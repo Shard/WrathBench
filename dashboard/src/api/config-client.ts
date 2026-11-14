@@ -21,7 +21,6 @@
  */
 
 import type { AdminResponse, DraftFetchResponse, DraftPromoteBody, DraftStatusResponse, DraftsResponse } from "@viewer/api-types";
-import { headerSafe } from "../lib/config";
 
 /**
  * One line of the change history, as `/api/config/audit` serves it.
@@ -40,10 +39,6 @@ export interface AuditRow {
   actor: string;
   note: string | null;
 }
-
-/** The header names `config-api.ts` reads attribution from. */
-export const ACTOR_HEADER = "x-wrathbench-actor";
-export const NOTE_HEADER = "x-wrathbench-note";
 
 /** A non-2xx from the config API. `message` is the server's sentence, verbatim. */
 export class ConfigError extends Error {
@@ -88,12 +83,6 @@ export interface ConfigExportResponse {
   text: string;
 }
 
-/** Who and why. The API defaults the actor and takes no note; the page requires both. */
-export interface Attribution {
-  actor: string;
-  note: string;
-}
-
 export interface ConfigClientOptions {
   fetch?: typeof globalThis.fetch;
   base?: string;
@@ -102,24 +91,13 @@ export interface ConfigClientOptions {
 async function send<T>(
   f: typeof globalThis.fetch,
   url: string,
-  init: RequestInit & { attribution?: Attribution; actor?: string },
+  rest: RequestInit,
 ): Promise<T> {
-  const { attribution, actor, ...rest } = init;
   // Every write says JSON, a body or not (DELETE, the draft fetch): the viewer
   // refuses an unsafe method without it, which is what keeps another site's
   // form or `text/plain` POST from writing here (runner/viewer/write-guard.ts).
   const write = (rest.method ?? "GET").toUpperCase() !== "GET";
   const headers: Record<string, string> = { accept: "application/json", ...(write || rest.body !== undefined ? { "content-type": "application/json" } : {}) };
-  if (attribution !== undefined) {
-    // Folded to what a header can carry: `fetch` refuses the whole request on a
-    // code point above U+00FF, and an em dash in a note is the likeliest thing
-    // an operator types here. See `headerSafe` in `lib/config.ts`.
-    headers[ACTOR_HEADER] = headerSafe(attribution.actor);
-    headers[NOTE_HEADER] = headerSafe(attribution.note);
-  } else if (actor !== undefined && actor.trim().length > 0) {
-    // Who, without why: an ignore is remembered on the draft, not in the history.
-    headers[ACTOR_HEADER] = headerSafe(actor.trim());
-  }
   const res = await f(url, { ...rest, headers });
   const text = await res.text();
   let body: unknown = null;
@@ -154,14 +132,14 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
     audit: (limit = 50): Promise<ConfigAuditResponse> =>
       send<ConfigAuditResponse>(f, at(`/api/config/audit?limit=${String(limit)}`), { method: "GET" }),
     /** Shallow-merge into one row. Cannot remove a key — see `lib/config.ts`. */
-    patch: (key: string, body: unknown, attribution: Attribution): Promise<ConfigWriteResponse> =>
-      send<ConfigWriteResponse>(f, rowUrl(key), { method: "PATCH", body: JSON.stringify(body), attribution }),
+    patch: (key: string, body: unknown): Promise<ConfigWriteResponse> =>
+      send<ConfigWriteResponse>(f, rowUrl(key), { method: "PATCH", body: JSON.stringify(body) }),
     /** Replace one row whole. */
-    put: (key: string, body: unknown, attribution: Attribution): Promise<ConfigWriteResponse> =>
-      send<ConfigWriteResponse>(f, rowUrl(key), { method: "PUT", body: JSON.stringify(body), attribution }),
+    put: (key: string, body: unknown): Promise<ConfigWriteResponse> =>
+      send<ConfigWriteResponse>(f, rowUrl(key), { method: "PUT", body: JSON.stringify(body) }),
     /** Remove one row. Validated like any other write: a referenced entry is refused. */
-    remove: (key: string, attribution: Attribution): Promise<ConfigWriteResponse> =>
-      send<ConfigWriteResponse>(f, rowUrl(key), { method: "DELETE", attribution }),
+    remove: (key: string): Promise<ConfigWriteResponse> =>
+      send<ConfigWriteResponse>(f, rowUrl(key), { method: "DELETE" }),
     /**
      * Render the store to fleet.json's shape and hand back the text. The
      * server writes no file for a request; the page shows and copies the text.
@@ -170,37 +148,29 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
       send<ConfigExportResponse>(f, at("/api/config/export"), { method: "POST", body: "{}" }),
     /** The drafts, newest first, the ignored apart. One shot, like `config()`. */
     drafts: (): Promise<DraftsResponse> => send<DraftsResponse>(f, at("/api/config/proposed"), { method: "GET" }),
-    /** One read of the catalogue. Not a config write: no attribution, no history line. */
+    /** One read of the catalogue. Not a config write: no history line. */
     fetchDrafts: (): Promise<DraftFetchResponse> =>
       send<DraftFetchResponse>(f, at("/api/config/proposed/fetch"), { method: "POST" }),
-    ignoreDraft: (model: string, actor?: string): Promise<DraftStatusResponse> =>
-      send<DraftStatusResponse>(f, at("/api/config/proposed/ignore"), {
-        method: "POST",
-        body: JSON.stringify({ model }),
-        ...(actor !== undefined ? { actor } : {}),
-      }),
-    unignoreDraft: (model: string, actor?: string): Promise<DraftStatusResponse> =>
-      send<DraftStatusResponse>(f, at("/api/config/proposed/unignore"), {
-        method: "POST",
-        body: JSON.stringify({ model }),
-        ...(actor !== undefined ? { actor } : {}),
-      }),
+    ignoreDraft: (model: string): Promise<DraftStatusResponse> =>
+      send<DraftStatusResponse>(f, at("/api/config/proposed/ignore"), { method: "POST", body: JSON.stringify({ model }) }),
+    unignoreDraft: (model: string): Promise<DraftStatusResponse> =>
+      send<DraftStatusResponse>(f, at("/api/config/proposed/unignore"), { method: "POST", body: JSON.stringify({ model }) }),
     /**
      * Store a credential's secret, sealed (`runner/viewer/admin-api.ts`). The
      * value travels in the body and nowhere else: never the URL, never a
      * header, and the answer never carries it back.
      */
-    setSecret: (name: string, value: string, attribution: Attribution): Promise<AdminSecretResponse> =>
-      send<AdminSecretResponse>(f, at(`/api/admin/secrets/${encodeURIComponent(name)}`), { method: "PUT", body: JSON.stringify({ value }), attribution }),
+    setSecret: (name: string, value: string): Promise<AdminSecretResponse> =>
+      send<AdminSecretResponse>(f, at(`/api/admin/secrets/${encodeURIComponent(name)}`), { method: "PUT", body: JSON.stringify({ value }) }),
     /** Remove a stored secret: the deployment's Secret stands again. */
-    clearSecret: (name: string, attribution: Attribution): Promise<AdminSecretResponse> =>
-      send<AdminSecretResponse>(f, at(`/api/admin/secrets/${encodeURIComponent(name)}`), { method: "DELETE", attribution }),
+    clearSecret: (name: string): Promise<AdminSecretResponse> =>
+      send<AdminSecretResponse>(f, at(`/api/admin/secrets/${encodeURIComponent(name)}`), { method: "DELETE" }),
     /** Ask the supervisor to log a Codex home in again; its link and code arrive on `/api/admin`. */
-    codexLogin: (id: string, attribution: Attribution): Promise<{ id: string; state: string }> =>
-      send<{ id: string; state: string }>(f, at(`/api/admin/codex-login/${encodeURIComponent(id)}`), { method: "POST", body: "{}", attribution }),
-    /** A roster write: attributed, validated by `parseFleet`, recorded in the history. */
-    promoteDraft: (body: DraftPromoteBody, attribution: Attribution): Promise<ConfigWriteResponse> =>
-      send<ConfigWriteResponse>(f, at("/api/config/proposed/promote"), { method: "POST", body: JSON.stringify(body), attribution }),
+    codexLogin: (id: string): Promise<{ id: string; state: string }> =>
+      send<{ id: string; state: string }>(f, at(`/api/admin/codex-login/${encodeURIComponent(id)}`), { method: "POST", body: "{}" }),
+    /** A roster write: validated by `parseFleet`, recorded in the history. */
+    promoteDraft: (body: DraftPromoteBody): Promise<ConfigWriteResponse> =>
+      send<ConfigWriteResponse>(f, at("/api/config/proposed/promote"), { method: "POST", body: JSON.stringify(body) }),
   };
 }
 

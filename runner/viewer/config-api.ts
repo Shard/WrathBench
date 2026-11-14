@@ -262,9 +262,8 @@ function policyRoutingOf(config: Record<string, unknown>): RoutingSpec | undefin
  * - `POST proposed/promote` — `{ model, name, tier, race?, class? }`.
  *
  * Only promote writes config, so only promote goes through `parseFleet` and
- * into the history, with the actor and note headers. Fetch and ignore are
- * bookkeeping on rows no config reader sees; an ignore records its actor on
- * the draft itself.
+ * into the history. Fetch and ignore are bookkeeping on rows no config reader
+ * sees; an ignore records when (and `actorOf`'s actor) on the draft itself.
  */
 async function handleDrafts(
   req: Request,

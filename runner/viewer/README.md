@@ -786,17 +786,21 @@ here, but every write route refuses them with a 400: only
 
 Drafts are `proposed/<model id>` rows of the same store that no config reader
 sees (`config-store.ts`, "The draft key space"). Only a promotion is a config
-write: it alone is validated, version-moving and recorded with the actor and
-note. A fetch or an ignore is bookkeeping on rows nothing schedules, so it
-takes no note and leaves the history alone; an ignore records its actor on the
-draft. Model ids travel in bodies, never in the path.
+write: it alone is validated, version-moving and recorded in the history. A
+fetch or an ignore is bookkeeping on rows nothing schedules, so it leaves the
+history alone; an ignore records when on the draft. Model ids travel in
+bodies, never in the path.
 
 Every write renders the whole candidate config and runs it through
 `parseFleet` — the same function the supervisor refuses a bad config
 with — so a rejected edit is a 400 carrying that refusal word for word, and
-nothing the app accepts can be rejected at the next tick. `x-wrathbench-actor`
-and `x-wrathbench-note` name who changed what and why; the actor defaults to
-`viewer`. The viewer has no authentication of its own (loopback, or a trusted
+nothing the app accepts can be rejected at the next tick. An accepted write
+lands in `config_audit` with what is known without asking: when, the key, the
+before and after, and the path it came by, `viewer` (the CLI's are `cli`).
+Nothing asks who or why. An `x-wrathbench-note` header, if a client sends one,
+is kept as the note, and an `x-wrathbench-actor` header replaces `viewer`; the
+dashboard sends neither, and older rows keep the actor and note they were
+written with. The viewer has no authentication of its own (loopback, or a trusted
 LAN behind `WRATHBENCH_VIEWER_LAN`), so the admin switch on a handle that is
 not public is the whole of the authorisation — which is why a handle without
 it answers 404 rather than the 403 it gives for a withheld read route.
@@ -855,8 +859,8 @@ device login: requested, starting, waiting (the link and the one-time code),
 ok or failed. Publishing is the chart's non-secret settings; the target is
 named only where the chart sets it as plain values, never from the Secret.
 
-Three writes beside it, attributed by the same actor and note headers as the
-config API and behind the same write guard:
+Three writes beside it, recorded in the audit like the config API's and
+behind the same write guard:
 
 - `PUT /api/admin/secrets/<NAME>` with `{ "value": "…" }` stores a
   credential's secret sealed (AES-256-GCM under `WRATHBENCH_STORE_KEY`, the

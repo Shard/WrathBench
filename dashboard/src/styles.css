@@ -1005,13 +1005,12 @@ button.update:hover { background: var(--panel); }
  * filter checkboxes it was never written for. Shapes follow `.filter select`.
  */
 .configbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 10px 0; }
-.configbar label, .configform label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); color: var(--dim); }
-.configbar label.grow { flex: 1 1 320px; }
-.configbar input, .configform input, .configform select, .configtable input, .configtable select, .jsoneditor textarea {
+.configform label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); color: var(--dim); }
+.configform input, .configform select, .configtable input, .configtable select, .jsoneditor textarea {
   font: inherit; color: var(--fg); background: var(--panel);
   border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
 }
-.configbar input:focus-visible, .configform input:focus-visible, .configtable input:focus-visible,
+.configform input:focus-visible, .configtable input:focus-visible,
 .jsoneditor textarea:focus-visible { outline: 1px solid var(--accent); }
 .configform { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .configtable input.routing { width: 10em; }

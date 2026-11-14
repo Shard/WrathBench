@@ -324,37 +324,6 @@ export const READ_ONLY_TITLE =
   "a published campaign definition: write-once, written only by the publish CLI (runner/src/campaign-publish.ts); the store refuses edits from here";
 
 /**
- * The typographic characters this repository's prose is full of, and the ASCII
- * a header can carry instead.
- */
-const HEADER_FOLD: readonly [RegExp, string][] = [
-  [/[\u2010-\u2015]/g, "-"],
-  [/[\u2018\u2019\u201B]/g, "'"],
-  [/[\u201C\u201D\u201F]/g, '"'],
-  [/\u2026/g, "..."],
-  [/[\u00A0\u2002-\u200B]/g, " "],
-];
-
-/**
- * An actor or a note as an HTTP header can carry it.
- *
- * The API takes both as headers (`x-wrathbench-actor`, `x-wrathbench-note`),
- * and a header value is ISO-8859-1: `fetch` REFUSES the whole request — not
- * just the header — when a value holds a code point above U+00FF. An em dash
- * in a note is the likeliest thing an operator here types, and without this
- * the write failed with a browser's message about `RequestInit` that said
- * nothing about config. Folded to ASCII rather than rejected, because the note
- * is prose and "\u2014" recorded as "-" loses nothing; anything left above
- * U+00FF becomes "?" so the rest of the sentence still lands, and a line break
- * becomes a space because a header cannot carry one either.
- */
-export function headerSafe(text: string): string {
-  let out = text;
-  for (const [re, to] of HEADER_FOLD) out = out.replace(re, to);
-  return out.replace(/[\u0100-\uFFFF]/g, "?").replace(/[\r\n]+/g, " ");
-}
-
-/**
  * Pretty-print a stored document for a textarea, stably.
  *
  * `?? null` because `JSON.stringify(undefined)` is `undefined`, not a string,

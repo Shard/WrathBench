@@ -222,8 +222,11 @@ the store to a document for reading or diffing, never for committing.
   the roster entries that need it.
 - Every write is validated against the whole config, refused with the
   sentence the supervisor would use, and recorded in the store's
-  `config_audit` table with the actor, the note, and the before and after
-  documents. That table is the history.
+  `config_audit` table with what is known without asking: when, the path it
+  came by (`cli` or `viewer`), and the before and after documents. Nothing
+  asks who or why; a `--note` on the CLI (or an `x-wrathbench-note` header on
+  the API) is kept if given. Older rows keep the actor and note they were
+  written with. That table is the history.
 - An **empty** store (zero rows, or no file yet) is a legitimate state: the
   supervisor runs an empty board and names the seed command every tick,
   `/api/config` answers `seeded: false`, and the `/config` page shows the
@@ -246,13 +249,13 @@ addresses (`runner/viewer/README.md`, "Host allowlist"). On the cluster its name
 # the CLI — for a script, or a viewer that is not up
 bun wb config seed                     # once, on a fresh deployment: infra/fleet.example.json (--force replaces)
 bun wb config get roster/sonnet
-bun wb config patch roster/sonnet '{"tier":"t2"}' --actor operator --note "promote"
+bun wb config patch roster/sonnet '{"tier":"t2"}'
 bun wb config audit 20
 bun wb config credentials                            # the credentials, in preference order ("Credentials")
 bun wb config credentials add claude-2 '{"provider":"claude","secretEnv":"CLAUDE_CODE_OAUTH_TOKEN_2","slots":1,"budget":{"kind":"usage"},"billing":"paid","enabled":true}'
-bun wb config credentials edit claude-2 '{"slots":2}' --note "why"
-bun wb config credentials disable claude-2 --note "why"   # no new run takes it; live runs finish
-bun wb config move-credential <run-id> claude-2 --pin --note "why"  # a paused run to another credential ("Moving a run to another credential")
+bun wb config credentials edit claude-2 '{"slots":2}'
+bun wb config credentials disable claude-2           # no new run takes it; live runs finish
+bun wb config move-credential <run-id> claude-2 --pin # a paused run to another credential ("Moving a run to another credential")
 bun wb config export > /tmp/fleet.json # to read or diff; never to commit
 ```
 
@@ -959,7 +962,7 @@ Both run in the runner pod:
 
 ```
 bun wb accounts export-character <run-id> [file] [--no-trajectory]
-bun wb accounts import-character <file> [--account NAME] [--note TEXT] [--actor NAME]
+bun wb accounts import-character <file> [--account NAME] [--note TEXT]
 ```
 
 Both need SOAP, which only the chart's `staging` switch turns on ("Party
@@ -1012,10 +1015,10 @@ nothing reads the old one.
 each one paused:
 
 ```
-bun wb config patch roster/sonnet '{"idle":"none"}' --actor operator --note "backup before maintenance"
+bun wb config patch roster/sonnet '{"idle":"none"}'
 bun wb inspect run <run-id>                       # wait for "paused: operator-pause"
 bun wb accounts export-character <run-id>         # prints the archive's path
-bun wb config patch roster/sonnet '{"idle":"unlimited"}' --actor operator --note "backed up"
+bun wb config patch roster/sonnet '{"idle":"unlimited"}'
 ```
 
 The archive is on the same volume as the run. To survive the loss of that
@@ -1188,10 +1191,10 @@ fleet.** The party smokes (`party-entry`, `party-staging`) stage and delete
 characters on PARTY1–PARTY5, which only the party campaign uses:
 
 ```
-bun wb config patch campaigns/<id> '{"enabled":false}' --actor <you> --note "held for the party smokes"
+bun wb config patch campaigns/<id> '{"enabled":false}'
 bun wb fleet status    # wait until no run on PARTY1–PARTY5 is live or paused
 bun wb smoke party-entry
-bun wb config patch campaigns/<id> '{"enabled":true}' --actor <you> --note "party smokes done"
+bun wb config patch campaigns/<id> '{"enabled":true}'
 ```
 
 A disabled campaign spawns nothing, and its live attempt drains at its
@@ -1460,8 +1463,8 @@ reached on the LAN by the viewer's own names ("Where the config lives").
 
 It is one more client of the config store, beside `bun wb config`: every
 write goes through `/api/config` and `parseFleet`, is refused with the
-supervisor's own sentence, and lands in `config_audit` with the actor and
-note the page requires. It is one section at a time, each its own address
+supervisor's own sentence, and lands in `config_audit` as the viewer's,
+with nothing asked. It is one section at a time, each its own address
 (`/config/<section>`), listed down the side (a row across the top on a
 phone); a section whose group is off is absent, and every store row's raw
 editor sits in the section of the table that edits it:
@@ -1629,7 +1632,7 @@ runs each owes per square. `/campaigns` lists every published version;
 3. Publish it from a checkout that has the commit:
 
 ```
-bun wb campaign publish runner/campaigns/<id>@<version>.json --actor <you> --note "<why>"
+bun wb campaign publish runner/campaigns/<id>@<version>.json
 bun wb campaign publish runner/campaigns/<id>@<version>.json --dry-run   # check and print, write nothing
 ```
 
@@ -1661,8 +1664,7 @@ published `id@version` is refused. Which commits may publish is
 
 ```
 bun wb config set campaigns/race-probe \
-  '{"version":1,"enabled":true,"assignments":[{"model":"codex-sol-61","runsPerCell":1}]}' \
-  --actor <you> --note "race-probe@1: sol-61 x1"
+  '{"version":1,"enabled":true,"assignments":[{"model":"codex-sol-61","runsPerCell":1}]}'
 ```
 
 A row naming a version nobody has published is accepted by the store and
@@ -1719,8 +1721,7 @@ the campaign compares at a fixed one:
 
 ```
 bun wb config set roster/deepseek-flash-pi \
-  '{"model":"deepseek-flash","driver":"pi","tier":"t1","apiBase":"https://api.deepseek.com/v1","effort":"high","compactWindow":"300k"}' \
-  --actor <you> --note "pi on deepseek-flash, probe-only (#257)"
+  '{"model":"deepseek-flash","driver":"pi","tier":"t1","apiBase":"https://api.deepseek.com/v1","effort":"high","compactWindow":"300k"}'
 ```
 
 - It may sit beside the `wrathbench` entry for the same model and endpoint:
@@ -1761,8 +1762,8 @@ stay child processes.
 **The switch.** `policy.runPods` in the config store, `"off"` by default:
 
 ```
-bun wb config patch policy '{"runPods":"probes"}' --actor <you> --note "run pods on for probes"
-bun wb config patch policy '{"runPods":"off"}'    --actor <you> --note "run pods off"
+bun wb config patch policy '{"runPods":"probes"}'
+bun wb config patch policy '{"runPods":"off"}'
 ```
 
 It reaches a job at its next roster spawn (the supervisor hands it to
@@ -2258,12 +2259,12 @@ supported way:
 
 ```
 # 1. pause it, so nothing resumes it mid-move: the runner writes operator-pause
-bun wb config patch roster/sonnet '{"idle":"none"}' --actor operator --note "moving credentials"
+bun wb config patch roster/sonnet '{"idle":"none"}'
 bun wb inspect run <run-id>             # wait for "paused: operator-pause"
 # 2. move it: meta.json first, then the roster pin
-bun wb config move-credential <run-id> claude-1 --pin --actor operator --note "claude-2 spent until Friday"
+bun wb config move-credential <run-id> claude-1 --pin
 # 3. let the fleet resume it, on the new credential
-bun wb config patch roster/sonnet '{"idle":"unlimited"}' --actor operator --note "moved credentials"
+bun wb config patch roster/sonnet '{"idle":"unlimited"}'
 ```
 
 **Step 1 is not optional**, even for a run that already reads paused. While
@@ -2288,7 +2289,8 @@ archived run; and any driver but claude-code. A Codex home holds the CLI's own
 threads, so codex runs stay where they started.
 
 Each move is appended to the run's `credentialHistory` in `meta.json` as
-`{ from, to, at, actor, note }`, which no public projection carries.
+`{ from, to, at, actor, note }` (the note null without `--note`), which no
+public projection carries.
 
 ### The account pool
 
@@ -2367,7 +2369,7 @@ PR to GitOps or an app-owned Secret):
   every reader of the config never see one, not even as ciphertext. A copy of
   the sqlite file carries ciphertext that is useless without the key.
 - **The history.** Each set, rotation and clear is a `secrets/<NAME>` line in
-  `config_audit` with the actor, the note, and an 8-hex HMAC fingerprint
+  `config_audit` with when, the path, any note, and an 8-hex HMAC fingerprint
   keyed by the store key, enough to tell two values apart and nothing else.
 - **Precedence.** A stored secret wins over the env Secret's value for that
   variable; with none, the environment's stands as before. It is read at
@@ -2414,10 +2416,10 @@ PR to GitOps or an app-owned Secret):
   and no route reads one back.
 
 **Moving a SOPS model key into the store** is optional, per key: set it on
-the page (or `printf %s "$KEY" | bun wb config secrets set OPENROUTER_KEY
---actor <you> --note "into the store"`), check the credential reads `stored`
-and its next run starts, then remove it from SOPS and from `modelKeys` in a
-later release if nothing else needs it. Bootstrap secrets stay in SOPS: the
+the page (or `printf %s "$KEY" | bun wb config secrets set OPENROUTER_KEY`),
+check the credential reads `stored` and its next run starts, then remove it
+from SOPS and from `modelKeys` in a later release if nothing else needs it.
+Bootstrap secrets stay in SOPS: the
 database passwords, the module secret, the store key itself, image pull
 credentials, the publisher's bucket pair and anything a pod needs before the
 store is readable.

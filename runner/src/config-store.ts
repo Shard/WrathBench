@@ -864,7 +864,7 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
   secrets set <NAME>        store a credential's secret, read from stdin (never argv), sealed under
                             WRATHBENCH_STORE_KEY; it wins over the environment's (runner/src/store-secrets.ts)
   secrets clear <NAME>      remove it: the environment's value stands again
-  move-credential <run-id> <credential id> --note <why> [--pin]
+  move-credential <run-id> <credential id> [--pin]
                             move a paused or ended run to another credential of its provider: rewrite its
                             meta.json's config.credential and append to its credentialHistory; with --pin, then
                             pin its roster entry to the same credential. Refuses a live run, a credential that
@@ -873,7 +873,7 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
 
   --db <path>        the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
   --actor <name>     who to record the change as (default "cli")
-  --note <text>      why
+  --note <text>      why, if you want it in the history (optional)
   --runs-dir <dir>   move-credential: the runs directory (default $WRATHBENCH_RUNS_DIR, else data/runs in the checkout)
 `;
 
@@ -986,13 +986,13 @@ async function main(argv: string[]): Promise<number> {
         return await secretsCommand(store, args, opts);
       case "move-credential": {
         const [runId, to] = args;
-        if (runId === undefined || to === undefined || args.length > 2 || note === undefined) {
+        if (runId === undefined || to === undefined || args.length > 2) {
           console.error(USAGE);
           return 2;
         }
         const { moveCredential } = await import("./move-credential");
         const runsDir = runsDirFlag ?? (process.env["WRATHBENCH_RUNS_DIR"] || join(repoRoot, "data", "runs"));
-        const r = moveCredential({ runsDir, runId, to, pin, actor, note, store });
+        const r = moveCredential({ runsDir, runId, to, pin, actor, ...(note !== undefined ? { note } : {}), store });
         console.error(
           r.moved
             ? `moved ${runId}: ${r.from} -> ${r.to} in its meta.json (credentialHistory: ${r.history} move${r.history === 1 ? "" : "s"})`

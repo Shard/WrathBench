@@ -186,7 +186,7 @@ export const ENTRIES: readonly Entry[] = [
   {
     group: "config",
     command: "move-credential",
-    takes: "<run-id> <credential id> --note <why> [--pin]",
+    takes: "<run-id> <credential id> [--pin] [--note <why>]",
     summary: "move a paused or ended run to another credential of its provider: its meta.json, then (--pin) its roster entry's pin",
     ...inRunner("bun", CONFIG_STORE, "move-credential"),
   },
