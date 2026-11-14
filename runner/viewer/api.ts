@@ -1470,7 +1470,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const runs = await Promise.all(
       all.map(async (run) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character }) })),
     );
-    const body: DungeonsResponse = { version: DUNGEON_BOARD_VERSION, boards: boardsOf(runs), now: Date.now() };
+    // A public handle withholds every fan-out run (`resultRuns`), and every
+    // run of the one-agent id is one, so it serves that id's table not at
+    // all rather than as an empty one: publishing it is the operator's call.
+    const boards = boardsOf(runs).filter((b) => !publicMode || !isTaskEpisode(b.episode) || EPISODES[b.episode].task.agents > 1);
+    const body: DungeonsResponse = { version: DUNGEON_BOARD_VERSION, boards, now: Date.now() };
     return pub(body, projectDungeons);
   }
 
