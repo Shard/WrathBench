@@ -157,6 +157,26 @@ export function badEvidenceReason(f: EvidenceFacts): string | null {
   return null;
 }
 
+/** A run's facts as "counted" reads them: the evidence facts, and the three that are membership. */
+export interface CountedFacts extends EvidenceFacts {
+  /** An attempt past the target (`extra: true`): numbered, reported apart. */
+  extra: boolean;
+  /** A tier run launched on a leash its tier does not describe. */
+  episodeOverride: boolean;
+  /** Driven by something that is not a model (`isNotAModelRun`, drivers.ts). */
+  notAModel: boolean;
+}
+
+/**
+ * Whether a run counts toward a target or a campaign square: a completed
+ * model result (`badEvidenceReason`) that is no extra, no override and no
+ * scripted driver. The one definition: the scheduler's `isCounted` and the
+ * campaigns page both read it, so a square and a target cannot disagree.
+ */
+export function countedRun(f: CountedFacts): boolean {
+  return !f.extra && !f.episodeOverride && !f.notAModel && badEvidenceReason(f) === null;
+}
+
 /**
  * How long a run may show no activity before it is cooked. Its OWN recorded
  * budget, never a tier nominal: a run launched with an overridden watchdog is

@@ -27,7 +27,7 @@ import { harnessSeries } from "../src/comparability";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
-import { badEvidenceReason } from "../src/lapse";
+import { badEvidenceReason, countedRun } from "../src/lapse";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
@@ -1450,13 +1450,23 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * The published definitions and the store row come from the config store,
    * read exactly as the supervisor reads them; the runs from the run
    * directory, matched by their own stamps. `counted` is the scheduler's own
-   * `isCounted` over a result row — never `unscored`, which is non-null for
+   * definition (`countedRun`, lapse.ts) over a result row — never `unscored`, which is non-null for
    * every probe.
    */
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
     const roster = fleetRoster();
-    const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && taintOf(r) === null);
+    const view = campaignsView(all, roster, (r) =>
+      countedRun({
+        extra: r.extra,
+        episodeOverride: r.episodeOverride,
+        notAModel: isNotAModelRun(r),
+        live: r.live === true,
+        paused: r.pauseReason !== null,
+        modelResponses: r.modelResponses,
+        terminationReason: r.terminationReason,
+      }),
+    );
     const body: CampaignsResponse = { now: Date.now(), campaigns: view.campaigns, refused: view.refused };
     return pub(body, projectCampaigns);
   }

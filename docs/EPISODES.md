@@ -49,10 +49,6 @@ everything else is derived from it — no list of names decides what counts.
   witness and stays. The rule, the budgets and what counts:
   `docs/METHODOLOGY.md` ("Episodes, lanes, and evidence", under *The tier is
   the evidence budget*).
-- **Extras.** A free model past its target may be given extra `e90` runs with
-  a different starting race/class. An extra is this episode — scored,
-  same prompt and leash — stamped `extra: true`; it is never counted toward a
-  target and never a promotion witness.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
   thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`, and
   the reference wiki included (`wiki` is absent unless a run withheld it).

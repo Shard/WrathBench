@@ -234,6 +234,17 @@ export interface QueuePlan {
  * carries the copies it still owes and the run ids already used (`takenRunIds`),
  * so its spawn launches only the remainder, under ids nothing has used.
  */
+/**
+ * Why a queue or pinned job is held by the scored-episode wait
+ * (`SCORED_EPISODES_WAIT`, runner/src/config.ts), or undefined when it is
+ * not: the reason the policy holds its own scored picks with. Held here, said
+ * once, rather than spawned for `run.ts` to refuse at launch.
+ */
+export function scoredHold(job: Pick<FleetJob, "episode">, scoredGate: string | undefined): string | undefined {
+  if (scoredGate === undefined || job.episode === null || !isScoredEpisode(job.episode)) return undefined;
+  return `${job.episode}: ${scoredGate}`;
+}
+
 export function planQueue(opts: {
   queue: FleetJob[];
   roster: Record<string, FleetRosterEntry>;
@@ -270,6 +281,8 @@ export function planQueue(opts: {
   counted?: CountedRuns;
   /** Every run id on disk, archive included: a remainder copy never reuses one. */
   takenRunIds?: ReadonlySet<string>;
+  /** Scored episodes closed, and why (`scoredHold`): a scored job is skipped with it. Absent is open. */
+  scoredGate?: string;
 }): QueuePlan {
   const plan: QueuePlan = { assign: [], waiting: [], skipped: [], done: [] };
   const taken = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
@@ -279,6 +292,11 @@ export function planQueue(opts: {
   for (const job of opts.queue) {
     if (job.account !== undefined) continue;
     if (!job.enabled || opts.running.has(job.name) || opts.finished.has(job.name)) continue;
+    const hold = scoredHold(job, opts.scoredGate);
+    if (hold !== undefined) {
+      plan.skipped.push({ job, reason: hold });
+      continue;
+    }
     const refs = runnableRefs(job, opts.roster, opts.eligible);
     if (refs.length === 0) {
       const gated = job.refs.filter((r) => opts.roster[r] !== undefined);
@@ -377,23 +395,21 @@ export function policyJob(pick: NextJob): FleetJob {
     enabled: true,
     source: "policy",
     attempt: pick.attempt,
-    ...(pick.extra !== undefined ? { extra: pick.extra } : {}),
     ...(pick.probe !== undefined ? { probe: pick.probe } : {}),
   };
 }
 
 /**
  * Whether a job is an extra run — a policy pick past the model's targets, which
- * the runner stamps `extra: true` so the projection never counts it.
- *
- * Two shapes, one question. A scored-tier extra carries the character it rolls;
- * a local model's extra is a freeplay pick with no character, and a freeplay
- * pick can only ever come from the extras path because no episode target names
+ * the runner stamps `extra: true` so it numbers attempts and is reported apart.
+ * The one shape left is the `idle: "unlimited"` freeplay session: a freeplay
+ * pick can only come from that path, because no episode target names
  * `freeplay`. `attempt` is what makes the job the policy's: a manual freeplay
- * job (the nav probe) is not an extra.
+ * job (the nav probe) is not an extra. The scored-tier extra that rolled a
+ * race and class became the race and class probe campaigns.
  */
-export function isExtraJob(job: Omit<Pick<FleetJob, "episode" | "extra" | "attempt">, "episode"> & { episode: EpisodeId | null }): boolean {
-  return job.attempt !== undefined && (job.extra !== undefined || job.episode === "freeplay");
+export function isExtraJob(job: Omit<Pick<FleetJob, "episode" | "attempt">, "episode"> & { episode: EpisodeId | null }): boolean {
+  return job.attempt !== undefined && job.episode === "freeplay";
 }
 
 /** One policy pick, placed. */
@@ -823,10 +839,8 @@ export function jobSpawn(
       // Scored evals never resume; freeplay always does; a probe opts in
       // through its own definition.
       resumeOnPause: resumesOnPause(job.episode, probeFile?.definition.resume),
-      // An extra run is stamped as one; a scored-tier extra also rolls the
-      // policy's race/class, where a freeplay extra keeps the entry's own.
+      // An extra run is stamped as one, and keeps the entry's own character.
       ...(isExtraJob(job) ? { extra: true } : {}),
-      ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class } : {}),
       // The character's lineage rides only on the lane that owns one: a
       // hand-written freeplay job is the operator's own experiment and starts
       // where the operator says. Another ref's freeplay characters on the account
@@ -2880,6 +2894,12 @@ export function planTick(
   const drawHeld: { job: FleetJob; why: string }[] = [];
   const pinned = [...pinnedJobs(config), ...withTakenRunIds(pinnedCampaignJobs(config, probeRuns, healthyFrom(states), draw, drawHeld), takenRunIds)]
     .filter((j) => j.enabled && !resumed.has(j.name) && !running.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
+    .filter((j) => {
+      // Held by the scored wait, with the policy's own reason, never spawned to be refused.
+      const hold = scoredHold(j, scoredGate);
+      if (hold !== undefined) drawHeld.push({ job: j, why: hold });
+      return hold === undefined;
+    })
     .flatMap((j) => {
       const owed = owedCopies(j, runnableRefs(j, config.roster, eligible), counted);
       if (owesNothing(owed)) return [];
@@ -2929,6 +2949,7 @@ export function planTick(
     ...(affinity !== undefined ? { affinity } : {}),
     counted,
     takenRunIds,
+    ...(scoredGate !== undefined ? { scoredGate } : {}),
     place: (job) => {
       const r = placeJob(job, config.roster, placing);
       if (!r.ok) return { ok: false, why: r.why };

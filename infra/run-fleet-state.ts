@@ -52,7 +52,6 @@ import {
   runFactCache,
   type RunPodsMode,
   type WorldsMode,
-  type StartingCharacter,
   type UnstampedRun,
 } from "../runner/src/models";
 
@@ -471,7 +470,6 @@ export interface StateJob {
   account: string;
   source: JobSource;
   attempt?: number;
-  extra?: StartingCharacter;
   /** The paused run this spawn is resuming. */
   resuming?: string;
   /**
@@ -559,14 +557,13 @@ export interface PoolView {
 export function stateJobFacts(
   name: string,
   job: FleetJob | undefined,
-): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; extra?: StartingCharacter; credentials?: string[] } {
+): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; credentials?: string[] } {
   if (job === undefined) return { ref: name, episode: null, source: "pinned" };
   return {
     ref: job.ref,
     episode: job.episode,
     source: job.source,
     ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
-    ...(job.extra !== undefined ? { extra: job.extra } : {}),
     ...(credentialIdsOf(job).length > 0 ? { credentials: credentialIdsOf(job) } : {}),
   };
 }

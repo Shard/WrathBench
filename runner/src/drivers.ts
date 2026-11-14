@@ -430,6 +430,26 @@ export const DRIVER_TABLE = {
 
 export const DRIVER_LIST: readonly DriverEntry[] = DRIVERS.map((d) => entryOf(d));
 
+// ------------------------------------------------------- not a model
+
+/**
+ * Whether a stored run was driven by something that is not a model (the
+ * scripted stub, the scripted reference), by its driver or by the stamp that
+ * driver leaves: either one is enough, so a row that lost one of the two
+ * still reads as what it was. The one definition: the scheduler, the viewer,
+ * the publisher and the dashboard all ask it here.
+ */
+export function isNotAModelRun(r: { driver?: string | null | undefined; unscored?: string | null | undefined }): boolean {
+  if (driverEntry(r.driver)?.stamp !== undefined) return true;
+  const stamp = r.unscored;
+  return typeof stamp === "string" && DRIVER_LIST.some((d) => d.stamp !== undefined && stamp.startsWith(d.stamp));
+}
+
+/** Whether a stored run is the scripted reference, by its driver's entry (`route`) or by its stamp; one of the two is enough. */
+export function isReferenceRun(r: { driver?: string | null | undefined; unscored?: string | null | undefined }): boolean {
+  return driverEntry(r.driver)?.route === true || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
+}
+
 // ------------------------------------------------------------------ lookups
 
 /** The entry a stored or configured name refers to; undefined for an absent or unknown one. */

@@ -140,6 +140,7 @@ import {
   planNameSweeps,
   planPolicy,
   planQueue,
+  scoredHold,
   implicitPauses,
   planResumes,
   planStaleRuns,
@@ -1290,6 +1291,14 @@ async function main(): Promise<void> {
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
+      // Held by the scored wait, as the policy's own picks are: never spawned
+      // for the launch to refuse (`scoredHold`).
+      const hold = job.enabled && !sets.running.has(job.name) ? scoredHold(job, SCORED_EPISODES_WAIT ?? undefined) : undefined;
+      if (hold !== undefined) {
+        pinnedSkips.push({ job, reason: hold });
+        out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
+        continue;
+      }
       // A pinned job's `repeat` is met off the runs on disk, the queue's rule
       // (`owedCopies`): one that owes nothing yields no spawn, so a supervisor
       // boot cannot start it again. Only a job that is not running is asked —
@@ -1534,6 +1543,7 @@ async function main(): Promise<void> {
       affinity,
       counted: countedFrom(states),
       takenRunIds,
+      ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
     });
     lastPlan.skipped.unshift(...pinnedSkips);
     // Every fresh launch this tick, for the cross-account name sweep below.

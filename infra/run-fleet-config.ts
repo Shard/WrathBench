@@ -42,7 +42,6 @@ import {
   type RosterModel,
   type RunFact,
   type SchedulingPolicy,
-  type StartingCharacter,
   type Tier,
 } from "../runner/src/models";
 import { isScoredEpisode } from "../runner/src/episodes";
@@ -258,14 +257,6 @@ export interface FleetJob {
    * spawn numbers up from (`freshAttempt`).
    */
   attempt?: number;
-  /**
-   * Set on an extra run that rolls a character: a policy pick past
-   * the model's target on a scored tier. Reaches the runner as `--race/--class`
-   * plus `--extra true`, so the run is stamped and never counted. A local
-   * model's extra is a freeplay run and rolls nothing — `isExtraJob` is the
-   * question "is this an extra", this field is only "which character".
-   */
-  extra?: StartingCharacter;
   /**
    * Set by `planResumes`: this job's spawn resumes the paused run
    * named here, on the account it was on, before anything fresh is launched.
