@@ -9,17 +9,23 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CAPACITY_BACKOFF_MS,
   CODEX_EFFORTS,
+  CODEX_ITEM_BODY_CHARS,
   DISABLED_FEATURES,
+  capacityBackoffMs,
   childEnv,
   codexArgs,
+  codexItemRecord,
   codexStatedReset,
   codexEffortRefusal,
   detectCodexFailure,
   homeLooksLoggedIn,
+  isCapacityRefusal,
   normalizeCodexUsage,
   PROGRAM_TOOL_TIMEOUT_SEC,
   parseCodexEvent,
+  retriesAtCapacity,
   runCodexEpisode,
   tomlString,
 } from "../src/adapter-codex";
@@ -32,6 +38,7 @@ import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";
 import { TOOLS } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
+import { ProgramWake } from "../src/wake";
 import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
@@ -1356,6 +1363,178 @@ describe("codex driver: the subscription's usage windows", () => {
     const { trajectory, options } = setupEpisode("tools", { maxTurns: 2, episode: "e90" }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
     expect(await runCodexEpisode(options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
     expect(trajectory.runRow("run-test")?.["pause_reason"]).toBeNull();
+    trajectory.close();
+  }, 30_000);
+});
+
+// ------------------------------------------------- exec's other items
+
+describe("codex driver: items the driver acts on nowhere", () => {
+  test("each goes on the record as codex_item, type and body cut to length; the model is told nothing of them", async () => {
+    const { runDir, recordPath, trajectory, options } = setupEpisode("items", { maxTurns: 2 });
+    expect(await runCodexEpisode(options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    const records = readTrajectory(runDir);
+    const items = records.filter((r) => r.t === "codex_item" && r["turn"] === 1);
+    expect(items.map((r) => r["type"])).toEqual(["command_execution", "collab_tool_call", "error", "agent_message"]);
+    expect(JSON.parse(String(items[0]!["body"]))).toMatchObject({ type: "command_execution", command: "cat /etc/hostname" });
+    expect(items[0]!["truncated"]).toBeUndefined();
+    // The long one is cut, and says how long it was.
+    expect(String(items[1]!["body"])).toHaveLength(CODEX_ITEM_BODY_CHARS);
+    expect(items[1]!["truncated"]).toBe(true);
+    expect(Number(items[1]!["chars"])).toBeGreaterThan(5_000);
+    // What the driver records elsewhere is not recorded again.
+    expect(records.filter((r) => r.t === "codex_item" && ["mcp_tool_call"].includes(String(r["type"])))).toEqual([]);
+    expect(records.filter((r) => r.t === "codex_item" && r["type"] === "agent_message" && String(r["body"]).includes("acting"))).toEqual([]);
+    // The next turn's message carries nothing of them.
+    const second = (readRecord(recordPath)["userMessages"] as string[])[1]!;
+    expect(second).not.toContain("cat /etc/hostname");
+    expect(second).not.toContain("something the CLI wanted said");
+    expect(second).not.toContain("spawn_agent");
+    trajectory.close();
+  }, 30_000);
+
+  test("codexItemRecord: the item's type and its JSON; a typeless item's type is null", () => {
+    expect(codexItemRecord(3, { id: "i", type: "web_search", query: "q" })).toEqual({
+      t: "codex_item",
+      turn: 3,
+      type: "web_search",
+      body: '{"id":"i","type":"web_search","query":"q"}',
+    });
+    expect(codexItemRecord(1, { id: "i" })["type"]).toBeNull();
+  });
+});
+
+// ------------------------------------------------- capacity refusals
+
+describe("codex driver: a model at capacity", () => {
+  /** A clock the injected sleep moves, shared by the watchdogs: the waits cost no real time. */
+  function fakeTime(): { now: () => number; sleep: (ms: number) => Promise<void>; slept: number[] } {
+    let t = Date.now();
+    const slept: number[] = [];
+    return {
+      now: () => t,
+      sleep: (ms: number) => {
+        slept.push(ms);
+        t += ms;
+        return Promise.resolve();
+      },
+      slept,
+    };
+  }
+  const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0);
+
+  test("is not a classified failure", () => {
+    expect(isCapacityRefusal('{"message":"Selected model is at capacity. Please try a different model."}')).toBe(true);
+    expect(detectCodexFailure("Selected model is at capacity. Please try a different model.")).toBeNull();
+    expect(isCapacityRefusal("stream disconnected before completion")).toBe(false);
+  });
+
+  test("is retried on the unscored tiers only, read off the episode table, until the ladder is spent", () => {
+    const failure = "Selected model is at capacity. Please try a different model.";
+    expect(retriesAtCapacity("freeplay")).toBe(true);
+    expect(retriesAtCapacity("probing")).toBe(true);
+    expect(retriesAtCapacity("e90")).toBe(false);
+    expect(retriesAtCapacity("e360")).toBe(false);
+    expect(retriesAtCapacity(undefined)).toBe(false);
+    expect(retriesAtCapacity("e45")).toBe(false);
+    expect(CAPACITY_BACKOFF_MS).toEqual([30_000, 60_000, 120_000, 240_000, 300_000]);
+    expect(CAPACITY_BACKOFF_MS.map((_, i) => capacityBackoffMs({ episode: "freeplay", failure, retriesSoFar: i }))).toEqual([...CAPACITY_BACKOFF_MS]);
+    expect(capacityBackoffMs({ episode: "freeplay", failure, retriesSoFar: CAPACITY_BACKOFF_MS.length })).toBeUndefined();
+    expect(capacityBackoffMs({ episode: "freeplay", failure: "stream disconnected", retriesSoFar: 0 })).toBeUndefined();
+    expect(capacityBackoffMs({ episode: "e90", failure, retriesSoFar: 0 })).toBeUndefined();
+  });
+
+  for (const episode of ["freeplay", "probing"] as const) {
+    test(`on ${episode}, four refusals in a row are waited out with a growing backoff, the idle clock held, and the run plays on`, async () => {
+      const time = fakeTime();
+      const { runDir, recordPath, trajectory, options } = setupEpisode("capacity", { maxTurns: 5, episode }, { WB_FAKE_CAPACITY_TURNS: "4" });
+      // An idle watchdog shorter than the waits: held, it never fires.
+      const watchdogs = new Watchdogs({ ...options.config.watchdogs, idleMs: 60_000 }, time.now);
+      expect(await runCodexEpisode({ ...options, watchdogs, sleep: time.sleep })).toEqual({ kind: "terminated", reason: "turn-limit", detail: "5 turns" });
+      const records = readTrajectory(runDir);
+      const retries = records.filter((r) => r.t === "harness" && r["kind"] === "capacity_retry");
+      expect(retries.map((r) => [r["turn"], r["retry"], r["waitMs"]])).toEqual([
+        [1, 1, 30_000],
+        [2, 2, 60_000],
+        [3, 3, 120_000],
+        [4, 4, 240_000],
+      ]);
+      expect(sum(time.slept)).toBe(30_000 + 60_000 + 120_000 + 240_000);
+      expect(Math.max(...time.slept)).toBeLessThanOrEqual(1_000);
+      expect(records.filter((r) => r.t === "codex_result").map((r) => r["status"])).toEqual(["error", "failed", "error", "failed", "error", "failed", "error", "failed", "completed"]);
+      // The model hears of each failed turn what it always did, and nothing of the wait.
+      const messages = readRecord(recordPath)["userMessages"] as string[];
+      expect(messages).toHaveLength(5);
+      expect(messages[4]).toContain("the previous turn ended with an error from the CLI before it finished.");
+      expect(messages.join("\n")).not.toMatch(/capacity|backoff|retry/i);
+      expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("turn-limit");
+      trajectory.close();
+    }, 60_000);
+  }
+
+  for (const episode of ["e90", undefined] as const) {
+    test(`on ${episode ?? "a launch with no episode"}, three refusals in a row end the run as adapter-error, unwaited, as before`, async () => {
+      const time = fakeTime();
+      const { runDir, trajectory, options } = setupEpisode("capacity", { maxTurns: 6, ...(episode !== undefined ? { episode } : {}) });
+      const outcome = await runCodexEpisode({ ...options, sleep: time.sleep });
+      expect(outcome).toMatchObject({ kind: "terminated", reason: "adapter-error" });
+      expect(outcome.kind === "terminated" && outcome.detail).toContain("failed 3 turns in a row");
+      expect(outcome.kind === "terminated" && outcome.detail).toContain("Selected model is at capacity");
+      expect(readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "capacity_retry")).toEqual([]);
+      expect(sum(time.slept)).toBe(0);
+      trajectory.close();
+    }, 60_000);
+  }
+
+  test("a model that stays at capacity still ends the run: the ladder, then three counted failures", async () => {
+    const time = fakeTime();
+    const { runDir, trajectory, options } = setupEpisode("capacity", { maxTurns: 20, episode: "freeplay" });
+    const outcome = await runCodexEpisode({ ...options, sleep: time.sleep });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "adapter-error" });
+    expect(outcome.kind === "terminated" && outcome.detail).toContain("failed 3 turns in a row");
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "harness" && r["kind"] === "capacity_retry").map((r) => r["waitMs"])).toEqual([...CAPACITY_BACKOFF_MS]);
+    expect(records.filter((r) => r.t === "request")).toHaveLength(CAPACITY_BACKOFF_MS.length + 3);
+    expect(sum(time.slept)).toBe(sum(CAPACITY_BACKOFF_MS));
+    trajectory.close();
+  }, 60_000);
+
+  test("on the program loop the backoff is the turn-end sleep's floor, and the wake says how long it slept", async () => {
+    const time = fakeTime();
+    const { runDir, trajectory, options } = setupEpisode("capacity", { maxTurns: 3, episode: "freeplay", loop: "program" }, { WB_FAKE_CAPACITY_TURNS: "2", WB_FAKE_CALLS: "[]" });
+    const facts = { deploy: null, routines: [], facts: [], factsDropped: 0, repeats: [], console: { lines: [], total: 0 } };
+    const program = {
+      routines: () => [],
+      drainFacts: () => facts,
+      beat: () => Promise.resolve(),
+      shownDetails: () => new Set<string>(),
+      markShown: () => undefined,
+      forgetShown: () => undefined,
+    };
+    const sandbox = Object.assign(fakeSandbox(), { program }) as unknown as SandboxHost;
+    const wake = new ProgramWake({ trajectory, now: time.now, sleep: time.sleep, tickMs: 1_000, coalesceMs: 0 });
+    const watchdogs = new Watchdogs({ ...options.config.watchdogs, idleMs: 45_000 }, time.now);
+    const outcome = await runCodexEpisode({ ...options, sandbox, watchdogs, programWake: wake, capacityBackoffMs: [30_000, 60_000] });
+    expect(outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "3 turns" });
+    const wakes = readTrajectory(runDir).filter((r) => r.t === "wake");
+    expect(wakes.map((r) => [r["turn"], r["fired"], r["sleptMs"]])).toEqual([
+      [1, "notice", 30_000],
+      [2, "notice", 60_000],
+    ]);
+    trajectory.close();
+  }, 30_000);
+
+  test("a stop request during the wait ends it", async () => {
+    const { trajectory, options } = setupEpisode("capacity", { maxTurns: 5, episode: "freeplay" });
+    const ac = new AbortController();
+    let calls = 0;
+    const sleep = (): Promise<void> => {
+      if (++calls === 3) ac.abort();
+      return Promise.resolve();
+    };
+    expect(await runCodexEpisode({ ...options, sleep, signal: ac.signal })).toMatchObject({ kind: "terminated", reason: "manual" });
+    // Two steps of the first wait, the stop, and nothing after it.
+    expect(calls).toBe(3);
     trajectory.close();
   }, 30_000);
 });

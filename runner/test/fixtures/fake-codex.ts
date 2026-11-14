@@ -47,6 +47,14 @@
  *                when resumed (`WB_FAKE_THREAD_ID` + the turn number).
  *   enospc       like tools, but stderr carries the CLI's rollout-write
  *                failure on a full disk while the turn still completes.
+ *   capacity     the provider turns the request away: an `error` and a
+ *                `turn.failed` saying "Selected model is at capacity…", exit 1,
+ *                on the first $WB_FAKE_CAPACITY_TURNS turns (every turn when
+ *                unset), then like tools.
+ *   items        like tools, plus items of exec's other types, which the
+ *                driver acts on nowhere: a command execution, a collaboration
+ *                tool call (with a body long enough to be cut), an `error`
+ *                item that is not a reroute, and an empty agent message.
  *
  * $WB_FAKE_CALLS replaces the default turn's one `run_snippet` with a script:
  * a JSON array indexed by turn, each entry the `{name, arguments}` calls that
@@ -345,6 +353,16 @@ switch (mode) {
     process.stderr.write("ERROR: usage limit reached for this account\n");
     saveRecord();
     process.exit(1);
+  case "capacity": {
+    const n = Bun.env["WB_FAKE_CAPACITY_TURNS"];
+    if (n === undefined || turn <= Number(n)) {
+      fail("error", "Selected model is at capacity. Please try a different model.");
+      fail("turn.failed", "Selected model is at capacity. Please try a different model.");
+      saveRecord();
+      process.exit(1);
+    }
+    break;
+  }
   case "flaky":
     if (turn === 1) {
       fail("turn.failed", "stream disconnected before completion");
@@ -496,6 +514,15 @@ function writeRollout(): void {
 emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: `turn ${turn}: acting` } });
 if (mode === "reroute") {
   emit({ type: "item.completed", item: { id: "item_r", type: "error", message: "model rerouted: gpt-5.5 -> gpt-5.5-mini (HighRiskCyberActivity)" } });
+}
+if (mode === "items") {
+  emit({ type: "item.completed", item: { id: "item_c", type: "command_execution", command: "cat /etc/hostname", aggregated_output: "fakehost\n", exit_code: 0, status: "completed" } });
+  emit({
+    type: "item.completed",
+    item: { id: "item_k", type: "collab_tool_call", tool: "spawn_agent", prompt: "x".repeat(5_000), receiver_thread_ids: [], status: "completed" },
+  });
+  emit({ type: "item.completed", item: { id: "item_e", type: "error", message: "something the CLI wanted said" } });
+  emit({ type: "item.completed", item: { id: "item_m", type: "agent_message", text: "" } });
 }
 if (mcp !== null) {
   // $WB_FAKE_CALLS: a JSON array indexed by turn, each entry the `{name, arguments}` calls that turn makes.

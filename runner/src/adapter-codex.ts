@@ -69,8 +69,13 @@
  * `sandbox_mode="read-only"` in an empty temp cwd — and, for GPT-6 models, the
  * CLI's code mode (`functions.exec`, `functions.wait`) and collaboration tools
  * as well, which no flag here removes (runner/README.md, "The codex driver").
- * Our tools (the nine, or a fan-out run's twelve: the CLI lists whatever the
- * server serves, and the approval below is per server) arrive via
+ * Whatever of theirs exec reports as an item goes on the record as a
+ * `codex_item` (`codexItemRecord`), for the operator only.
+ * Our tools — whatever `toolsFor` (tools.ts) serves the run: on the program
+ * loop fifteen, sixteen with `yield` (off on codex unless a launch asks), and
+ * three roster tools more at fan-out; on the snippet loop the nine, or twelve
+ * at fan-out; `search_reference` less on a run without the wiki. The CLI lists
+ * whatever the server serves, and the approval below is per server — arrive via
  * `mcp_servers.wrathbench.*` overrides on the command line (`--ignore-user-config` keeps the operator's
  * ~/.codex/config.toml — trusted projects, other MCP servers — out of the run;
  * auth still comes from CODEX_HOME). Codex presents them to the model as
@@ -131,6 +136,12 @@
  * policy violation" sentence is not recognised: the turn is an unclassified
  * failure, a session note, and three of them end the run as `adapter-error` —
  * the known limit of classifying exec's words until typed errors reach it.
+ * One unclassified failure is waited out on the unscored tiers: "Selected
+ * model is at capacity" on a freeplay or probing run is retried after a
+ * backoff (30 s doubling to 5 minutes, `CAPACITY_BACKOFF_MS`) before it
+ * counts, since a model at capacity for a minute ended runs three turns and
+ * a few seconds later. A scored run keeps the three-in-a-row rule, which
+ * gives it a fresh attempt instead of spending its clock (`retriesAtCapacity`).
  * The CLI failing on the host under it — its thread store unwritable, a full
  * disk under `$CODEX_HOME` — is `infrastructure-failed`: a pause for the
  * operator, never a notice to the model, which can do nothing about it and
@@ -157,6 +168,7 @@ import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { entryOf } from "./drivers";
+import { isEpisodeId, isScoredEpisode } from "./episodes";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { ThreadContext } from "./context";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
@@ -369,6 +381,83 @@ export function parseCodexEvent(line: string): Record<string, unknown> | null {
   return eventSchema.safeParse(parsed).success ? (parsed as Record<string, unknown>) : null;
 }
 
+/** How much of an item's JSON a `codex_item` record keeps. */
+export const CODEX_ITEM_BODY_CHARS = 4_000;
+
+/**
+ * An `item.completed` the driver writes nowhere else, as the operator's record
+ * of it: its type and its JSON, cut to `CODEX_ITEM_BODY_CHARS`. The items the
+ * driver acts on (an agent message, an MCP call, reasoning, a reroute) have
+ * their own records; this is everything else exec prints — the GPT-6 CLI's
+ * own tools above all, which no flag removes (header, "Tools"), and any type a
+ * later CLI adds — so a model's use of a tool outside ours leaves a trace.
+ * Trajectory only: nothing of it reaches the model, and the public projection
+ * names no field of it. The trajectory scrubs it of the run's secrets as it
+ * scrubs every record.
+ */
+export function codexItemRecord(turn: number, item: Record<string, unknown>): { t: "codex_item"; [key: string]: unknown } {
+  const json = JSON.stringify(item);
+  const type = item["type"];
+  return {
+    t: "codex_item",
+    turn,
+    type: typeof type === "string" ? type : null,
+    body: json.slice(0, CODEX_ITEM_BODY_CHARS),
+    ...(json.length > CODEX_ITEM_BODY_CHARS ? { truncated: true, chars: json.length } : {}),
+  };
+}
+
+/**
+ * The provider turning a request away for load: exec prints "Selected model is
+ * at capacity. Please try a different model." as the failed turn's message.
+ * Never a classified failure (`detectCodexFailure`): it is an unclassified
+ * failed turn, which on the unscored lanes is retried with a backoff before
+ * it counts (`capacityBackoffMs`).
+ */
+const CAPACITY_PATTERN = /selected model is at capacity/i;
+
+export function isCapacityRefusal(text: string | undefined | null): boolean {
+  return typeof text === "string" && CAPACITY_PATTERN.test(text);
+}
+
+/**
+ * The waits before each retry of a turn the provider refused at capacity, in
+ * order: 30 s doubling to a 5-minute cap, about thirteen minutes in all. Past
+ * the last, a capacity failure counts toward `MAX_CONSECUTIVE_FAILED_TURNS`
+ * like any other, so a model that stays at capacity still ends the run, as
+ * `adapter-error`, in bounded time.
+ */
+export const CAPACITY_BACKOFF_MS = [30_000, 60_000, 120_000, 240_000, 300_000] as const;
+
+/**
+ * Whether an episode retries a capacity refusal before counting it: the
+ * unscored tiers only (freeplay and probing), read off the episode table as
+ * the lapse rule reads it (`resumesOnPause`). A scored episode keeps the
+ * three-in-a-row rule as it was: its `adapter-error` is a failed attempt that
+ * is retried fresh with a full clock and no strike (METHODOLOGY, "A lapsed run
+ * is evidence only if its lane says so"), where a backoff would spend the
+ * attempt's own clock. A launch with no episode keeps it too.
+ */
+export function retriesAtCapacity(episode: string | undefined): boolean {
+  return episode !== undefined && isEpisodeId(episode) && !isScoredEpisode(episode);
+}
+
+/**
+ * The wait before retrying the turn that just failed, or undefined when it
+ * counts as a failed turn: it was not a capacity refusal, the episode does not
+ * retry one, or `retriesSoFar` (since the last completed turn) has spent the
+ * ladder.
+ */
+export function capacityBackoffMs(o: {
+  episode: string | undefined;
+  failure: string;
+  retriesSoFar: number;
+  ladder?: readonly number[];
+}): number | undefined {
+  if (!retriesAtCapacity(o.episode) || !isCapacityRefusal(o.failure)) return undefined;
+  return (o.ladder ?? CAPACITY_BACKOFF_MS)[o.retriesSoFar];
+}
+
 /**
  * One compaction off the rollout (`CodexRolloutFollower`) as the record both
  * CLI drivers write (`cli-compaction.ts`). The CLI names no trigger in exec
@@ -526,6 +615,8 @@ export interface CodexEpisodeOptions {
   onObservationStalled?: ObservationStallHook | undefined;
   /** The program loop's waking (`wake.ts`), on a `loop: "program"` run: the pause after each turn becomes a sleep until a wake. */
   programWake?: ProgramWake | undefined;
+  /** The capacity retries' waits (`CAPACITY_BACKOFF_MS`). Test hook only. */
+  capacityBackoffMs?: readonly number[];
 }
 
 /** The program loop's MCP tool timeout, in the seconds the CLI takes: above the longest `yield` hold (`PROGRAM_TOOL_TIMEOUT_MS`). */
@@ -666,12 +757,13 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
    * whose every message carries the whole pad as it always has.
    */
   const thread = threadContextOf(config) ? new ThreadContext() : undefined;
-  const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
+  /** `floorMs`: a capacity retry's backoff, which no wake cuts short; else the step interval. */
+  const sleepFor = (via: "turn-end" | "yield", capMs: number, floorMs?: number) =>
     programWake!.sleep(program!, {
       via,
       turn,
       capMs,
-      floorMs: config.stepIntervalMs,
+      floorMs: floorMs ?? config.stepIntervalMs,
       stopped: () => done() || watchdogs.check() !== null,
       queuedNotices: () => pendingNotices.length,
       idle: watchdogs,
@@ -1058,6 +1150,23 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
 
   let threadId: string | undefined;
   let failedTurns = 0;
+  /** Capacity refusals retried since the last completed turn (`capacityBackoffMs`). */
+  let capacityRetries = 0;
+  const capacityLadder = o.capacityBackoffMs ?? CAPACITY_BACKOFF_MS;
+  /**
+   * The snippet loop's wait before a capacity retry: in steps of at most a
+   * second, so a stop request or a watchdog verdict (a probe's clock still
+   * runs) ends it, with the idle clock held — the model is not the one
+   * silent. Counted down by what was slept, never by the clock.
+   */
+  const backOff = async (ms: number): Promise<void> => {
+    watchdogs.noteAsleep();
+    try {
+      for (let left = ms; left > 0 && !done() && watchdogs.check() === null; left -= 1_000) await sleep(Math.min(1_000, left));
+    } finally {
+      watchdogs.noteAwake();
+    }
+  };
   /**
    * This episode's threads whose rollouts are still on the home's volume, and
    * the ones it has moved off since the last turn ended. A rollout is deleted
@@ -1257,6 +1366,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
             if (item === undefined) break;
             items++;
             const kind = item["type"];
+            /** Whether a branch below wrote this item; the rest go on the record as `codex_item`. */
+            let recorded = true;
             if (kind === "agent_message" && typeof item["text"] === "string") {
               const text = item["text"] as string;
               if (text.length > 0) {
@@ -1264,6 +1375,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
                 watchdogs.noteModelOutput();
                 lastText = text;
                 pushResponse({ t: "response", turn, message: { role: "assistant", content: text } });
+              } else {
+                recorded = false;
               }
             } else if (kind === "mcp_tool_call") {
               sawOutput = true;
@@ -1291,7 +1404,11 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
               // every driver keeps); the reroute is on the record beside it.
               const r = REROUTED.exec(item["message"] as string);
               if (r !== null) trajectory.append({ t: "harness", kind: "model_rerouted", turn, from: r[1], to: r[2], reason: r[3] ?? null });
+              else recorded = false;
+            } else {
+              recorded = false;
             }
+            if (!recorded) trajectory.append(codexItemRecord(turn, item));
             break;
           }
           case "turn.completed": {
@@ -1420,14 +1537,30 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         }
         return terminate(failure.reason, failure.detail);
       }
+      /** Set when this failed turn is a capacity refusal to retry after a wait (`capacityBackoffMs`). */
+      let backoffMs: number | undefined;
       if (!turnCompleted) {
-        failedTurns++;
         const why = failureTexts[failureTexts.length - 1] ?? stderrChunks.slice(-3).join(" | ").slice(0, 300);
-        if (threadId === undefined) {
-          return terminate("adapter-error", `codex exited (code ${exitCode}) before starting a thread: ${why}`);
-        }
-        if (failedTurns >= MAX_CONSECUTIVE_FAILED_TURNS) {
-          return terminate("adapter-error", `codex failed ${failedTurns} turns in a row (last exit ${exitCode}): ${why}`);
+        backoffMs = capacityBackoffMs({
+          episode: config.episode,
+          failure: [...failureTexts, ...stderrChunks].join("\n"),
+          retriesSoFar: capacityRetries,
+          ladder: capacityLadder,
+        });
+        if (backoffMs !== undefined) {
+          // Not a failed turn yet: the next turn goes after the wait, and the
+          // turn it opens is the retry. The model is told what it is told of
+          // any failed turn (below), and nothing of the wait.
+          capacityRetries++;
+          trajectory.append({ t: "harness", kind: "capacity_retry", turn, retry: capacityRetries, of: capacityLadder.length, waitMs: backoffMs });
+        } else {
+          failedTurns++;
+          if (threadId === undefined) {
+            return terminate("adapter-error", `codex exited (code ${exitCode}) before starting a thread: ${why}`);
+          }
+          if (failedTurns >= MAX_CONSECUTIVE_FAILED_TURNS) {
+            return terminate("adapter-error", `codex failed ${failedTurns} turns in a row (last exit ${exitCode}): ${why}`);
+          }
         }
         // The CLI's own words are the operator's, not the model's: they name
         // the CLI's internals, which the model cannot act on. They go on the
@@ -1444,6 +1577,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         });
       } else {
         failedTurns = 0;
+        capacityRetries = 0;
       }
       if (!sawOutput) {
         trajectory.append({ t: "harness", kind: "session_note", text: `turn ${turn} produced no assistant output` });
@@ -1489,8 +1623,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         pendingNotices.push(compactionNotice(ask.ask, Date.now()));
         trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
-      // The program loop sleeps until a wake where the snippet loop pauses for the step interval.
-      if (programWake !== undefined) currentWake = (await sleepFor("turn-end", WAKE_CAP_MS)).block;
+      // The program loop sleeps until a wake where the snippet loop pauses for
+      // the step interval. A capacity retry waits out its backoff first: on
+      // the program loop as the sleep's floor, which the failed turn's queued
+      // notice wakes at, so the wake block says how long it slept.
+      if (programWake !== undefined) currentWake = (await sleepFor("turn-end", WAKE_CAP_MS, backoffMs)).block;
+      else if (backoffMs !== undefined) await backOff(backoffMs);
       else await sleep(config.stepIntervalMs);
     }
   } catch (err) {
