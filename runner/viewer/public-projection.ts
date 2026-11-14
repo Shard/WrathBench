@@ -137,7 +137,7 @@ import type {
   NearbyStateView,
   NearbyWindow,
 } from "./api-types";
-import { EPISODE_IDS } from "../src/episodes";
+import { EPISODE_IDS, isTaskEpisode } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
@@ -701,6 +701,15 @@ function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string
             yield: r.condition.yield,
             pinned: r.condition.pinned,
             wiki: r.condition.wiki,
+            // What is being tested, and a local build's weights, quantisation
+            // and runtime: published (operator, 2026-11-14). Its labels, the
+            // machine and the runtime's version, never reach a result row.
+            subject: r.condition.subject,
+            ...(r.condition.serving !== undefined
+              ? { serving: { weights: r.condition.serving.weights, quant: r.condition.serving.quant, runtime: r.condition.serving.runtime } }
+              : {}),
+            // An external agent's declared name and version; never its operator.
+            ...(r.condition.agent !== undefined ? { agent: { name: r.condition.agent.name, version: r.condition.agent.version } } : {}),
           },
         }
       : {}),
@@ -872,7 +881,9 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
 
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
   return scrubPathsValue<EpisodesResponse>({
-    episodes: e.episodes.map((t) => ({
+    // The Deadmines task episodes are published with their board, not
+    // before it: until then a public page has no reading of them to show.
+    episodes: e.episodes.filter((t) => !isTaskEpisode(t.id)).map((t) => ({
       id: t.id,
       minutes: t.minutes,
       idleMinutes: t.idleMinutes,
@@ -1074,11 +1085,26 @@ function projectModelRun(r: ModelRunView): ModelRunView {
   });
 }
 
+/**
+ * A scheduler's "schedulable on …" or "targets met on …" with the task
+ * episodes left out of its list, as the rest of the row leaves them out until
+ * their board is published (`projectEpisodes`). A list of nothing else is
+ * kept whole: dropping every item would say something false.
+ */
+export function withoutTaskEpisodes(why: string): string {
+  const m = /^(schedulable on|targets met on) (.+?)( — .*)?$/.exec(why);
+  if (m === null) return why;
+  const kept = m[2]!.split(", ").filter((x) => !isTaskEpisode(x));
+  return kept.length === 0 ? why : `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
+}
+
 function projectModelRow(row: ModelRowView): ModelRowView {
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
   // Keyed off the known tier ids, not the object's own keys: an input parsed
   // from JSON could carry any key, and only the four tiers are speakable.
   for (const id of EPISODE_IDS) {
+    // Not the task episodes, until their board is published (`projectEpisodes`).
+    if (isTaskEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;
     // Not emitted: `otherSeries`, `reachedL5`, `lastEnded`, `lastReason` and
@@ -1106,14 +1132,14 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     earnedRung1: row.earnedRung1,
     idle: row.idle,
     status: row.status,
-    eligible: [...row.eligible],
+    eligible: row.eligible.filter((id) => !isTaskEpisode(id)),
     perEpisode,
     ...(row.cooling !== undefined
       ? { cooling: { until: row.cooling.until, rung: row.cooling.rung, reason: row.cooling.reason } }
       : {}),
     ...(row.retired !== undefined ? { retired: { at: row.retired.at, reason: row.retired.reason } } : {}),
     ladder: row.ladder,
-    schedulable: { ok: row.schedulable.ok, why: row.schedulable.why, extras: row.schedulable.extras },
+    schedulable: { ok: row.schedulable.ok, why: withoutTaskEpisodes(row.schedulable.why), extras: row.schedulable.extras },
     ...(row.resolvedModels !== undefined ? { resolvedModels: [...row.resolvedModels] } : {}),
     runs: row.runs.map(projectModelRun),
     newestRunId: row.newestRunId,

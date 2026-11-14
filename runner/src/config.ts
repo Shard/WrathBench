@@ -17,9 +17,10 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { EPISODE_IDS, EPISODES, episodeIdSchema, isScoredEpisode, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
+import { EPISODE_IDS, EPISODES, TASK_EPISODE_IDS, episodeIdSchema, isScoredEpisode, isTaskEpisode, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 import { PARTY_PAUSE, STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
+import { agentSchema, servingLabelsSchema, servingSchema } from "./serving";
 import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
 import { endConditionSchema } from "./end-conditions";
@@ -587,6 +588,21 @@ export const runConfigSchema = z.object({
    */
   objective: z.string().min(1).max(4000).optional(),
   /**
+   * A task episode's directive (operator, 2026-11-14): the text its id pins
+   * (`task-episodes.ts`), one agent's or one member's, rendered into the
+   * prompt by the same block and bytes as an objective but never one. Nobody
+   * authors it at launch and it is identical for every model, so it is not
+   * steering and the run stays scored; the prompt hash covers it. Only a task
+   * episode carries one (`loadRunConfig`).
+   */
+  directive: z.string().min(1).max(4000).optional(),
+  /**
+   * A task episode's pins as the launch file named them: the content hash of
+   * the definition its id pins, and of the stager's fixtures the party was
+   * staged from. Stamped into the tuple as a key (`comparability.ts`).
+   */
+  task: z.object({ definition: z.string().min(1), staging: z.string().min(1).optional() }).strict().optional(),
+  /**
    * Whether `search_reference` serves wiki-recorded coordinates.
    * Default false — names-first: the scored tiers measure whether a model can
    * find things, and exact yards would make every model converge on
@@ -819,6 +835,20 @@ export const runConfigSchema = z.object({
    * launched with, and the resolved answer is stamped in the tuple.
    */
   routing: routingSchema.optional(),
+  /**
+   * A local build's weights, quantisation and runtime, as its roster entry
+   * declared them (`serving.ts`; operator, 2026-11-14). A key in the tuple,
+   * with routing's standing; absent on a hosted run. Identity: a resume keeps it.
+   */
+  serving: servingSchema.optional(),
+  /** The machine and the runtime's version: labels, never a key and never published. */
+  servingLabels: servingLabelsSchema.optional(),
+  /**
+   * The agent an `external` run declared (operator, 2026-11-14): its name and
+   * version, a key of its own comparability group. Declared, never observed,
+   * and null where the operator stated none rather than a guess.
+   */
+  agent: agentSchema.optional(),
   /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 
@@ -1004,23 +1034,33 @@ export function loadRunConfig(raw: unknown): RunConfig {
   const loopRefusal = programLoopRefusal(config);
   if (loopRefusal !== null) throw new Error(loopRefusal);
   // Refused, never ignored: one agent driving several characters is its own
-  // measurement (operator, 2026-11-11), which runs first as a probe campaign
-  // and has no scored episode yet, so a scored tier never starts as one; a
-  // party is several agents, and a continuation or a staged `--character` is
-  // one character's.
+  // measurement (operator, 2026-11-11), whose one scored episode is
+  // `deadmines-solo` (operator, 2026-11-14), so no other scored tier starts
+  // as one; a party is several agents, and a continuation or a staged
+  // `--character` is one character's.
   if (config.fanout !== undefined) {
-    if (config.episode !== undefined && config.episode !== "probing" && config.episode !== "freeplay") {
-      throw new Error(`fan-out (--max-characters above 1) is a probe's or a freeplay run's; --episode ${config.episode} is a scored single-character episode`);
+    if (config.episode !== undefined && config.episode !== "probing" && config.episode !== "freeplay" && config.episode !== "deadmines-solo") {
+      throw new Error(
+        `fan-out (--max-characters above 1) is a probe's, a freeplay run's or --episode deadmines-solo's; --episode ${config.episode} is ${isTaskEpisode(config.episode) ? "five agents of one character each" : "a scored single-character episode"}`,
+      );
     }
     if (config.party !== undefined) throw new Error("fan-out is one agent driving several characters; a party member drives one");
     if (config.continuedFrom !== undefined) throw new Error("fan-out does not continue a single character's run (--continue-from)");
     if (entryOf(config.driver).route === true) throw new Error(`driver ${config.driver} plays one character's route; it has no fan-out`);
   }
+  // Refused, never ignored: a task episode's shape is its id's (operator,
+  // 2026-11-14). Its directive is the only text a scored run may carry in the
+  // objective's place, and it carries exactly as many agents and characters
+  // as the id says: one agent driving the party's five (`deadmines-solo`,
+  // the grant), or one member of five (`deadmines`, the party stamp).
+  const taskProblem = taskEpisodeRefusal(config);
+  if (taskProblem !== null) throw new Error(taskProblem);
   // Refused at launch as well as in the scheduler: a probe-only driver's run
   // is a campaign's square and nothing else, so a hand launch on a scored,
   // freeplay or unnamed episode — which would carry a scored stamp and could
   // map onto another harness's row by model id — never starts.
-  if (entryOf(config.driver).probeOnly && (config.episode !== "probing" || config.campaign === undefined)) {
+  const handRun = entryOf(config.driver).handRun === true && config.episode === undefined;
+  if (entryOf(config.driver).probeOnly && !handRun && (config.episode !== "probing" || config.campaign === undefined)) {
     throw new Error(`${probeOnlyRefusal(config.driver)} — launch it as a campaign's square (--campaign <id>@<v> --cell <id>), not as episode ${config.episode ?? "(none)"}`);
   }
   // Refused, never ignored: the reference program reads no prompt, so an
@@ -1041,6 +1081,38 @@ export function loadRunConfig(raw: unknown): RunConfig {
     // see it.
   }
   return config;
+}
+
+/**
+ * Why a config does not hold together as its task episode, or as no task
+ * episode, or null when it does. A directive belongs to a task episode alone
+ * and is refused beside an objective; a task episode needs one, starts on a
+ * staged character, and its grant is the id's: `deadmines-solo` one run with
+ * fan-out over the party's characters and no party stamp, `deadmines` one
+ * member of a party with no fan-out.
+ */
+export function taskEpisodeRefusal(config: Pick<RunConfig, "episode" | "directive" | "objective" | "fanout" | "party" | "continuedFrom" | "task">): string | null {
+  const ep = config.episode;
+  if (!isTaskEpisode(ep)) {
+    if (config.task !== undefined) return `task pins are a task episode's (${TASK_EPISODE_IDS.join(", ")}); --episode ${ep ?? "(none)"} has none`;
+    return config.directive !== undefined ? `a directive is a task episode's (${TASK_EPISODE_IDS.join(", ")}); --episode ${ep ?? "(none)"} has none` : null;
+  }
+  if (config.objective !== undefined) return `--episode ${ep} is scored: its directive is pinned by the id, and an operator objective would steer it`;
+  if (config.directive === undefined) return `--episode ${ep} carries the directive its id pins, and this launch has none — it launches from the fleet's file for the id`;
+  if (config.continuedFrom !== undefined) return `--episode ${ep} starts on a staged party; it continues no run`;
+  const want = EPISODES[ep].task;
+  if (want.agents === 1) {
+    if (config.party !== undefined) return `--episode ${ep} is one agent driving the party; a party member is --episode deadmines`;
+    if (config.fanout === undefined || config.fanout.characters !== want.characters) {
+      return `--episode ${ep} is one agent driving ${want.characters} characters; this launch grants ${config.fanout?.characters ?? 1}`;
+    }
+    return null;
+  }
+  if (config.fanout !== undefined) return `--episode ${ep} is ${want.agents} agents of one character each; fan-out is --episode deadmines-solo`;
+  if (config.party === undefined || config.party.size !== want.agents) {
+    return `--episode ${ep} is a party of ${want.agents} agents; this launch is ${config.party === undefined ? "no party member" : `a member of a party of ${config.party.size}`}`;
+  }
+  return null;
 }
 
 /**

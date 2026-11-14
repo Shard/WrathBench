@@ -151,6 +151,20 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
   add("probe, a party's members on the second Claude credential", partySpecs());
   add("hand roster, steered, on an account", resolve([{ model: "x/y", objective: "go north", wikiCoords: true, episode: "probing", account: "SHAKEOUT" } as RosterSpec], STAMP));
   add("hand roster, no wiki, no clock", resolve([{ model: "x/y", wiki: false, watchdogs: { episodeMs: null, idleMs: 0 } } as RosterSpec], STAMP));
+  add(
+    "hand roster, a local build with its labels",
+    resolve(
+      [
+        {
+          model: "qwen/q",
+          apiBase: "http://127.0.0.1:1234/v1",
+          serving: { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" },
+          servingLabels: { machine: "box", runtimeVersion: "0.4.1" },
+        } as RosterSpec,
+      ],
+      STAMP,
+    ),
+  );
   for (const { name, spec } of [...out]) out.push({ name: `${name}, resumed`, spec, resume: true });
   return out;
 }

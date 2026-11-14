@@ -30,9 +30,6 @@
 
 import { EPISODES, isEpisodeId } from "./episodes";
 
-/** Failed attempts on one (model, episode, series) before the model is tainted for that episode. */
-export const TAINT_AFTER = 3;
-
 /**
  * A run with no wall clock of its own is stale after this. Twice the longest
  * tier budget (`e360`), which is the same fallback the pause logic used,
@@ -52,7 +49,7 @@ export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", 
  * every other pause keeps (operator, 2026-09-25): a lane that resumes brings
  * it back on the same defer ladder a provider pause cools on, with a fresh
  * sandbox and session, and a scored lane ends it. It is not in
- * `PROVIDER_PAUSES`, so on a scored lane it ends as `manual` and is no strike.
+ * `PROVIDER_PAUSES`, so on a scored lane it ends as `manual` and is no cooling rung.
  *
  * Declared here rather than beside `PAUSE_REASONS` because the viewer's public
  * projection reads it, and this module is the light one: it must keep
@@ -64,7 +61,7 @@ export const STALL_PAUSE = "observation-stalled";
  * The pause a freeplay run takes when its credential's usage window
  * reaches the freeplay threshold (`runner/src/subscription-usage.ts`; operator,
  * 2026-10-16). The harness's own doing, not the provider's refusal and not the
- * model's: no strike, no rung on the defer ladder, no streak. It carries the
+ * model's: no rung on either ladder, no streak. It carries the
  * window's reset as `notBefore`, and the credential's budget holds the resume until the
  * window is back under the threshold. Declared here for the reason
  * `STALL_PAUSE` is: the public projection reads it.
@@ -76,7 +73,7 @@ export const SUBSCRIPTION_PAUSE = "subscription-budget";
  * (docs/proposals/GROUP-PLAY.md, "Shared fate"): the party is one attempt and
  * resumes whole or not at all, so the roster pauses the rest under this
  * reason with the first member's own as the detail. The harness's doing, not
- * the provider's or the model's: no strike, no rung on the defer ladder of
+ * the provider's or the model's: no rung on either ladder of
  * its own. When the party comes back is the first member's pause's question
  * (`planResumes` groups the party and waits on every member).
  */
@@ -114,7 +111,7 @@ export const NOT_THE_MODELS_FAULT: ReadonlySet<string> = new Set([
   "stale-character",
   "environment-defect",
   // A transport failure ends the episode early with the model's clock unspent;
-  // the evidence is tainted, not weak (operator, 2026-08-30).
+  // the evidence is not the model's, not weak (operator, 2026-08-30).
   "adapter-error",
   // A probe launch that never became a run: no turn was played.
   "launch-failed",
@@ -139,7 +136,7 @@ export interface EvidenceFacts {
  * This is deliberately below both the scheduler and viewer: the scheduler's
  * counted target and the viewer's unscored reason must not grow separate lists
  * of reasons or disagree about an in-progress run. Extra/override are not
- * taint: they remain membership questions at their existing callers.
+ * bad evidence: they remain membership questions at their existing callers.
  */
 export function badEvidenceReason(f: EvidenceFacts): string | null {
   // Viewer rows currently expose `live: true` for a fresh paused directory, so
@@ -218,8 +215,6 @@ export interface Lapse {
   /** The termination to write. Absent on `resume`. */
   reason?: "attempt-failed" | "manual" | "stale";
   detail?: string;
-  /** Counts toward the model's three strikes on this episode. Always `reason === "attempt-failed"`. */
-  counts: boolean;
 }
 
 /** "12h42m" — the gap named in a stale run's detail. */
@@ -244,23 +239,22 @@ export function classifyLapse(opts: {
 }): Lapse {
   const cause = opts.pause?.reason ?? OFFLINE_PAUSE;
   const provider = PROVIDER_PAUSES.has(cause);
-  if (neverStale(opts.episode)) return { kind: "resume", counts: false };
+  if (neverStale(opts.episode)) return { kind: "resume" };
   if (opts.staleForMs !== null) {
     // A stale gap is the harness's weather, not the model's failure — unless
     // the run was already waiting on its provider when the lights went out.
     const gap = `no activity for ${fmtGap(opts.staleForMs)}`;
     return provider
-      ? { kind: "stale", reason: "attempt-failed", detail: `${cause}: ${gap} — ended stale`, counts: true }
-      : { kind: "stale", reason: "stale", detail: `${cause}: ${gap} — ended stale`, counts: false };
+      ? { kind: "stale", reason: "attempt-failed", detail: `${cause}: ${gap} — ended stale` }
+      : { kind: "stale", reason: "stale", detail: `${cause}: ${gap} — ended stale` };
   }
-  if (opts.pause === null) return { kind: "resume", counts: false };
-  if (resumesOnPause(opts.episode, opts.campaignResume)) return { kind: "resume", counts: false };
+  if (opts.pause === null) return { kind: "resume" };
+  if (resumesOnPause(opts.episode, opts.campaignResume)) return { kind: "resume" };
   if (provider) {
     return {
       kind: "fail",
       reason: "attempt-failed",
       detail: `${cause}: not resumed — a scored run that pauses is a failed attempt`,
-      counts: true,
     };
   }
   // An operator-pause is a fleet stop or a deploy. The attempt is spent and
@@ -269,6 +263,5 @@ export function classifyLapse(opts: {
     kind: "fail",
     reason: "manual",
     detail: `${cause}: ended as a failed attempt, not counted against the model`,
-    counts: false,
   };
 }

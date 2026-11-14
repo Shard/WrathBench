@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { PAUSE_REASONS } from "../src/config";
-import { NOT_THE_MODELS_FAULT, PROVIDER_PAUSES, STALL_PAUSE, TAINT_AFTER, classifyLapse, countedRun, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
+import { NOT_THE_MODELS_FAULT, PROVIDER_PAUSES, STALL_PAUSE, classifyLapse, countedRun, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
 
 /**
  * The whole of the lapse rule, as a table. Every row is a case an operator
@@ -16,109 +16,109 @@ describe("what happens to a lapsed run", () => {
     campaignResume?: boolean;
     pause: { reason: string } | null;
     staleForMs?: number | null;
-    want: Pick<Lapse, "kind" | "counts"> & { reason?: Lapse["reason"] };
+    want: Pick<Lapse, "kind"> & { reason?: Lapse["reason"] };
   }[] = [
     {
-      what: "an e90 the provider paused: a failed attempt, and it counts",
+      what: "an e90 the provider paused: a failed attempt, a cooling rung",
       episode: "e90",
       pause: { reason: "quota-exhausted" },
-      want: { kind: "fail", reason: "attempt-failed", counts: true },
+      want: { kind: "fail", reason: "attempt-failed" },
     },
     {
       what: "an e360 rate-limited: the same, on the long tier",
       episode: "e360",
       pause: { reason: "rate-limited" },
-      want: { kind: "fail", reason: "attempt-failed", counts: true },
+      want: { kind: "fail", reason: "attempt-failed" },
     },
     {
-      what: "an e90 stopped by the operator (a fleet stop, a deploy): a failed attempt that does NOT count",
+      what: "an e90 stopped by the operator (a fleet stop, a deploy): a failed attempt that is no rung",
       episode: "e90",
       pause: { reason: "operator-pause" },
-      want: { kind: "fail", reason: "manual", counts: false },
+      want: { kind: "fail", reason: "manual" },
     },
-    { what: "freeplay: resumed, exactly as before", episode: "freeplay", pause: { reason: "quota-exhausted" }, want: { kind: "resume", counts: false } },
-    { what: "freeplay stopped by the operator: resumed", episode: "freeplay", pause: { reason: "operator-pause" }, want: { kind: "resume", counts: false } },
-    { what: "a probe campaign that asked to resume", episode: "probing", campaignResume: true, pause: { reason: "rate-limited" }, want: { kind: "resume", counts: false } },
+    { what: "freeplay: resumed, exactly as before", episode: "freeplay", pause: { reason: "quota-exhausted" }, want: { kind: "resume" } },
+    { what: "freeplay stopped by the operator: resumed", episode: "freeplay", pause: { reason: "operator-pause" }, want: { kind: "resume" } },
+    { what: "a probe campaign that asked to resume", episode: "probing", campaignResume: true, pause: { reason: "rate-limited" }, want: { kind: "resume" } },
     {
       what: "a probe campaign that did not (the default): a failed attempt, swept again",
       episode: "probing",
       campaignResume: false,
       pause: { reason: "rate-limited" },
-      want: { kind: "fail", reason: "attempt-failed", counts: true },
+      want: { kind: "fail", reason: "attempt-failed" },
     },
     {
-      what: "a stale e90 that was waiting on its provider: ended, and it counts",
+      what: "a stale e90 that was waiting on its provider: ended, a cooling rung",
       episode: "e90",
       pause: { reason: "quota-exhausted" },
       staleForMs: 12 * H,
-      want: { kind: "stale", reason: "attempt-failed", counts: true },
+      want: { kind: "stale", reason: "attempt-failed" },
     },
     {
       what: "a stale e90 nobody paused — the host slept: ended `stale`, harness weather",
       episode: "e90",
       pause: null,
       staleForMs: 12 * H,
-      want: { kind: "stale", reason: "stale", counts: false },
+      want: { kind: "stale", reason: "stale" },
     },
     {
       what: "a stale e90 that was stopped for a deploy: ended, never counted",
       episode: "e90",
       pause: { reason: "operator-pause" },
       staleForMs: 12 * H,
-      want: { kind: "stale", reason: "stale", counts: false },
+      want: { kind: "stale", reason: "stale" },
     },
     {
       what: "a stale freeplay session: resumed under its own run id, however long the gap (operator, 2026-09-20)",
       episode: "freeplay",
       pause: { reason: "operator-pause" },
       staleForMs: 13 * H,
-      want: { kind: "resume", counts: false },
+      want: { kind: "resume" },
     },
     {
       what: "a freeplay session that was waiting on its provider when the lights went out: still resumed — it never counts",
       episode: "freeplay",
       pause: { reason: "rate-limited" },
       staleForMs: 13 * H,
-      want: { kind: "resume", counts: false },
+      want: { kind: "resume" },
     },
     {
       what: "a freeplay run whose runner died before its verdict (the planner's `offline` pause): resumed",
       episode: "freeplay",
       pause: { reason: "offline" },
-      want: { kind: "resume", counts: false },
+      want: { kind: "resume" },
     },
     {
       what: "a hand-written roster with no episode: the original behaviour, untouched",
       episode: undefined,
       pause: { reason: "quota-exhausted" },
-      want: { kind: "resume", counts: false },
+      want: { kind: "resume" },
     },
-    { what: "a current run that never paused: nothing to do", episode: "e90", pause: null, want: { kind: "resume", counts: false } },
+    { what: "a current run that never paused: nothing to do", episode: "e90", pause: null, want: { kind: "resume" } },
     {
       what: "a freeplay run whose observation stalled: resumed, like any other pause (operator, 2026-09-25)",
       episode: "freeplay",
       pause: { reason: STALL_PAUSE },
-      want: { kind: "resume", counts: false },
+      want: { kind: "resume" },
     },
     {
       what: "an e90 whose observation stalled: a failed attempt under the existing rule, and not a strike",
       episode: "e90",
       pause: { reason: STALL_PAUSE },
-      want: { kind: "fail", reason: "manual", counts: false },
+      want: { kind: "fail", reason: "manual" },
     },
     ...(["auth-failed", "no-access"] as const).map((reason) => ({
       what: `an e90 its credential paused (${reason}): a failed attempt, and not a strike`,
       episode: "e90",
       pause: { reason },
-      want: { kind: "fail" as const, reason: "manual" as const, counts: false },
+      want: { kind: "fail" as const, reason: "manual" as const },
     })),
-    { what: "a freeplay run its key paused (no-access): resumed", episode: "freeplay", pause: { reason: "no-access" }, want: { kind: "resume", counts: false } },
+    { what: "a freeplay run its key paused (no-access): resumed", episode: "freeplay", pause: { reason: "no-access" }, want: { kind: "resume" } },
     {
       what: "a stale e90 that had stalled: ended `stale`, never counted",
       episode: "e90",
       pause: { reason: STALL_PAUSE },
       staleForMs: 12 * H,
-      want: { kind: "stale", reason: "stale", counts: false },
+      want: { kind: "stale", reason: "stale" },
     },
   ];
 
@@ -131,10 +131,7 @@ describe("what happens to a lapsed run", () => {
         staleForMs: c.staleForMs ?? null,
       });
       expect(got.kind).toBe(c.want.kind);
-      expect(got.counts).toBe(c.want.counts);
       expect(got.reason).toBe(c.want.reason);
-      // The one predicate: counting is the reason and nothing else.
-      expect(got.counts).toBe(got.reason === "attempt-failed");
       if (got.kind !== "resume") expect(got.detail).toContain(c.pause?.reason ?? "offline");
     });
   }
@@ -160,10 +157,6 @@ describe("what happens to a lapsed run", () => {
     expect(resumesOnPause("e90", true)).toBe(false);
     expect(resumesOnPause(undefined)).toBe(true);
     expect(resumesOnPause("nonsense")).toBe(true);
-  });
-
-  test("three strikes", () => {
-    expect(TAINT_AFTER).toBe(3);
   });
 });
 

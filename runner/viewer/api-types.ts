@@ -56,7 +56,7 @@ export interface EpisodeBudgetView {
  * The episode tiers (`runner/src/episodes.ts`). Spelled out as a literal union
  * rather than imported, because this module is import-free by construction.
  */
-export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay";
+export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay" | "deadmines" | "deadmines-solo";
 
 /** One episode tier as `/api/episodes` serves it. Mirrors `EpisodeTier`. */
 export interface EpisodeTierView {
@@ -69,6 +69,8 @@ export interface EpisodeTierView {
   objectiveAllowed: boolean;
   scored: boolean;
   summary: string;
+  /** A task episode's agents and characters per agent; absent on every other id. */
+  task?: { agents: number; characters: number };
 }
 
 /**
@@ -333,6 +335,12 @@ export interface ComparabilityView {
   loop?: "program";
   /** The program loop's `yield` tool, a key; absent when off. */
   yield?: true;
+  /** A local build's weights, quantisation and runtime, a key; absent on a hosted run. */
+  serving?: { weights: string; quant: string; runtime: string };
+  /** What is being tested; stamped only when not `hosted` (`subjectOfConfig`). */
+  subject?: "hosted" | "local" | "external";
+  /** An external run's declared agent, a key; absent on every run of ours. */
+  agent?: { name: string | null; version: string | null };
   /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild ships as a patch within the
@@ -365,6 +373,10 @@ export interface ComparabilityView {
    * equality. Absent on runs stamped before the field existed.
    */
   resolvedModel?: string | null;
+  /** A task episode's agents, characters per agent and pins (`comparability.ts`). Absent on every other run. */
+  agents?: number;
+  characters?: number;
+  task?: { definition: string; staging?: string };
 }
 
 /** One run, as the listing and the detail endpoint report it. */

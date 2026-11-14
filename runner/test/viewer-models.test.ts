@@ -354,7 +354,7 @@ describe("/api/models", () => {
     const body = await models(runsDir, fleetPath);
     const alpha = body.models[0]!;
     expect(alpha.perEpisode.e90!.reachedL5).toBe(true);
-    expect(alpha.eligible).toEqual(["e90", "e360"]);
+    expect(alpha.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
     expect(alpha.status).toBe("promoted");
     expect(alpha.perEpisode.e360!.counted).toBe(0);
     expect(body.policy.promoteAtLevel).toBe(5);

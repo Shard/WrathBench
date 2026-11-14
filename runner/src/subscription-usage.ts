@@ -26,7 +26,7 @@
  * - `freeplayMaxPct` (default 80): a freeplay run does not start or resume on
  *   a credential at or over it, and a live one pauses at its next turn
  *   boundary (`subscription-budget`), resumable, with the window's reset as
- *   `notBefore` — no strike, no defer rung, no streak.
+ *   `notBefore` — no rung on either ladder, no streak.
  *
  * `100` turns either off. What stays on regardless is the quota-reset rule,
  * which is not a knob: a credential whose quota is spent (a window at 100%,

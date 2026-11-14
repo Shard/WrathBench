@@ -111,7 +111,7 @@ export function worldSoapUrl(id: string, port: number): string {
 }
 
 /** The episode tiers that are scored or probing, the ones a world is for; freeplay and a hand roster's unnamed episode share the long-lived world. */
-const WORLD_EPISODES = new Set(["e90", "e360", "probing"]);
+const WORLD_EPISODES = new Set(["e90", "e360", "probing", "deadmines", "deadmines-solo"]);
 
 /** Whether an attempt of `episode` plays on a world of its own under `mode`. */
 export function worldUsedBy(mode: WorldsMode, episode: string | null | undefined): boolean {

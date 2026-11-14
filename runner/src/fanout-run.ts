@@ -16,10 +16,11 @@
  *   bring back the characters that were in the world. The run's own
  *   `config.token` names no session at fan-out and is never leased.
  *
- * What a fan-out run means as a result (its episode, its comparability key,
- * its prompt and context rendering) is not decided here: it runs first as a
- * probe campaign (the operator's decisions of 2026-11-11), with the stack's
- * default wording.
+ * What a fan-out run means as a result is not decided here: its one scored
+ * episode is `deadmines-solo` (`episodes.ts`, operator 2026-11-14), its
+ * comparability keys are `comparability.ts`'s, and the wording a model reads
+ * when it names no character is the runner's own copy of the stack's default
+ * (`fanout-wording.ts`), whose freeze waits on the read of deadmines@5.
  */
 
 import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
