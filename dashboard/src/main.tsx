@@ -41,6 +41,7 @@ const Ladder = lazy(() => import("./pages/Ladder"));
 const About = lazy(() => import("./pages/About"));
 const Models = lazy(() => import("./pages/Models"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
+const Dungeons = lazy(() => import("./pages/Dungeons"));
 /* Operator-only; the page itself withholds on the public build. */
 const Config = lazy(() => import("./pages/Config"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -78,6 +79,7 @@ render(
       {/* The results page became the runs page; old links keep their query. */}
       <Route path="/results" component={ResultsRedirect} />
       <Route path="/ladder" component={Ladder} preload={preload.ladder} />
+      <Route path="/dungeons" component={Dungeons} preload={preload.dungeons} />
       <Route path="/about" component={About} preload={preload.about} />
       {/* The episodes page became the about page; old links still land. */}
       <Route path="/episodes" component={EpisodesRedirect} />

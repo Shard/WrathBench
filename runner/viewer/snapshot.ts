@@ -79,6 +79,7 @@ import type {
   CampaignsResponse,
   EntriesResponse,
   ToolsResponse,
+  DungeonsResponse,
   EpisodesResponse,
   FleetResponse,
   LiveNearby,
@@ -101,6 +102,7 @@ import {
   projectCampaigns,
   projectEntries,
   projectTools,
+  projectDungeons,
   projectEpisodes,
   projectFleet,
   projectInfo,
@@ -566,6 +568,8 @@ export function createRenderer(
       }
     }
     const episodes = groups.evals ? projectEpisodes(await get<EpisodesResponse>("/api/episodes")) : null;
+    // The dungeon board: an eval aggregate like the ladders.
+    const dungeons = groups.evals ? projectDungeons(await get<DungeonsResponse>("/api/dungeons")) : null;
     // The runner group's two: the scheduler's verdict per model, and the fleet.
     const models = groups.runner ? projectModels(await get<ModelsResponse>("/api/models")) : null;
     const campaigns = groups.evals ? projectCampaigns(await get<CampaignsResponse>("/api/campaigns")) : null;
@@ -779,6 +783,7 @@ export function createRenderer(
       ["results.json", results],
       ...ladders.map(([ep, body]): [string, object] => [`ladder-${ep}.json`, body]),
       ...(episodes === null ? [] : [["episodes.json", episodes] as [string, object]]),
+      ...(dungeons === null ? [] : [["dungeons.json", dungeons] as [string, object]]),
       ...(models === null ? [] : [["models.json", models] as [string, object]]),
       ...(campaigns === null ? [] : [["campaigns.json", campaigns] as [string, object]]),
       ["tools.json", tools],

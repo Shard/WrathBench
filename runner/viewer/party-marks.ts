@@ -20,6 +20,7 @@
 
 import { SessionReader } from "@wrathbench/mcp/record";
 import { isV1RunDir, sessionDirOfRun } from "../src/run-reader";
+import { isTaskEpisode } from "../src/episodes";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openRunDb } from "../src/rundb";
@@ -37,8 +38,9 @@ function partyStampOf(dir: string): { id: string; member: string; role: string; 
   if (!existsSync(path)) return null;
   let p: Record<string, unknown> | undefined;
   try {
-    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { party?: unknown; campaign?: unknown } };
-    if (typeof meta.config?.campaign !== "string") return null;
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { party?: unknown; campaign?: unknown; episode?: unknown } };
+    // A party is a campaign's square or a scored Deadmines attempt.
+    if (typeof meta.config?.campaign !== "string" && !(typeof meta.config?.episode === "string" && isTaskEpisode(meta.config.episode))) return null;
     p = meta.config.party as Record<string, unknown> | undefined;
   } catch {
     return null;

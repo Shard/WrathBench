@@ -58,12 +58,14 @@ import {
   type TraceDict,
   type TraceKeyData,
   type TraceRow,
+  type EventRow,
 } from "@wrathbench/mcp/record";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
 import { SESSIONS_DIR } from "../../runner/src/run-reader";
 import { sessionDirOf } from "../../runner/src/session-record";
 import { Trajectory } from "../../runner/src/trajectory";
+import { taskDefinition, taskHash } from "../../runner/src/task-episodes";
 
 export const LIVE_RUN = "fixture-live";
 export const ENDED_RUN = "fixture-ended";
@@ -342,6 +344,7 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null, fanout?: Sp
 export const E90_RUN = "fixture-e90";
 export const E90_CLOSED_RUN = "fixture-e90-closed";
 export const REFERENCE_RUN = "fixture-reference";
+export const E90_DUNGEON_RUN = "fixture-e90-dungeon";
 
 function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unknown>, level: number, startedAt: number): void {
   const dir = join(runsDir, runId);
@@ -495,6 +498,140 @@ export const LIVE_RUN_3 = "fixture-live-3";
 export const LIVE_RUN_4 = "fixture-live-4";
 
 /** Write the runs into `runsDir` relative to `now`, and hand back the live runs' ticker. */
+/**
+ * The dungeon board's runs: scored Deadmines attempts on both ids, cleared
+ * and not, each with its characters' kills, deaths and instance entry on its
+ * own session record, as a real attempt's are. A one-agent run is a fan-out
+ * run and so private only; a five-agent attempt is five member runs.
+ */
+export const DUNGEON_SOLO_RUN = "fixture-dm-solo";
+export const DUNGEON_SOLO_CLEARED_RUN = "fixture-dm-solo-cleared";
+export const DUNGEON_PARTY = "fixture-dm-party";
+
+const DM_CHARACTERS = ["Tankpartyb", "Healpartyc", "Magepartyd", "Roguepartye", "Palapartyf"];
+const DM_MEMBERS = ["tank", "healer", "mage", "rogue", "paladin"];
+const DM_ROLES = ["tank", "healer", "damage", "damage", "damage"];
+
+/** One character's events on a Deadmines attempt: entered at `enter`, the bosses killed at their minutes, deaths and resurrections. */
+interface DungeonCharacter {
+  name: string;
+  enter?: number;
+  kills?: [entry: number, minute: number][];
+  deaths?: number[];
+  resurrects?: number[];
+}
+
+function dungeonEvents(c: DungeonCharacter, startedAt: number): EventRow[] {
+  const t = (m: number): number => startedAt + m * 60_000;
+  const rows: EventRow[] = [];
+  if (c.enter !== undefined) rows.push({ kind: "instance", event: "entered", map: 36, instanceType: 1, from: { map: 0, instanceType: 0 }, ts: t(c.enter) });
+  for (const [entry, m] of c.kills ?? []) rows.push({ kind: "kill", victimGuid: `fixture-victim-${entry}`, entry, rank: 1, self: c.name === DM_CHARACTERS[0], member: true, ts: t(m) });
+  for (const m of c.deaths ?? []) rows.push({ kind: "death", ts: t(m) });
+  for (const m of c.resurrects ?? []) rows.push({ kind: "resurrect", ts: t(m) });
+  return rows.sort((a, b) => a.ts - b.ts);
+}
+
+function writeDungeonRun(
+  runsDir: string,
+  runId: string,
+  raw: Record<string, unknown>,
+  characters: DungeonCharacter[],
+  o: { startedAt: number; minutes: number; reason: string; fanout: boolean },
+): Promise<void> {
+  const dir = join(runsDir, runId);
+  mkdirSync(dir, { recursive: true });
+  let clock = o.startedAt;
+  const traj = new Trajectory(dir, { now: () => clock });
+  const config = { ...loadRunConfig({ driver: "openai", account: "FIXTURE1", race: 1, class: 1, loop: "program", yield: true, ...raw }), runId, token: `${runId}-fixture-token-000000000000`, runsDir };
+  traj.writeMeta({ runId, harnessVersion: "harness-fixture", startedAt: o.startedAt, config, comparability: comparabilityOf(config, "harness-fixture") });
+  for (let turn = 1; turn <= 3; turn++) {
+    clock = o.startedAt + turn * 60_000;
+    traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 });
+    traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}.` } });
+  }
+  const writers = characters.map((c, i) => {
+    const sdir = o.fanout ? join(dir, SESSIONS_DIR, c.name) : sessionDirOf(dir);
+    const id = createHash("sha256").update(`${runId}-${c.name}-fixture-token`).digest("hex").slice(0, 16);
+    const writer = new SessionWriter({ dir: sdir, id, stack: { version: "fixture" }, now: () => clock, log: () => {} });
+    writer.open();
+    const key: TraceRow = { ts: o.startedAt + 60_000, kind: "key", map: 0, x: CENTRE.x, y: CENTRE.y, z: CENTRE.z, o: 0, data: { ...keyData(20, 0, 0, 30_000, false), xpMax: null } };
+    writer.ingest({
+      trace: { rows: [key], dropped: 0, dict: DICT },
+      events: { rows: dungeonEvents(c, o.startedAt), dropped: 0 },
+      nearby: { rows: [], dropped: 0, through: 0 },
+      moves: [],
+      character: { guid: String(100 + i), name: c.name, race: 1, class: 1 },
+      stream: { connected: true, events: 0, seq: 0 },
+    });
+    return writer;
+  });
+  clock = o.startedAt + o.minutes * 60_000;
+  traj.setTermination(runId, o.reason as Parameters<Trajectory["setTermination"]>[1], o.reason);
+  traj.close();
+  return Promise.all(writers.map((w) => w.close())).then(() => undefined);
+}
+
+function writeDungeonRuns(runsDir: string, now: number): Promise<void> {
+  const solo = taskDefinition("deadmines-solo");
+  const five = taskDefinition("deadmines");
+  const accounts = DM_CHARACTERS.map((_, i) => `FIXTURE${i + 1}`);
+  const fanout = { characters: 5, accounts, staged: DM_CHARACTERS.map((character, i) => ({ character, account: accounts[i]! })) };
+  const soloRaw = (model: string): Record<string, unknown> => ({ model, episode: "deadmines-solo", directive: solo.objective, fanout, task: { definition: taskHash("deadmines-solo") }, watchdogs: { episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCallsPerEpisode: 8000 });
+  const writes: Promise<void>[] = [];
+  // Cleared in 1h41m, after a wipe: every boss but Cookie.
+  writes.push(
+    writeDungeonRun(
+      runsDir,
+      DUNGEON_SOLO_CLEARED_RUN,
+      soloRaw("fixture/dungeon-model"),
+      DM_CHARACTERS.map((name, i) => ({
+        name,
+        ...(i === 0 ? { enter: 4, kills: [[644, 18], [643, 35], [642, 34], [1763, 47], [646, 62], [647, 80], [639, 101]] as [number, number][] } : {}),
+        deaths: [55],
+        resurrects: [58],
+      })),
+      { startedAt: now - 4 * 3_600_000, minutes: 102, reason: "kill-target", fanout: true },
+    ),
+  );
+  // Not cleared: three bosses before the clock ran out.
+  writes.push(
+    writeDungeonRun(
+      runsDir,
+      DUNGEON_SOLO_RUN,
+      soloRaw("fixture/second-model"),
+      DM_CHARACTERS.map((name, i) => ({ name, ...(i === 0 ? { enter: 9, kills: [[644, 30], [643, 70], [642, 71]] as [number, number][] } : {}), ...(i === 1 ? { deaths: [40, 90] } : {}) })),
+      { startedAt: now - 5 * 3_600_000, minutes: 240, reason: "episode-limit", fanout: true },
+    ),
+  );
+  // Five agents of one model: the tank's run met the clock, the rest ended with it.
+  const party = { id: DUNGEON_PARTY, size: 5, members: DM_MEMBERS.map((member, i) => ({ member, role: DM_ROLES[i]!, runId: `${DUNGEON_PARTY}-${member}`, account: accounts[i]!, character: DM_CHARACTERS[i]! })) };
+  DM_MEMBERS.forEach((member, i) => {
+    const m = five.party!.members[i]!;
+    writes.push(
+      writeDungeonRun(
+        runsDir,
+        `${DUNGEON_PARTY}-${member}`,
+        {
+          model: "fixture/dungeon-model",
+          episode: "deadmines",
+          account: accounts[i],
+          race: m.race,
+          class: m.class,
+          character: m.character,
+          directive: m.objective,
+          party: { ...party, member, role: DM_ROLES[i] },
+          task: { definition: taskHash("deadmines") },
+          watchdogs: { episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null },
+          maxToolCallsPerEpisode: 8000,
+        },
+        [{ name: DM_CHARACTERS[i]!, enter: 6, ...(i === 0 ? { kills: [[644, 25], [643, 50], [642, 49], [1763, 66], [645, 90]] as [number, number][] } : {}), deaths: [110 + i] }],
+        { startedAt: now - 6 * 3_600_000, minutes: 240, reason: i === 0 ? "episode-limit" : "party-ended", fanout: false },
+      ),
+    );
+  });
+  return Promise.all(writes).then(() => undefined);
+}
+
 export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   mkdirSync(runsDir, { recursive: true });
   const at = (t: number): number => t - (t % 2_000);
@@ -537,13 +674,15 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   fanoutRun.traj.close();
   // Its launch's session tokens, which no reader may serve.
   writeFileSync(join(runsDir, FANOUT_RUN, "roster.json"), JSON.stringify({ characters: [{ character: "Oakhart", token: FANOUT_ROSTER_TOKEN }, { character: "Pellira", token: FANOUT_ROSTER_TOKEN }] }), { mode: 0o600 });
-  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close())]).then(() => undefined);
+  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now))]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
   // A second row, under an invented id a family's weights rules still answer
   // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter
   // has two buckets to offer; `fixture/e90-model` reads `unknown`.
   writeLadderRun(runsDir, E90_CLOSED_RUN, { driver: "openai", model: "anthropic/fixture-model", character: "Closewyn" }, 4, at(now - 6 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
+  // The dungeon board's model on the solo ladder, on the board runs' condition, so rung 6 fills.
+  writeLadderRun(runsDir, E90_DUNGEON_RUN, { driver: "openai", model: "fixture/dungeon-model", loop: "program", yield: true, character: "Delvara" }, 3, at(now - 7 * 3_600_000));
   const liveSpecs: Spec[] = [
     liveSpec,
     {

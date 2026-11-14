@@ -17,6 +17,7 @@ import type {
   EpisodeIdView,
   EpisodesResponse,
   CampaignsResponse,
+  DungeonsResponse,
   ToolsResponse,
   ResultsResponse,
   FleetResponse,
@@ -47,6 +48,10 @@ export type {
   EpisodesResponse,
   ArmSummary,
   CampaignsResponse,
+  DungeonsResponse,
+  DungeonRowView,
+  DungeonAttemptView,
+  DungeonBoardView,
   CampaignView,
   Square,
   ToolsResponse,
@@ -263,6 +268,8 @@ export function createClient(opts: ClientOptions = {}) {
     /** The episode tiers and how many runs sit against each. */
     episodes: (): Promise<EpisodesResponse> => get<EpisodesResponse>("/api/episodes"),
     campaigns: (): Promise<CampaignsResponse> => get<CampaignsResponse>("/api/campaigns"),
+    /** The dungeon board: both Deadmines ids, a row per model condition. */
+    dungeons: (): Promise<DungeonsResponse> => get<DungeonsResponse>("/api/dungeons"),
     /** The model-facing tool list, read off the runner at request time (the homepage inspector). */
     tools: (): Promise<ToolsResponse> => get<ToolsResponse>("/api/tools"),
     /**

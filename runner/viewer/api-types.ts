@@ -2239,6 +2239,62 @@ export interface ResultRun {
   stillborn: boolean | null;
 }
 
+/**
+ * One Deadmines attempt as the dungeon board reads it (`runner/viewer/dungeons.ts`):
+ * a launch of the id, one run or a party's five. Times are milliseconds from
+ * the launch; null when not observed.
+ */
+export interface DungeonAttemptView {
+  runIds: string[];
+  /** The party id on the five-agent id (its page is `/party/<id>`); null on the one-agent id. */
+  party: string | null;
+  launchedAt: number | null;
+  /** Counted as the scheduler counts it. */
+  counted: boolean;
+  live: boolean;
+  /** Counted, and ended on the kill of Edwin VanCleef. */
+  cleared: boolean;
+  /** The verdict the attempt ended on (a member's own, never `party-ended`). */
+  reason: string | null;
+  timeToClearMs: number | null;
+  /** The Deadmines boss entries killed, in the board's boss order. */
+  bosses: number[];
+  lastBossMs: number | null;
+  /** When the first character entered the instance. */
+  enteredMs: number | null;
+  deaths: number;
+  wipes: number;
+}
+
+/** One model condition on one Deadmines id: its best attempt and how many cleared of how many counted. */
+export interface DungeonRowView {
+  model: string | null;
+  effort: string | null;
+  harness: HarnessView | null;
+  compactWindow?: string | null;
+  series: string | null;
+  /** The condition's public dimensions beside the ones above (`RunCondition` without its id), which rung 6 joins the ladder on. */
+  condition: { loop: "program" | "snippet"; yield: boolean; pinned: boolean; wiki: boolean };
+  /** Counted attempts. */
+  n: number;
+  /** Of those, cleared. */
+  cleared: number;
+  best: DungeonAttemptView;
+}
+
+/** One id's table, rows in the board's order. */
+export interface DungeonBoardView {
+  episode: EpisodeIdView;
+  rows: DungeonRowView[];
+}
+
+/** `/api/dungeons`: the board, both ids, the one-agent id first. */
+export interface DungeonsResponse extends SnapshotEnvelope {
+  version: number;
+  boards: DungeonBoardView[];
+  now: number;
+}
+
 export interface ResultsResponse extends SnapshotEnvelope {
   runs: ResultRun[];
   /** The tier the response was filtered to, or "all". Echoed so a page can

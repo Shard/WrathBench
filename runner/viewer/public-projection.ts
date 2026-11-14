@@ -74,6 +74,7 @@ import type {
   EntriesResponse,
   EntrySummary,
   EpisodeIdView,
+  DungeonsResponse,
   EpisodesResponse,
   FleetAccountView,
   FleetEndedView,
@@ -879,10 +880,52 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
   });
 }
 
+/**
+ * The dungeon board as published: every field is a number, a model id, an
+ * effort, a harness tag or a series, and each attempt's run ids, all of which
+ * the public runs listing already carries; nothing of a run a public handle
+ * withholds reaches a row (the route builds off the handle's own listing).
+ */
+export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
+  return scrubPathsValue<DungeonsResponse>({
+    version: d.version,
+    boards: d.boards.map((b) => ({
+      episode: b.episode,
+      rows: b.rows.map((r) => ({
+        model: r.model,
+        effort: r.effort,
+        harness: r.harness,
+        ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
+        series: r.series,
+        condition: { loop: r.condition.loop, yield: r.condition.yield, pinned: r.condition.pinned, wiki: r.condition.wiki },
+        n: r.n,
+        cleared: r.cleared,
+        best: {
+          runIds: [...r.best.runIds],
+          party: r.best.party,
+          launchedAt: r.best.launchedAt,
+          counted: r.best.counted,
+          live: r.best.live,
+          cleared: r.best.cleared,
+          reason: r.best.reason,
+          timeToClearMs: r.best.timeToClearMs,
+          bosses: [...r.best.bosses],
+          lastBossMs: r.best.lastBossMs,
+          enteredMs: r.best.enteredMs,
+          deaths: r.best.deaths,
+          wipes: r.best.wipes,
+        },
+      })),
+    })),
+    now: d.now,
+  });
+}
+
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
   return scrubPathsValue<EpisodesResponse>({
-    // The Deadmines task episodes are published with their board, not
-    // before it: until then a public page has no reading of them to show.
+    // The Deadmines task episodes stay off the public episode list, pending
+    // the operator's call on publishing them; the dungeon board is where
+    // their runs are read.
     episodes: e.episodes.filter((t) => !isTaskEpisode(t.id)).map((t) => ({
       id: t.id,
       minutes: t.minutes,
@@ -1087,8 +1130,8 @@ function projectModelRun(r: ModelRunView): ModelRunView {
 
 /**
  * A scheduler's "schedulable on …" or "targets met on …" with the task
- * episodes left out of its list, as the rest of the row leaves them out until
- * their board is published (`projectEpisodes`). A list of nothing else is
+ * episodes left out of its list, as the rest of the row leaves them out
+ * (`projectEpisodes`). A list of nothing else is
  * kept whole: dropping every item would say something false.
  */
 export function withoutTaskEpisodes(why: string): string {
@@ -1103,7 +1146,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
   // Keyed off the known tier ids, not the object's own keys: an input parsed
   // from JSON could carry any key, and only the four tiers are speakable.
   for (const id of EPISODE_IDS) {
-    // Not the task episodes, until their board is published (`projectEpisodes`).
+    // Not the task episodes, as on the public episode list (`projectEpisodes`).
     if (isTaskEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;

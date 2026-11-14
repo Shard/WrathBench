@@ -58,6 +58,7 @@ import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes"
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
   RUNGS,
+  BOARD_RUNG,
   billingKnown,
   entryKeyOf,
   filterRuns,
@@ -123,6 +124,8 @@ export default function Ladder() {
   // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
   // client-side, in `lib/ladder.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode()), POLL_MS);
+  // Rung 6 is filled from the dungeon board (`rungSixCell`); a board that does not load leaves it unfilled.
+  const dungeons = poll(() => api.dungeons(), POLL_MS);
   createEffect(on(episode, () => feed.refresh(), { defer: true }));
   const body = (): ResultsResponse | undefined => feed.latest;
   // The shell's harness series, applied before anything else reads
@@ -320,7 +323,7 @@ export default function Ladder() {
   // `SeriesFilterNote` states for the series filter).
   const billingUnknown = (): boolean =>
     excludeFree() && all().length > 0 && !billingKnown(all());
-  const rows = createMemo(() => ladderRows(runs()));
+  const rows = createMemo(() => ladderRows(runs(), dungeons.latest?.boards ?? []));
   /*
    * The scripted reference line, from the series-filtered set before the
    * reader's filters (`scriptedReference`); the rows on screen only decide how
@@ -640,8 +643,8 @@ export default function Ladder() {
                   <tr>
                     <td class="right mono">{rung.n}</td>
                     <td>{rung.title}</td>
-                    <td class={rung.test === null ? "warn" : "dim"}>
-                      {rung.test === null ? `not instrumented — ${rung.rule}` : rung.rule}
+                    <td class={rung.test === null && rung.n !== BOARD_RUNG ? "warn" : "dim"}>
+                      {rung.test === null && rung.n !== BOARD_RUNG ? `not instrumented — ${rung.rule}` : rung.rule}
                     </td>
                   </tr>
                 )}
@@ -842,6 +845,8 @@ function Furthest(props: { row: LadderRow }) {
  */
 function RungCell(props: { cell: LadderCell; runs: number }) {
   const c = (): LadderCell => props.cell;
+  // Rung 6 is the dungeon board's: its own cell, its own counts.
+  if (props.cell.arm !== undefined) return <BoardRungCell cell={props.cell} />;
   const short = (): boolean => c().askable < props.runs;
   const title = (): string =>
     `${c().reached} of ${c().askable} run${c().askable === 1 ? "" : "s"} reached this rung` +
@@ -861,6 +866,22 @@ function RungCell(props: { cell: LadderCell; runs: number }) {
           </Show>
         </A>
       </Show>
+    </td>
+  );
+}
+
+/** Rung 6, filled from the dungeon board: cleared attempts of counted ones, labelled with the arm, linking the board. */
+function BoardRungCell(props: { cell: LadderCell }) {
+  const c = (): LadderCell => props.cell;
+  const title = (): string =>
+    `${c().arm}: ${c().reached} of ${c().askable} counted Deadmines attempt${c().askable === 1 ? "" : "s"} cleared, on the dungeon board — not counted in the highest rung or the order`;
+  return (
+    <td class="right">
+      <A href="/dungeons" title={title()}>
+        <span class={c().status === "reached" ? "ok mono" : "dim mono"}>
+          {c().reached}/{c().askable}
+        </span>
+      </A>
     </td>
   );
 }
