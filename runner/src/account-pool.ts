@@ -52,3 +52,33 @@ export function poolSizeOf(env: Record<string, string | undefined>): { size: num
   }
   return { size: Number(raw) };
 }
+
+/**
+ * The eval pool: `EVAL01` … `EVALnn`, the accounts a party campaign that
+ * draws its accounts (`accounts: "evals"`) takes five of per attempt, while
+ * every scored or probing attempt plays on a world of its own
+ * (infra/world.ts). Sized by the chart's `worlds.pool.size`, created by the
+ * bootstrap Job, and never on the long-lived world's allowlist: a world's
+ * allowlist is its attempt's accounts, so the pool grows without a restart.
+ */
+export const EVAL_POOL_SIZE_ENV = "WRATHBENCH_EVAL_POOL_SIZE";
+export const EVAL_POOL_ACCOUNT_PREFIX = "EVAL";
+
+export function evalPoolAccountNames(size: number): string[] {
+  return Array.from({ length: size }, (_, i) => `${EVAL_POOL_ACCOUNT_PREFIX}${String(i + 1).padStart(2, "0")}`);
+}
+
+/** Whether a name is one the eval pool hands out (any size), case aside. */
+export function isEvalPoolAccountName(name: string): boolean {
+  return /^EVAL\d{2}$/i.test(name);
+}
+
+/** The eval pool's size as the deployment states it, as `poolSizeOf`. */
+export function evalPoolSizeOf(env: Record<string, string | undefined>): { size: number } | { error: string } {
+  const raw = env[EVAL_POOL_SIZE_ENV]?.trim();
+  if (raw === undefined || raw === "") return { size: 0 };
+  if (!/^\d+$/.test(raw) || Number(raw) > MAX_POOL_SIZE) {
+    return { error: `${EVAL_POOL_SIZE_ENV}=${JSON.stringify(raw)} is not a pool size: a whole number from 0 to ${MAX_POOL_SIZE}` };
+  }
+  return { size: Number(raw) };
+}

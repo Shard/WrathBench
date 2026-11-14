@@ -42,6 +42,7 @@ import {
 import { cellDimensions, isOneAgentArm } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { fanoutLaunchOf, memberRunId } from "../runner/src/party";
+import { isEvalPoolAccountName } from "../runner/src/account-pool";
 import { stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { isScoredEpisode } from "../runner/src/episodes";
@@ -557,7 +558,8 @@ export function placeJob(
     for (let i = 0; i < sessions; i++) keys.push(...r.placement.keys);
     placed[ref] = r.placement.credential;
   }
-  return { ok: true, job: { ...job, placed }, keys };
+  // A job is one attempt at a time, so one world: whatever its members or its rotation's refs.
+  return { ok: true, job: { ...job, placed }, keys: oneWorld(keys) };
 }
 
 /** What `outsideRuns` reads of a run, stamped (`RunFact`) or not (`UnstampedRun`). */
@@ -611,11 +613,25 @@ export function countJob(
   runCredentials: ReadonlyMap<string, string>,
 ): void {
   const sessions = sessionsOf(job);
+  let world = false;
   for (const ref of job.refs) {
     const placed = job.placed?.[ref];
     const id = placed !== undefined ? (placed?.id ?? null) : (runCredentials.get(ref) ?? null);
-    book.add(book.keysOf(driverOfEntry(roster[ref]), id, job.episode), sessions);
+    const keys = book.keysOf(driverOfEntry(roster[ref]), id, job.episode).filter((k) => k !== WORLD_KEY || !world);
+    if (keys.includes(WORLD_KEY)) world = true;
+    book.add(keys, sessions);
   }
+}
+
+/** Keys with the world key once: a job holds one world at a time. */
+function oneWorld(keys: readonly string[]): string[] {
+  let seen = false;
+  return keys.filter((k) => {
+    if (k !== WORLD_KEY) return true;
+    if (seen) return false;
+    seen = true;
+    return true;
+  });
 }
 
 /**
@@ -632,6 +648,48 @@ export function countUnownedRuns(book: SlotBook, runs: readonly { credential: st
     const keys = [...(u.credential !== null ? [credentialKey(u.credential)] : []), ...book.keysOf(undefined, null, u.episode).filter((k) => k === RUN_POD_KEY || k === WORLD_KEY)];
     book.add(keys);
   }
+}
+
+/**
+ * The accounts a party that draws them (`accounts: "evals"`) takes for one
+ * attempt, the same answer for the live tick and `planTick`: the first
+ * `size` of the eval pool that no run without a verdict holds (its own or a
+ * paused party's members), no running job holds, and nothing this tick drew
+ * before it. A job already running keeps the accounts it was drawn. Such a
+ * party plays on a world of its own, so with `policy.worlds` off it is held
+ * with the reason, never moved to a pinned list or the shared world.
+ */
+export function evalPoolDraw(o: {
+  mode: string;
+  pool: readonly string[];
+  /** Accounts no draw may take (`evalPoolTaken`); drawn ones are added as they go. */
+  taken: Set<string>;
+  held: (account: string) => string | undefined;
+  /** A running job's own accounts, by its name. */
+  running?: (jobName: string) => readonly string[] | undefined;
+}): (c: Pick<Campaign, "name">, jobName: string, size: number) => { accounts: string[] } | { held: string } {
+  return (c, jobName, size) => {
+    const own = o.running?.(jobName);
+    if (own !== undefined && own.length === size) return { accounts: [...own] };
+    if (o.mode !== "evals") {
+      return { held: `campaign ${c.name} draws its party's accounts from the eval pool, and such a party plays on a world of its own: policy.worlds is ${JSON.stringify(o.mode)}` };
+    }
+    const free = o.pool.filter((a) => !o.taken.has(a.toUpperCase()) && o.held(a) === undefined);
+    if (free.length < size) {
+      return { held: `eval pool: ${free.length} of ${size} accounts free (${o.pool.length} in the pool, the chart's worlds.pool.size) — waits for a party to end` };
+    }
+    const accounts = free.slice(0, size);
+    for (const a of accounts) o.taken.add(a.toUpperCase());
+    return { accounts };
+  };
+}
+
+/** The eval pool's accounts no draw may take: every run's without a verdict, and the given jobs'. */
+export function evalPoolTaken(runs: readonly Pick<RunFact, "account" | "fanoutAccounts" | "terminationReason">[], jobAccounts: Iterable<string>): Set<string> {
+  const taken = new Set<string>();
+  for (const f of runs) if (f.terminationReason === null) for (const a of accountsOfRun(f)) taken.add(a.toUpperCase());
+  for (const a of jobAccounts) taken.add(a.toUpperCase());
+  return taken;
 }
 
 /**
@@ -1552,7 +1610,7 @@ export function planResumes(opts: {
     // while the campaign's square was offered again and spawned a fresh `-a2`
     // over the paused run. A campaign's own older attempt still waits behind
     // its newest-started one.
-    const pinnedCampaign = file === null ? undefined : config.campaigns?.find((c) => c.name === file.campaign && c.account !== undefined);
+    const pinnedCampaign = file === null ? undefined : config.campaigns?.find((c) => c.name === file.campaign && (c.account !== undefined || c.drawsAccounts === true));
     const resumeKey = pinnedCampaign !== undefined ? `campaign:${pinnedCampaign.name}` : modelKey;
     if (seenModel.has(resumeKey)) {
       list(`a later-started paused run of ${pinnedCampaign !== undefined ? `campaign ${pinnedCampaign.name}` : "this model"} is ahead of it — resume by hand or archive`);
@@ -1626,7 +1684,29 @@ export function planResumes(opts: {
         continue;
       }
       const probe = { campaign: file.campaign, version: file.version, cell: file.cell.id, arm: file.arm.id };
-      if (c.account !== undefined) {
+      // A one-agent arm whose party drew its accounts comes back on the ones it drew.
+      const drawnFanout = c.drawsAccounts === true ? file.fanout?.members.map((m) => m.account) : undefined;
+      if (c.drawsAccounts === true && (drawnFanout === undefined || drawnFanout.some((a) => !isEvalPoolAccountName(a)))) {
+        list(`campaign ${c.name} draws its accounts from the eval pool, and the run holds ${drawnFanout?.join(", ") ?? f.account ?? "none"} — resume by hand`);
+        continue;
+      }
+      if (drawnFanout !== undefined) {
+        job = {
+          refs: [ref],
+          ref,
+          episode: "probing",
+          repeat: 1,
+          name: pinnedCampaignJobName(file.campaign, file.cell.id, file.arm.id),
+          account: drawnFanout[0]!,
+          enabled: true,
+          source: "pinned",
+          probe,
+          campaignFile: file,
+          accounts: drawnFanout,
+          fanout: true as const,
+        };
+        account = drawnFanout[0]!;
+      } else if (c.account !== undefined) {
         if (f.account !== null && c.account.toUpperCase() !== f.account.toUpperCase()) {
           list(`campaign ${c.name} is pinned to ${c.account}, the run was on ${f.account} — resume by hand`);
           continue;
@@ -1858,9 +1938,14 @@ function planPartyResume(
   if (!c.enabled) return listAll(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
   if (isConcluded(c, leaderFile.version)) return listAll(`campaign ${c.name}@${leaderFile.version} is concluded — it owes nothing; resume by hand or archive`);
   const accounts = launch.members.map((m) => m.account);
-  const pinned = c.accounts ?? [];
-  if (pinned.length !== accounts.length || pinned.some((a, i) => a.toUpperCase() !== accounts[i]!.toUpperCase())) {
-    return listAll(`campaign ${c.name} is pinned to ${pinned.join(", ") || "no accounts"}, the party ran on ${accounts.join(", ")} — resume by hand`);
+  if (c.drawsAccounts === true) {
+    // It comes back on the accounts it drew, which must still be the eval pool's.
+    if (accounts.some((a) => !isEvalPoolAccountName(a))) return listAll(`campaign ${c.name} draws its accounts from the eval pool, and the party ran on ${accounts.join(", ")} — resume by hand`);
+  } else {
+    const pinned = c.accounts ?? [];
+    if (pinned.length !== accounts.length || pinned.some((a, i) => a.toUpperCase() !== accounts[i]!.toUpperCase())) {
+      return listAll(`campaign ${c.name} is pinned to ${pinned.join(", ") || "no accounts"}, the party ran on ${accounts.join(", ")} — resume by hand`);
+    }
   }
   if ((leaderFile.arm.image !== undefined || leaderFile.arm.command !== undefined) && o.config.policy.runPods !== "probes") {
     return listAll(`arm ${leaderFile.arm.id} runs only in a run pod; policy.runPods is ${JSON.stringify(o.config.policy.runPods)} — it resumes once that is "probes"`);
@@ -2772,6 +2857,8 @@ export function planTick(
   scoredGate?: string,
   /** The book's world setting (`worldsOf`). */
   worlds?: WorldsSetting,
+  /** A party that draws its accounts: this tick's eval-pool draw (`evalPoolDraw`). */
+  draw?: (c: Campaign, jobName: string, size: number) => { accounts: string[] } | { held: string },
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2790,7 +2877,8 @@ export function planTick(
   // of quiet disagreement between the supervisor and its own report that has
   // cost a night before. A pinned config job whose `repeat` is met is not
   // spawned, by the queue's own rule (`owedCopies`).
-  const pinned = [...pinnedJobs(config), ...withTakenRunIds(pinnedCampaignJobs(config, probeRuns, healthyFrom(states)), takenRunIds)]
+  const drawHeld: { job: FleetJob; why: string }[] = [];
+  const pinned = [...pinnedJobs(config), ...withTakenRunIds(pinnedCampaignJobs(config, probeRuns, healthyFrom(states), draw, drawHeld), takenRunIds)]
     .filter((j) => j.enabled && !resumed.has(j.name) && !running.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
     .flatMap((j) => {
       const owed = owedCopies(j, runnableRefs(j, config.roster, eligible), counted);
@@ -2809,7 +2897,7 @@ export function planTick(
   // A pinned job that no credential has room for does not spawn: it is
   // reported with the picks the policy held, which is where `--dry-run` says
   // why. A party fits whole or not at all.
-  const gatedPinned: HeldPick[] = [];
+  const gatedPinned: HeldPick[] = drawHeld.map((h) => ({ name: h.job.name, episode: h.job.episode, why: h.why }));
   for (let i = 0; i < pinned.length; ) {
     const p = pinned[i]!;
     const r = placeJob(p.job, config.roster, placing);

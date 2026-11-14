@@ -481,7 +481,11 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
               the leader first; any other count, a shared account or a clash refuses the whole
               pin. Its square launches one roster of all members together, after the stager,
               takes a slot per member on one credential, starts only when all fit, and
-              resumes whole (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`).
+              resumes whole (docs/proposals/GROUP-PLAY.md; `infra/party-fate.ts`). Or
+              `"evals"`: each attempt draws its members' accounts from the eval pool (`EVAL01`…,
+              "The account pool") and plays on a world of its own, so party campaigns run side
+              by side. Held, with the reason, while `policy.worlds` is off or the pool is short;
+              a paused one resumes on the accounts it drew.
             `credential` — a PINNED campaign's credential, by id: every launch of the campaign
               takes it, overriding the assignments' own placement for those runs only. One that
               cannot carry every assignment refuses the campaign.
@@ -2424,6 +2428,17 @@ characters on the named accounts keeps listing them until those runs are done.
 The reserved accounts are as they were: `SMOKE*`, `PROBE` and the preflight
 gate's are never in the pool, and a `POOLnn` name is never listed, pinned by
 an enabled job, or a gate account.
+
+**The eval pool.** With worlds on, the chart also makes `EVAL01` … `EVALnn`
+(`worlds.pool.size`, default 10, at most 99): the bootstrap Job creates them
+the same way, and the config-reading pods get `WRATHBENCH_EVAL_POOL_SIZE`.
+They are on no allowlist of the long-lived world's: an eval world's allowlist
+is its attempt's accounts. So growing the pool is a values change and an
+upgrade, with no worldserver restart. A party campaign with `accounts:
+"evals"` takes five per attempt: none a run without a verdict holds, and none
+another party drew this tick. An eval account is never pinned, listed in
+`accounts.pool`, or a gate's. Solo scored and probing attempts still draw from
+the generated pool above, on a world of their own while worlds are on.
 
 On the quickstart, compose cannot loop: `x-pool-size` in `infra/compose.yml`
 (4) sizes bootstrap and the services, and the worldserver's allowlist lists
