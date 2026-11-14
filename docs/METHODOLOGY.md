@@ -264,8 +264,10 @@ version change.
 
 **The model sleeps until woken, on facts only** (operator, 2026-11-14). A
 reply with no tool call, or a `yield` call, sleeps while the routines run. It
-is woken by a routine ending, the first occurrence of each new error or
-refusal signature since a load, the program's own `wake(reason)`, a death, a
+is woken by a routine ending, the first occurrence of each new error
+signature since a load and of each refusal signature in the run (operator delegated,
+2026-11-15: a save no longer re-arms refusals; later ones are counted in the
+next wake), the program's own `wake(reason)`, a death, a
 sandbox restart, the event stream closing or a harness notice, and after five
 minutes at the latest; gaining a level or completing a quest does not wake it,
 and a program that wants either calls `wake()`. What it was already shown in

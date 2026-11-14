@@ -296,6 +296,10 @@ function programReplacements(program: ProgramPrompt): readonly [string, string][
       program.yield ? `${PROGRAM_TOOL_BULLETS}${PROGRAM_YIELD_BULLET}` : PROGRAM_TOOL_BULLETS,
     ],
     [
+      "Read it from a snippet: await Bun.file(API_MD_PATH).text().",
+      'read_file({ path: "API.md", offset: 1, limit: 200 }) returns a range of its lines; from a snippet, await Bun.file(API_MD_PATH).text() returns all of it.',
+    ],
+    [
       "There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet await scratchpad.read() returns it.",
       "There is no read tool: the scratchpad as last written is in this turn's context or earlier in this conversation, and inside a snippet await scratchpad.read() returns it.",
     ],

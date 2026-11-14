@@ -48,7 +48,7 @@ import { inventoryResultText, isGroupOrWhisperChat } from "@wrathbench/sdk";
 // through the viewer; neither needs the host, the MCP server or the tools.
 import { compactJson } from "@wrathbench/mcp/jsonsafe";
 import { scratchpadSizeLabel } from "@wrathbench/mcp/scratchpad";
-import type { EventSummary, MoveIntentNote } from "@wrathbench/mcp";
+import { FILE_MAX_CHARS, type EventSummary, type MoveIntentNote } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
@@ -77,7 +77,9 @@ export const CONTEXT_POLICY = {
    * Tool results the per-message cap does not cut: the program loop's
    * `read_file`, whose answer is a workspace file exactly as stored and is
    * already bounded by the 32,000-char file cap (a cut file cannot be read
-   * back at all: it has no range), and its `yield`, whose answer is the
+   * back at all: it has no range) — the SDK reference, which it also serves
+   * and which is larger, is cut past that cap like any other message — and
+   * its `yield`, whose answer is the
    * [wake] block, bounded by its own caps. The snippet loop serves neither,
    * so its window is cut as it always was. Older results still fold.
    */
@@ -1942,6 +1944,18 @@ function windowMessage(m: HistoryMessage): ChatMessage {
 }
 
 /**
+ * A `read_file` result longer than a workspace file can be: the SDK reference
+ * (`API.md`) read whole or in a wide range. The exemption rests on the file
+ * cap, so such a result is cut like any other message; a range of the
+ * reference within the cap is not.
+ */
+function pastFileCap(tool: string, m: HistoryMessage): boolean {
+  return tool === "read_file" && typeof m.content === "string" && m.content.length > FILE_MAX_CHARS + READ_RANGE_HEADER_CHARS;
+}
+/** Room for `read_file`'s range line (`API.md, lines 1-200 of 1287:`) above a file-cap's worth of text. */
+const READ_RANGE_HEADER_CHARS = 200;
+
+/**
  * A window as it is sent: the tool results among its first `fold` messages
  * folded, every other message capped (but the results of
  * `WINDOW_UNCAPPED_TOOLS`), and nothing but `ChatMessage` fields.
@@ -1966,7 +1980,7 @@ export function renderWindow(
     } else if (m.role === "tool") {
       const call = calls[answered++]?.function;
       if (i < fold) return foldToolResult(call, m);
-      if (call !== undefined && CONTEXT_POLICY.WINDOW_UNCAPPED_TOOLS.includes(call.name)) return windowMessage(m);
+      if (call !== undefined && CONTEXT_POLICY.WINDOW_UNCAPPED_TOOLS.includes(call.name) && !pastFileCap(call.name, m)) return windowMessage(m);
     }
     return capWindowMessage(windowMessage(m), cap);
   });

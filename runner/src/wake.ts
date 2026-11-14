@@ -13,14 +13,16 @@
  * The wake set is fixed by the harness and the same for every model:
  *
  *  - from the program (`ProgramFact`, the stack's): a routine ending, the
- *    first error or refusal of each signature since the last load, a
- *    `wake(reason)` call, and a sandbox restart the program came back from;
+ *    first error of each signature since the last load, the first refusal of
+ *    each signature in the run (`Waker`), a `wake(reason)` call, and a
+ *    sandbox restart the program came back from;
  *  - from the runner: a death (the session record's `death` row), the event
  *    stream closing (the state sample), and a harness notice.
  *
  * At fan-out (one agent driving several characters) the program is one and
- * its routines are per character: every line names the character, any
- * character's death wakes, and so does any one's stream closing. What
+ * its routines are per character: every line names the character, a
+ * refusal's the character whose client was refused (the fact's `seat`),
+ * any character's death wakes, and so does any one's stream closing. What
  * changed over a sleep names only the characters whose level moved, the
  * stack's roll-up rule of one line per exception rather than per character.
  *
@@ -75,6 +77,10 @@ export const WAKE_CONSOLE_SHOWN = 20;
 export const WAKE_CONSOLE_CHARS = 2_000;
 /** Pre-emptions and `wake` calls shown in one wake, each. */
 export const WAKE_EVENTS_SHOWN = 8;
+/** Refusal signatures a `Waker` remembers as told; the stack mints at most 500 per load. */
+const KNOWN_SIGNATURES_KEPT = 5_000;
+/** Characters a grouped refusal line names before it counts the rest, as the stack's hint lines do. */
+const WAKE_SEATS_SHOWN = 4;
 /** Wake reasons named in a wake's header; past it they are counted. */
 const WAKE_REASONS_SHOWN = 4;
 /** Workspace frames shown under an error. */
@@ -118,6 +124,9 @@ const runKey = (name: string, character: string | undefined): string => (charact
 const shownOver = (shown: Pick<RoutineRow, "startedAt" | "state"> | undefined, startedAt: number | undefined): boolean =>
   shown !== undefined && startedAt !== undefined && (shown.startedAt > startedAt || (shown.startedAt === startedAt && shown.state !== "running"));
 
+/** At fan-out, the character a refusal's client belongs to, as the stack's hint lines name it: ` [Alfa]`. */
+const seatTag = (seat: string | undefined): string => (seat === undefined ? "" : ` [${seat}]`);
+
 /** The key a reason's "shown up to" moment is kept under: its key, and at fan-out its character. */
 const seenKey = (key: WakeKey, character: string | undefined): string => (character === undefined ? key : `${key}\u0000${character}`);
 
@@ -141,7 +150,7 @@ export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
     case "error":
       return { key: "error", ts: fact.ts, text: `new error (${label(fact)}: ${fact.error.name})`, inContext: false };
     case "refusal":
-      return { key: "refusal", ts: fact.ts, text: `new refusal (${label(fact)}: ${fact.action} ${fact.status})`, inContext: false, signature: fact.signature };
+      return { key: "refusal", ts: fact.ts, text: `new refusal (${label(fact)}: ${fact.action} ${fact.status}${seatTag(fact.seat)})`, inContext: false, signature: fact.signature };
     case "wake":
       return {
         key: "wake",
@@ -165,15 +174,25 @@ export class Waker {
   private pending: WakeReason[] = [];
   /** Per key (and character, `seenKey`), the newest moment the model has been shown its reasons up to (`forget`). */
   private readonly seenUntil = new Map<string, number>();
-  /** Refusal signatures a tool result has carried the hint of since the last load (`deliver`). */
-  private readonly delivered = new Set<string>();
+  /**
+   * Refusal signatures the model has been told of this run: one that woke
+   * it, or was pending when it woke, and one whose hint a tool result
+   * carried (`deliver`). A signature wakes once per run, not once per load:
+   * an edit reloads the program, and a combat routine's ordinary refusals
+   * (`not_ready`, `out_of_range`) would otherwise each wake it again after
+   * every save. Later ones still show, counted, in the next wake.
+   */
+  private readonly known = new Set<string>();
 
   note(reason: WakeReason): void {
     // A reason from before the model was shown its key's news is not news, however late its fact arrives.
     if (reason.ts <= (this.seenUntil.get(reason.key) ?? -Infinity)) return;
     if (reason.character !== undefined && reason.ts <= (this.seenUntil.get(seenKey(reason.key, reason.character)) ?? -Infinity)) return;
-    // Nor a refusal whose hint a result has already carried, however late its fact arrives.
-    if (reason.signature !== undefined && this.delivered.has(reason.signature)) return;
+    // Nor a refusal of a signature the model was already told of this run, however late its fact arrives.
+    if (reason.signature !== undefined) {
+      if (this.known.has(reason.signature)) return;
+      this.remember(reason.signature);
+    }
     this.pending.push(reason);
     // A program that throws on a tight loop must not grow this without bound.
     if (this.pending.length > 200) this.pending.splice(0, this.pending.length - 200);
@@ -206,16 +225,16 @@ export class Waker {
     this.pending = this.pending.filter((r) => !drop(r));
   }
 
-  /** A tool result carried the hint of this refusal signature: it is no reason to wake, now or when its fact lands, until the next load. */
+  /** A tool result carried the hint of this refusal signature: it is no reason to wake, now or when its fact lands, for the rest of the run. */
   deliver(signature: string): void {
-    if (this.delivered.size > 1_000) this.delivered.clear();
-    this.delivered.add(signature);
+    this.remember(signature);
     this.pending = this.pending.filter((r) => r.signature !== signature);
   }
 
-  /** A load: a signature's first refusal on the new code is news again. */
-  loaded(): void {
-    this.delivered.clear();
+  /** Keep `signature` as told; past the cap the oldest is forgotten, so a program minting signatures cannot grow this without bound. */
+  private remember(signature: string): void {
+    this.known.add(signature);
+    if (this.known.size > KNOWN_SIGNATURES_KEPT) this.known.delete(this.known.values().next().value as string);
   }
 
   /** The reasons a wake reports, cleared. */
@@ -316,6 +335,12 @@ export interface SignatureLine {
   text: string;
   /** An error's workspace frames, innermost first. */
   frames: readonly string[];
+  /**
+   * At fan-out, a refusal's parts: `head` (routine, action, status), the
+   * character whose client was refused and the hint. Lines alike in all but
+   * the character are one line naming each, as the stack's hint lines are.
+   */
+  seat?: { head: string; character: string; hint: string } | undefined;
 }
 
 /** "45s", "4m05s", "1h05m". */
@@ -337,7 +362,11 @@ export function signatureLineOf(fact: ProgramFact): { signature: string; line: S
     return { signature: fact.error.signature, line: { kind: "error", text: `${label(fact)} ${fact.error.text}`, frames: fact.error.frames } };
   }
   if (fact.kind === "refusal") {
-    return { signature: fact.signature, line: { kind: "refusal", text: `${label(fact)} ${fact.action} ${fact.status} — ${fact.hint}`, frames: [] } };
+    const head = `${label(fact)} ${fact.action} ${fact.status}`;
+    return {
+      signature: fact.signature,
+      line: { kind: "refusal", text: `${head} — ${fact.hint}`, frames: [], ...(fact.seat !== undefined ? { seat: { head, character: fact.seat, hint: fact.hint } } : {}) },
+    };
   }
   if (fact.kind === "ended" && fact.routine.state === "threw" && fact.routine.error !== undefined) {
     const e = fact.routine.error;
@@ -403,12 +432,12 @@ export function renderWake(v: WakeView): string {
     .filter((x): x is { sig: string; n: number; ts: number; line: SignatureLine } => x.line !== undefined)
     .sort((a, b) => b.ts - a.ts);
   for (const kind of ["error", "refusal"] as const) {
-    const rows = shown.filter((x) => x.line.kind === kind);
+    const rows = groupSeats(shown.filter((x) => x.line.kind === kind));
     if (rows.length === 0) continue;
     lines.push(kind === "error" ? "errors:" : "refusals:");
     for (const x of rows.slice(0, WAKE_SIGNATURES_SHOWN)) {
-      lines.push(`  ${x.line.text}${x.n > 1 ? ` ×${x.n}` : ""}`);
-      for (const frame of x.line.frames.slice(0, ERROR_FRAMES_SHOWN)) lines.push(`      ${frame}`);
+      lines.push(`  ${x.text}${x.n > 1 ? ` ×${x.n}` : ""}`);
+      for (const frame of x.frames.slice(0, ERROR_FRAMES_SHOWN)) lines.push(`      ${frame}`);
     }
     if (rows.length > WAKE_SIGNATURES_SHOWN) lines.push(`  and ${rows.length - WAKE_SIGNATURES_SHOWN} more`);
   }
@@ -448,6 +477,40 @@ export function renderWake(v: WakeView): string {
     lines.push(...tail);
   }
   return lines.join("\n");
+}
+
+/**
+ * Signature rows as the block lists them, newest first. A fan-out refusal
+ * row (one with `seat`) joins the first row alike in head and hint, which
+ * names each character in brackets after the status, as the stack's hint
+ * lines do (`party castSpell not_ready [Alfa, Bravo] — …`), counts summed.
+ * Every other row is its own line, its text unchanged.
+ */
+function groupSeats(rows: readonly { n: number; line: SignatureLine }[]): { text: string; n: number; frames: readonly string[] }[] {
+  const out: { text: string; n: number; frames: readonly string[]; names?: string[]; seat?: NonNullable<SignatureLine["seat"]> }[] = [];
+  const byKey = new Map<string, (typeof out)[number]>();
+  for (const x of rows) {
+    const seat = x.line.seat;
+    if (seat === undefined) {
+      out.push({ text: x.line.text, n: x.n, frames: x.line.frames });
+      continue;
+    }
+    const key = `${seat.head}\n${seat.hint}`;
+    const g = byKey.get(key);
+    if (g !== undefined) {
+      g.n += x.n;
+      if (!g.names!.includes(seat.character)) g.names!.push(seat.character);
+      continue;
+    }
+    const row = { text: "", n: x.n, frames: [], names: [seat.character], seat };
+    byKey.set(key, row);
+    out.push(row);
+  }
+  return out.map((r) => {
+    if (r.seat === undefined || r.names === undefined) return r;
+    const names = r.names.slice(0, WAKE_SEATS_SHOWN).join(", ") + (r.names.length > WAKE_SEATS_SHOWN ? ` +${r.names.length - WAKE_SEATS_SHOWN}` : "");
+    return { text: `${r.seat.head} [${names}] — ${r.seat.hint}`, n: r.n, frames: r.frames };
+  });
 }
 
 /**
@@ -604,7 +667,6 @@ export class ProgramWake {
       if (this.signatures.size > 1_000) this.signatures.delete(this.signatures.keys().next().value as string);
     }
     if (fact.kind === "restart" && fact.blamed) this.blamed++;
-    if (fact.kind === "loaded") this.waker.loaded();
     try {
       this.o.trajectory.append(factRecord(fact));
     } catch {
@@ -687,7 +749,9 @@ export class ProgramWake {
    * A tool result is carrying these action hints (the stack's
    * `onHintsDelivered`, called as the result is built): a routine's refusal
    * whose hint it carries is delivered, by signature, and no longer wakes a
-   * sleep, nor does its fact when it lands late, until the next load. A hint
+   * sleep, nor does its fact when it lands late, for the rest of the run
+   * (at fan-out its signature names the client's character, as the stack's
+   * fact does). A hint
    * whose status is `dead` tells the model its character is dead, so a death
    * from before it no longer wakes either. Both still show in the next wake.
    */
@@ -872,6 +936,7 @@ export function factRecord(fact: ProgramFact): { t: string; [key: string]: unkno
         signature: fact.signature,
         name: fact.routine,
         ...(fact.character !== undefined ? { character: fact.character } : {}),
+        ...(fact.seat !== undefined ? { seat: fact.seat } : {}),
         action: fact.action,
         status: fact.status,
         deploy: fact.deploy,

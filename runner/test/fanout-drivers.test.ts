@@ -60,10 +60,12 @@ const FANOUT_NAMES = toolsFor({ fanout: true }).map((t) => t.name);
  * list has moved once since, on a decision about the single-character
  * surface itself: `run_snippet`'s description says the `scratchpad` calls
  * return Promises (operator, 2026-11-12). With that one clause taken back
- * out the list hashes b6b0f118bee75e59, as it did before fan-out.
+ * out the list hashes b6b0f118bee75e59, as it did before fan-out. It moved
+ * again when that description stated the snippet time limit (operator,
+ * 2026-11-15); without that sentence it hashes cb0608ca57a2e422.
  */
 const SINGLE = {
-  toolsList: "cb0608ca57a2e422",
+  toolsList: "621f80e6366c31ae",
   claudeAllowedTools: "a24dbe820edb9b8b",
   claudeArgs: "90a5a17af291fcf4",
 };

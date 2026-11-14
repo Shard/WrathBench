@@ -54,7 +54,7 @@ export const SUITE_MEMBERS: readonly SuiteMember[] = [
   { name: "deadmines-entry", account: "SMOKE4" },
   // Looting a chest-type gameobject through the SDK (`Chsmokee`).
   { name: "chest-loot", account: "SMOKE4" },
-  // The module's limits against a lease secret: body size, the subscriber cap, the request rate (`Limsmokee`).
+  // The module's limits against a lease secret: body size, the subscriber cap, the request rate, /health by credential, one-step binding (`Limsmokee`, `Libsmokee`).
   { name: "module-limits", account: "SMOKE4" },
 ];
 
