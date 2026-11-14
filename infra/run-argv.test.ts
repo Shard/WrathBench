@@ -172,8 +172,8 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
 /**
  * The fresh launches run.ts refuses after the parse, and why, while scored
  * episodes are held (`SCORED_EPISODES_WAIT`, runner/src/config.ts): every
- * scored lane. Every freeplay and hand lane launches. None is held today, so
- * this is under an explicit reason. The planner never spawns a scored lane
+ * scored lane. Every freeplay and hand lane launches. Both cases name the
+ * hold explicitly, so neither depends on whether one is set today. The planner never spawns a scored lane
  * while they are held (`scoredHold`); this is the launch's own refusal behind
  * it, for a hand launch.
  */
@@ -197,7 +197,7 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     });
   }
 
-  test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam; run.ts refuses none today, and exactly the scored ones while they are held", () => {
+  test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam; run.ts refuses none while scored episodes are open, and exactly the scored ones while they are held", () => {
     const refusedAtLaunch: string[] = [];
     const refusedWhileHeld: string[] = [];
     for (const { name, spec, resume } of everyLane()) {
@@ -205,7 +205,7 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
       expect(() => configFromArgs(episodeFlags(spec, false), {})).not.toThrow();
       // run.ts's own refusal, after the parse (`loopLaunchRefusal`): a scored hold, and the snippet loop is a probe's.
       const config = configFromArgs(episodeFlags(spec, false), {});
-      const why = loopLaunchRefusal(config);
+      const why = loopLaunchRefusal(config, null);
       if (why !== null) refusedAtLaunch.push(`${name}: ${why}`);
       const held = loopLaunchRefusal(config, HOLD);
       if (held !== null) refusedWhileHeld.push(`${name}: ${held}`);

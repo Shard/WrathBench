@@ -17,7 +17,7 @@ import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindow, scratchpadUnchangedLine, type HistoryMessage } from "../src/context";
 import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
-import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, SCORED_EPISODES_WAIT, scoredWaitFor } from "../src/config";
+import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, scoredWaitFor } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote } from "../src/fanout-run";
 import { runLoop } from "../src/loop";
@@ -110,12 +110,11 @@ describe("config, flags and the tuple", () => {
     expect(loopLaunchRefusal({ loop: "snippet", driver: "claude-code", episode: "freeplay" })).toContain("runs the program loop (--loop program)");
     expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode: "freeplay" })).toBeNull();
     expect(loopLaunchRefusal({ loop: "program", driver: "codex", episode: undefined })).toBeNull();
-    // Open today (SCORED_EPISODES_WAIT is null); a hold is one line set to its reason.
-    expect(SCORED_EPISODES_WAIT).toBeNull();
+    // Open (SCORED_EPISODES_WAIT null, as today) and held under an explicit reason, whatever the constant says.
     const hold = "scored episodes are held for this test";
     for (const episode of ["e90", "e360"] as const) {
-      expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode })).toBeNull();
-      expect(scoredWaitFor(episode)).toBeNull();
+      expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode }, null)).toBeNull();
+      expect(scoredWaitFor(episode, null)).toBeNull();
       expect(scoredWaitFor(episode, hold)).toBe(hold);
       expect(loopLaunchRefusal({ loop: "program", driver: "openai", episode }, hold)).toBe(`--episode ${episode} is a scored episode, and ${hold}`);
     }
