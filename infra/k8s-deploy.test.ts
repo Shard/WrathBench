@@ -520,7 +520,8 @@ describe("k8s-deploy.sh --keep-paused", () => {
     expect(r.out).toContain("DEPLOYED and verified by");
     expect(r.out.lastIndexOf("./infra/fleet-update.sh resume")).toBeGreaterThan(r.out.indexOf("DEPLOYED and verified by"));
     expect(r.out).toContain("./infra/run-episode.sh --k8s --account PROBE --driver claude-code");
-    expect(r.out).toContain("--driver codex");
+    expect(r.out).not.toContain("--driver codex");
+    expect(r.out).toContain("codex has no hand launch on the cluster");
     expect(r.out).not.toContain("pause switch CLEARED");
     // A switch set a moment ago is not the one a Helm upgrade raced.
     expect(r.out).toContain("SET (just now, by --keep-paused)");

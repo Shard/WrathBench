@@ -541,7 +541,7 @@ hash, source, cell, arm and the definition itself (`runner/src/campaign-file.ts`
 when the arm pinned one; a digest-only pin stamps
 `<repository basename>@sha256:<12 hex>`, which names no series),
 `WRATHBENCH_RUN_IMAGE` (the image as requested, when the episode is a probe's pod),
-`WRATHBENCH_MODULE_URL`, `WRATHBENCH_RUNS_DIR`, `WRATHBENCH_IN_CONTAINER=1`,
+`WRATHBENCH_MODULE_URL`, `WRATHBENCH_RUNS_DIR`, `WRATHBENCH_IN_CONTAINER=1`, `WRATHBENCH_RUN_POD=1` (on every run pod, so a codex episode can tell it is in one),
 `WRATHBENCH_LOCAL_MODEL_HOSTS` (the self-hosted hosts the provider table pairs
 with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
 reads the key), the module port secret, and the one credential the driver
