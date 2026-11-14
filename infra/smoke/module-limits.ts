@@ -21,14 +21,20 @@
  *      pace. Any `429 rate_limited` must come after some were served, and a
  *      real action a second later is served again. None refused is a world
  *      with the rate off: logged as such, and a pass.
+ *   4. The `/health` view by credential (wrath-mcp#70): the port secret's
+ *      carries `limits` and `leases`, a lease secret's neither, wherever
+ *      either calls from.
  *   Cleanup, always: the subscribers closed, then `DELETE /session` and
  *   `DELETE /lease` with the port secret, which no limit applies to (a lease
  *   secret's logout after the burst could itself be rate limited).
+ *   5. One-step character binding (wrath-mcp#70), on a fresh lease of the
+ *      same account once the first is released: two first creates naming
+ *      different characters, sent at once, answer one `200` and one `409
+ *      character_bound` whose `bound` names the winner. Cleaned up the same
+ *      way.
  *
  * Not exercised: `431 header_too_large` (the same path as 413), `429
- * lease_limit` (1024 leases), and the connection caps. The network `GET
- * /health` view does not carry `limits` (loopback only), so the configured
- * values cannot be read from here.
+ * lease_limit` (1024 leases), and the connection caps.
  *
  * It FAILS against a module that predates wrath-mcp#57, saying so. A member of
  * the on-demand suite (lib/suite.ts), not of the preflight gate.
@@ -53,6 +59,9 @@ const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "SMOKE4";
 const TOKEN = smokeToken("module-limits");
 const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Lim", ACCOUNT);
+/** Step 5's token, and the second persistent character its race names. */
+const BIND_TOKEN = smokeToken("module-limits", { role: "bind" });
+const RIVAL = accountFixtureName("Lib", ACCOUNT);
 /** The module's default; the chart sets none. */
 const SUBSCRIBERS = Number(process.env.SMOKE_EVENTS_SUBSCRIBERS ?? "4");
 /** Upgrades tried before concluding there is no cap at all. */
@@ -67,6 +76,7 @@ const log = (m: string) => console.log(`[module-limits +${((Date.now() - started
 
 const held: Socket[] = [];
 let leased = false;
+let bindLeased = false;
 let cleaned: Promise<void> | undefined;
 /** Once, from the pass and the fail path alike. */
 function cleanup(): Promise<void> {
@@ -79,7 +89,22 @@ function cleanup(): Promise<void> {
   return cleaned;
 }
 
-const { fail: failNow, failed } = failOnce({ prefix: () => "[module-limits] FAIL", cleanup, cleanupMs: 15_000 });
+/** Step 5's lease, from its own pass and from the fail path. */
+async function cleanupBind(): Promise<void> {
+  if (!bindLeased) return;
+  bindLeased = false;
+  await logoutSession({ moduleUrl: BASE, token: BIND_TOKEN });
+  await releaseSessionSecret({ moduleUrl: BASE, token: BIND_TOKEN });
+}
+
+const { fail: failNow, failed } = failOnce({
+  prefix: () => "[module-limits] FAIL",
+  cleanup: async () => {
+    await cleanup();
+    await cleanupBind();
+  },
+  cleanupMs: 15_000,
+});
 function fail(msg: string): never {
   return failNow(msg);
 }
@@ -282,6 +307,50 @@ async function rate(secret: string): Promise<void> {
   log(`PASS request rate: on; ${first} served, then 429 rate_limited, then served again 1.1s later`);
 }
 
+/** 4. The `/health` view by credential. */
+async function healthViews(secret: string): Promise<void> {
+  const port = await req("GET", "/health", undefined);
+  if (port.status !== 200 || typeof port.json?.limits !== "object" || port.json.limits === null || port.json?.leases === undefined) {
+    fail(`port-secret GET /health: expected 200 with limits and leases, got ${port.status} ${JSON.stringify(port.json)}`);
+  }
+  const lease = await req("GET", "/health", undefined, secret);
+  if (lease.status !== 200 || lease.json?.ok !== true) fail(`lease-secret GET /health: expected 200 ok, got ${lease.status} ${JSON.stringify(lease.json)}`);
+  if ("limits" in lease.json || "leases" in lease.json) {
+    fail(`lease-secret GET /health carries ${["limits", "leases"].filter((k) => k in lease.json).join(" and ")}: the full view is the port secret's (wrath-mcp#70)`);
+  }
+  log(`PASS /health by credential: the port secret's view has limits and leases, a lease secret's neither`);
+}
+
+/** 5. Two first creates at once, naming different characters, on a fresh lease. */
+async function bindRace(): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const lease = await leaseSessionSecret({ moduleUrl: BASE, token: BIND_TOKEN, account: ACCOUNT });
+    if (lease.secret === undefined) fail(`no lease secret for the bind step: ${lease.note}`);
+    bindLeased = true;
+    const create = (character: string) => req("POST", "/session", { token: BIND_TOKEN, character, race: 1, class: 1 }, lease.secret);
+    const [a, b] = await Promise.all([create(CHARACTER), create(RIVAL)]);
+    const replies = [
+      { character: CHARACTER, ...a },
+      { character: RIVAL, ...b },
+    ];
+    const shownAll = replies.map((r) => `${r.character}: ${r.status} ${JSON.stringify(r.json)}`).join("; ");
+    // An earlier session on the account still releasing answers a create 504, which binds nothing: start over.
+    if (replies.some((r) => r.status === 504 && r.json?.error === "timeout") && !replies.some((r) => r.status === 200) && attempt < 4) {
+      log(`${RETRY_MARK} bind step: a create answered 504 timeout (attempt ${attempt}): ${shownAll}; retrying`);
+      await cleanupBind();
+      await Bun.sleep(3_000);
+      continue;
+    }
+    const won = replies.filter((r) => r.status === 200);
+    const lost = replies.filter((r) => r.status === 409 && r.json?.error === "character_bound");
+    if (won.length !== 1 || lost.length !== 1) fail(`two first creates at once: expected one 200 and one 409 character_bound, got ${shownAll}`);
+    if (lost[0]!.json?.bound !== won[0]!.character) fail(`the refused create's bound is ${JSON.stringify(lost[0]!.json?.bound)}, expected the winner ${won[0]!.character}: ${shownAll}`);
+    log(`PASS two first creates at once: ${won[0]!.character} 200, ${lost[0]!.character} 409 character_bound naming ${won[0]!.character}`);
+    await cleanupBind();
+    return;
+  }
+}
+
 async function main(): Promise<void> {
   if (MODULE_SECRET === undefined) fail("WRATHBENCH_MODULE_SECRET is not set: the smoke leases with the port secret");
   if (!Number.isInteger(SUBSCRIBERS) || SUBSCRIBERS < 1) fail(`SMOKE_EVENTS_SUBSCRIBERS must be a positive integer, got ${process.env.SMOKE_EVENTS_SUBSCRIBERS}`);
@@ -299,10 +368,13 @@ async function main(): Promise<void> {
   await login(secret);
   await subscribers(secret);
   await rate(secret);
+  await healthViews(secret);
 
   await cleanup();
   log("logged out and released the lease");
-  log("PASS: 413 body_too_large -> subscriber cap -> port secret uncounted -> request rate");
+  await bindRace();
+  log("logged out and released the bind step's lease");
+  log("PASS: 413 body_too_large -> subscriber cap -> port secret uncounted -> request rate -> /health by credential -> one-step binding");
   process.exit(0);
 }
 

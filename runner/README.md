@@ -1335,8 +1335,11 @@ built from the snippet one by exact replacements (`prompt.ts`), so everything
 else it is told is the snippet loop's bytes.
 
 A reply with no tool call sleeps instead of being re-prompted after the step
-interval (`src/wake.ts`). A wake is a routine ending, the first error or
-refusal of a signature since a load, a `wake(reason)` call, a death, the event
+interval (`src/wake.ts`). A wake is a routine ending, the first error of a
+signature since a load, the first refusal of a signature in the run (a save
+re-arms none, so a combat routine's ordinary refusals do not wake it after
+every edit; later ones are counted in the next wake), a `wake(reason)` call,
+any character's death, the event
 stream closing, a sandbox restart or a harness notice; the first reason opens
 a two-second window so a cascade is one wake, the step interval is the floor
 and five minutes the cap. Level-ups and quest completions do not wake; the
@@ -1344,7 +1347,9 @@ next wake reports them. `--yield true` adds a `yield` tool held open the same
 way inside a turn, whose result is the wake. What a wake shows is facts only,
 rendered by a pure function (`renderWake`) and scrubbed of the run's secrets:
 every routine as it stands, new errors with the model's own file lines,
-refusals with their hints, moves that replaced one another, `wake` calls, what
+refusals with their hints (at fan-out each names the character whose client
+was refused, `[Alfa, Bravo]` after the status, as the stack's hint lines
+do), moves that replaced one another, `wake` calls, what
 changed for the character, and the routines' last console entries (at most
 20, in at most 2,000 characters, since one log call can print an object over
 many lines). A routine's error or returned value is shown whole once; a later
@@ -1366,13 +1371,16 @@ has already been told wakes no later sleep, and still shows in the next wake:
 a refusal whose hint a tool result carried (the stack hands the runner each
 result's hints as it is built, `onHintsDelivered`; matched by signature, so a
 refusal that lands after the drain still wakes, and one whose fact lands late
-does not, until the next load), a death a `dead` hint reported, a routine end
+does not, for the rest of the run), a death a `dead` hint reported, a routine end
 the routine tools' lines showed (that run as ended, or a newer run of its
 name, matched by the run's start; a routine that ends a millisecond after the
-`start_routine` that answered "running 0s" still wakes), and a `wake(reason)`
+`start_routine` that answered "running 0s" still wakes; one that ended
+before the answer is shown ended in it), and a `wake(reason)`
 from a run those lines showed as over or replaced. `read_file` and `yield` results are exempt from
 the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
-bounded by the 32,000-character file cap, and a wake by its own caps.
+bounded by the 32,000-character file cap, and a wake by its own caps. A
+`read_file` result past the file cap (the SDK reference, `API.md`, read whole)
+is cut like any other message.
 
 At fan-out (one agent driving several characters, `fanout-run.ts`) the run has
 one workspace and one program, and routines are per character: the list is

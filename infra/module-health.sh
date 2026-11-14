@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# The module's operator health census (sessions, drop counts by opcode, the
-# world-load counts behind `worldLoaded`), read
-# over loopback inside the worldserver container, which is the only caller the
-# module gives the census to; any other caller gets liveness with zeroed
-# counters (wrath-mcp/module/PROTOCOL.md, "Authentication"). The image has no curl or
-# wget — perl is what it does have.
+# The module's operator health census (sessions, leases, limits, drop counts
+# by opcode, the world-load counts behind `worldLoaded`). The module gives the
+# census to the port secret's holder, wherever it calls from; a lease secret
+# gets liveness with zeroed counters (wrath-mcp/module/PROTOCOL.md, "GET
+# /health"). The probe runs inside the worldserver container because that is
+# where the port secret is (AC_WRATH_BENCH_SECRET), not because of the
+# address. The image has no curl or wget — perl is what it does have.
 #
 # The worldserver is a Deployment in namespace `wrathbench`:
 #

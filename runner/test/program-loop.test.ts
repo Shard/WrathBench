@@ -768,11 +768,19 @@ describe("ProgramWake", () => {
     c.schedule(30_000, () => p.push(refusal(c.now(), "no_path"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(second.fired).toBe("refusal");
-    // After a load, a delivered signature's first refusal on the new code is news again.
+    // After a load, a signature the model was told of, by a result or a wake, does not wake it again: once per run.
     p.push({ kind: "loaded", ts: c.now(), deploy: 7, routines: ["grind"], restarted: ["grind"], dropped: [], by: "save" }, wake);
     c.schedule(30_000, () => p.push(refusal(c.now(), "too_far"), wake));
-    const third = await wake.sleep(p, { via: "yield", turn: 3, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
-    expect(third.fired).toBe("refusal");
+    c.schedule(40_000, () => p.push(refusal(c.now(), "no_path"), wake));
+    const third = await wake.sleep(p, { via: "yield", turn: 3, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true });
+    expect(third.fired).toBe("cap");
+    // They still show, in the wake that happens for another reason.
+    expect(third.block).toContain("refusals:\n  grind moveTo no_path — h\n  grind moveTo too_far — h");
+    // A new signature still wakes.
+    c.schedule(10_000, () => p.push(refusal(c.now(), "drop"), wake));
+    const fourth = await wake.sleep(p, { via: "yield", turn: 4, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
+    expect(fourth.fired).toBe("refusal");
+    expect(fourth.block.split("\n")[0]).toBe("[wake 4 · slept 12s · woke for: new refusal (grind: moveTo drop)]");
   });
 
   test("a refusal that lands after the hint drain, before the result returns, still wakes: only what a result carried is delivered", async () => {
@@ -1030,6 +1038,15 @@ describe("the window cap and the program's tools", () => {
     // Folded like any result once the window's older block.
     expect(String(renderWindow(window, 4)[1]!.content)).toStartWith("[folded by harness] read_file");
   });
+
+  test("a read_file result past the file cap, the SDK reference read whole, is capped like any other message", () => {
+    const reference = "y".repeat(56_000);
+    const window: HistoryMessage[] = [
+      { role: "assistant", content: null, tool_calls: [{ id: "a", type: "function", function: { name: "read_file", arguments: '{"path":"API.md"}' } }] },
+      { role: "tool", tool_call_id: "a", content: reference },
+    ];
+    expect(String(renderWindow(window, 0)[1]!.content)).toEndWith(`…[truncated ${56_000 - CONTEXT_POLICY.WINDOW_MESSAGE_CHARS} chars]`);
+  });
 });
 
 describe("PadSeen: a scaffold's program loop sends the pad only when its thread does not hold it", () => {
@@ -1148,6 +1165,63 @@ describe("the program loop at fan-out", () => {
     wake.onDeath(12, "Alfa");
     wake.onDeath(13, "Bravo");
     expect(wake.waker.peek().map((r) => r.text)).toEqual(["Bravo died", "Bravo died"]);
+  });
+
+  test("a refusal line names the character whose client was refused, alike lines as one; its signature wakes once per run", async () => {
+    const c = fakeClock(10_000_000);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const refusal = (ts: number, seat: string, status: string, hint = "the spell is not ready"): ProgramFact => ({
+      kind: "refusal",
+      ts,
+      routine: "party",
+      seat,
+      deploy: 3,
+      action: "castSpell",
+      status,
+      hint,
+      signature: `party|${seat}|castSpell|${status}`,
+      fresh: true,
+    });
+    c.schedule(10_000, () => {
+      p.push(refusal(c.now(), "Alfa", "not_ready"), wake);
+      p.push(refusal(c.now(), "Bravo", "not_ready"), wake);
+      p.push(refusal(c.now(), "Bravo", "out_of_range", "move closer"), wake);
+    });
+    const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
+    expect(first.fired).toBe("refusal");
+    expect(first.block.split("\n")).toEqual([
+      "[wake 1 · slept 12s · woke for: new refusal (party: castSpell not_ready [Alfa]); new refusal (party: castSpell not_ready [Bravo]); new refusal (party: castSpell out_of_range [Bravo])]",
+      "routines: none started",
+      "no routine is running",
+      "refusals:",
+      "  party castSpell not_ready [Alfa, Bravo] — the spell is not ready ×2",
+      "  party castSpell out_of_range [Bravo] — move closer",
+      "since you slept: quests completed 0 · deaths 0",
+    ]);
+    // A save re-arms nothing: the same three on the new code do not wake, a new character's first does.
+    p.push({ kind: "loaded", ts: c.now(), deploy: 4, routines: ["party"], restarted: ["party"], dropped: [], by: "save" }, wake);
+    c.schedule(10_000, () => {
+      p.push(refusal(c.now(), "Alfa", "not_ready"), wake);
+      p.push(refusal(c.now(), "Bravo", "out_of_range", "move closer"), wake);
+    });
+    c.schedule(20_000, () => p.push(refusal(c.now(), "Charlie", "not_ready"), wake));
+    const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
+    expect(second.fired).toBe("refusal");
+    expect(second.block.split("\n")[0]).toBe("[wake 2 · slept 22s · woke for: new refusal (party: castSpell not_ready [Charlie])]");
+    expect(second.block).toContain("refusals:\n  party castSpell not_ready [Charlie, Alfa] — the spell is not ready ×2\n  party castSpell out_of_range [Bravo] — move closer");
+  });
+
+  test("each death wakes its own sleep, the same character's twice included", async () => {
+    const c = fakeClock();
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    for (const turn of [1, 2]) {
+      c.schedule(20_000, () => wake.onDeath(c.now(), "Bravo"));
+      const woke = await wake.sleep(p, { via: "yield", turn, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
+      expect(woke.fired).toBe("died");
+      expect(woke.block.split("\n")[0]).toBe(`[wake ${turn} · slept 22s · woke for: Bravo died]`);
+    }
   });
 
   test("any character's death or closed stream wakes, by name, and a wake names whose level moved", async () => {
