@@ -508,6 +508,21 @@ describe("what the store must not lose", () => {
   });
 });
 
+describe("a run's world", () => {
+  test("is its own column off the launch config, and empty before worlds", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeRun(runsDir, "run-on-world");
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { config: Record<string, unknown> };
+    writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config: { ...meta.config, world: "wabcdefghij" } }, null, 2)}\n`);
+    writeRun(runsDir, "run-before");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const byId = new Map(rowsOf(sink, "runs").map((r) => [r["run_id"], r["world_id"]]));
+    expect(byId.get("run-on-world")).toBe("wabcdefghij");
+    expect(byId.get("run-before")).toBe("");
+  });
+});
+
 describe("what the store must never hold", () => {
   const TOKEN = "tok-fedcba9876543210fedcba9876543210";
 

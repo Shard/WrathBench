@@ -59,6 +59,8 @@ export interface RunTableRow {
   platform: string;
   resolved_model: string;
   resolved_cli_version: string;
+  /** The run's world (`config.world`); "" before worlds, and on a row written before the column. */
+  world_id?: string;
   continued_from: string;
   termination_reason: string;
   termination_detail: string;
@@ -541,6 +543,9 @@ export function runRowOf(r: RunTableRow, latest: LatestState | LatestReading | u
   const declared = config["billing"];
   if (declared === "free" || declared === "paid") row.declaredBilling = declared;
   Object.assign(row, runCredentialOf(config));
+  // The world it played on: the column when the collector wrote one, else the launch config.
+  const world = (typeof r.world_id === "string" && r.world_id !== "" ? r.world_id : undefined) ?? (typeof config["world"] === "string" && config["world"] !== "" ? config["world"] : undefined);
+  if (world !== undefined) row.world = world;
   return row;
 }
 

@@ -109,6 +109,9 @@ export default function Fleet() {
                 )}
               </Show>
 
+              {/* Failed boots that hold every launch needing a world, in the supervisor's own words. */}
+              <Show when={f().worldsHold}>{(why) => <div class="banner bad">{why()}</div>}</Show>
+
               {/* The gate only when it blocks: a PASS is not news. */}
               <Show when={gateVerdict(f().preflight) === "FAIL"}>
                 <div class="banner bad">
@@ -175,6 +178,35 @@ export default function Fleet() {
                       {(e) => (
                         <li>
                           <A href={`/run/${encodeURIComponent(e.runId)}`} title={e.runId}>{shortRunId(e.runId)}</A> — {e.detail}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Collapsible>
+              </Show>
+              {/* The worlds per eval: each attempt's own worldserver, open or lately ended. Private only. */}
+              <Show when={(f().worlds ?? []).length > 0}>
+                <Collapsible
+                  title="worlds"
+                  summary={`${(f().worlds ?? []).filter((w) => w.state !== "ended").length} open · ${(f().worlds ?? []).length} listed`}
+                  storageKey="wrathbench.fleet.worlds"
+                >
+                  <ul class="dim">
+                    <For each={f().worlds ?? []}>
+                      {(w) => (
+                        <li title={w.failed ?? ""}>
+                          <span class="mono">{w.id}</span> <span class={`badge ${w.state === "up" ? "running" : w.state === "ended" ? "exited" : ""}`}>{w.state}</span> realm {w.realmId} ·{" "}
+                          {w.bootMs === null ? "no boot" : `boot ${fmtDuration(w.bootMs)}`}
+                          <Show when={w.boots > 1}> ({w.boots} boots)</Show> · {stamp(w.createdAt)}
+                          <Show when={w.endedAt}>{(t) => <> – {stamp(t())}</>}</Show> ·{" "}
+                          <For each={w.runIds}>
+                            {(id, i) => (
+                              <>
+                                <Show when={i() > 0}>, </Show>
+                                <A href={`/run/${encodeURIComponent(id)}`} title={id}>{shortRunId(id)}</A>
+                              </>
+                            )}
+                          </For>
                         </li>
                       )}
                     </For>

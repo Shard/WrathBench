@@ -461,6 +461,7 @@ export function resultRunOf(
     ...(run.ref !== undefined ? { ref: run.ref } : {}),
     ...(run.image !== undefined ? { image: run.image } : {}),
     ...(run.party !== undefined ? { party: run.party } : {}),
+    ...(run.world !== undefined ? { world: run.world } : {}),
     effort: run.comparability?.effort ?? null,
     // Only when set: absent is the CLI's own `auto`, which every older row is.
     ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),
