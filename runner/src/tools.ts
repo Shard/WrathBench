@@ -29,7 +29,7 @@ import {
   type ToolResult,
   type ToolSpec,
 } from "@wrathbench/mcp/tools";
-import { fanoutTools, type FanoutSurface } from "@wrathbench/mcp/fanout";
+import { fanoutTools, PLAIN_FANOUT_RENDER, type FanoutSurface } from "@wrathbench/mcp/fanout";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { formatEventLine, formatStateSummary, isAmbientEvent, type SnapshotLike } from "./context";
@@ -521,7 +521,7 @@ function routineTool(spec: ToolSpec<ProgramContext>): ToolSpec<ProgramContext> {
  * The program loop's tools, in the order the program prompt lists them: the
  * one-off `run_snippet`, the four file tools, the two routine tools, `yield`
  * on a `yield` arm, then the benchmark's others as the snippet loop serves
- * them.
+ * them. A fan-out run's list is `programFanoutToolList`.
  */
 function programToolList(withYield: boolean): ToolSpec<ProgramContext>[] {
   return [
@@ -550,11 +550,14 @@ const RUNNER_PROGRAM_YIELD_TOOLS = new ToolSet<ProgramContext>(programToolList(t
 /** Which program-loop tools a run serves; undefined on the snippet loop. */
 export interface ProgramTools {
   yield: boolean;
+  /** A fan-out run: one program for several characters (`programFanoutToolList`). Absent is one character. */
+  characters?: boolean | undefined;
 }
 
 /** The program loop's set for `program`, or null on the snippet loop. */
 function programSet(program: ProgramTools | undefined): ToolSet<ToolContext> | null {
   if (program === undefined) return null;
+  if (program.characters === true) return (program.yield ? RUNNER_PROGRAM_FANOUT_YIELD_TOOLS : RUNNER_PROGRAM_FANOUT_TOOLS) as unknown as ToolSet<ToolContext>;
   return (program.yield ? RUNNER_PROGRAM_YIELD_TOOLS : RUNNER_PROGRAM_TOOLS) as unknown as ToolSet<ToolContext>;
 }
 
@@ -604,6 +607,33 @@ const RUNNER_FANOUT_TOOLS = new ToolSet<FanoutContext>([
   FANOUT.list_characters,
 ]);
 
+/** A program-loop fan-out run's context: the program and the roster both. */
+type ProgramFanoutContext = ProgramContext & { fanout: FanoutSurface };
+
+/**
+ * The program loop's tools at fan-out (one agent, one workspace, one program,
+ * routines per character): the program loop's list in its order, with the
+ * stack's fan-out `run_snippet` (the program's one-off, with a `character`),
+ * routine tools that take the character a routine runs for, and the fan-out
+ * `recent_events` and `state_summary`; the three roster tools follow, as on
+ * the snippet loop's fan-out list.
+ */
+const PROGRAM_FANOUT = fanoutTools<ProgramFanoutContext>(RENDER as CoreToolRender<ProgramFanoutContext>, PLAIN_FANOUT_RENDER, { program: true });
+const PROGRAM_CHARACTERS = programTools<ProgramFanoutContext>(RENDER as CoreToolRender<ProgramFanoutContext>, { characters: true });
+function programFanoutToolList(withYield: boolean): ToolSpec<ProgramFanoutContext>[] {
+  const own = programToolList(withYield) as unknown as ToolSpec<ProgramFanoutContext>[];
+  const swap: Record<string, ToolSpec<ProgramFanoutContext>> = {
+    run_snippet: PROGRAM_FANOUT.run_snippet,
+    start_routine: routineTool(PROGRAM_CHARACTERS.start_routine as ToolSpec<ProgramContext>) as unknown as ToolSpec<ProgramFanoutContext>,
+    stop_routine: routineTool(PROGRAM_CHARACTERS.stop_routine as ToolSpec<ProgramContext>) as unknown as ToolSpec<ProgramFanoutContext>,
+    recent_events: PROGRAM_FANOUT.recent_events,
+    state_summary: PROGRAM_FANOUT.state_summary,
+  };
+  return [...own.map((t) => swap[t.def.name] ?? t), PROGRAM_FANOUT.login_character, PROGRAM_FANOUT.logout_character, PROGRAM_FANOUT.list_characters];
+}
+const RUNNER_PROGRAM_FANOUT_TOOLS = new ToolSet<ProgramFanoutContext>(programFanoutToolList(false));
+const RUNNER_PROGRAM_FANOUT_YIELD_TOOLS = new ToolSet<ProgramFanoutContext>(programFanoutToolList(true));
+
 /**
  * The context as the fan-out tools take it, or null for a run that drives
  * one character. The roster is the sandbox's (`SandboxHost.roster`), set on
@@ -621,10 +651,10 @@ function fanoutContext(ctx: ToolContext): FanoutContext | null {
 
 /** The dispatcher a context is served by: the fan-out set for a fan-out run, else the nine. */
 function toolSetOf(ctx: ToolContext): { set: ToolSet<ToolContext>; ctx: ToolContext } {
-  // A program-loop run's context carries its program (`ToolContext.program`).
-  const program = ctx.program !== undefined ? programSet({ yield: ctx.yieldWake !== undefined }) : null;
-  if (program !== null) return { set: program, ctx };
+  // A program-loop run's context carries its program (`ToolContext.program`), and a fan-out run's its roster.
   const fan = fanoutContext(ctx);
+  const program = ctx.program !== undefined ? programSet({ yield: ctx.yieldWake !== undefined, characters: fan !== null }) : null;
+  if (program !== null) return { set: program, ctx: fan ?? ctx };
   if (fan !== null) return { set: RUNNER_FANOUT_TOOLS as unknown as ToolSet<ToolContext>, ctx: fan };
   return { set: RUNNER_TOOLS, ctx };
 }
@@ -649,9 +679,10 @@ export function toolsFor(opts: {
   // A fan-out run is served the fan-out list: the same options, over the
   // other set. Asked either with a tool context (its sandbox holds the
   // roster) or with `fanout` said outright by a caller that has no context.
-  // A program-loop run is served its own list (`program`), which is never fan-out.
+  // A program-loop run is served its own list (`program`), at fan-out its fan-out list.
   const fanout = opts.fanout !== undefined && opts.fanout !== false ? true : (opts.sandbox as { roster?: unknown } | undefined)?.roster !== undefined;
-  const program = opts.programTools ?? (opts.program !== undefined ? { yield: opts.yieldWake !== undefined } : undefined);
+  const said = opts.programTools ?? (opts.program !== undefined ? { yield: opts.yieldWake !== undefined } : undefined);
+  const program = said !== undefined && fanout ? { ...said, characters: true } : said;
   const all = programSet(program)?.defs ?? (fanout ? RUNNER_FANOUT_TOOLS.defs : TOOLS);
   // A run configured without the reference wiki (`wiki: false`, issue #61) is
   // not handed the tool at all. Absent reads as true: the reference surface is

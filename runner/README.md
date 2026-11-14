@@ -1274,7 +1274,9 @@ writes its loop into the config (`loop`, `launchLoopOf`): `--loop` and
 | `codex` | `program`, `yield` off | as measured; its turn-end pause is the sleep |
 | `pi` | `snippet` | its adapter has no sleep yet |
 | `stub`, `reference` | `snippet` | not a model; the reference's route needs bindings that persist |
-| any driver at fan-out | `snippet` | the program loop is not built for several characters yet |
+
+A fan-out run takes its driver's default like a solo run: one program drives
+every character (the paragraph that opens "At fan-out", below).
 
 The snippet loop is kept as the legacy arm of probe campaigns: a model
 driver runs it only on `--episode probing`, and a scored, freeplay or
@@ -1283,7 +1285,7 @@ unnamed episode on it is refused at launch and again on resume
 config stored before the loop was written down has none, and was the snippet
 loop. Scored episodes are refused on the program loop too, until a
 long-clock program-loop run has been read. The program loop itself is
-refused on pi, on a route driver and at fan-out
+refused on pi and on a route driver
 (`programLoopRefusal`, `DriverEntry.programLoop`; a campaign pair is refused
 the same way). Together these mean pi runs only as probe campaign squares
 for now.
@@ -1336,6 +1338,20 @@ the routine tools' lines showed, and a `wake(reason)` from a run those lines
 showed as over or replaced. `read_file` and `yield` results are exempt from
 the window's 4,000-character message cap (`WINDOW_UNCAPPED_TOOLS`): a file is
 bounded by the 32,000-character file cap, and a wake by its own caps.
+
+At fan-out (one agent driving several characters, `fanout-run.ts`) the run has
+one workspace and one program, and routines are per character: the list is
+the program loop's in its order, with the stack's fan-out `run_snippet` (the
+one-off, taking a `character`), `start_routine` and `stop_routine` taking the
+character a routine runs for, the fan-out `recent_events` and
+`state_summary`, and the three roster tools after (`programFanoutToolList`).
+Every routine line, error, refusal and pre-emption names its character. Any
+character's death wakes (each record's signals name whose it is), as does any
+one's stream closing, and the wake names the character; what changed over a
+sleep names only the characters whose level moved. Logging a character out
+stops the routines started for it. The prompt body is the program loop's,
+unchanged; the session note names the routine tools among those that take a
+character.
 
 On the CLI drivers the pause after each turn is the sleep, and the wake
 opens the next turn's message; `yield` is held on the MCP call, under a tool

@@ -238,3 +238,11 @@ describe("the record joins its tool call", () => {
     );
   });
 });
+
+describe("the viewer's feed of a program's dispatches", () => {
+  test("a program origin is a routine's, as a snippet-loop routine's is", () => {
+    const row = { ts: 10, kind: "actions" as const, origin: { type: "program", call: 7, routine: "grind", character: "Alfa" }, actions: [] };
+    expect(feedRecordOf(row, 2, "calls")).toEqual({ t: "actions", ts: 10, turn: 2, callTs: 7, routine: true, actions: [] });
+    expect(feedRecordOf({ ...row, origin: { type: "tool", call: 7 } }, 2, "calls")).toEqual({ t: "actions", ts: 10, turn: 2, callTs: 7, actions: [] });
+  });
+});

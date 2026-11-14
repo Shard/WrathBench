@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { CharacterRoster, type RosterEntry } from "@wrathbench/mcp/fanout";
 import { moduleAuthHeaders, moduleIdentity } from "@wrathbench/mcp/module-auth";
 import { newSessionToken, type FanoutConfig } from "./config";
+import { PROGRAM_RESUME_KEPT } from "./prompt";
 import { openSessionRecord, type RecordSignals } from "./session-record";
 import type { SandboxHost } from "./sandbox/host";
 
@@ -132,11 +133,20 @@ export function openFanout(o: OpenFanoutOptions): CharacterRoster {
  * own wording for a fan-out run is decided with its harness round
  * (Shard/wrath-mcp#29, decision 8).
  */
-export function fanoutSessionNote(o: { characters: number; staged: readonly string[]; resumed: boolean; back: readonly string[]; lost: readonly { character: string; error: string }[] }): string {
+export function fanoutSessionNote(o: {
+  characters: number;
+  staged: readonly string[];
+  resumed: boolean;
+  back: readonly string[];
+  lost: readonly { character: string; error: string }[];
+  /** The program loop: the routine tools take a character too. */
+  program?: boolean | undefined;
+}): string {
   const head = o.resumed
-    ? "the runner process was restarted and this run resumed after a pause. Conversation history was not preserved; your scratchpad was. "
+    ? `the runner process was restarted and this run resumed after a pause. ${o.program === true ? PROGRAM_RESUME_KEPT : "Conversation history was not preserved; your scratchpad was."} `
     : "";
-  const grant = `This run may have up to ${o.characters} characters in the world at once. login_character logs one in by name, logout_character logs one out, and list_characters shows them; a character's name is what the \`character\` argument of run_snippet, recent_events and state_summary takes.`;
+  const takers = o.program === true ? "run_snippet, start_routine, stop_routine, recent_events and state_summary" : "run_snippet, recent_events and state_summary";
+  const grant = `This run may have up to ${o.characters} characters in the world at once. login_character logs one in by name, logout_character logs one out, and list_characters shows them; a character's name is what the \`character\` argument of ${takers} takes.`;
   const staged = !o.resumed && o.staged.length > 0 ? ` These characters already exist and are yours: ${o.staged.join(", ")}. Log each in by its name; do not create others in their place.` : "";
   const back = o.resumed && o.back.length > 0 ? ` These characters were in the world and have been logged back in: ${o.back.join(", ")}.` : "";
   const lost = o.lost.length > 0 ? ` These could not be logged back in: ${o.lost.map((l) => `${l.character} (${l.error})`).join("; ")}.` : "";

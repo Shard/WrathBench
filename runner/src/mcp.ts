@@ -28,7 +28,7 @@ import {
 import { openWikiBundle } from "./wiki";
 import { EpisodicLog } from "./episodic";
 import { ClosedWindowReflectGate } from "./reflect";
-import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
+import { appendPendingActionHints, callTool, coerceToolArgs, servesFanout, toolsFor, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
@@ -51,7 +51,7 @@ export class McpServer extends StackMcpServer {
       {
         list: () => toolsFor(ctx),
         // A program-loop context's own tools coerce by their own schemas (`ToolContext.program`).
-        coerce: (name, raw) => coerceToolArgs(name, raw, ctx.program !== undefined ? { yield: ctx.yieldWake !== undefined } : undefined),
+        coerce: (name, raw) => coerceToolArgs(name, raw, ctx.program !== undefined ? { yield: ctx.yieldWake !== undefined, characters: servesFanout(ctx.sandbox) } : undefined),
         call: (name, args, origin) => callTool(ctx, name, args, origin),
         appendPending: (result) => appendPendingActionHints(ctx, result),
       },

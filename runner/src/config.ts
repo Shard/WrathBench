@@ -759,7 +759,8 @@ export const runConfigSchema = z.object({
    * campaign's legacy arm (`loopLaunchRefusal`). Written at every launch
    * (`launchLoopOf`); ABSENT on a config stored before it was, which was the
    * snippet loop. The program loop runs on the fixed loop, claude-code and
-   * codex, never yet a scored tier or fan-out (`programLoopRefusal`).
+   * codex (`programLoopRefusal`), never yet a scored tier
+   * (`loopLaunchRefusal`); at fan-out one program drives every character.
    * Identity: a resume keeps it.
    */
   loop: z.enum(["program", "snippet"]).optional(),
@@ -960,8 +961,8 @@ export function loadRunConfig(raw: unknown): RunConfig {
   if (config.compactWindow !== undefined && !driverHasCompactWindow(config.driver)) {
     throw new Error(compactWindowDriverRefusal(config.driver));
   }
-  // Refused, never ignored: the program loop runs on the fixed loop and
-  // codex, one character, and no scored episode yet.
+  // Refused, never ignored: the program loop runs on the fixed loop,
+  // claude-code and codex.
   const loopRefusal = programLoopRefusal(config);
   if (loopRefusal !== null) throw new Error(loopRefusal);
   // Refused, never ignored: one agent driving several characters is its own
@@ -1018,11 +1019,12 @@ export function runsProgramLoop(driver: Driver): boolean {
  * the program loop wherever it is built — the fixed loop and claude-code
  * with `yield`, codex without (`yieldDefaultOf`) — and the snippet loop on
  * the drivers that are not a model (the stub and the scripted reference,
- * `isUnscoredDriver`), on pi until its program adapter exists, and at
- * fan-out until the program loop is built for it.
+ * `isUnscoredDriver`) and on pi until its program adapter exists. A fan-out
+ * run takes the same default as a solo run on its driver: one program drives
+ * every character.
  */
 export function defaultLoopOf(c: { driver: Driver; fanout?: unknown }): { loop: "program" | "snippet"; yield: boolean } {
-  if (isUnscoredDriver(c.driver) || c.fanout !== undefined || !runsProgramLoop(c.driver)) return { loop: "snippet", yield: false };
+  if (isUnscoredDriver(c.driver) || !runsProgramLoop(c.driver)) return { loop: "snippet", yield: false };
   return { loop: "program", yield: yieldDefaultOf(c.driver) };
 }
 
@@ -1055,17 +1057,16 @@ export function launchLoopOf(
 /**
  * Why a config's program loop cannot run as stated, or null. The fixed loop,
  * claude-code and codex run it (`runsProgramLoop`), pi's own turn loop does
- * not yet, a route driver plays no model, and one agent driving several
- * characters is a later step. `yield` is a setting of the program loop and
- * means nothing without it. Which episodes may launch at all is
+ * not yet, and a route driver plays no model. At fan-out one program drives
+ * every character. `yield` is a setting of the program loop and means
+ * nothing without it. Which episodes may launch at all is
  * `loopLaunchRefusal`'s.
  */
-export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode" | "fanout">): string | null {
+export function programLoopRefusal(c: Pick<RunConfig, "loop" | "yield" | "driver" | "episode">): string | null {
   if (c.loop !== "program") return c.yield === true ? "--yield is a setting of the program loop; it needs --loop program" : null;
   const entry = entryOf(c.driver);
   if (!runsProgramLoop(c.driver)) return `--loop program runs on the fixed loop, claude-code and codex; the ${c.driver} driver runs a CLI's own turn loop`;
   if (entry.route === true) return `--loop program drives a model; the ${c.driver} driver plays a scripted route`;
-  if (c.fanout !== undefined) return "--loop program drives one character; fan-out is not built for it";
   return null;
 }
 

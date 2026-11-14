@@ -271,7 +271,7 @@ export function campaignPairRefusals(
       // The arm's loop as its launch resolves it (`launchLoopOf`): `--loop`
       // and `--yield` when it sets them, else the driver's default. The
       // program loop runs on the fixed loop, claude-code and codex (`runsProgramLoop`),
-      // drives one character, and plays no route; `--yield` is a setting of
+      // at fan-out too, and plays no route; `--yield` is a setting of
       // it. Refused here as `programLoopRefusal` refuses at launch.
       const d = entry.driver ?? DEFAULT_DRIVER;
       const askedLoop = armArg(arm, "loop");
@@ -284,7 +284,6 @@ export function campaignPairRefusals(
         if (resolved.loop === "program" && askedLoop === "program") {
           if (!runsProgramLoop(d)) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which runs a CLI's own turn loop`);
           else if (entryOf(d).route === true) reasons.push(`arm ${arm.id} sets --loop program, and ${a.model} runs on the ${d} driver, which plays a scripted route`);
-          else if (arm.agents === 1) reasons.push(`arm ${arm.id} sets --loop program, which drives one character, and is one agent driving the whole party`);
         } else if (resolved.loop !== "program" && resolved.yield === true) {
           reasons.push(`arm ${arm.id} sets --yield, which is a setting of the program loop, and runs the snippet loop on the ${d} driver`);
         }
