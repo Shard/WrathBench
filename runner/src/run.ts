@@ -49,7 +49,7 @@
  */
 
 import { unsealLaunchSecret } from "./store-secrets";
-import { copyFileSync, cpSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { hostname } from "node:os";
 import { latestReading } from "./run-reader";
@@ -342,6 +342,17 @@ export function carryProgramFiles(fromRunDir: string, toRunDir: string): boolean
   if (!existsSync(from) || existsSync(to) || readdirSync(from).length === 0) return false;
   cpSync(from, to, { recursive: true });
   return true;
+}
+
+/**
+ * Empty a new run's workspace files again, after a continuation whose
+ * character turned out to be gone: the run starts fresh, and the files it
+ * carried were that character's. Before the sandbox's first start only.
+ */
+export function dropCarriedProgramFiles(runDir: string): void {
+  const files = join(runDir, PROGRAM_DIR, "files");
+  rmSync(files, { recursive: true, force: true });
+  mkdirSync(files, { recursive: true });
 }
 
 /** What a continuation takes from its predecessor: the character's identity. */
@@ -1271,6 +1282,9 @@ async function main(): Promise<void> {
         await trajectory.dropContinuation(config.runId, detail);
         config = { ...config, character: undefined, continuedFrom: undefined };
         if (existsSync(scratchpad.path)) rmSync(scratchpad.path);
+        // The program files it carried describe that character too: the
+        // workspace starts empty, before the sandbox's first start loads them.
+        if (carriedFiles) dropCarriedProgramFiles(runDir);
         continuation = undefined;
       }
       // The freshness tripwire is one character's first sight; a fan-out
