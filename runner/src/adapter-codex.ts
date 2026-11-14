@@ -178,7 +178,7 @@ import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compaction
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf } from "./prompt";
+import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -929,7 +929,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt);
+  const systemPrompt = buildSystemPrompt(steeringOf(config), config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPrompt);
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").

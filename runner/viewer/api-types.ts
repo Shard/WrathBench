@@ -15,6 +15,8 @@
 import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow, ResumeHoldCode } from "../src/credential-health";
 export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState, ResumeHoldCode } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
+import type { RunCondition } from "./condition";
+export type { ChartGroup, RunCondition } from "./condition";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
 
 /**
@@ -54,7 +56,7 @@ export interface EpisodeBudgetView {
  * The episode tiers (`runner/src/episodes.ts`). Spelled out as a literal union
  * rather than imported, because this module is import-free by construction.
  */
-export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay";
+export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay" | "deadmines" | "deadmines-solo";
 
 /** One episode tier as `/api/episodes` serves it. Mirrors `EpisodeTier`. */
 export interface EpisodeTierView {
@@ -67,6 +69,8 @@ export interface EpisodeTierView {
   objectiveAllowed: boolean;
   scored: boolean;
   summary: string;
+  /** A task episode's agents and characters per agent; absent on every other id. */
+  task?: { agents: number; characters: number };
 }
 
 /**
@@ -322,6 +326,20 @@ export interface ComparabilityView {
    */
   compactWindow?: string | null;
   /**
+   * The requested routing (`runner/src/routing.ts`), a key. Absent on a run
+   * with no routing to state. Never published: it names providers, and the
+   * public row carries only its `RunCondition.pinned` reading.
+   */
+  routing?: { allowFallbacks: boolean } & Record<string, unknown>;
+  /** `program` on the program loop, a key; absent on the snippet loop. */
+  loop?: "program";
+  /** The program loop's `yield` tool, a key; absent when off. */
+  yield?: true;
+  /** A local build's weights, quantisation and runtime, a key; absent on a hosted run. */
+  serving?: { weights: string; quant: string; runtime: string };
+  /** What is being tested; stamped only when not `hosted` (`subjectOfConfig`). */
+  subject?: "hosted" | "local" | "external";
+  /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild ships as a patch within the
    * series, and `builtAt` marks which side of it a run read. Null when the run had no bundle;
@@ -353,6 +371,10 @@ export interface ComparabilityView {
    * equality. Absent on runs stamped before the field existed.
    */
   resolvedModel?: string | null;
+  /** A task episode's agents, characters per agent and pins (`comparability.ts`). Absent on every other run. */
+  agents?: number;
+  characters?: number;
+  task?: { definition: string; staging?: string };
 }
 
 /** One run, as the listing and the detail endpoint report it. */
@@ -2034,6 +2056,12 @@ export interface ResultRun {
   compactWindow?: string | null;
   /** The harness tag. A tag on the row, not a partition. */
   harness: HarnessView | null;
+  /**
+   * The condition the run was played under (`condition.ts`): a ladder row
+   * never mixes two. Optional: a dashboard built against a viewer that
+   * predates it derives one from the row's own fields (`conditionOfRun`).
+   */
+  condition?: RunCondition;
   promptHash: string | null;
   /** The worldserver build this run was stamped against, or null. */
   serverBuild: string | null;

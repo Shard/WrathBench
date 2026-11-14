@@ -155,6 +155,8 @@ const tempDir = tempDirs();
  * change a verdict here.
  */
 const LAN_ENV = { WRATHBENCH_LOCAL_MODEL_HOSTS: "10.0.0.1:1234, 192.168.100.20:1234" };
+/** What a local entry states it serves (`serving.ts`): required of every local entry. */
+const LOCAL_SERVING = { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" };
 
 /**
  * A credential for every provider, each with room for every run a test here
@@ -417,7 +419,7 @@ describe("parseFleet", () => {
       oc: { tier: "t1", model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", billing: "paid" },
       cb: { tier: "t1", model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1" },
       ds: { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1" },
-      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" },
+      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", serving: LOCAL_SERVING },
       // Claude-code and codex entries send no key at all, so nothing to pair.
       son: { tier: "t1", model: "sonnet", driver: "claude-code" },
     };
@@ -810,7 +812,7 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(windows.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:away:auto", "window-probe@1:away:w200k"]);
     expect(windows.campaignRefusals[1]!.reason).toMatch(/^roster entry away is refused, so nothing schedules it; arm w200k sets --compact-window 200k/);
     // The deployment that pairs the key with that host has nothing to refuse.
-    const lan = { ...ROSTER_BASE, away: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" } };
+    const lan = { ...ROSTER_BASE, away: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", serving: LOCAL_SERVING } };
     const listed = parseFleet(fleetJson([], { roster: lan, campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "away" }, { model: "glm" }] } } }), { env: LAN_ENV });
     expect(listed.refusals).toEqual([]);
     expect(listed.campaignRefusals).toEqual([]);
@@ -1582,7 +1584,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
       "nav-probe": { tier: "t1", model: "sonnet", driver: "claude-code" },
       glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       ox: { model: "stealth/ox-alpha:free", tier: "t2" },
-      qwen: { model: "qwen/q", driver: "openai", apiBase: "http://10.0.0.1:1234/v1", tier: "t1" },
+      qwen: { model: "qwen/q", driver: "openai", apiBase: "http://10.0.0.1:1234/v1", tier: "t1", serving: LOCAL_SERVING },
     },
     queue: [
       { ref: "nav-probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop" },
@@ -2125,7 +2127,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       accounts: { pool: ["RUNNER", "BOX"] },
       roster: {
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", race: 1, class: 2 },
+        local: { tier: "t1", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", race: 1, class: 2, serving: LOCAL_SERVING },
       },
     };
     const config = parseFleet(raw, { env: LAN_ENV });
@@ -2179,7 +2181,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const raw = {
       accounts: { pool: ["LOCALBOX"] },
       roster: {
-        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", race: 1, class: 2 },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", race: 1, class: 2, serving: LOCAL_SERVING },
       },
       policy: {},
     };

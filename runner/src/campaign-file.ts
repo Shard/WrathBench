@@ -39,6 +39,8 @@ import {
 } from "./campaign-def";
 import type { PublishedCampaign } from "./campaigns";
 import { fanoutLaunchProblem, fanoutLaunchSchema, partyLaunchProblem, partyLaunchSchema, type FanoutLaunch, type PartyLaunch } from "./party";
+import { TASK_EPISODE_IDS, type TaskEpisodeId } from "./episodes";
+import { taskDefinition, taskHash } from "./task-episodes";
 
 /** The file a probe's run directory holds; one of the `LAUNCH_FILES`. */
 export const CAMPAIGN_FILE = "campaign.json";
@@ -50,7 +52,15 @@ export const campaignFileSchema = z
     campaign: z.string().min(1),
     version: z.number().int().positive(),
     hash: z.string().min(1),
-    source: campaignSourceSchema,
+    /** Where a published definition came from; absent on a task episode's file, whose definition is the build's own. */
+    source: campaignSourceSchema.optional(),
+    /**
+     * A scored task episode's launch (`task-episodes.ts`): the id whose pinned
+     * definition the file holds. Absent on every probe's file.
+     */
+    episode: z.enum(TASK_EPISODE_IDS).optional(),
+    /** A task episode's staging fixtures, hashed by the fleet that wrote the file (`stagingHash`). */
+    staging: z.string().regex(/^sha256:[0-9a-f]{16}$/).optional(),
     cell: z.unknown(),
     arm: z.unknown(),
     definition: campaignDefinitionSchema,
@@ -66,7 +76,16 @@ export interface CampaignFile {
   campaign: string;
   version: number;
   hash: string;
-  source: z.infer<typeof campaignSourceSchema>;
+  /** Absent only on a task episode's file (`episode`). */
+  source?: z.infer<typeof campaignSourceSchema>;
+  /**
+   * A scored task episode's file: the run is that episode, stamped with its
+   * id and no campaign, and its definition is the one the id pins. Absent on
+   * every probe's file.
+   */
+  episode?: TaskEpisodeId;
+  /** A task episode's staging fixtures' hash: the scenario and the members' loadouts the stager applies. */
+  staging?: string;
   cell: CampaignCell;
   arm: CampaignArm;
   definition: CampaignDefinition;
@@ -118,6 +137,17 @@ export function campaignFileOf(published: PublishedCampaign, cellId: string, arm
 }
 
 /**
+ * The launch file for a scored task episode (`task-episodes.ts`): its pinned
+ * definition, its one cell and arm, and the episode id in place of a
+ * publish's provenance. The fleet's spawn adds the party or fan-out half, as
+ * for a probe of the same shape.
+ */
+export function taskFileOf(episode: TaskEpisodeId): CampaignFile {
+  const def = taskDefinition(episode);
+  return { campaign: def.id, version: def.version, hash: taskHash(episode), episode, cell: def.cells[0]!, arm: def.arms[0]!, definition: def };
+}
+
+/**
  * Parse a campaign file's JSON and check it holds together: the hash is its
  * definition's, and the cell and arm are the definition's own, exactly. A
  * file that disagrees with itself was edited by hand, and a run that followed
@@ -133,6 +163,16 @@ export function parseCampaignFile(raw: unknown, where = CAMPAIGN_FILE): Campaign
   }
   const hash = campaignHash(def);
   if (f.hash !== hash) throw new CampaignFileError(`${where}: its definition hashes to ${hash}, not the ${f.hash} it claims`);
+  // A task episode's definition is the build's own, pinned by its id: a file
+  // holding any other under the id would run a different episode under its
+  // name. A probe's file is a published campaign's and says where it came from.
+  if (f.staging !== undefined && f.episode === undefined) throw new CampaignFileError(`${where}: a staging hash is a task episode's`);
+  if (f.episode !== undefined) {
+    if (f.source !== undefined) throw new CampaignFileError(`${where}: a task episode's definition is the build's, never a published campaign's`);
+    if (hash !== taskHash(f.episode)) throw new CampaignFileError(`${where}: its definition is not the one --episode ${f.episode} pins (${taskHash(f.episode)})`);
+  } else if (f.source === undefined) {
+    throw new CampaignFileError(`${where}: names no source — a probe's definition is a published campaign's`);
+  }
   const cell = def.cells.find((c) => canonicalJson(c) === canonicalJson(f.cell));
   if (cell === undefined) throw new CampaignFileError(`${where}: its cell is not one of ${campaignRef(def)}'s`);
   const arm = def.arms.find((a) => canonicalJson(a) === canonicalJson(f.arm));
@@ -152,7 +192,9 @@ export function parseCampaignFile(raw: unknown, where = CAMPAIGN_FILE): Campaign
     campaign: f.campaign,
     version: f.version,
     hash: f.hash,
-    source: f.source,
+    ...(f.source !== undefined ? { source: f.source } : {}),
+    ...(f.episode !== undefined ? { episode: f.episode } : {}),
+    ...(f.staging !== undefined ? { staging: f.staging } : {}),
     cell,
     arm,
     definition: def,

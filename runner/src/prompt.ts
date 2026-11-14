@@ -22,7 +22,7 @@
 
 import type { Harness, RunConfig } from "./config";
 import { harnessDriver } from "./drivers";
-import type { EpisodeId } from "./episodes";
+import { EPISODES, type EpisodeId } from "./episodes";
 
 /**
  * The opening of every prompt is two kinds of sentence, and they are kept
@@ -386,12 +386,13 @@ export function objectiveSection(objective: string): string {
  * when it carries an objective (`probingClockSentence`), and freeplay states
  * none.
  *
- * The e90 bar is followed by the fact that it is not the end of the episode.
- * Stated without it, all three Sonnet 5.5 e90 runs read the bar as a finish
- * line ("Level 5 is done and the promotion bar is met. I'm stopping here") and
- * idled until the no-XP watchdog ended them. The added sentence is a fact, not
- * advice: it names nothing to do and no number to chase, and it does not say
- * the episode runs its full clock, which the watchdogs can make false.
+ * Each eval states its clock and nothing else (operator, 2026-11-14). The e90
+ * sentence used to name the promotion bar, level 5 for six-hour episodes, and
+ * then that the bar did not end the episode, because three Sonnet 5.5 runs read
+ * the bar as a finish line and idled into the no-XP watchdog. Promotion is a
+ * stopping rule of the scheduler's, and a stopping rule the model is told about
+ * becomes part of what is measured, so both sentences went: the tiers and the
+ * bar can now change without moving a prompt hash.
  */
 export function episodeSection(episode: EpisodeId | undefined): string | undefined {
   if (episode === undefined) return undefined;
@@ -400,7 +401,7 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
   // the model is told and must never happen by omission.
   switch (episode) {
     case "e90":
-      return "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes. Reaching the bar does not end the episode: everything after it is recorded and counts exactly as what came before.";
+      return "This episode lasts 90 minutes.";
     case "e360":
       return "This episode lasts six hours.";
     case "probing":
@@ -409,7 +410,22 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
       // names none: a sentence naming a default the run may not be under would
       // be a false fact rather than a missing one.
       return undefined;
+    case "deadmines":
+    case "deadmines-solo":
+      // A task episode states its clock in the words a probe with an objective
+      // does, so its prompt is byte for byte the one its rehearsal ran on
+      // (deadmines@5's one-agent arm, @4's members).
+      return probingClockSentence(EPISODES[episode].minutes * 60_000);
   }
+}
+
+/**
+ * The text a run's prompt renders in the objective's block: an operator
+ * objective, or a task episode's directive (`RunConfig.directive`), which
+ * reads the same and is not one. A config carries at most one of the two.
+ */
+export function steeringOf(config: { objective?: string | undefined; directive?: string | undefined }): string | undefined {
+  return config.objective ?? config.directive;
 }
 
 const HOUR_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];

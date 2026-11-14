@@ -26,10 +26,15 @@
  * **The derivation is the ladder page's own.** `scored`, `ladderRows` and the
  * rung rules come from `dashboard/src/lib/ladder.ts`, called once per cell, so
  * a record's highest rung, `(level, xp)` pair and money are the numbers the
- * site prints. A cell is one (series, episode, harness, model, effort,
- * compaction window): the series is the comparability group, and effort and
- * the window are run dimensions, so a cell never mixes what the methodology
- * keeps apart. Free runs are left out by default, as the public site's own
+ * site prints. A cell is one model under one condition (series, episode,
+ * harness, effort, compaction window, loop, `yield`, pinned or unpinned
+ * routing, wiki; `runner/viewer/condition.ts`), so a cell never mixes what the
+ * methodology keeps apart. The ladder page shows each model's newest condition
+ * by default; the export writes every condition, since that is a way of
+ * reading the table, not membership. A cell the published rows cannot tell
+ * apart from another (two pinned routings of one model, whose providers the
+ * public row does not name) derives two ladder rows and is skipped, never
+ * written as one. Free runs are left out by default, as the public site's own
  * default reading leaves them out (the operator's decision, 2026-10-20);
  * `--include-free` exports them too. The page's representative-effort filter
  * is not applied: it is a way of reading the table, not membership.
@@ -46,10 +51,10 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
-import { EPISODES, EPISODE_IDS, type EpisodeId } from "../runner/src/episodes";
+import { EPISODES, EPISODE_IDS, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
-import { ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
+import { conditionOfRun, ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
 import { seriesOf } from "../dashboard/src/lib/harness";
 import { familyOf, weightsOf, type Weights } from "./model-catalogue";
 import { httpSource, scanBody, type AcceptSource } from "./publish-accept";
@@ -67,8 +72,8 @@ const TOP_RUNG = Math.max(...RUNGS.map((r) => r.n));
 /** The game's level cap in 3.3.5a; `best_level` lies in [1, this]. */
 const LEVEL_CAP = 80;
 
-/** The episodes with a scored ladder, read off the tier table. */
-export const SCORED_EPISODES: readonly EpisodeId[] = EPISODE_IDS.filter((id) => EPISODES[id].scored);
+/** The episodes with a scored ladder, read off the tier table: the task episodes have a board instead. */
+export const SCORED_EPISODES: readonly EpisodeId[] = EPISODE_IDS.filter((id) => EPISODES[id].scored && !isTaskEpisode(id));
 
 /** How the ladder orders rows, stated on every record because EEE has no field for a non-scalar order. */
 export const LADDER_ORDER =
@@ -164,12 +169,25 @@ interface CellKey {
   model: string;
   effort: string | null;
   compactWindow: string | null;
+  /** The rest of the condition, as the published row carries it (`RunCondition`). */
+  loop: "program" | "snippet";
+  yield: boolean;
+  pinned: boolean;
+  wiki: boolean;
 }
 
-/** The record identity, keyed on the raw recorded values (never on a resolved id, never on now). */
+/**
+ * The record identity, keyed on the raw recorded values (never on a resolved
+ * id, never on now). A dimension at its default adds nothing, so a record
+ * written before the dimension existed keeps its id.
+ */
 export function evaluationIdOf(k: CellKey): string {
   const parts = [COLLECTION, k.series, k.episode, k.harness, k.model, k.effort ?? "default"];
   if (k.compactWindow !== null) parts.push(`compact-${k.compactWindow}`);
+  if (k.loop === "program") parts.push("loop-program");
+  if (k.yield) parts.push("yield");
+  if (!k.pinned) parts.push("unpinned");
+  if (!k.wiki) parts.push("no-wiki");
   return parts.join("/");
 }
 
@@ -291,6 +309,10 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
     harness: k.harness,
     effort,
     ...(k.compactWindow !== null ? { compact_window: k.compactWindow } : {}),
+    ...(k.loop === "program" ? { loop: "program" } : {}),
+    ...(k.yield ? { yield: "true" } : {}),
+    ...(!k.pinned ? { routing: "unpinned" } : {}),
+    ...(!k.wiki ? { wiki: "none" } : {}),
     episode: k.episode,
     runs: String(runs.length),
     run_ids: json(runs.map((r) => r.runId).sort()),
@@ -473,7 +495,19 @@ export function eeeFromLadder(episode: EpisodeId, body: Pick<ResultsResponse, "r
       skip("no model recorded");
       continue;
     }
-    const key: CellKey = { series, episode, harness: r.harness, model: r.model, effort: r.effort, compactWindow: r.compactWindow ?? null };
+    const c = conditionOfRun(r);
+    const key: CellKey = {
+      series,
+      episode,
+      harness: r.harness,
+      model: r.model,
+      effort: r.effort,
+      compactWindow: r.compactWindow ?? null,
+      loop: c.loop,
+      yield: c.yield,
+      pinned: c.pinned,
+      wiki: c.wiki,
+    };
     const id = evaluationIdOf(key);
     const cell = cells.get(id);
     if (cell === undefined) cells.set(id, { key, runs: [r] });
@@ -483,8 +517,13 @@ export function eeeFromLadder(episode: EpisodeId, body: Pick<ResultsResponse, "r
   const files: EeeFile[] = [];
   for (const { key, runs } of cells.values()) {
     const rows = ladderRows(runs);
-    // One model and one harness by construction; anything else would be a
-    // record mixing rows, which is the one thing this must never write.
+    // One model under one condition by construction, except where the public
+    // row cannot say what tells two conditions apart (`CellKey`); a record
+    // mixing rows is the one thing this must never write.
+    if (rows.length > 1) {
+      skip("more than one condition the published rows cannot name apart", runs.length);
+      continue;
+    }
     if (rows.length !== 1 || rows[0]!.harnesses.length !== 1) throw new Error(`cell ${evaluationIdOf(key)} derived ${rows.length} ladder rows`);
     const row = rows[0]!;
     const model = modelIdOf(key.model, row.resolvedModels);

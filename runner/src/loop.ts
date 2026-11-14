@@ -23,7 +23,7 @@ import {
 } from "./context";
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf, taxiFlightOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
-import { buildSystemPrompt, programPromptOf } from "./prompt";
+import { buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { digestCharacter, PLAIN_FANOUT_RENDER, type CharacterDigest, type FanoutSurface } from "@wrathbench/mcp/fanout";
@@ -864,7 +864,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return await terminate(integrity.reason, integrity.detail);
       }
 
-      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs, programPrompt);
+      const systemText = buildSystemPrompt(steeringOf(config), config.episode, harnessOf(config.driver), config.wiki, config.watchdogs.episodeMs, programPrompt);
       const messages: ChatMessage[] = [
         { role: "system", content: systemText },
         ...messageWindow(history),

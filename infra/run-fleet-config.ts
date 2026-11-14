@@ -12,6 +12,7 @@ import { harnessSeries } from "../runner/src/comparability";
 import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
+import { parseServing } from "../runner/src/serving";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
 import {
   applyPairRefusals,
@@ -45,7 +46,7 @@ import {
   type StartingCharacter,
   type Tier,
 } from "../runner/src/models";
-import { isScoredEpisode } from "../runner/src/episodes";
+import { EPISODE_IDS, isScoredEpisode, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { evalPoolAccountNames, evalPoolSizeOf, isEvalPoolAccountName, isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";
 import { tenantAccountRefusal } from "./tenant-accounts";
@@ -160,8 +161,7 @@ export interface PreflightRecord {
 // tick.
 
 /** Episode tiers. The unscored ids bypass the tiers gate entirely. */
-export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay"] as const;
-export type EpisodeId = (typeof EPISODE_IDS)[number];
+export { EPISODE_IDS, type EpisodeId } from "../runner/src/episodes";
 
 /**
  * A roster entry as named in the `roster` map: the exact per-entry schema plus
@@ -196,6 +196,14 @@ export interface FleetRosterEntry extends RosterSpec {
    * name (`matchesRoster`), so it never pools with another entry's.
    */
   campaignOnly?: true;
+  /**
+   * Opts the entry into the five-agent Deadmines episode (operator,
+   * 2026-11-14): `true` or absent. Its tier buys it as it buys the one-agent
+   * one (`t2`, three attempts), and only here, because five agents need five
+   * sessions on one credential at once, which is a lane fact, not a model's.
+   * The policy still holds it until `policy.rehearsed` names `deadmines`.
+   */
+  deadmines?: true;
   /**
    * Set by the parser when this entry was refused: it stays in the catalog so a
    * job naming it is gated rather than taking the whole file down, and nothing
@@ -729,6 +737,11 @@ export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "
       return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
     case "freeplay":
       return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: null };
+    case "deadmines":
+    case "deadmines-solo":
+      // The id's own leash; the launch file carries the same budget, which
+      // the runner reads (`jobSpawn`), and the tests hold the two equal.
+      return { episode: id, watchdogs: { episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 8000 };
   }
 }
 
@@ -1098,7 +1111,11 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   // under it is spared.
   for (const [name, e] of Object.entries(roster)) {
     const r = rosterEntryRefusal(e, credentials, env);
-    if (r === null) continue;
+    if (r === null) {
+      // Canonical, as routing is: one spelling of a build on every path.
+      if (e.serving !== undefined) roster[name] = { ...e, serving: parseServing(e.serving, `roster ${name}`) };
+      continue;
+    }
     roster[name] = { ...e, refused: r.why };
     refusals.push({
       pin: `roster ${name}`,
@@ -1195,10 +1212,11 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, credential: rawCred, campaignOnly: rawCampaignOnly, ...rest } = e as {
+    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, credential: rawCred, campaignOnly: rawCampaignOnly, deadmines: rawDeadmines, ...rest } = e as {
       tier?: unknown;
       idle?: unknown;
       campaignOnly?: unknown;
+      deadmines?: unknown;
       tiers?: unknown;
       runsPerEpisode?: unknown;
       billing?: unknown;
@@ -1212,6 +1230,12 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     }
     if (rawCampaignOnly !== undefined && rawCampaignOnly !== true) fail(`roster ${name}: campaignOnly is true or absent`);
     if (rawCampaignOnly === true && rawIdle !== undefined && rawIdle !== "none") fail(`roster ${name}: a campaignOnly entry has no idle work — drop idle or set it to "none"`);
+    // The five-agent Deadmines episode's opt-in (operator, 2026-11-14): one
+    // spelling, and only where a tier can buy it.
+    if (rawDeadmines !== undefined && rawDeadmines !== true) {
+      fail(`roster ${name}: deadmines is true or absent — true opts this entry into the five-agent Deadmines episode, which its tier then buys`);
+    }
+    if (rawDeadmines === true && rawCampaignOnly === true) fail(`roster ${name}: a campaignOnly entry runs no scored episode, so deadmines cannot apply to it`);
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
     // The retired 0.4 spellings, refused by name. Both said how much a model
     // runs, which is its tier now; dropping them silently would re-scope a
@@ -1266,6 +1290,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
       ...(rawCred !== undefined ? { credential: rawCred as string } : {}),
       ...(rawCampaignOnly === true ? { campaignOnly: true as const } : {}),
+      ...(rawDeadmines === true ? { deadmines: true as const } : {}),
     };
   }
   // One model id, one harness: what keeps the harness a tag (`harnessClash`).
@@ -1309,10 +1334,12 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
             ...(e.compactWindow !== undefined ? { compactWindow: e.compactWindow } : {}),
             ...(e.driver !== undefined ? { driver: e.driver } : {}),
             ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+            ...(e.serving !== undefined ? { serving: e.serving } : {}),
             tier: e.tier,
             idle: e.idle,
             ...(e.billing !== undefined ? { billing: e.billing } : {}),
             ...(e.campaignOnly === true ? { campaignOnly: true as const } : {}),
+            ...(e.deadmines === true ? { deadmines: true as const } : {}),
           },
         ],
   );
@@ -1367,6 +1394,12 @@ function parseQueue(
     const ref = (refs as string[]).join("+");
     if (typeof j.episode !== "string" || !(EPISODE_IDS as readonly string[]).includes(j.episode)) {
       fail(`queue ${ref}: episode must be one of ${EPISODE_IDS.join("|")}`);
+    }
+    // A task episode is staged on the eval pool's accounts and a world of its
+    // own, and bought by the tier (operator, 2026-11-14): the policy's to
+    // launch, never a hand-written job.
+    if (isTaskEpisode(j.episode)) {
+      fail(`queue ${ref}: --episode ${j.episode} is the policy's — a model's tier buys its attempts (roster.<name>.tier, and roster.<name>.deadmines for the five-agent id)`);
     }
     // A probe exists only as a cell of a published campaign definition
     // (operator decision, 2026-10-09): a queue job naming `probing` would launch

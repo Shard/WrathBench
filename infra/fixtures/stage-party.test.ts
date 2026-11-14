@@ -9,8 +9,12 @@
  * The live staging is proven by infra/smoke/party-staging.ts in a release window.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkedIn, checkedInFiles } from "../../runner/test/fixtures/campaigns";
+import { commandStager, type StageRequest as RosterRequest } from "../party-stager";
+import { tempDirs } from "../temp-dirs";
+import { stagingEnvOf } from "../world";
 import { loadoutFor, partyCharacterName, type Loadout } from "./loadouts";
 import { SoapClient } from "./soap";
 import {
@@ -44,6 +48,17 @@ function rosterRequest(): StageRequest {
     ],
   };
 }
+
+/** The roster's request on five eval-pool accounts, as a party campaign with `accounts: "evals"` draws them. */
+function evalRequest(): StageRequest {
+  const r = rosterRequest();
+  r.members.forEach((m, i) => (m.account = `EVAL0${i + 1}`));
+  return r;
+}
+
+/** A world id (infra/world.ts `WORLD_ID_RE`). */
+const WORLD = "wabcdefghij";
+const tempDir = tempDirs();
 
 describe("parseStageRequest: the roster's shape and nothing else", () => {
   test("takes the roster's request as it is sent", () => {
@@ -150,6 +165,94 @@ describe("bagTargets", () => {
     const full = [19, 20, 21, 22].map((slot) => ({ bag: 0, slot, item: slot, entry: 4496 }));
     expect(() => bagTargets(full, bags)).toThrow(/no free bag slot/);
   });
+});
+
+describe("the accounts a party is staged on", () => {
+  test("a party drawn from the eval pool is staged, as the pinned PARTY accounts are", () => {
+    expect(checkStageRequest(evalRequest())).toEqual([]);
+    const later = evalRequest();
+    later.members[4]!.account = "EVAL99";
+    expect(checkStageRequest(later)).toEqual([]);
+    later.members[3]!.account = "eval99";
+    expect(checkStageRequest(later).join("; ")).toMatch(/account EVAL99 is named twice/);
+  });
+
+  test("every other account is refused: the generated pool, tenants, runners, smokes, STAGER, and names only shaped like a party's", () => {
+    for (const account of ["POOL01", "POOL10", "TENANT01", "TENANT99", "RUNNER", "RUNNER2", "SHAKEOUT", "SMOKE", "SMOKE4", "PROBE", "STAGER", "EVAL1", "EVAL100", "EVAL", "XEVAL01", "PARTY10"]) {
+      const r = evalRequest();
+      r.members[2]!.account = account;
+      expect(checkStageRequest(r).join("; ")).toMatch(new RegExp(`refusing to stage on '${account}'`));
+    }
+  });
+});
+
+describe("on a world of its own", () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const saved: Record<string, string | undefined> = {};
+  const setEnv = (vars: Record<string, string>) => {
+    for (const [k, v] of Object.entries(vars)) {
+      if (!(k in saved)) saved[k] = process.env[k];
+      process.env[k] = v;
+    }
+  };
+  afterEach(() => {
+    server?.stop(true);
+    server = undefined;
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+      delete saved[k];
+    }
+  });
+
+  /** The roster's env names the shared world, MODULE_HOST included (which moduleBase() prefers over WRATHBENCH_MODULE_URL). */
+  const SHARED = {
+    WRATHBENCH_MODULE_URL: "http://worldserver:8086",
+    MODULE_HOST: "worldserver",
+    MODULE_PORT: "8086",
+    WRATHBENCH_SOAP_URL: "http://worldserver:7878/",
+    WRATHBENCH_CHARACTERS_DB: "acore_characters",
+    WRATHBENCH_STAGER_PASSWORD: "pw",
+  };
+
+  test("the roster's world env reaches the stager: its module, SOAP console and characters schema, never the shared world's", async () => {
+    setEnv(SHARED);
+    const dir = tempDir("wb-stage-world-");
+    const script = join(dir, "where.ts");
+    // The stager's own resolvers, run in the child the roster spawns.
+    writeFileSync(
+      script,
+      [
+        `import { moduleBase } from ${JSON.stringify(join(import.meta.dir, "../smoke/lib/module"))};`,
+        `import { connectOptions } from ${JSON.stringify(join(import.meta.dir, "apply"))};`,
+        `import { soapFromEnv } from ${JSON.stringify(join(import.meta.dir, "soap"))};`,
+        "await Bun.stdin.text();",
+        "console.log(JSON.stringify({ ok: true, detail: JSON.stringify({ module: moduleBase(), soap: soapFromEnv().url, schema: connectOptions().database }) }));",
+      ].join("\n"),
+    );
+    const stager = commandStager({ cwd: dir, command: ["bun", script] });
+    const onWorld = await stager.stage(evalRequest() as RosterRequest, undefined, stagingEnvOf(WORLD, 7878, {}));
+    expect(onWorld.ok && JSON.parse(onWorld.detail!)).toEqual({ module: `http://${WORLD}.worlds:8086`, soap: `http://${WORLD}.worlds:7878/`, schema: `acore_characters_${WORLD}` });
+  }, 30_000);
+
+  test("the stager takes an eval party on a world and stages there: past the request, on the world's module and schema", async () => {
+    const seen: string[] = [];
+    server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        seen.push(`${req.method} ${new URL(req.url).pathname}`);
+        return new Response("", { status: 403 });
+      },
+    });
+    const env = { ...process.env, ...SHARED, ...stagingEnvOf(WORLD, 7878, {}), WRATHBENCH_SOAP_URL: `http://127.0.0.1:${server.port}/`, WRATHBENCH_MODULE_SECRET: "x".repeat(32) };
+    const proc = Bun.spawn(["bun", SCRIPT, "--request", "-"], { stdin: new Blob([JSON.stringify(evalRequest())]), stdout: "pipe", stderr: "pipe", env });
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    // Refused by SOAP at preflight (exit 1), not refused as a request (exit 2).
+    expect(code).toBe(1);
+    expect(err.trim().split("\n").at(-1)).toMatch(/^stage-party: preflight: /);
+    expect(out).toContain(`staging on module http://${WORLD}.worlds:8086, SOAP http://127.0.0.1:${server.port}/, characters schema acore_characters_${WORLD}`);
+    expect(seen).toEqual(["POST /"]);
+  }, 30_000);
 });
 
 describe("countByItem", () => {

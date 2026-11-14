@@ -182,7 +182,7 @@ describe("modelStates", () => {
 
     // ox is t1 and earned rung 1, so it climbed to t2 — which is what unlocks
     // e360 at all. The declared tier is unchanged: the config is not rewritten.
-    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360"], platform: "openrouter", ladder: 0 });
+    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360", "deadmines-solo"], platform: "openrouter", ladder: 0 });
     // attempts 4: the archived ox run is an attempt — it numbers the next run id.
     expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 4, target: 3, bestLevel: 6, reachedL5: true, lastReason: "episode-limit" });
     expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 1, bestLevel: null, reachedL5: false, lastEnded: null, lastReason: null });
@@ -228,7 +228,7 @@ describe("modelStates", () => {
 
   test("a hand-set tier is eligible without a witness, and never reads as earned", () => {
     const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t2" }], now: NOW, sidecar: { version: 1, cleared: {} } });
-    expect(s!.eligible).toEqual(["e90", "e360"]);
+    expect(s!.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
     // Hand-placed on t2: eligible, but it did not climb, so "promoted" — the
     // earned word — is not said of it, and the witness stays false.
     expect(s!.status).toBe("active");

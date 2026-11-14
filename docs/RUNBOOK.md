@@ -360,6 +360,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               not a number edited into one entry. On EVERY entry.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
               in an assignment and supplies its own task shape.
+            `serving` — REQUIRED of a local entry (an openai base on the LAN, loopback or a host
+              `localModelHosts` lists) and REFUSED on any other: `{ weights, quant, runtime }`,
+              a key of the run's tuple (infra/README.md, "Local (self-hosted) models").
+              `servingLabels` `{ machine, runtimeVersion }` ride beside it, labels only.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Flipping
@@ -439,6 +443,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               scored or freeplay episode is gated. For a harness variant that is an arm rather than
               a driver, so a probe of it needs no scored run first. Its probe runs map back to it
               by name, so copies of one model never pool.
+            `deadmines` — `true` or absent: opts the entry into the five-agent Deadmines
+              episode, which its tier then buys as it buys the one-agent one (`t2`: three
+              attempts each; docs/EPISODES.md). Refused with `campaignOnly`. Still held until
+              `policy.rehearsed` names `deadmines`, and behind the scored-episode hold.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -457,8 +465,14 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             `runPods` — `"off"` (default) or `"probes"`: every probing episode runs as its own
             pod on the arm's image ("Run pods"). While it is not `probes`, or off the cluster, an
             arm that pins an image or a command is a refused pair, never run on master.
-            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360 or probing attempt
-            plays on a world of its own ("Worlds"), and never on the shared one while it is on.
+            `worlds` — `"off"` (default) or `"evals"`: every fresh e90, e360, Deadmines or probing
+            attempt plays on a world of its own ("Worlds"), and never on the shared one while it
+            is on. A Deadmines attempt also draws its party from the eval pool, so with `off` it
+            is held with the reason.
+            `rehearsed` — what a program-loop rehearsal has cleared to score, the operator's word
+            after reading it: a list of `"deadmines"` (the five-agent episode) and `"codex"`
+            (codex rows on either Deadmines id). Absent or empty clears neither, and the policy
+            holds those picks, saying why. Anything else is refused.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
@@ -498,7 +512,8 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only
             Completion is DERIVED per (id, version, assignment, arm, cell) against the counted
             probe runs on disk; set `enabled: false` when a sweep is done and its results stay
             visible. Progress is on the /campaigns page.
-queue       jobs, in priority order (never `probing`): { ref | [refs], episode e90|e360|freeplay,
+queue       jobs, in priority order (never `probing`, never a Deadmines id, which only a tier
+            buys): { ref | [refs], episode e90|e360|freeplay,
             repeat n|"loop", enabled, account?, credential? } and nothing else ("Strict keys").
             With `account` the job is PINNED to it and never the policy's; without, it is a
             manual pool job that outranks the policy. The name is always `<first ref>-<episode>`
@@ -1948,7 +1963,10 @@ order:
 - it creates the pod and waits for its module's `/health`.
 
 The world's allowlist is the attempt's accounts. The stager works on the
-world's own SOAP console and schema. Allocation and boot sit under one lock,
+world's own module, SOAP console and schema: the roster lays them over the
+stager's env (`stagingEnvOf` in `infra/world.ts`, `MODULE_HOST` included,
+since the stager's module lookup prefers it), and the stager logs all three
+before it touches anything. Allocation and boot sit under one lock,
 so one world boots at a time.
 
 **Hosted mode's secret.** With `hosted` on, an eval world opens with its own
@@ -2750,7 +2768,9 @@ roster runs `bun infra/fixtures/stage-party.ts --request -` with one request
 on stdin (`infra/party-stager.ts` holds the contract): the party id,
 campaign, version, scenario and level, and per member the member id, role
 word, race, class, character name, account and run id. The first member
-leads. The definition names the characters and the stager creates them under
+leads. A member's account is PARTY1–PARTY5, or one the attempt drew from the
+eval pool (`EVAL01`…); the stager refuses any other before touching anything,
+so a pool, tenant, runner or smoke account is never staged. The definition names the characters and the stager creates them under
 those names. Each member wears the loadout of its race and class
 (`infra/fixtures/loadouts.ts`): a Human Warrior tank, a Dwarf Priest healer,
 and as damage a Human Mage, a Human Rogue and a Dwarf Paladin, so no pet is

@@ -59,19 +59,21 @@ import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
   RUNGS,
   billingKnown,
+  entryKeyOf,
   filterRuns,
-  hoverKeyOf,
   ladderPoints,
   ladderRows,
-  pointKey,
   characterRows,
   type LadderCell,
   type LadderRow,
   type CharacterRow,
 } from "../lib/ladder";
 import {
+  chartGroups,
   companyOf,
   currentModels,
+  inChartGroup,
+  newestConditions,
   filterOptions,
   lineOf,
   matchesSelection,
@@ -81,7 +83,7 @@ import {
 } from "../lib/ladderfilter";
 import { resolvedSummary } from "../lib/models";
 import { type ReferenceMark, type ReferenceScale, scriptedReference, scriptedReferenceScale } from "../lib/reference";
-import { fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { effortLabel, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { statusTitle, statusTone } from "../lib/runs";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
@@ -189,6 +191,9 @@ export default function Ladder() {
   /** The model rule, the same way: ON by default, `?models=all` the one form that turns it off. */
   const current = (): boolean =>
     !freeplay() && (Array.isArray(params.models) ? params.models[0] : params.models) !== "all";
+  /** The condition rule, the same way: ON by default, `?conditions=all` the one form that turns it off. */
+  const newest = (): boolean =>
+    !freeplay() && (Array.isArray(params.conditions) ? params.conditions[0] : params.conditions) !== "all";
   /*
    * Which chart a scored tier draws: the scatter of roster entries, the
    * default, or every run as a line of xp against active playtime
@@ -214,7 +219,29 @@ export default function Ladder() {
     ),
   );
   /*
-   * The entries the effort rule hides, as `pointKey`s.
+   * The condition rule, then the chart. Each model at each effort and window under its newest condition
+   * (`newestConditions`) unless `?conditions=all`, over the whole narrowed tier
+   * so a model whose newest condition is on another chart is not shown here
+   * under an older one; then one chart group (`chartGroups`), because the
+   * loop, pinned against unpinned routing, and the wiki never share a chart
+   * (operator, 2026-11-14). `?group=` picks one; the default, and the fallback
+   * for a group the tier no longer holds, is the one with the most entries.
+   * The effort and model rules below judge only what is left, so neither
+   * compares across charts.
+   */
+  const conditioned = createMemo(() => (newest() ? newestConditions(narrowed()) : narrowed()));
+  const groupsOnPage = createMemo(() => (freeplay() ? [] : chartGroups(conditioned())));
+  const group = (): string | null => {
+    const want = Array.isArray(params.group) ? params.group[0] : params.group;
+    const groups = groupsOnPage();
+    return groups.find((g) => g.id === want)?.id ?? groups[0]?.id ?? null;
+  };
+  const charted = createMemo(() => {
+    const g = group();
+    return g === null ? conditioned() : inChartGroup(conditioned(), g);
+  });
+  /*
+   * The entries the effort rule hides, as entry keys (`entryKeyOf`).
    *
    * Computed as a set of what is *dropped* rather than of what is kept, which
    * is the difference between a rule and an accident: an entry `ladderPoints`
@@ -228,7 +255,7 @@ export default function Ladder() {
    */
   const hidden = createMemo((): Set<string> => {
     if (!representative()) return new Set();
-    const points = ladderPoints(narrowed(), COST, XP).points;
+    const points = ladderPoints(charted(), COST, XP).points;
     const kept = new Set(
       representativeEfforts(
         points.map((p) => ({ key: p.key, model: p.model, effort: p.effort, cost: p.x, xp: p.y })),
@@ -245,25 +272,25 @@ export default function Ladder() {
    */
   const outdated = createMemo((): Set<string> => {
     if (!current()) return new Set();
-    const entries = modelEntries(narrowed());
+    const entries = modelEntries(charted());
     const kept = new Set(currentModels(entries).map((e) => e.key));
     return new Set(entries.filter((e) => !kept.has(e.key)).map((e) => e.key));
   });
   const runs = createMemo(() =>
     hidden().size === 0 && outdated().size === 0
-      ? narrowed()
-      : narrowed().filter((r) => {
-          const key = pointKey(r.model ?? "(unnamed)", r.effort, r.compactWindow);
+      ? charted()
+      : charted().filter((r) => {
+          const key = entryKeyOf(r);
           return !hidden().has(key) && !outdated().has(key);
         }),
   );
   /*
    * What the reader is pointing at, shared by the scatter and the table so
    * hovering either end lights both. One signal at the
-   * page rather than two derivations that could disagree; the key is
-   * `hoverKeyOf`, because the chart draws per (model, effort) and the table
-   * per model, and the model is what the two have in common. Keyboard focus on
-   * a row sets it too, so the link is not pointer-only.
+   * page rather than two derivations that could disagree; the key is the
+   * entry (`entryKeyOf`), one model under one condition, which is what a
+   * point, a mean line and a table row each are. Keyboard focus on a row sets
+   * it too, so the link is not pointer-only.
    */
   const [hovered, setHovered] = createSignal<string | null>(null);
   const groups = createMemo((): FilterGroup[] => [
@@ -336,6 +363,24 @@ export default function Ladder() {
           left, the filters on the right, on one line while the viewport has
           room and one above the other when it does not (`.ladder-controls`). */}
       <div class="ladder-controls">
+        {/* The chart group: conditions that may never share a chart are
+            offered one at a time, and only when the tier holds more than one. */}
+        <Show when={groupsOnPage().length > 1}>
+          <div class="chips views">
+            <span class="dim">condition</span>
+            <For each={groupsOnPage()}>
+              {(g, i) => (
+                <button
+                  class={g.id === group() ? "on" : ""}
+                  title={`${g.entries} ${g.entries === 1 ? "entry" : "entries"}; runs under different conditions never share a chart`}
+                  onClick={() => setParams({ group: i() === 0 ? undefined : g.id }, { replace: true })}
+                >
+                  {g.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
         <Show when={!freeplay()}>
           <div class="chips views">
             <span class="dim">chart</span>
@@ -427,6 +472,17 @@ export default function Ladder() {
             />
             <span>current models</span>
           </label>
+          <label
+            class="filter check"
+            title="Shows each model at each effort and compaction window under its newest condition only: the one whose latest counted run started last. A condition is the series, episode, harness, effort, routing, wiki, compaction window, loop and yield; a row never mixes two."
+          >
+            <input
+              type="checkbox"
+              checked={newest()}
+              onChange={(e) => setParams({ conditions: e.currentTarget.checked ? undefined : "all" }, { replace: true })}
+            />
+            <span>newest condition</span>
+          </label>
         </Show>
         </div>
       </div>
@@ -490,16 +546,27 @@ export default function Ladder() {
               <For each={rows()}>
                 {(row) => (
                   <tr
-                    classList={{ hovered: hovered() === hoverKeyOf(row.model) }}
+                    classList={{ hovered: hovered() === row.key }}
                     tabindex="0"
-                    onMouseEnter={() => setHovered(hoverKeyOf(row.model))}
+                    onMouseEnter={() => setHovered(row.key)}
                     onMouseLeave={() => setHovered(null)}
-                    onFocus={() => setHovered(hoverKeyOf(row.model))}
+                    onFocus={() => setHovered(row.key)}
                     onBlur={() => setHovered(null)}
                   >
                     <td>
                       <ModelIcon model={row.model} />
                       <span title={row.model}>{modelDisplay(row.model)}</span>
+                      <Show when={effortLabel(row.effort, row.compactWindow)}>
+                        {(tag) => <span class="dim"> · {tag()}</span>}
+                      </Show>
+                      {/* A local build names itself beside the model: the quantisation and runtime it was served at. */}
+                      <Show when={row.condition.serving}>
+                        {(s) => (
+                          <span class="dim" title={`a local build: ${s().weights}, ${s().quant}, served by ${s().runtime}`}>
+                            {" "}· local {s().quant} · {s().runtime}
+                          </span>
+                        )}
+                      </Show>
                       {/* The ids the row's runs actually resolved to. Two of
                           them is one alias that resolved two ways across the
                           row — drift the ladder must show, not average. */}

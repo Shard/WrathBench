@@ -53,6 +53,7 @@ export type {
   ToolView,
   ResultsResponse,
   ResultRun,
+  RunCondition,
   LevelMark,
   TrackPoint,
   TrackResponse,
