@@ -472,7 +472,7 @@ const yieldTool: ToolSpec<ToolContext> = {
   def: {
     name: "yield",
     description:
-      "Sleep until something wakes you: a routine ending, the first occurrence of a new error or refusal in your routines, a wake(reason) call, a death, a sandbox restart, a harness notice, or `seconds` passing (at most 300, the default). Your routines keep running while you sleep. Returns the [wake] block: why you woke and what your routines did meanwhile.",
+      "Sleep until something wakes you: a routine ending, the first occurrence of a new error or refusal in your routines, a wake(reason) call, a death, a sandbox restart, a harness notice, or `seconds` passing (at most 300, the default). Your routines keep running while you sleep. Returns the [wake] block (why you woke and what your routines did meanwhile) and any harness notices since your last turn message.",
     inputSchema: {
       type: "object",
       properties: {

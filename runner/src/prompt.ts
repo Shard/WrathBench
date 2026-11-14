@@ -266,7 +266,7 @@ const PROGRAM_TOOL_BULLETS = `- run_snippet: run TypeScript once, now, in the sa
 
 /** The `yield` tool's bullet, after the routine tools' (`yield` only). */
 const PROGRAM_YIELD_BULLET =
-  "\n- yield: sleep until something wakes you. yield({ seconds? }) returns when a wake arrives, or after seconds (at most 300, the default), and its result is the [wake] block.";
+  "\n- yield: sleep until something wakes you. yield({ seconds? }) returns when a wake arrives, or after seconds (at most 300, the default), and its result is the [wake] block and any harness notices since your last turn message.";
 
 /** Each passage of the snippet body the program body replaces, and with what. */
 function programReplacements(program: ProgramPrompt): readonly [string, string][] {
