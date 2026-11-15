@@ -19,10 +19,10 @@
  * campaigns pages; they simply have no ladder. The runs page is where every
  * run is listed regardless.
  *
- * The Deadmines ids are tabs of the same page (`DUNGEON_CHOICES`) but not
- * ladder choices: their runs are read on the dungeon board (`/api/dungeons`),
- * a table per id, and `/api/ladder` refuses them. So `episodeParam` never
- * yields one, and the ladder's own request never names one.
+ * The Deadmines eval is a tab of the same page (`DUNGEON_CHOICES`) but not a
+ * ladder choice: its runs are read on the dungeon board (`/api/dungeons`), and
+ * `/api/ladder` refuses it. So `episodeParam` never yields one, and the
+ * ladder's own request never names one.
  */
 
 import type { EpisodeIdView } from "../api/client";
@@ -45,10 +45,20 @@ export function episodeParam(raw: string | string[] | undefined, fallback: Episo
   return EPISODE_CHOICES.includes(v as EpisodeChoice) ? (v as EpisodeChoice) : fallback;
 }
 
-/** The dungeon board's ids, offered as tabs beside the ladder's: five agents, then one agent driving five. */
-export const DUNGEON_CHOICES = ["deadmines", "deadmines-solo"] as const satisfies readonly EpisodeIdView[];
+/**
+ * The dungeon board's ids, offered as tabs beside the ladder's: the one
+ * Deadmines eval, one agent driving the party. The five-agent `deadmines`
+ * runs only as a probe campaign for now and has no tab (operator,
+ * 2026-11-15); it joins here when it becomes an eval.
+ */
+export const DUNGEON_CHOICES = ["deadmines-solo"] as const satisfies readonly EpisodeIdView[];
 
 export type DungeonChoice = (typeof DUNGEON_CHOICES)[number];
+
+/** A dungeon tab's label: "deadmines", the only one. */
+export function dungeonLabel(_id: DungeonChoice): string {
+  return "deadmines";
+}
 
 /** The `?episode=` search param when it names a dungeon board's id, else null. */
 export function dungeonParam(raw: string | string[] | undefined): DungeonChoice | null {
@@ -57,10 +67,10 @@ export function dungeonParam(raw: string | string[] | undefined): DungeonChoice 
 }
 
 /**
- * The dungeon tabs to offer: the five-agent id always, the one-agent id only
- * where the viewer serves its table. A public handle serves none, so a public
- * page never names it; `served` is undefined until `/api/dungeons` answers.
+ * Where an old link's `?episode=` lands now, or null: `deadmines` was the
+ * five-agent tab, and the Deadmines tab is `deadmines-solo`'s.
  */
-export function dungeonChoices(served: readonly EpisodeIdView[] | undefined): DungeonChoice[] {
-  return DUNGEON_CHOICES.filter((id) => id === "deadmines" || (served ?? []).includes(id));
+export function dungeonRedirect(raw: string | string[] | undefined): DungeonChoice | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === "deadmines" ? "deadmines-solo" : null;
 }

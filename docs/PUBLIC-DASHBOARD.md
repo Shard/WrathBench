@@ -679,6 +679,21 @@ sends carries that program's text, so its entries and trace windows would
 publish the program itself. The rule is the scheduler's (`isNotAModelRun`, by
 driver or by stamp), not a list of names.
 
+A fan-out run, one agent driving several characters, is withheld the same
+way: a probe's has no public form, since its run is no one character and its
+game side is per character. The exception is the one-agent Deadmines id: a
+run stamped `deadmines-solo` is published with its table, the ladder's
+Deadmines tab (operator delegated, 2026-11-15), by that id and no other
+(`isWithheldFanoutRun`), so another one-agent id would be its own call. What
+it publishes is the run's own: its row, its detail, entries, scratchpad and
+a track with no points. Its detail carries neither the `fanout` list nor
+`fanoutLead`, so no character's session id, record or replay feed is
+published (a public handle answers none of those ids), and the run page names
+no character: its level is the lead's, its race and class the launch's first
+character's, and its replay has nothing to draw. The characters' names reach
+the page only as the agent's own entries name them, as any run's do, and the
+accounts and session tokens in `meta.json` and `roster.json` reach nothing.
+
 - **At the source.** A public handle (`createApi` with `publicMode`) leaves
   such a run out of every listing (`runRows`, `resultRuns`), keeps a position
   only for a run its listing holds, drops it from the fleet's rows, and
@@ -705,7 +720,9 @@ driver or by stamp), not a list of names.
 - **Checked.** `infra/publish-accept.ts` raises `unpublished-run` for any
   published row or object whose driver or stamp is not a model's, and for
   every object that names such a run's id. The reference line has neither, so
-  it passes.
+  it passes. Nothing published says a run is fan-out, so the fan-out rule has
+  no such check: `infra/dungeons-public.test.ts` holds it, over a publisher
+  pass that site verify also reads clean.
 
 ### What is published
 
@@ -766,9 +783,14 @@ pass leaves out, and who reads what is left:
 - **Models** leave out, per run, the version and series, the character's ids,
   the served model and the start time, and per tier `otherSeries`,
   `countedLevel`, `lastEnded`, `lastReason` and the run ids; the roster table
-  prints the counts and the target, and the run list is its own. Nothing about
-  the Deadmines evals rides on a model row: not the task episodes, not
-  `earnedDeadmines`, and not what they still wait on in the schedulable line.
+  prints the counts and the target, and the run list is its own.
+  `deadmines-solo` rides on a model row like any id (operator delegated,
+  2026-11-15): in `eligible`, `perEpisode` and the schedulable line, what it
+  still waits on included, and `episodes.json` lists it for the About page.
+  The five-agent `deadmines` is on neither, since it runs only as a probe
+  campaign for now and has no table (operator, 2026-11-15;
+  `isUnpublishedEpisode`). `earnedDeadmines` is not published: no page reads
+  it.
 - **A move's `z`** (on the live feed and in a track): the map marks a
   destination on the plane.
 

@@ -53,6 +53,21 @@ export function isTaskEpisode(id: string | null | undefined): id is TaskEpisodeI
   return typeof id === "string" && (TASK_EPISODE_IDS as readonly string[]).includes(id);
 }
 
+/**
+ * The task ids with a table on the dungeon board (`runner/viewer/dungeons.ts`):
+ * `deadmines-solo` alone, the Deadmines eval. The five-agent `deadmines` runs
+ * only as a probe campaign for now and has no ladder tab (operator,
+ * 2026-11-15); it joins this list when it becomes an eval. A public handle
+ * names no task id that is not here (`isUnpublishedEpisode`,
+ * `runner/viewer/public-projection.ts`). The scheduler does not read it.
+ */
+export const BOARD_EPISODE_IDS: readonly TaskEpisodeId[] = ["deadmines-solo"];
+
+/** Whether an id has a table on the dungeon board (`BOARD_EPISODE_IDS`). */
+export function hasBoard(id: string | null | undefined): id is TaskEpisodeId {
+  return (BOARD_EPISODE_IDS as readonly (string | null | undefined)[]).includes(id);
+}
+
 export const episodeIdSchema = z.enum(EPISODE_IDS);
 
 /** One tier: the whole shape of a run, in the units an operator thinks in. */

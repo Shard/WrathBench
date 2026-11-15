@@ -31,14 +31,14 @@
  * are freeplay achievements, and the freeplay view prints the rule each
  * applies, with "not instrumented" where nothing recorded can answer one.
  *
- * The two Deadmines ids are tabs of this page too, and read something else
- * again: the dungeon board (`/api/dungeons`, derived in
- * `runner/viewer/dungeons.ts`), one table per id, a row per model condition
- * on its best attempt, never pooled or ranked against the other id. Above the
- * table, the scatter's idiom for an attempt: time from launch against bosses
- * killed (`components/DungeonChart`). None of the tier's controls apply to a
- * board, so none is shown; the shell's series still is. The one-agent id's tab
- * is offered only where its table is served (`dungeonChoices`).
+ * The Deadmines eval, `deadmines-solo`, is a tab of this page too, labelled
+ * "deadmines", and reads something else again: the dungeon board
+ * (`/api/dungeons`, derived in `runner/viewer/dungeons.ts`), a row per model
+ * condition on its best attempt. Above the table, the scatter's idiom for an
+ * attempt: time from launch against bosses killed (`components/DungeonChart`).
+ * None of the tier's controls apply to a board, so none is shown; the shell's
+ * series still is. The five-agent id has no tab (operator, 2026-11-15), and
+ * an old `?episode=deadmines` link lands on this one (`dungeonRedirect`).
  */
 
 import { A, useSearchParams } from "@solidjs/router";
@@ -55,7 +55,7 @@ import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { useSeriesFilter } from "../components/SeriesSelect";
 import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
-import { type DungeonChoice, EPISODE_CHOICES, dungeonChoices, dungeonParam, episodeParam } from "../lib/episodes";
+import { DUNGEON_CHOICES, type DungeonChoice, EPISODE_CHOICES, dungeonLabel, dungeonParam, dungeonRedirect, episodeParam } from "../lib/episodes";
 import { attemptHref, attemptTitle, boardHint, boardRowKey, bossesText, bossesTitle, clearTimeText, clearedText } from "../lib/dungeons";
 import {
   RUNGS,
@@ -129,11 +129,15 @@ export default function Ladder() {
   createEffect(on(episode, () => feed.refresh(), { defer: true }));
   /** The ids whose tables the viewer serves, once it has answered. */
   const servedBoards = () => dungeons.latest?.boards.map((b) => b.episode);
+  // An old link to the five-agent tab lands on the Deadmines tab.
+  createEffect(() => {
+    const to = dungeonRedirect(params.episode);
+    if (to !== null) setParams({ episode: to }, { replace: true });
+  });
   /*
    * The dungeon tab in view, or null on a ladder tier. An id whose table is
-   * not served — the one-agent id on a public handle — falls back to the
-   * tier, as any other unknown id does; until the board answers, a named
-   * id is taken at its word.
+   * not served falls back to the tier, as any other unknown id does; until
+   * the board answers, a named id is taken at its word.
    */
   const dungeon = (): DungeonChoice | null => {
     const d = dungeonParam(params.episode);
@@ -371,10 +375,10 @@ export default function Ladder() {
             </button>
           )}
         </For>
-        <For each={dungeonChoices(servedBoards())}>
+        <For each={DUNGEON_CHOICES}>
           {(id) => (
             <button class={id === dungeon() ? "on" : ""} title={boardHint(id)} onClick={() => setParams({ episode: id }, { replace: true })}>
-              {id}
+              {dungeonLabel(id)}
             </button>
           )}
         </For>
@@ -658,7 +662,7 @@ export default function Ladder() {
 }
 
 const BOARD_NOTE =
-  "The fixed Deadmines episode from a staged level-20 party, a table per arm, never pooled or ranked against each other. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the eight, then time to the last. Deaths and wipes are shown and never order a row.";
+  "The fixed Deadmines episode from a staged level-20 party, one agent driving all five characters. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the eight, then time to the last. Deaths and wipes are shown and never order a row.";
 
 /**
  * One dungeon tab: the board's table for its id, as the viewer derived and

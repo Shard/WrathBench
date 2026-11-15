@@ -51,11 +51,11 @@ function ResultsRedirect() {
   return <Navigate href={`/runs${location.search}`} />;
 }
 
-/** The dungeon board became the ladder's Deadmines tabs: an old link lands on the five-agent one, its query (the series pin) along. */
+/** The dungeon board became the ladder's Deadmines tab: an old link lands on it, its query (the series pin) along. */
 function DungeonsRedirect() {
   const location = useLocation();
   const query = new URLSearchParams(location.search);
-  query.set("episode", "deadmines");
+  query.set("episode", "deadmines-solo");
   return <Navigate href={`/ladder?${query.toString()}`} />;
 }
 
@@ -86,7 +86,7 @@ render(
       {/* The results page became the runs page; old links keep their query. */}
       <Route path="/results" component={ResultsRedirect} />
       <Route path="/ladder" component={Ladder} preload={preload.ladder} />
-      {/* The dungeon board's page became the ladder's Deadmines tabs; old links still land. */}
+      {/* The dungeon board's page became the ladder's Deadmines tab; old links still land. */}
       <Route path="/dungeons" component={DungeonsRedirect} />
       <Route path="/about" component={About} preload={preload.about} />
       {/* The episodes page became the about page; old links still land. */}

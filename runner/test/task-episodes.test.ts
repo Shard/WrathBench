@@ -28,6 +28,9 @@ import { buildSystemPrompt, programPromptOf, steeringOf } from "../src/prompt";
 import { configFromArgs } from "../src/run";
 import { taskDefinition, taskDefinitionProblem, taskHash } from "../src/task-episodes";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { countedFact } from "./fixtures/counted-fact";
+import { DEFAULT_POLICY, projectModel, schedulability, type RosterModel } from "../src/models";
+import { withoutUnpublishedEpisodes } from "../viewer/public-projection";
 
 const tempDir = tempDirs();
 const ROOT = join(import.meta.dir, "..", "campaigns");
@@ -209,18 +212,51 @@ test("a refused task launch is a CampaignLaunchError", () => {
   }
 });
 
-describe("the public projection, until the board is published", () => {
-  test("leaves the task episodes out of the scheduler's words, keeping a list of nothing else whole", async () => {
-    const { withoutTaskEpisodes } = await import("../viewer/public-projection");
-    expect(withoutTaskEpisodes("schedulable on e90, e360, deadmines-solo")).toBe("schedulable on e90, e360");
-    expect(withoutTaskEpisodes("targets met on e90, e360, deadmines-solo, deadmines — unlimited sessions while its account is idle")).toBe(
-      "targets met on e90, e360 — unlimited sessions while its account is idle",
-    );
-    expect(withoutTaskEpisodes("schedulable on deadmines-solo")).toBe("schedulable on deadmines-solo");
-    // What a t2 model's Deadmines evals wait on is no more public than the evals (operator, 2026-11-15).
+describe("the public projection of the task episodes", () => {
+  test("names deadmines-solo on the episode list and a model row, and not the five-agent id", async () => {
+    const { projectEpisodes, projectModels } = await import("../viewer/public-projection");
+    const tier = (id: string) => ({ id, minutes: 240, idleMinutes: 20, noXpMinutes: null, toolCalls: 8000, objectiveAllowed: true, scored: true, summary: id, members: 1, overrides: 0, lapsed: 0, derived: 0 });
+    const episodes = projectEpisodes({ episodes: ["e90", "deadmines-solo", "deadmines"].map(tier), untiered: 0, now: 1 } as unknown as Parameters<typeof projectEpisodes>[0]);
+    expect(episodes.episodes.map((e) => e.id)).toEqual(["e90", "deadmines-solo"]);
+    // What a t2 model's Deadmines eval waits on is as public as the eval (operator, 2026-11-15).
     const wait = "; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
-    expect(withoutTaskEpisodes(`schedulable on e90, e360${wait}`)).toBe("schedulable on e90, e360");
-    expect(withoutTaskEpisodes(`targets met on e90, e360${wait} — unlimited sessions while its account is idle`)).toBe("targets met on e90, e360 — unlimited sessions while its account is idle");
-    expect(withoutTaskEpisodes("cooling until 12:00")).toBe("cooling until 12:00");
+    const stats = { counted: 1, attempts: 1, extras: 0, target: 3, bestLevel: null };
+    const row = (why: string) => ({
+      name: "m", model: "m", effort: null, platform: null, harness: "wrathbench", billing: "metered", declaredTier: "t2", tier: "t2",
+      earnedPromotion: true, earnedDeadmines: true, idle: "none", status: "ok", eligible: ["e90", "e360", "deadmines-solo", "deadmines"],
+      perEpisode: { e90: stats, "deadmines-solo": stats, deadmines: stats }, ladder: null, schedulable: { ok: true, why, extras: false }, runs: [], newestRunId: null, lastError: null,
+    });
+    const tiers = Object.fromEntries(["t0", "t1", "t2"].map((t) => [t, { runsPerEpisode: { e90: 1, e360: 1 }, promotesTo: null, label: t }]));
+    const project = (why: string) =>
+      projectModels({ models: [row(why)], roster: { path: null, shape: "roster", count: 1, excluded: [] }, policy: { promoteAtLevel: 5, series: "1.0", tiers, maxSessions: {} }, ladderMs: [], harness: "all", now: 1 } as unknown as Parameters<typeof projectModels>[0]).models[0]!;
+    const projected = project(`schedulable on e90, e360${wait}`);
+    expect(projected.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
+    expect(Object.keys(projected.perEpisode)).toEqual(["e90", "deadmines-solo"]);
+    expect(projected.schedulable.why).toBe(`schedulable on e90, e360${wait}`);
+    // No page reads it, so it is not published.
+    expect("earnedDeadmines" in projected).toBe(false);
+    expect(project("targets met on e90, e360, deadmines-solo, deadmines — unlimited sessions while its account is idle").schedulable.why).toBe(
+      "targets met on e90, e360, deadmines-solo — unlimited sessions while its account is idle",
+    );
+    expect(project("schedulable on deadmines, e90").schedulable.why).toBe("schedulable on e90");
+    // A list of nothing else loses the list, never naming the id (the scheduler's own line for a t2
+    // entry opted into the five-agent id with every other target met).
+    expect(project("schedulable on deadmines").schedulable.why).toBe("schedulable");
+    expect(project("cooling until 12:00").schedulable.why).toBe("cooling until 12:00");
+  });
+
+  test("the scheduler's own lines for a t2 entry opted into both ids never name the five-agent one in public", () => {
+    const now = Date.now();
+    const policy = { ...DEFAULT_POLICY, series: "1.0" };
+    const entry = { name: "s", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true } as unknown as RosterModel;
+    const lines: string[] = [];
+    for (const level of [7, 8]) {
+      const s = projectModel(entry, [countedFact(entry, "e90", 6, { now, series: "1.0" }), countedFact(entry, "e360", level, { now, series: "1.0" })], policy, { now });
+      lines.push(schedulability(s, new Set(), policy).why);
+      for (const ep of ["e90", "e360", "deadmines-solo"] as const) if (s.perEpisode[ep] !== undefined) s.perEpisode[ep]!.counted = s.perEpisode[ep]!.target;
+      lines.push(schedulability(s, new Set(), policy).why);
+    }
+    expect(lines.some((l) => /\bdeadmines\b(?!-)/.test(l))).toBe(true);
+    for (const l of lines) expect({ l, named: /\bdeadmines\b(?!-)/.test(withoutUnpublishedEpisodes(l)) }).toEqual({ l, named: false });
   });
 });

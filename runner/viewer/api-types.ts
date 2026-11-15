@@ -1329,8 +1329,8 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * and the character's name. Present only on a fan-out run, so every other
    * run's detail keeps its shape. The run's own game-side figures (level,
    * states, milestones) are no one character's and read as not recorded;
-   * each character's are its session's. Private: a fan-out run is never
-   * published.
+   * each character's are its session's. Private: the public projection
+   * leaves it out, so a published `deadmines-solo` run names no session.
    */
   fanout?: FanoutSessionView[];
   /**
@@ -2493,7 +2493,7 @@ export interface TrackResponse extends SnapshotEnvelope, SessionTrack<TrackPoint
   /**
    * A fan-out run's characters, on the run's own track, which has no points
    * of its own: each one's track is `/api/run/<id>/track` under its session
-   * id. Absent on every other run. Private: a fan-out run is never published.
+   * id. Absent on every other run. Private, as on the run's detail.
    */
   fanout?: FanoutSessionView[];
 }

@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_POLICY, projectModel, type RunFact } from "../src/models";
-import { attemptOf, boardOf, compareAttempts, DEADMINES_BOSSES, wipesOf, type CharacterMarks, type DungeonRun } from "../viewer/dungeons";
+import { attemptOf, boardOf, boardsOf, compareAttempts, DEADMINES_BOSSES, wipesOf, type CharacterMarks, type DungeonRun } from "../viewer/dungeons";
 import { projectDungeons } from "../viewer/public-projection";
 import type { ResultRun } from "../viewer/api-types";
 
@@ -115,6 +115,12 @@ describe("the order", () => {
       ["glm", 0, 1, "g1"],
     ]);
     expect(boardOf("deadmines", runs).rows).toEqual([]);
+  });
+
+  test("only the Deadmines eval has a table; the five-agent id's waits, dormant (operator, 2026-11-15)", () => {
+    const runs = [solo("s2", "kill-target", [marks("x", { kills: [kill(639, 150)] })]), ...party("p1", "kill-target", [kill(639, 90)])];
+    expect(boardsOf(runs).map((b) => [b.episode, b.rows.length])).toEqual([["deadmines-solo", 1]]);
+    expect(boardOf("deadmines", runs).rows.length).toBe(1);
   });
 
   test("the published board carries the same numbers", () => {
