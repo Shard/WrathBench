@@ -545,21 +545,24 @@ camera:
     claimName: ""
     subPath: Data
   resources:
+    # Measured on the reference node (Intel Iris Xe through devic.es/dri, 5
+    # fps, 1280x720, following an e90 in Elwynn): about 0.25 core and 3 GiB.
     gpu:
       requests:
         cpu: 250m
-        memory: 2Gi
-        ephemeral-storage: 256Mi
-      limits:
-        memory: 4Gi
-        devic.es/dri: 1
-    software:
-      requests:
-        cpu: "2"
         memory: 3Gi
         ephemeral-storage: 256Mi
       limits:
-        memory: 8Gi
+        memory: 5Gi
+        devic.es/dri: 1
+    # Measured the same way on lavapipe at 2 fps: about 0.9 core and 2.9 GiB.
+    software:
+      requests:
+        cpu: "1"
+        memory: 3Gi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 6Gi
   director:
     # The follow loop, the frame ring (about 45 s of JPEGs in memory) and
     # ffmpeg's encode at the run's end.

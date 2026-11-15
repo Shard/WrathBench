@@ -51,8 +51,6 @@ Called with (dict "ctx" . "world" <bool>).
       value: "17980"
     - name: CAMERA_FPS
       value: {{ ternary "5" "2" $gpu | quote }}
-    - name: WRATHPLUS_HOME
-      value: /run/camera/home
     - name: WOW_DATA
       value: /data/client
     # Noon on the camera's own clock: the scene's light only, client-side.
@@ -62,7 +60,7 @@ Called with (dict "ctx" . "world" <bool>).
     {{- if not $gpu }}
     # Mesa's software Vulkan (lavapipe): no GPU claim.
     - name: VK_ICD_FILENAMES
-      value: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      value: /usr/share/vulkan/icd.d/lvp_icd.json
     {{- end }}
   resources: {{ toYaml (ternary $c.resources.gpu $c.resources.software $gpu) | nindent 4 }}
   volumeMounts:

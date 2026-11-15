@@ -42,6 +42,11 @@ const APPEAR_COOLDOWN_MS = 3_000;
 /** A cross-map `.appear` sent during the loading screen is lost: wait it out before trying again. */
 const LOADING_WAIT_MS = 12_000;
 const SUBJECT_CHECK_MS = 10_000;
+/**
+ * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
+ * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
+ */
+export const MIN_FRAME_BYTES = 32_000;
 
 export interface DirectorOptions {
   client: CameraClient;
@@ -144,7 +149,7 @@ export class Director {
     await this.o.client.gm(`.morph target ${HIDDEN_DISPLAY}`);
   }
 
-  /** The client-only chase view on the subject, where the client has it (a local WrathPlus patch). */
+  /** The client-only chase view behind the subject (`AgentViewSubject`), where the camera client has it; it survives a map change. */
   private async chase(subject: Subject): Promise<void> {
     await this.o.client.lua(`if type(AgentViewSubject)=="function" then AgentViewSubject(${luaString(subject.character)}) end return true`);
   }
@@ -254,7 +259,9 @@ export class Director {
             needSetup = false;
           }
           const bytes = await c.screenshot(JPEG_QUALITY);
-          if (bytes !== null && bytes.length > 0) {
+          if (bytes !== null && bytes.length < MIN_FRAME_BYTES) {
+            if (++skips % 30 === 1) this.log(`skip: a blank frame (${bytes.length} bytes)`);
+          } else if (bytes !== null) {
             const ts = this.now();
             if (!started) {
               shutter.event({ ts, type: "start", detail: "camera attached" });
