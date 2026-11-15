@@ -411,7 +411,11 @@ run's session" (the trace, the nearby ring) answers empty for a fan-out run
 rather than present one character as the run: the run's own id opens no
 session. A
 public handle withholds the run and its characters' ids whole, as it does a
-run whose driver is not a model, and the publisher hands it back as withdrawn.
+run whose driver is not a model, and the publisher hands it back as withdrawn,
+unless the run is a `deadmines-solo` attempt (`isWithheldFanoutRun`): that
+one id's runs are published with its table (operator delegated, 2026-11-15),
+the run's own detail, track, entries and scratchpad, without the `fanout`
+list or `fanoutLead`, so no character's session or feed is published.
 `roster.json`, the characters' session tokens, is never read.
 
 ## Token accounting

@@ -69,6 +69,7 @@ import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
   projectClips,
+  projectDungeons,
   projectEntries,
   projectHighlight,
   projectEpisodes,
@@ -679,6 +680,7 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
   if (name === "episodes.json") return (p) => projectEpisodes(p as unknown as Parameters<typeof projectEpisodes>[0]);
   if (name === "models.json") return (p) => projectModels(p as unknown as Parameters<typeof projectModels>[0]);
   if (name === "campaigns.json") return (p) => projectCampaigns(p as unknown as Parameters<typeof projectCampaigns>[0]);
+  if (name === "dungeons.json") return (p) => projectDungeons(p as unknown as Parameters<typeof projectDungeons>[0]);
   if (name === "tools.json") return (p) => projectTools(p as unknown as Parameters<typeof projectTools>[0]);
   if (name === "highlight.json") return (p) => projectHighlight(p as unknown as Parameters<typeof projectHighlight>[0]);
   return null;

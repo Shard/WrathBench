@@ -741,8 +741,10 @@ Every episode starts with a freshly created character at level 1 in its starting
   resume tells the model, null (`runner/src/run-reader.ts`). Where a reader
   needs one figure, the listing's level and the scheduler's best level, it
   takes the lead: the character with the highest level, its xp beside it.
-  The public site never publishes the run. A run has one layout or the
-  other, never both.
+  The public site publishes no fan-out run but a `deadmines-solo` attempt,
+  and that one without its characters' sessions (docs/PUBLIC-DASHBOARD.md,
+  "Runs that are never published"). A run has one layout or the other,
+  never both.
 - A run recorded before the session record (a 0.5 run) has no `session/`:
   its run row, 60-second state samples, trace and movement intentions are
   tables of its `run.sqlite`, and its milestones are trajectory records. It stays

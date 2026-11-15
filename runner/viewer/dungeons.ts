@@ -1,7 +1,9 @@
 /**
  * The dungeon board's derivation (operator, 2026-11-14; docs/METHODOLOGY.md,
- * "The Deadmines evals, and rung 6"): the two Deadmines episodes read as
- * attempts, one table per id, a row per model condition.
+ * "The Deadmines evals, and rung 6"): a Deadmines episode read as attempts,
+ * one table per id, a row per model condition. Only `deadmines-solo` has a
+ * table (`BOARD_EPISODE_IDS`); the five-agent id derives the same way and
+ * waits, dormant, until it is an eval.
  *
  * Versioned (`DUNGEON_BOARD_VERSION`) and recomputable over every recorded
  * run, like every number here: nothing below is recorded, it is read off the
@@ -31,7 +33,7 @@
 
 import { partyAttempt } from "../src/campaigns";
 import { conditionKey } from "./condition";
-import { TASK_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
+import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
@@ -218,7 +220,7 @@ export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): Du
   return { episode, rows };
 }
 
-/** Both tables, the one-agent id first. */
+/** Every table, one per id with one. */
 export function boardsOf(runs: readonly DungeonRun[]): DungeonBoardView[] {
-  return TASK_EPISODE_IDS.map((ep) => boardOf(ep, runs));
+  return BOARD_EPISODE_IDS.map((ep) => boardOf(ep, runs));
 }

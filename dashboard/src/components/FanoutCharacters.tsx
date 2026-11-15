@@ -7,8 +7,8 @@
  * the `character` search parameter, so a link names the character it opens
  * on; with none, the first by name.
  *
- * Private only: the public build has no inspector mount, and a fan-out run is
- * never published.
+ * Private only: the public build has no inspector mount, and a published
+ * fan-out run (`deadmines-solo` only) carries no `fanout` list.
  */
 
 import { useSearchParams } from "@solidjs/router";

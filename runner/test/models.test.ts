@@ -44,7 +44,6 @@ import {
 import { billingOf } from "../src/model-cost";
 import { parseCredentials } from "../src/credential-slots";
 import { rowOf } from "../viewer/models";
-import { withoutTaskEpisodes } from "../viewer/public-projection";
 import type { EpisodeId } from "../src/episodes";
 import type { Campaign } from "../src/campaigns";
 import type { ProbeRun } from "../src/campaigns";
@@ -1491,8 +1490,6 @@ describe("promotion and the Deadmines witness", () => {
     const e90 = countedFact(entry, "e90", 5, { i: 1 });
     const waiting = at([e90, countedFact(entry, "e360", 7, { i: 2 })]);
     expect(schedulability(waiting, new Set(), policy).why).toContain("not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360");
-    // The public row says nothing of it, as it says nothing of the Deadmines evals.
-    expect(withoutTaskEpisodes(schedulability(waiting, new Set(), policy).why)).toBe("schedulable on e90");
     const open = at([e90, countedFact(entry, "e360", 8, { i: 2 })]);
     expect(schedulability(open, new Set(), policy).why).not.toContain("not yet on deadmines-solo");
     // A t1 model's tier buys none, so it has nothing to wait on there.

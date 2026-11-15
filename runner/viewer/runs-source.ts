@@ -37,7 +37,7 @@
  * serves is scoped to a user.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
 import type { SessionFile } from "@wrathbench/mcp/record";
@@ -58,6 +58,31 @@ export function isV1Run(runsDir: string, runId: string): boolean {
 /** Whether a run is a fan-out run (`isFanoutRunDir`): several characters, a record each. */
 export function isFanoutRun(runsDir: string, runId: string): boolean {
   return isFanoutRunDir(join(runsDir, runId));
+}
+
+/**
+ * The one episode id whose fan-out runs a public handle publishes:
+ * `deadmines-solo`, one agent driving the staged party, whose table and runs
+ * went public at the v1 cutover (operator delegated, 2026-11-15). By id, not
+ * by agent count, so another one-agent task id is withheld until it is
+ * decided on its own.
+ */
+export const PUBLISHED_FANOUT_EPISODE = "deadmines-solo";
+
+/**
+ * Whether a public handle withholds a run for being fan-out: every fan-out
+ * run but one stamped `PUBLISHED_FANOUT_EPISODE` in its meta.json, the file
+ * `isFanoutRunDir` reads. A probe's fan-out square is stamped `probing`, so
+ * it stays withheld.
+ */
+export function isWithheldFanoutRun(runsDir: string, runId: string): boolean {
+  if (!isFanoutRun(runsDir, runId)) return false;
+  try {
+    const meta = JSON.parse(readFileSync(join(runsDir, runId, "meta.json"), "utf8")) as { config?: { episode?: unknown } } | null;
+    return meta?.config?.episode !== PUBLISHED_FANOUT_EPISODE;
+  } catch {
+    return true;
+  }
 }
 
 /** A fan-out run's sessions, one per character with a record, in name order; empty for any other run. */
