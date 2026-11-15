@@ -651,9 +651,12 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
 
 - **Camera clips ship; frames never do.** A frame shows the game world
   only, with no interface, chat, game text or sound (`docs/DATA-AND-LEGAL.md`).
-  The still frames under a run's `camera/frames/` are never served and never
-  published; only the clips `camera/clips.json` names, and only their
-  `clips/` files. `projectClips` rebuilds each clip field by field: name,
+  The still frames under a run's `camera/frames/` are never published, and a
+  public handle serves none of them. Only the clips `camera/clips.json` names
+  are published, and only their `clips/` files. Live viewing is a private
+  viewer's alone (operator, 2026-11-15): it serves a live run's newest frame on
+  the run page, and nothing on the public site acts as a live view of the
+  world (`runner/viewer/README.md`, "The live still"). `projectClips` rebuilds each clip field by field: name,
   kind, event type and detail, moment, length, caption, and the video and
   poster as this clip's bucket key and nothing else. The caption is the
   model's own words as the director quoted them, with the benchmark's and the
