@@ -1609,8 +1609,8 @@ by one line, `SCORED_EPISODES_WAIT` in `runner/src/config.ts`, set to the
 reason (none today: the wait for a long-clock program-loop run to be read
 ended once it was, docs/METHODOLOGY.md). While they are held, no scored
 episode is picked, and a scored queue or pinned job is held with the same
-reason rather than spawned for `run.ts` to refuse. Only runs from the running build's harness **series** (`0.5`
-of `harness-0.5-1437-g…`) count; a minor bump starts every model's evidence
+reason rather than spawned for `run.ts` to refuse. Only runs from the running build's harness **series** (`1.0`
+of `harness-1.0-12-g…`) count; a minor bump starts every model's evidence
 over, a fix commit does not. How many paid runs are in flight at once is the
 paid credentials' slots — never a budget: how much a paid model runs is its
 tier. A model whose entry
