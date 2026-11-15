@@ -875,6 +875,15 @@ describe("the public build's call sites", () => {
     }
   });
 
+  test("the live camera still is mounted only in the private build, and only while live", () => {
+    // Live viewing is the private viewer's alone: the public build never mounts
+    // the poll, and its client (above) would answer nothing if it did.
+    expect(read("../src/pages/RunDetail.tsx")).toMatch(/<Show when=\{!SNAPSHOT_MODE && live\(\)\}>\s*<LiveFrame /);
+    expect(read("../src/pages/MapPage.tsx")).toMatch(
+      /<Show when=\{SNAPSHOT_MODE \|\| track\(\) !== undefined \? undefined : p\(\)\.runId\} keyed>\s*\{\(id\) => <LiveFrame /,
+    );
+  });
+
   test("the map asks lib/tiles for a URL rather than hard-coding the path", () => {
     // Where a tile comes from moved with the Open shape: same-origin under the
     // viewer, and `VITE_WRATHBENCH_TILES_BASE` in a public build, which is the

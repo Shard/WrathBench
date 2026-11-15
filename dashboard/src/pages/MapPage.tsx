@@ -2601,7 +2601,7 @@ export default function MapPage() {
                 )}
               </Show>
               {/* The camera's newest still of a live run, private only; keyed so a new pick starts afresh. */}
-              <Show when={!SNAPSHOT_MODE && track() === undefined ? p().runId : undefined} keyed>
+              <Show when={SNAPSHOT_MODE || track() !== undefined ? undefined : p().runId} keyed>
                 {(id) => <LiveFrame runId={id} now={ageTick()} kv />}
               </Show>
               <div class="k">last update</div>
