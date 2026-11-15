@@ -21,7 +21,8 @@ import {
   type UnstampedRun,
 } from "../runner/src/models";
 import { parseCredentials } from "../runner/src/credential-slots";
-import { parseFleet, planTick, rosterModels, type FleetConfig } from "./run-fleet";
+import { parseFleet, rosterModels, type FleetConfig } from "./run-fleet";
+import { planOf } from "./fixtures/tick";
 import { credentialGate, credentialKey, driverKey, SlotBook } from "./run-fleet-credentials";
 import { countOutsideRuns, freePoolAccounts, outsideRuns } from "./run-fleet-plan";
 import { localCredentialStatuses } from "./run-fleet-status";
@@ -186,13 +187,11 @@ describe("a hand launch with no episode", () => {
     const root = handRuns(NOW);
     const cfg = fleet({ credentials: { [CRED]: { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, billing: "free", enabled: true } } });
     const { unstamped } = readFleetRuns(root, NOW, { includeArchived: true });
-    const states = modelStates({ runsDir: root, roster: rosterModels(cfg.roster), runs: [], sidecar: { version: 1, cleared: {} }, now: NOW, policy: cfg.policy });
-    const plan = (outside: readonly UnstampedRun[]) =>
-      planTick(cfg, states, () => undefined, "20300314", [], [], undefined, new Map(), new Set(), [], [], undefined, true, outsideRuns(outside));
-    expect(plan([]).policy.map((p) => p.job.ref)).toEqual(["glm"]);
+    const plan = (outside: readonly UnstampedRun[]) => planOf(cfg, { unstamped: outside, now: NOW });
+    expect(plan([]).picks.map((p) => p.job.ref)).toEqual(["glm"]);
     const held = plan(unstamped);
-    expect(held.policy).toEqual([]);
-    expect(held.heldPicks.map((h) => h.why).join(" ")).toContain(`credential ${CRED} 2/2 in flight`);
+    expect(held.picks).toEqual([]);
+    expect(held.holds.map((h) => h.why).join(" ")).toContain(`credential ${CRED} 2/2 in flight`);
   });
 
   test("the status's own reading counts it once, on its credential", () => {

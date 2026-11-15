@@ -9,12 +9,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY, parsePolicyBlock, projectModel, rehearsalHold, type ModelState, type RosterModel, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, parsePolicyBlock, projectModel, rehearsalHold, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import { loadRunConfig } from "../runner/src/config";
 import { taskHash } from "../runner/src/task-episodes";
 import { taskDefinition } from "../runner/src/task-episodes";
 import { parseFleet, type FleetConfig } from "./run-fleet-config";
-import { evalPoolDraw, evalPoolTaken, planTick } from "./run-fleet-plan";
+import { planOf } from "./fixtures/tick";
 import { episodeFlags, resolve } from "./run-roster";
 import { stagingHash, taskLaunchFile } from "./task-launch";
 import { configFromArgs } from "../runner/src/run";
@@ -35,17 +35,19 @@ function fleet(roster: Record<string, unknown>, policy: Record<string, unknown> 
   return parseFleet({ _notes: ["n"], accounts: { pool: ["RUNNER"] }, roster, credentials: CREDENTIALS, policy, queue: [] }, { env: ENV });
 }
 
-/** A model whose level evals are all counted, one e360 at level 8, so a Deadmines id is what it owes. */
-function owing(entry: RosterModel, policy: SchedulingPolicy): ModelState {
-  const s = projectModel(entry, [countedFact(entry, "e360", 8, { now: NOW, series: policy.series ?? undefined })], policy, { now: NOW });
-  for (const ep of ["e90", "e360"] as const) s.perEpisode[ep]!.counted = s.perEpisode[ep]!.target;
-  return s;
+/** A model's level evals all counted, one e360 at level 8, so a Deadmines id is what it owes; with `solo`, its three solo attempts too. */
+function owing(entry: RosterModel, policy: SchedulingPolicy, solo = false): RunFact[] {
+  const series = policy.series ?? undefined;
+  const of = (episode: "e90" | "e360" | "deadmines-solo", n: number) => Array.from({ length: n }, (_, i) => countedFact(entry, episode, 8, { i: i + 1, now: NOW, series: series! }));
+  return [...of("e90", 3), ...of("e360", 1), ...(solo ? of("deadmines-solo", 3) : [])];
 }
 
-function plan(cfg: FleetConfig, states: ModelState[], scoredGate?: string) {
-  const draw = evalPoolDraw({ mode: cfg.policy.worlds, pool: cfg.accounts.evalPool ?? [], taken: evalPoolTaken([], []), held: () => undefined });
-  return planTick(cfg, states, () => undefined, STAMP, [], [], undefined, new Map(), new Set(), [], [], undefined, true, [], [], { max: 4 }, scoredGate, undefined, draw);
+/** The tick over those runs, with four worlds and `scoredGate` closing scored episodes. */
+function plan(cfg: FleetConfig, runs: RunFact[], scoredGate?: string) {
+  return planOf(cfg, { runs, now: NOW, stamp: STAMP, worlds: { max: 4 }, ...(scoredGate !== undefined ? { scoredWait: scoredGate } : {}) });
 }
+/** A hold as the policy's own pick: name, episode, why. */
+const held = (p: ReturnType<typeof plan>) => p.holds.map((h) => ({ name: h.name, episode: h.episode, why: h.why }));
 
 const SON = { tier: "t2", model: "sonnet", driver: "claude-code", effort: "max" };
 
@@ -111,54 +113,52 @@ describe("the holds", () => {
     // None is set today (SCORED_EPISODES_WAIT is null); the mechanism under an explicit reason.
     const HOLD = "scored episodes are held for this test";
     const cfg = fleet({ son: { ...SON, deadmines: true } }, { worlds: "evals", rehearsed: ["deadmines"] });
-    const s = owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true }, cfg.policy);
-    const p = plan(cfg, [s], HOLD);
-    expect(p.policy).toEqual([]);
-    expect(p.heldPicks).toEqual([{ name: "son", episode: "deadmines-solo", why: HOLD }]);
-    s.perEpisode["deadmines-solo"]!.counted = 3;
-    const five = plan(cfg, [s], HOLD);
-    expect(five.policy).toEqual([]);
-    expect(five.heldPicks).toEqual([{ name: "son", episode: "deadmines", why: HOLD }]);
+    const entry: RosterModel = { name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2", deadmines: true };
+    const p = plan(cfg, owing(entry, cfg.policy), HOLD);
+    expect(p.picks).toEqual([]);
+    expect(held(p)).toEqual([{ name: "son", episode: "deadmines-solo", why: HOLD }]);
+    const five = plan(cfg, owing(entry, cfg.policy, true), HOLD);
+    expect(five.picks).toEqual([]);
+    expect(held(five)).toEqual([{ name: "son", episode: "deadmines", why: HOLD }]);
   });
 
   test("an unrehearsed five-agent attempt is said and passed over; the one-agent id still goes", () => {
     const cfg = fleet({ son: { ...SON, deadmines: true } });
-    const p = plan(cfg, [owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true }, cfg.policy)]);
-    expect(p.heldPicks.map((h) => [h.episode, h.why])).toEqual([["deadmines", expect.stringContaining("program-loop rehearsal")]]);
-    expect(p.policy.map((x) => x.job.episode)).toEqual(["deadmines-solo"]);
+    const p = plan(cfg, owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2", deadmines: true }, cfg.policy));
+    expect(p.holds.map((h) => [h.episode, h.why])).toEqual([["deadmines", expect.stringContaining("program-loop rehearsal")]]);
+    expect(p.picks.map((x) => x.job.episode)).toEqual(["deadmines-solo"]);
   });
 
   test("a model that owes only held attempts does what a model owing nothing does", () => {
     const cfg = fleet({ cx: { tier: "t2", model: "gpt-6.1", driver: "codex", idle: "unlimited" } });
-    const s = owing({ name: "cx", model: "gpt-6.1", driver: "codex", tier: "t2", idle: "unlimited" }, cfg.policy);
-    const p = plan(cfg, [s]);
-    expect(p.heldPicks.map((h) => h.episode)).toEqual(["deadmines-solo"]);
-    expect(p.policy.map((x) => x.job.episode)).toEqual(["freeplay"]);
+    const p = plan(cfg, owing({ name: "cx", model: "gpt-6.1", driver: "codex", tier: "t2", idle: "unlimited" }, cfg.policy));
+    expect(p.holds.map((h) => h.episode)).toEqual(["deadmines-solo"]);
+    expect(p.picks.map((x) => x.job.episode)).toEqual(["freeplay"]);
   });
 });
 
 describe("a deadmines-solo pick", () => {
   const cfg = fleet({ son: SON });
-  const state = owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2" }, cfg.policy);
+  const runs = owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2" }, cfg.policy);
 
   test("draws five eval accounts and spawns one fan-out run with the id's file", () => {
-    const p = plan(cfg, [state]);
-    expect(p.heldPicks).toEqual([]);
-    const pick = p.policy[0]!;
+    const p = plan(cfg, runs);
+    expect(p.holds).toEqual([]);
+    const pick = p.picks[0]!;
     expect(pick.job).toMatchObject({ episode: "deadmines-solo", fanout: true, accounts: ["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05"], account: "EVAL01" });
     expect(pick.account).toBe("EVAL01");
   });
 
   test("is held, not moved to the shared world, while worlds are off", () => {
     const off = fleet({ son: SON }, { worlds: "off" });
-    const p = plan(off, [owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2" }, off.policy)]);
-    expect(p.policy).toEqual([]);
-    expect(p.heldPicks.map((h) => h.why).join(" ")).toContain("--episode deadmines-solo draws its party's accounts from the eval pool");
+    const p = plan(off, owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2" }, off.policy));
+    expect(p.picks).toEqual([]);
+    expect(p.holds.map((h) => h.why).join(" ")).toContain("--episode deadmines-solo draws its party's accounts from the eval pool");
   });
 
   test("launches as the id: its file, its accounts, and an argv run.ts takes", async () => {
     const { jobSpawn } = await import("./run-fleet-plan");
-    const pick = plan(cfg, [state]).policy[0]!;
+    const pick = plan(cfg, runs).picks[0]!;
     const spawn = jobSpawn(pick.job, cfg.roster, pick.account, STAMP);
     expect(spawn.accounts).toEqual(["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05"]);
     expect(spawn.entries).toHaveLength(1);
@@ -184,10 +184,8 @@ describe("a five-agent pick, once rehearsed", () => {
   test("is five member runs on one credential, each with the id's file", async () => {
     const { jobSpawn } = await import("./run-fleet-plan");
     const cfg = fleet({ son: { ...SON, deadmines: true } }, { worlds: "evals", rehearsed: ["deadmines"] });
-    const s = owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true }, cfg.policy);
-    s.perEpisode["deadmines-solo"]!.counted = 3;
-    const p = plan(cfg, [s]);
-    const pick = p.policy.find((x) => x.job.episode === "deadmines")!;
+    const p = plan(cfg, owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2", deadmines: true }, cfg.policy, true));
+    const pick = p.picks.find((x) => x.job.episode === "deadmines")!;
     expect(pick.job.fanout).toBeUndefined();
     const spawn = jobSpawn(pick.job, cfg.roster, pick.account, STAMP);
     expect(spawn.entries.map((e) => e.party?.member)).toEqual(["tank", "healer", "mage", "rogue", "paladin"]);
@@ -200,11 +198,9 @@ describe("a five-agent pick, once rehearsed", () => {
       { _notes: ["n"], accounts: { pool: ["RUNNER"] }, roster: { son: { ...SON, deadmines: true } }, credentials: { "claude-2": { ...CREDENTIALS["claude-2"], slots: 4 } }, policy: { worlds: "evals", rehearsed: ["deadmines"] }, queue: [] },
       { env: ENV },
     );
-    const s = owing({ name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true }, small.policy);
-    s.perEpisode["deadmines-solo"]!.counted = 3;
-    const p = plan(small, [s]);
-    expect(p.policy).toEqual([]);
-    expect(p.heldPicks.find((h) => h.episode === "deadmines")?.why).toContain("claude-2 0/4");
+    const p = plan(small, owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2", deadmines: true }, small.policy, true));
+    expect(p.picks).toEqual([]);
+    expect(p.holds.find((h) => h.episode === "deadmines")?.why).toContain("claude-2 0/4");
   });
 });
 

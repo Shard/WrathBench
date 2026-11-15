@@ -14,6 +14,7 @@ import type { RunFact, UnstampedRun } from "../runner/src/models";
 import type { CampaignFile } from "../runner/src/campaign-file";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { countedFact } from "../runner/test/fixtures/counted-fact";
+import { emptyModelLists } from "../runner/src/model-lists";
 import { checkedIn, defsBlock, definition, partyDefinition } from "../runner/test/fixtures/campaigns";
 
 const NOW = Date.UTC(2026, 10, 15, 12);
@@ -136,6 +137,8 @@ interface Scenario {
   pauseSwitch?: boolean;
   /** Ends whose write fails, by run id. */
   endFails?: string[];
+  /** Campaign files whose write fails, by run id. */
+  fileFails?: string[];
 }
 
 /** A Set or Map, as plain data, so a snapshot can hold it; a local clock reading is the same in every zone. */
@@ -200,11 +203,14 @@ export function runScenario(sc: Scenario): Record<string, unknown> {
     maxRunPods: () => sc.maxRunPods,
     worldsSetting: (mode) => (mode !== "evals" || sc.worlds === undefined ? undefined : { max: sc.worlds.max, ...(sc.worlds.hold !== undefined ? { hold: sc.worlds.hold } : {}) }),
     readFacts: () => ({ facts: structuredClone(sc.facts ?? []), unstamped: structuredClone(sc.unstamped ?? []) }),
+    readModelsSidecar: () => ({ version: 1, cleared: {} }),
+    readModelLists: () => emptyModelLists(),
     goUsage: { noteOverages: () => {}, observations: () => sc.usage ?? [], readHolds: () => new Map() },
-    held: (a) => sc.holders?.[a.toUpperCase()],
+    holders: () => new Map(Object.entries(sc.holders ?? {})),
     jobCooling: (job) => sc.cooling?.[job.name],
     runCampaignFile: (dir) => files.get(dir.slice(RUNS_DIR.length + 1)) ?? null,
     writeCampaignFile: (dir, file) => {
+      if ((sc.fileFails ?? []).includes(dir.slice(RUNS_DIR.length + 1))) throw new Error("read-only file system");
       written.push(`${dir.slice(RUNS_DIR.length + 1)} ${file.campaign}@${file.version}`);
       files.set(dir.slice(RUNS_DIR.length + 1), file);
     },
@@ -535,6 +541,27 @@ const SCENARIOS: Record<string, () => Scenario> = {
           arm: "base",
         } as Partial<RunFact>),
       ],
+    };
+  },
+  "probes: a campaign file that cannot be written holds the resume this tick": () => {
+    const def = definition({ id: "solo" });
+    return {
+      config: idleFleet({ "campaign-defs": defsBlock(def), campaigns: { solo: { version: 1, assignments: [{ model: "glm", runsPerCell: 1 }] } } }),
+      facts: [
+        ...pastTargets(),
+        paused("fleet-glm-probing-solo-a1", "operator-pause", {
+          model: "z-ai/glm-5.2:free",
+          episode: "probing",
+          account: "RUNNER2",
+          credential: "or-free",
+          campaign: "solo",
+          campaignVersion: 1,
+          cell: def.cells[0]!.id,
+          ref: "glm",
+          arm: "base",
+        } as Partial<RunFact>),
+      ],
+      fileFails: ["fleet-glm-probing-solo-a1"],
     };
   },
   "parties: two parties draw from the eval pool, a third is held": () => ({

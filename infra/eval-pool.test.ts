@@ -2,7 +2,7 @@
  * The eval pool (`EVAL01`…, the chart's `worlds.pool.size`): the accounts a
  * party campaign that draws its own (`accounts: "evals"`) takes per attempt,
  * so two parties run side by side, each on a world of its own. Pinned:
- * the draw is the same for the tick and `planTick`, disjoint across
+ * the draw is the tick's (`planTick`), disjoint across
  * parties, held with a reason when the pool is short or worlds are off;
  * an eval account is never pinned, listed or a gate's; a paused party comes
  * back on the accounts it drew; and the chart puts the pool on no allowlist
@@ -13,8 +13,9 @@ import { join } from "node:path";
 import { evalPoolAccountNames, isEvalPoolAccountName } from "../runner/src/account-pool";
 import { defsBlock, definition, PARTY_MEMBERS, partyDefinition } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig, type FleetJob } from "./run-fleet-config";
-import { evalPoolDraw, evalPoolTaken, fillEntries, jobSpawn, planResumes, planTick } from "./run-fleet-plan";
+import { evalPoolDraw, evalPoolTaken, fillEntries, jobSpawn, planResumes } from "./run-fleet-plan";
 import { DEFAULT_POLICY, type RunFact } from "../runner/src/models";
+import { planOf } from "./fixtures/tick";
 
 const STAMP = "20261114";
 const ROSTER = {
@@ -93,7 +94,7 @@ describe("the eval pool", () => {
 describe("parties side by side", () => {
   test("two parties each draw five eval accounts, disjoint, and both spawn on a world each; the third is held on the pool", () => {
     const cfg = fleet(["deadmines", "stockades", "wailing"]);
-    const plan = planTick(cfg, [], () => undefined, STAMP, [], [], undefined, new Map(), new Set(), [], [], undefined, true, [], [], undefined, undefined, { max: 2 }, drawFor(cfg));
+    const plan = planOf(cfg, { stamp: STAMP, worlds: { max: 2 } });
     const spawned = plan.pinned.map((p) => p.spawn);
     expect(spawned.map((s) => s.name).sort()).toEqual(["deadmines-party-base", "stockades-party-base"]);
     const accounts = spawned.map((s) => s.accounts!);
@@ -102,15 +103,15 @@ describe("parties side by side", () => {
       expect(a.every(isEvalPoolAccountName)).toBe(true);
     }
     expect(new Set(accounts.flat()).size).toBe(10);
-    const third = plan.heldPicks.find((h) => h.name === "wailing-party-base");
+    const third = plan.holds.find((h) => h.name === "wailing-party-base");
     expect(third?.why).toContain("eval pool: 0 of 5 accounts free");
   });
 
   test("with the world cap full, a party that drew its accounts waits on the world key", () => {
     const cfg = fleet(["deadmines", "stockades"]);
-    const plan = planTick(cfg, [], () => undefined, STAMP, [], [], undefined, new Map(), new Set(), [], [], undefined, true, [], [], undefined, undefined, { max: 1 }, drawFor(cfg));
+    const plan = planOf(cfg, { stamp: STAMP, worlds: { max: 1 } });
     expect(plan.pinned).toHaveLength(1);
-    expect(plan.heldPicks.map((h) => h.why).join(" ")).toContain("worlds 1/1");
+    expect(plan.holds.map((h) => h.why).join(" ")).toContain("worlds 1/1");
   });
 
   test("accounts a run without a verdict holds, or a live session, are never drawn", () => {

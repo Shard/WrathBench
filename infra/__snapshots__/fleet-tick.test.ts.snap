@@ -19392,3 +19392,186 @@ exports[`the supervisor's tick over fixture states a refused pin is left disable
   ],
 }
 `;
+
+exports[`the supervisor's tick over fixture states probes: a campaign file that cannot be written holds the resume this tick 1`] = `
+{
+  "io": {
+    "ended": [],
+    "released": [],
+    "repaired": [],
+    "sweeps": [],
+    "written": [],
+  },
+  "memory": {
+    "campaignJobs": [],
+    "credentialsBooked": {
+      "claude-1": 0,
+      "claude-2": 0,
+      "or-free": 2,
+      "or-paid": 0,
+    },
+    "drainReasons": {},
+    "endedRuns": [],
+    "finished": [],
+    "lastPaused": [],
+    "lastPlan": {
+      "assign": [],
+      "done": [],
+      "skipped": [],
+      "waiting": [],
+    },
+    "pending": [
+      [
+        "fp-freeplay",
+        {
+          "attempt": 1,
+          "enabled": true,
+          "episode": "freeplay",
+          "name": "fp-freeplay",
+          "placed": {
+            "fp": {
+              "env": "OPENROUTER_KEY",
+              "id": "or-free",
+            },
+          },
+          "ref": "fp",
+          "refs": [
+            "fp",
+          ],
+          "repeat": 1,
+          "source": "policy",
+        },
+      ],
+      [
+        "fp2-freeplay",
+        {
+          "attempt": 1,
+          "enabled": true,
+          "episode": "freeplay",
+          "name": "fp2-freeplay",
+          "placed": {
+            "fp2": {
+              "env": "OPENROUTER_KEY",
+              "id": "or-free",
+            },
+          },
+          "ref": "fp2",
+          "refs": [
+            "fp2",
+          ],
+          "repeat": 1,
+          "source": "policy",
+        },
+      ],
+    ],
+    "pinnedDone": [],
+    "placedMemo": {
+      "fp-freeplay": {
+        "fp": {
+          "env": "OPENROUTER_KEY",
+          "id": "or-free",
+        },
+      },
+      "fp2-freeplay": {
+        "fp2": {
+          "env": "OPENROUTER_KEY",
+          "id": "or-free",
+        },
+      },
+    },
+    "policyIdle": "2 free account(s), nothing schedulable: glm=active fp=active fp2=active",
+  },
+  "memoryAfterFirst": {
+    "drainReasons": {},
+    "finished": [],
+    "pending": [
+      "fp-freeplay",
+      "fp2-freeplay",
+    ],
+    "placedMemo": {
+      "fp-freeplay": {
+        "fp": {
+          "env": "OPENROUTER_KEY",
+          "id": "or-free",
+        },
+      },
+      "fp2-freeplay": {
+        "fp2": {
+          "env": "OPENROUTER_KEY",
+          "id": "or-free",
+        },
+      },
+    },
+  },
+  "record": [
+    {
+      "detail": "fp freeplay attempt 1 (extra) on RUNNER: extra #1: unlimited session (targets met; one continuous session, idle watchdog only)",
+      "event": "policy-pick",
+      "job": "fp-freeplay",
+    },
+    {
+      "detail": "fp2 freeplay attempt 1 (extra) on RUNNER2: extra #1: unlimited session (targets met; one continuous session, idle watchdog only)",
+      "event": "policy-pick",
+      "job": "fp2-freeplay",
+    },
+  ],
+  "say": [
+    "resume glm-solo-a-base: could not write fleet-glm-probing-solo-a1/campaign.json — read-only file system; not resuming it this tick",
+    "policy fp-freeplay: fp freeplay attempt 1 (extra) on RUNNER — extra #1: unlimited session (targets met; one continuous session, idle watchdog only)",
+    "policy fp2-freeplay: fp2 freeplay attempt 1 (extra) on RUNNER2 — extra #1: unlimited session (targets met; one continuous session, idle watchdog only)",
+    "policy: 2 free account(s), nothing schedulable: glm=active fp=active fp2=active",
+    "resume glm-solo-a-base: could not write fleet-glm-probing-solo-a1/campaign.json — read-only file system; not resuming it this tick",
+  ],
+  "secondCall": "same",
+  "spawns": [
+    {
+      "account": "RUNNER",
+      "enabled": true,
+      "entries": [
+        {
+          "episode": "freeplay",
+          "extra": true,
+          "maxToolCalls": null,
+          "model": "stealth/ox-alpha:free",
+          "placedOn": {
+            "env": "OPENROUTER_KEY",
+            "id": "or-free",
+          },
+          "resumeOnPause": true,
+          "watchdogs": {
+            "episodeMs": null,
+            "idleMs": 1200000,
+            "noXpMs": null,
+          },
+        },
+      ],
+      "loop": false,
+      "name": "fp-freeplay",
+    },
+    {
+      "account": "RUNNER2",
+      "enabled": true,
+      "entries": [
+        {
+          "episode": "freeplay",
+          "extra": true,
+          "maxToolCalls": null,
+          "model": "z-ai/glm-5.3-flash:free",
+          "placedOn": {
+            "env": "OPENROUTER_KEY",
+            "id": "or-free",
+          },
+          "resumeOnPause": true,
+          "watchdogs": {
+            "episodeMs": null,
+            "idleMs": 1200000,
+            "noXpMs": null,
+          },
+        },
+      ],
+      "loop": false,
+      "name": "fp2-freeplay",
+    },
+  ],
+}
+`;

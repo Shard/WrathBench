@@ -17,7 +17,8 @@ import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
 import { accountsOfRun, DEFAULT_POLICY, type RunFact } from "../runner/src/models";
 import { defsBlock, ONE_AGENT_IMAGE, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig } from "./run-fleet-config";
-import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, planTick, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
+import { planOf } from "./fixtures/tick";
+import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
 import { liveRunStuck, rosterResumes, runProgress } from "./run-fleet-state";
 import { FANOUT_RUN, writeFanoutRun } from "../runner/test/fixtures/fanout";
 import { accountHolderIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
@@ -66,25 +67,23 @@ describe("a one-agent arm's job", () => {
   });
 
   test("starts on a credential with one slot and a driver cap of one, where a party of five could not", () => {
-    const planned = planTick(cfg, [], () => undefined, STAMP);
-    expect(planned.heldPicks).toEqual([]);
+    const planned = planOf(cfg, { stamp: STAMP });
+    expect(planned.holds.filter((h) => h.by === "pinned")).toEqual([]);
     expect(planned.pinned.map((p) => p.job.name)).toEqual(["deadmines-party-one-agent"]);
     const capped = fleet({ over: { policy: { maxSessions: { "claude-code": 1 } } } });
-    expect(planTick(capped, [], () => undefined, STAMP).pinned).toHaveLength(1);
+    expect(planOf(capped, { stamp: STAMP }).pinned).toHaveLength(1);
   });
 
   test("waits, with the reason, when its credential has no slot, and starts on none of its accounts", () => {
     const none = fleet({ slots: 1 });
     // The slot is held by a live run of another job on the same credential.
-    const held = planTick(none, [], () => undefined, STAMP, [], [], undefined, new Map([["son2", CRED2]]), new Set(), [
-      { name: "other", account: "RUNNER", refs: ["son2"], placed: { son2: { id: CRED2, env: LANE2 } } },
-    ]);
+    const held = planOf(none, { stamp: STAMP, running: [{ name: "other", account: "RUNNER", refs: ["son2"], placed: { son2: { id: CRED2, env: LANE2 } } }] });
     expect(held.pinned).toEqual([]);
-    expect(held.heldPicks.find((h) => h.name === "deadmines-party-one-agent")?.why).toContain("one agent on 5 accounts");
+    expect(held.holds.find((h) => h.name === "deadmines-party-one-agent")?.why).toContain("one agent on 5 accounts");
   });
 
   test("its spawn is one entry on the leader's account, every account held, a campaign file naming each character", () => {
-    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned[0]!.spawn;
+    const spawn = planOf(cfg, { stamp: STAMP }).pinned[0]!.spawn;
     expect(spawn.account).toBe("PARTY1");
     expect(spawn.accounts).toEqual(ACCOUNTS);
     expect(spawn.resumeRunId).toBeUndefined();
@@ -97,7 +96,7 @@ describe("a one-agent arm's job", () => {
   });
 
   test("the roster waits on every account, stages the party as this one run, and launches it with no --character", () => {
-    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned[0]!.spawn;
+    const spawn = planOf(cfg, { stamp: STAMP }).pinned[0]!.spawn;
     const [spec] = resolve(fillEntries(spawn, STAMP), STAMP);
     expect(specAccounts(spec!)).toEqual(ACCOUNTS);
     const req = fanoutStageRequestOf(spec!);

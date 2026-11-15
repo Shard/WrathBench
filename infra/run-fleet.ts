@@ -135,7 +135,7 @@ import {
   rosterEpisodeInFlight,
   runHasImageRecord,
   jobArgv,
-  jobDefers,
+  jobCoolingOf,
   rosterResumes,
   jobJsonlPath,
   jobLogPath,
@@ -159,7 +159,8 @@ import {
 } from "./run-fleet-state";
 import { printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { effectiveJobs as effectiveTick, type TickIO, type TickMemory } from "./run-fleet-tick";
-import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
+import { accountHolders, drainMarkerPath, releaseRunSession } from "./run-roster";
+import { readModelListsSidecar } from "../runner/src/model-lists";
 import { K8sClient } from "./k8s-client";
 import { ensureSharedCamera, readCameraTemplate } from "./camera-pods";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
@@ -211,7 +212,7 @@ import { Trajectory } from "../runner/src/trajectory";
 //   run-fleet-plan.ts    the pure planners, the character/drain rules, the gate verdict
 //   run-fleet-state.ts   paths, fleet-state.json, the pause switch, what /proc says
 //   run-fleet-status.ts  the format* helpers and the --status/--live-runs/--dry-run printers
-//   run-fleet-tick.ts    the tick: what it spawns, drains, ends and says, over the supervisor's memory
+//   run-fleet-tick.ts    the tick: one snapshot, the plan over it (`planTick`), and the plan applied
 //
 // The four domain files are re-exported here so `./run-fleet` still names every symbol the
 // tests and scripts import from it.
@@ -1070,19 +1071,7 @@ async function main(): Promise<void> {
   };
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
-  const jobCooling = (job: FleetJob): string | undefined => {
-    const defers = jobDefers(jobJsonlPath(job.name, stampToday));
-    const now = Date.now();
-    for (const d of defers) {
-      if (d.entry.tainted === true) return `${job.ref} tainted this epoch (${d.entry.defers} defers, ${d.entry.reason})`;
-      if (now < d.entry.notBefore) {
-        return d.entry.reset === true
-          ? `${job.ref} ${d.entry.reason}, resuming at ${new Date(d.entry.notBefore).toLocaleString()} (provider reset)`
-          : `${job.ref} cooling until ${new Date(d.entry.notBefore).toLocaleTimeString()} (${d.entry.reason})`;
-      }
-    }
-    return undefined;
-  };
+  const jobCooling = (job: FleetJob): string | undefined => jobCoolingOf(job, stampToday, Date.now());
 
   /** The tick's memory beside the process bookkeeping above (`TickMemory`). */
   const mem: TickMemory = {
@@ -1115,8 +1104,10 @@ async function main(): Promise<void> {
     maxRunPods,
     worldsSetting,
     readFacts,
+    readModelsSidecar: () => readModelsSidecar(RUNS_DIR),
+    readModelLists: () => readModelListsSidecar(RUNS_DIR),
     goUsage,
-    held: (a) => accountHeldBy(a, ""),
+    holders: accountHolders,
     jobCooling,
     runCampaignFile,
     writeCampaignFile,

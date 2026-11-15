@@ -23,7 +23,8 @@ import {
   type Groups,
 } from "../viewer/groups";
 import { parseFleet, rosterModels, withoutEvals } from "../../infra/run-fleet-config";
-import { forGroups, formatGroupsBanner, formatHeld, formatModels, formatOutstandingFor, formatQueue, planDryRun } from "../../infra/run-fleet-status";
+import { forGroups, formatGroupsBanner, formatHeld, formatModels, formatOutstandingFor, formatQueue } from "../../infra/run-fleet-status";
+import { planOf } from "../../infra/fixtures/tick";
 import { modelStates } from "../src/models";
 import { rowOf } from "../viewer/models";
 
@@ -209,8 +210,8 @@ describe("bun wb fleet status with evals off", () => {
 
   test("the dry-run plans no scored pick, only the idle freeplay session", () => {
     const plan = (groups: Groups) => {
-      const { config, offByGroup } = forGroups({ ...cfg, jobs: [] }, groups);
-      return planDryRun({ config, runs: [], states, held: () => undefined, stamp: "20261112", now: NOW, evals: groups.evals, offByGroup }).plan.policy;
+      const { config } = forGroups({ ...cfg, jobs: [] }, groups);
+      return planOf(config, { now: NOW, stamp: "20261112", evals: groups.evals }).picks;
     };
     expect(plan(ALL_GROUPS).map((p) => p.job.episode)).toContain("e90");
     expect(plan(evalsOff).map((p) => p.job.episode)).toEqual(["freeplay"]);
@@ -219,9 +220,9 @@ describe("bun wb fleet status with evals off", () => {
   test("while scored episodes are held, the dry-run holds the scored pick and says why, as the tick does", () => {
     const HOLD = "scored episodes are held for this test";
     const { config } = forGroups({ ...cfg, jobs: [] }, ALL_GROUPS);
-    const dry = planDryRun({ config, runs: [], states, held: () => undefined, stamp: "20261112", now: NOW, evals: true, scoredGate: HOLD });
-    expect(dry.plan.policy.map((p) => [p.job.refs[0], p.job.episode])).toEqual([["b", "freeplay"]]);
-    expect(formatHeld(dry.plan.heldPicks)).toEqual([
+    const dry = planOf(config, { now: NOW, stamp: "20261112", scoredWait: HOLD });
+    expect(dry.picks.map((p) => [p.job.refs[0], p.job.episode])).toEqual([["b", "freeplay"]]);
+    expect(formatHeld(dry.holds)).toEqual([
       `  a: HELD — e90 wanted, ${HOLD}`,
       `  b: HELD — e90 wanted, ${HOLD}`,
     ]);

@@ -28,10 +28,8 @@ import {
   type JobSpawn,
   parseFleet,
   type PreflightRecord,
-  rosterModels,
 } from "./run-fleet-config";
 import {
-  applyEnded,
   type ConfigRejection,
   type EndedRun,
   type FleetPause,
@@ -45,9 +43,6 @@ import type { FleetServerView, FleetWorldView } from "../runner/viewer/api-types
 import { IMAGE_RECORD_FILE } from "./run-pod";
 import { episodeRunsInPod } from "./episode-launcher";
 import {
-  type ModelsSidecar,
-  type ModelState,
-  modelStates,
   readFleetRuns,
   type RunFact,
   runFactCache,
@@ -105,28 +100,6 @@ export interface ReportRuns {
 /** The facts an archive-less `readRunFacts` answers, out of an archive-inclusive read: the same runs, in the same order. Pure. */
 export function unarchived<T extends Pick<RunFact, "archived">>(facts: readonly T[]): T[] {
   return facts.filter((f) => f.archived !== true);
-}
-
-/**
- * The projection the rest of a tick must read once its sweep has ended runs.
- * `sidecar` is the operator's clear list; omitted it is read from
- * the run directory, exactly as the top-of-tick projection reads it.
- */
-export function statesAfterSweep(
-  cfg: Pick<FleetConfig, "roster" | "policy">,
-  runs: readonly RunFact[],
-  ended: readonly EndedRun[],
-  now: number,
-  sidecar?: ModelsSidecar,
-): ModelState[] {
-  return modelStates({
-    runsDir: RUNS_DIR,
-    roster: rosterModels(cfg.roster),
-    policy: cfg.policy,
-    runs: applyEnded(runs, ended, now),
-    now,
-    ...(sidecar !== undefined ? { sidecar } : {}),
-  });
 }
 
 /**
@@ -755,6 +728,23 @@ export function foreignRosters(managedPids: Set<number>): { pid: number; argv: s
     }
   }
   return out;
+}
+
+/**
+ * Why a job is not runnable on the defer ladder this epoch, or undefined:
+ * tainted, or cooling until its sidecar's next instant (a provider's stated
+ * reset said as one). Reads the job's own sidecar under `stamp`.
+ */
+export function jobCoolingOf(job: { name: string; ref: string }, stamp: string, now: number): string | undefined {
+  for (const d of jobDefers(jobJsonlPath(job.name, stamp))) {
+    if (d.entry.tainted === true) return `${job.ref} tainted this epoch (${d.entry.defers} defers, ${d.entry.reason})`;
+    if (now < d.entry.notBefore) {
+      return d.entry.reset === true
+        ? `${job.ref} ${d.entry.reason}, resuming at ${new Date(d.entry.notBefore).toLocaleString()} (provider reset)`
+        : `${job.ref} cooling until ${new Date(d.entry.notBefore).toLocaleTimeString()} (${d.entry.reason})`;
+    }
+  }
+  return undefined;
 }
 
 /**

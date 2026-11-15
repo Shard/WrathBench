@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { campaignSquares, partyAttempt, type ProbeRun } from "../runner/src/campaigns";
 import { loadRunConfig } from "../runner/src/config";
 import { DEFAULT_POLICY, modelStates, readRunFacts, type RunFact } from "../runner/src/models";
+import { planOf } from "./fixtures/tick";
 import { Trajectory } from "../runner/src/trajectory";
 import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from "../runner/test/fixtures/campaigns";
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
@@ -22,7 +23,7 @@ import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
 import { partyOwnGuids, type PartyConfig } from "../runner/src/party";
 import { stageResultLine } from "./fixtures/stage-party";
 import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
-import { diffJobs, fillEntries, finishesOnExit, jobSpawn, planResumes, planTick, withTakenRunIds } from "./run-fleet-plan";
+import { diffJobs, fillEntries, finishesOnExit, jobSpawn, planResumes, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
 import type { ResumeHold } from "./run-fleet-credentials";
@@ -502,7 +503,7 @@ describe("a party's spawn", () => {
 
   test("materialises one entry per member: its run id off one stem, its account, start, credential and campaign file", () => {
     // Placed as the tick places it: the whole party on the campaign's credential.
-    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned.find((p) => p.job.name === job!.name)!.spawn;
+    const spawn = planOf(cfg, { stamp: STAMP }).pinned.find((p) => p.job.name === job!.name)!.spawn;
     expect(spawn.accounts).toEqual(ACCOUNTS);
     const entries = fillEntries(spawn, STAMP);
     const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
@@ -519,7 +520,7 @@ describe("a party's spawn", () => {
   });
 
   test("the stager's guids reach every member's config before any launches, and its resume reads them back", () => {
-    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned.find((p) => p.job.name === job!.name)!.spawn;
+    const spawn = planOf(cfg, { stamp: STAMP }).pinned.find((p) => p.job.name === job!.name)!.spawn;
     const specs = resolve(fillEntries(spawn, STAMP), STAMP);
     // What the stager reports, as its CLI prints it: one guid per member, by the characters it created.
     const line = stageResultLine({
@@ -613,7 +614,36 @@ describe("a fresh attempt never reuses a run id", () => {
     expect(rosterResumes(spawn, true)).toBe(false);
     expect(jobArgv(spawn, { stamp: STAMP, until: undefined, resumeRoster: rosterResumes(spawn, true) })).not.toContain("--resume-roster");
     // The dry-run plans the same ids and the same argv.
-    const plan = planTick(cfg, [], () => undefined, STAMP, [], runs, undefined, new Map(), taken);
+    // The same five stopped members as the runs on disk the tick reads them from.
+    const facts = MEMBERS.map((m, i): RunFact => ({
+      runId: idsOf(stem)[i]!,
+      model: "sonnet",
+      effort: "max",
+      episode: "probing",
+      episodeOverride: false,
+      harnessVersion: null,
+      harnessSeries: null,
+      extra: false,
+      startedAt: 1,
+      endedAt: 2,
+      terminationReason: "manual",
+      modelResponses: 0,
+      bestLevel: null,
+      live: false,
+      pause: null,
+      account: `PARTY${i + 1}`,
+      character: null,
+      episodeMs: null,
+      campaign: "deadmines",
+      campaignVersion: 1,
+      cell: "party",
+      ref: "son2",
+      arm: "base",
+      party: { id: stem, member: m, size: 5 },
+      credential: null,
+    }));
+    expect(new Set(facts.map((f) => f.runId))).toEqual(taken);
+    const plan = planOf(cfg, { stamp: STAMP, runs: facts });
     expect(fillEntries(plan.pinned[0]!.spawn, STAMP).map((e) => e.runId)).toEqual(idsOf(`${stem}-a2`));
     const argv = formatArgvBlock(plan.pinned, { stamp: STAMP, until: undefined, jsonlExists: () => true });
     expect(argv.join("\n")).not.toContain("--resume-roster");
@@ -699,13 +729,13 @@ describe("a campaign's own credential (campaigns.<id>.credential)", () => {
     expect(cfg.roster["son2"]!.credential).toBeUndefined();
     const [job] = pinnedCampaignJobs(cfg, []);
     expect(job!.credential).toBe(CRED2);
-    const plan = planTick(cfg, [], () => undefined, STAMP);
+    const plan = planOf(cfg, { stamp: STAMP });
     const party = plan.pinned.find((p) => p.job.name === job!.name)!;
     expect(party.spawn.entries.map((e) => e.placedOn?.id)).toEqual([CRED2, CRED2, CRED2, CRED2, CRED2]);
     // The e90 of the same roster entry, a pinned queue job, is placed by its own rules: the first with room.
     const e90 = cfg.jobs.find((j) => j.name === "son2-e90")!;
     expect(e90.credential).toBeUndefined();
-    const solo = planTick({ ...cfg, campaigns: [] }, [], () => undefined, STAMP).pinned.find((p) => p.job.name === "son2-e90")!;
+    const solo = planOf({ ...cfg, campaigns: [] }, { stamp: STAMP }).pinned.find((p) => p.job.name === "son2-e90")!;
     expect(solo.spawn.entries[0]!.placedOn?.id).toBe("claude-1");
   });
 
@@ -736,16 +766,16 @@ describe("a campaign's own credential (campaigns.<id>.credential)", () => {
 // ------------------------------------------------------------ admission
 
 describe("admission: a party starts whole or not at all", () => {
-  test("planTick holds a pinned party its credential has no room for, with the reason, and plans it when there is", () => {
+  test("the tick holds a pinned party its credential has no room for, with the reason, and plans it when there is", () => {
     const tight = fleet({}, { credentials: credentialsWith(4) });
-    const held = planTick(tight, [], () => undefined, STAMP);
+    const held = planOf(tight, { stamp: STAMP });
     expect(held.pinned).toEqual([]);
-    expect(held.heldPicks.find((h) => h.name === "deadmines-party-base")?.why).toBe(`a party of 5 starts whole or not at all: cap: credential ${CRED2} 0/4 in flight`);
-    const planned = planTick(fleet(), [], () => undefined, STAMP);
+    expect(held.holds.find((h) => h.name === "deadmines-party-base")?.why).toBe(`a party of 5 starts whole or not at all: cap: credential ${CRED2} 0/4 in flight`);
+    const planned = planOf(fleet(), { stamp: STAMP });
     expect(planned.pinned.map((p) => p.spawn.entries.length)).toEqual([5]);
     // The host's session cap holds the whole party too.
     const hosted = fleet({}, { policy: { maxSessions: { "claude-code": 4 } } });
-    expect(planTick(hosted, [], () => undefined, STAMP).heldPicks.find((h) => h.name === "deadmines-party-base")?.why).toContain("claude-code 0/4 sessions on this host");
+    expect(planOf(hosted, { stamp: STAMP }).holds.find((h) => h.name === "deadmines-party-base")?.why).toContain("claude-code 0/4 sessions on this host");
   });
 });
 

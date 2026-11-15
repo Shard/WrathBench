@@ -18,15 +18,17 @@ import {
   type FleetJob,
   type FleetRosterEntry,
   healthyFrom,
-  type JobSource,
   type JobSpawn,
   pinnedCampaignJobs,
   pinnedJobs,
   policyRefs,
   poolJobs,
   type PreflightRecord,
+  probeRunsOf,
+  rosterModels,
   scheduledAccounts,
   unpinnedCampaigns,
+  withoutEvals,
 } from "./run-fleet-config";
 import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
 import {
@@ -49,7 +51,26 @@ import { EPISODES, isScoredEpisode, isTaskEpisode } from "../runner/src/episodes
 import { taskDefinition } from "../runner/src/task-episodes";
 import { taskLaunchFile } from "./task-launch";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
-import { credentialKey, driverOfEntry, placeRef, RUN_POD_KEY, SlotBook, WORLD_KEY, type CredentialGate, type PlacedCredential, type ResumeHold, type WorldsSetting } from "./run-fleet-credentials";
+import {
+  credentialGate,
+  credentialKey,
+  driverOfEntry,
+  gateSpawns,
+  placeRef,
+  resumeHoldOf,
+  RUN_POD_KEY,
+  SlotBook,
+  WORLD_KEY,
+  type CredentialGate,
+  type PlacedCredential,
+  type ReadHold,
+  type ResumeHold,
+  type RunPodsSetting,
+  type WorldsSetting,
+} from "./run-fleet-credentials";
+import { worldUsedBy } from "./world";
+import type { ModelListsSidecar } from "../runner/src/model-lists";
+import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import type { ResumeHoldCode } from "../runner/src/credential-health";
 import type { Credential } from "../runner/src/credential-slots";
 import {
@@ -68,7 +89,11 @@ import {
   type SchedulingPolicy,
   staleForMs,
   ineligibleWhy,
+  liveCredentials,
+  type ModelsSidecar,
+  modelStates,
   TIER_TABLE,
+  type UnstampedRun,
 } from "../runner/src/models";
 
 export const TICK_MS = 60_000;
@@ -2907,182 +2932,724 @@ export function sessionsOf(job: { accounts?: readonly string[] | undefined; fano
   return job.accounts?.length ?? 1;
 }
 
+// ------------------------------------------------------------------ the tick
+
 /**
- * A job already running when a plan is made: the supervisor has a live
- * process for it. It holds its account and its refs — one character per
- * model — exactly as the live tick's own processes do.
+ * What the supervisor knows about its own jobs when a tick is planned: the
+ * live processes and what they play, the accounts its pool jobs hold, and the
+ * jobs it handed out and has not yet seen on disk. The live tick passes its
+ * memory; `--status` and `--dry-run` pass what fleet-state.json says of it
+ * (`supervisorFromState`).
  */
-export interface InFlight {
-  /** The job name; for a run no job owns (a reader's row), its run id. */
-  name: string;
-  account: string;
-  refs: readonly string[];
-  /** The job's source. */
-  source?: JobSource;
-  /** Where its refs were placed, when the job says (`FleetJob.placed`); else each ref's live run says. */
-  placed?: FleetJob["placed"];
-  /** A party's accounts: it holds a session per member. A fan-out job's (`fanout`): it holds them all on one session. */
-  accounts?: readonly string[];
-  fanout?: true;
-  /** Its episode: a probing one is on the run-pod cap while run pods are on. */
-  episode?: EpisodeId | null;
+export interface SupervisorView {
+  /** The run ids the live processes were materialized with. */
+  ownRunIds: ReadonlySet<string>;
+  /** The jobs with a live process. */
+  running: ReadonlySet<string>;
+  /** The jobs whose process finished and that do not run again until rearmed. */
+  finished: ReadonlySet<string>;
+  /** Pool jobs with a live process, on the account each was given. */
+  assigned: ReadonlyMap<string, string>;
+  /** The job each live process was spawned for. */
+  liveJobs: ReadonlyMap<string, FleetJob>;
+  /** Jobs handed an account by an earlier tick that have not spawned yet. */
+  pending: ReadonlySet<string>;
+  /** Where each running or pending job was placed, before its run is on disk. */
+  placedMemo: ReadonlyMap<string, NonNullable<FleetJob["placed"]>>;
 }
 
 /**
- * The plan for one tick, as the read-only views tell it: which pinned jobs
- * spawn, which pool accounts the queue and then the policy would take. Pure
- * over the projection; `--status` and `--dry-run` read it. It is an
- * approximation of the supervisor's own tick (`effectiveJobs`,
- * run-fleet.ts), which plans and acts in one pass — it ends lapsed runs,
- * continues characters, gates spawns on credential budgets and drains what the
- * file dropped — and is not built from this; making that tick a pure plan
- * plus an apply step, so this is the one planner, is its own piece of work.
- * `inFlight` is what is already
- * running (none at boot): without it a model whose run was live read as free
- * and the dry-run planned it a second character on another account
- * (2026-10-14, codex-sol-61's a3 beside its live a2). `unownedRefs` are the
- * refs of live runs no job owns (`unownedLiveRuns`), held for their model as
- * the live tick holds them: never planned again; `unowned` are the same runs,
- * on their credential and the run-pod cap as the tick counts them
- * (`countUnownedRuns`), never on a driver cap. `outside` are the live runs the
- * fleet did not launch, each on its credential's slot as the tick counts them
- * (`countOutsideRuns`). `runPods` is the book's run-pod setting (`runPodsOf`).
+ * Everything a tick reads, read once: the config, every run's facts, the
+ * credentials' readings and holds, the worlds, run pods and accounts, the
+ * supervisor's own jobs, and the clock. `planTick` decides from this alone.
  */
-export function planTick(
-  config: FleetConfig,
-  states: readonly ModelState[],
-  held: (a: string) => string | undefined,
-  stamp: string,
-  resumes: readonly ResumePlan[] = [],
-  probeRuns: readonly ProbeRun[] = [],
-  affinity?: AccountAffinity,
-  /** Which credential each ref's live or paused run is on (`liveCredentials`). */
-  runCredentials: ReadonlyMap<string, string> = new Map(),
-  /** Every run id on disk, so a planned remainder names the ids its spawn will really use. */
-  takenRunIds: ReadonlySet<string> = new Set(),
-  inFlight: readonly InFlight[] = [],
-  unownedRefs: readonly string[] = [],
-  /** The credentials' budgets (`credentialGate`); absent holds nothing. */
-  gate?: CredentialGate,
-  /** The evals group (`planPolicy`'s `evals`): off, the policy picks no scored or probing episode. The caller passes the config `withoutEvals` too. */
-  evals = true,
-  /** Live runs this fleet did not launch, each on its credential's slot (`outsideRuns`). */
-  outside: readonly OutsideRun[] = [],
-  unowned: readonly { credential: string | null; episode: string | null }[] = [],
-  runPods?: { max: number | undefined },
-  /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`): the policy holds them with this reason. Absent is open. */
-  scoredGate?: string,
-  /** The book's world setting (`worldsOf`). */
-  worlds?: WorldsSetting,
-  /** A party that draws its accounts: this tick's eval-pool draw (`evalPoolDraw`). */
-  draw?: (c: Pick<Campaign, "name">, jobName: string, size: number) => { accounts: string[] } | { held: string },
-): {
+export interface TickSnapshot {
+  /** The config as read; the plan applies the evals group (`withoutEvals`). */
+  config: FleetConfig;
+  /** The evals group: off, no scored or probing episode is launched. */
+  evals: boolean;
+  stamp: string;
+  now: number;
+  /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`); null is open. */
+  scoredWait: string | null;
+  /** The pause switch is set: resumes and picks are planned but not announced (nothing spawns). */
+  paused: boolean;
+  /** Every run's facts as read, archive included, before `implicitPauses`. */
+  facts: readonly RunFact[];
+  /** The runs with no episode (a hand launch): only the credentials read them. */
+  unstamped: readonly UnstampedRun[];
+  /** The projection's sidecars (`modelStates`). */
+  modelsSidecar: ModelsSidecar;
+  modelLists: ModelListsSidecar;
+  /** Usage readings beyond the runs' own (OpenCode Go's), and the holds the keys' last reads put on credentials. */
+  usage: readonly SubscriptionUsage[];
+  readHolds: ReadonlyMap<string, ReadHold>;
+  /** The book's run-pod setting (`runPodsOf`) and world setting (`worldsOf`). */
+  runPods: RunPodsSetting | undefined;
+  worlds: WorldsSetting | undefined;
+  /** The run holding each account, by upper-cased account (`accountHoldersIn`); an account absent is free. */
+  holders: ReadonlyMap<string, string>;
+  /** Why each queue job is cooling on its defer ladder, by job name; absent is not. */
+  cooling: ReadonlyMap<string, string>;
+  /** The campaign file beside each run without a verdict, by run id (null: none). */
+  campaignFiles: ReadonlyMap<string, CampaignFile | null>;
+  /** The runs without a verdict that carry an image record. */
+  imageRecords: ReadonlySet<string>;
+  supervisor: SupervisorView;
+  /**
+   * Writes the live tick could not make for an earlier plan of this same
+   * snapshot: an end it could not record stays out of the projection, and a
+   * resume whose campaign file could not be written waits.
+   */
+  failed?: { ends?: ReadonlySet<string>; campaignFiles?: ReadonlySet<string> };
+}
+
+/** One thing the tick says, or one write it makes, in the order the tick makes them. */
+export type TickStep =
+  /** A line for the log; with `key`, said once per key (the supervisor's `announcedPicks`). */
+  | { kind: "say"; line: string; key?: string; record?: { job: string; event: string; detail?: string } }
+  /** The recorded terminations the rows lack (`TickPlan.repairs`) are written here. */
+  | { kind: "repair" }
+  /** The lapsed runs (`TickPlan.ends`) are ended here, and their sessions released. */
+  | { kind: "end" }
+  /** A probe resumed with a campaign file rebuilt from its published definition: written here, before the spawn. */
+  | { kind: "campaign-file"; name: string; runId: string; file: CampaignFile }
+  /** Why the policy left accounts free, or undefined when it did not; said when it changes. */
+  | { kind: "idle"; idle: string | undefined }
+  /** The name sweeps (`TickPlan.sweeps`) start here, in the background. */
+  | { kind: "sweep" }
+  /** A queue job skipped, said once per (job, reason). */
+  | { kind: "skip"; name: string; reason: string }
+  /** A job whose `repeat` is met, said once. */
+  | { kind: "done"; job: FleetJob; progress: string };
+
+/** A launch the tick holds back this time, and why. */
+export interface TickHold {
+  name: string;
+  /** The roster names it would have launched. */
+  refs: readonly string[];
+  episode: EpisodeId | null;
+  why: string;
+  /** Which planner held it. */
+  by: "pinned" | "queue" | "policy" | "resume" | "character" | "credential";
+}
+
+/** Everything one tick decides. */
+export interface TickPlan {
+  /** The config as planned: the evals group applied. */
+  config: FleetConfig;
+  /** The run facts the tick read, with `implicitPauses` applied. */
+  runs: RunFact[];
+  /** The projection after this tick's ends and resumes. */
+  states: ModelState[];
+  /** What `diffJobs` acts on: every job's spawn, live, fresh, drained or held, after the credential gate. */
+  spawns: JobSpawn[];
+  /** Pinned jobs (config and campaign) launching fresh this tick, as placed. */
   pinned: { job: FleetJob; spawn: JobSpawn }[];
+  /** Paused runs resuming this tick, as placed. */
+  resumed: { plan: ResumePlan; job: FleetJob; spawn: JobSpawn }[];
+  /** The resume planner's answer: what comes back, what is listed and why, what is ended. */
+  resumes: { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] };
+  /** The queue's plan; its `skipped` leads with the pinned jobs this tick held. */
   queue: QueuePlan;
-  policy: PolicyPick[];
-  /** Picks the policy wanted but held back (no credential with room, the driver cap), with why. */
-  heldPicks: HeldPick[];
-} {
-  // A character resuming this tick holds its model's scored episodes, as one playing does.
-  states = withResumesPlaying(states, resumes, config.roster);
-  const eligible = eligibleFrom(states);
-  const counted = countedFrom(states);
-  const resumed = new Set(resumes.map((r) => r.job.name));
-  // A job already running is kept, never spawned again (`diffJobs`).
-  const running = new Set(inFlight.map((j) => j.name));
-  // A pinned campaign's next cell is a pinned job, and it has to be one HERE
-  // too: `planTick` is what `--status` and `--dry-run` print, and a probe the
-  // live loop would spawn but this planner never mentions is exactly the kind
-  // of quiet disagreement between the supervisor and its own report that has
-  // cost a night before. A pinned config job whose `repeat` is met is not
-  // spawned, by the queue's own rule (`owedCopies`).
+  /** The policy's picks, continued (`planContinuations`) and placed. */
+  picks: PolicyPick[];
+  /** Freeplay picks waiting for their character's account, and the ones that started fresh instead. */
+  waiting: CharacterWait[];
+  dropped: CharacterDrop[];
+  /** Every launch held back this tick, with why. */
+  holds: TickHold[];
+  /** Live jobs this tick drains, and why. */
+  drainReasons: Map<string, string>;
+  /** Runs nothing came back for: ended this tick. */
+  ends: EndedRun[];
+  /** Runs whose trajectory records a termination their row lacks. */
+  repairs: RunFact[];
+  /** Stale character names to delete on free accounts. */
+  sweeps: NameSweep[];
+  /** The pinned campaigns' jobs this tick generated. */
+  campaignJobs: FleetJob[];
+  /** Pinned config jobs whose `repeat` is met. */
+  pinnedDone: FleetJob[];
+  /** Why the policy left accounts free; absent when there is no policy pool. */
+  policyIdle?: { idle: string | undefined };
+  /** The models held while a run no job owns is live on them. */
+  unownedRefs: string[];
+  /** The credentials' ledger this tick. */
+  credentials: { gate: CredentialGate; book: SlotBook; credentials: readonly Credential[]; runs: readonly (RunFact | UnstampedRun)[] };
+  /** What the supervisor remembers after this tick. */
+  memory: { pending: Map<string, FleetJob>; placedMemo: Map<string, NonNullable<FleetJob["placed"]>>; unfinished: string[] };
+  /** What the tick says and writes, in order. */
+  steps: TickStep[];
+}
+
+/**
+ * The tick: every decision the supervisor makes on one tick, from one
+ * snapshot, with no I/O. The live supervisor gathers the snapshot, plans, and
+ * applies the plan (`infra/run-fleet-tick.ts`); `--status` and `--dry-run`
+ * gather the same snapshot from disk and the state file and print the plan.
+ *
+ * The order is the supervisor's: every session already held goes on the book
+ * (its live jobs, runs it did not launch, live runs no job owns); then the
+ * pinned jobs and campaigns are placed; then the paused runs that come back,
+ * each on the credential it started on; then the manual queue; then the
+ * policy, with freeplay characters continued; and last the credentials'
+ * budgets over every spawn (`gateSpawns`). A run that lapsed is ended and the
+ * projection re-derived before the queue and the policy read it.
+ */
+export function planTick(snap: TickSnapshot): TickPlan {
+  const read = snap.config;
+  const sup = snap.supervisor;
+  const now = snap.now;
+  // With the evals group off, every campaign and scored or probing job reads
+  // as disabled, and the policy below picks none (`withoutEvals`).
+  const cfg = snap.evals ? read : withoutEvals(read);
+  const out: JobSpawn[] = [];
+  const steps: TickStep[] = [];
+  const holds: TickHold[] = [];
+  const drainReasons = new Map<string, string>();
+  const held = (a: string): string | undefined => snap.holders.get(a.toUpperCase());
+  const scoredGate = snap.scoredWait ?? undefined;
+  const pending = new Map<string, FleetJob>();
+  const finished = new Set(sup.finished);
+  const unfinished: string[] = [];
+  const placedMemo = new Map(sup.placedMemo);
+  // The run facts once a tick, shared by the projection and the resume
+  // planner. A verdict-less run on a resuming lane reads as paused `offline`
+  // from here on — unless one of this supervisor's own processes is playing
+  // it, or a live job holds its account (the same guards the stale sweep
+  // applies, for the same reason).
+  const ownRunIds = sup.ownRunIds;
+  const ownAccounts = new Set(
+    [...sup.assigned.values(), ...pinnedJobs(cfg).filter((j) => sup.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
+  );
+  const runs = implicitPauses({ runs: snap.facts, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts, now });
+  const project = (facts: readonly RunFact[]): ModelState[] =>
+    modelStates({ runsDir: "", roster: rosterModels(cfg.roster), policy: cfg.policy, runs: facts, now, sidecar: snap.modelsSidecar, modelLists: snap.modelLists });
+  // Both are re-derived below if this tick's sweep ends anything: a failed
+  // attempt ended halfway down a tick has to be in the projection the queue
+  // and the policy read at the bottom of it.
+  let states = project(runs);
+  let eligible = eligibleFrom(states);
+  // The credentials over the same facts: each one's budget (its newest usage
+  // reading, its runs and spend today) and every live session on its slots
+  // and its driver's host cap, asked at every launch below
+  // (`run-fleet-credentials.ts`). Every run on a credential costs it,
+  // whether or not it carries an episode: a hand launch's are read too.
+  const billed = [...runs, ...snap.unstamped];
+  const credGate = credentialGate(cfg.credentials, [...billed.map((f) => f.credentialUsage), ...snap.usage], billed, now, snap.readHolds);
+  const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions, snap.runPods, snap.worlds);
+  const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
+  const runningRefs = new Set<string>();
+  const pinnedSkips: QueueSkip[] = [];
+  /**
+   * The credential each roster entry's live-or-paused run is on, read back
+   * off the runs. This is what makes the per-credential count survive a
+   * supervisor restart: the job objects that remember where they were placed
+   * die with the process, the runs do not.
+   */
+  const runCreds = liveCredentials(runs, rosterModels(cfg.roster));
+  /** A job with where it was placed: what it carries, else what this supervisor placed it on (`placedMemo`). */
+  const withPlaced = (job: FleetJob): FleetJob => {
+    const placed = job.placed ?? placedMemo.get(job.name);
+    return placed !== undefined ? { ...job, placed } : job;
+  };
+  const placing = { credentials: cfg.credentials, book, gate: credGate };
+  /** Place a job that holds no session yet and commit its slots, or say why it may not start. */
+  const placeFresh = (job: FleetJob): { ok: true; job: FleetJob } | { ok: false; why: string } => {
+    const r = placeJob(job, cfg.roster, placing);
+    if (!r.ok) return r;
+    book.add(r.keys);
+    if (r.job.placed !== undefined) placedMemo.set(job.name, r.job.placed);
+    return { ok: true, job: r.job };
+  };
+  for (const n of [...placedMemo.keys()]) if (!sup.running.has(n) && !sup.pending.has(n)) placedMemo.delete(n);
+  // Pinned jobs: from the file, on their own accounts — plus a pinned
+  // campaign's next cell, which is a pinned job in everything but where it
+  // was written down.
+  const probes = probeRunsOf(runs);
+  // Every run id on disk, archive included: a job's remainder never reuses
+  // one, and a campaign square's fresh attempt numbers past them.
+  const takenRunIds = new Set(runs.map((f) => f.runId));
+  // A party that draws its accounts takes this attempt's from the eval pool:
+  // none a run without a verdict or a running job holds (`evalPoolDraw`).
   const drawHeld: { job: FleetJob; why: string }[] = [];
-  const pinned = [...pinnedJobs(config), ...withTakenRunIds(pinnedCampaignJobs(config, probeRuns, healthyFrom(states), draw, drawHeld), takenRunIds)]
-    .filter((j) => j.enabled && !resumed.has(j.name) && !running.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
-    .filter((j) => {
-      // Held by a scored hold, with the policy's own reason, never spawned to be refused.
-      const hold = scoredHold(j, scoredGate);
-      if (hold !== undefined) drawHeld.push({ job: j, why: hold });
-      return hold === undefined;
-    })
-    .flatMap((j) => {
-      const owed = owedCopies(j, runnableRefs(j, config.roster, eligible), counted);
-      if (owesNothing(owed)) return [];
-      return [owed === undefined ? j : { ...j, owed: { copies: owed, taken: takenRunIds } }];
-    })
-    .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
-  // Everything already holding a session is on the book first: what is in
-  // flight, and the resumes, each on the credential it records.
-  const book = new SlotBook(config.credentials, config.policy.maxSessions, runPods, worlds);
-  for (const j of inFlight) countJob(book, j, config.roster, runCredentials);
-  for (const r of resumes) countJob(book, r.job, config.roster, runCredentials);
-  countOutsideRuns(book, outside);
+  const draw = evalPoolDraw({
+    mode: cfg.policy.worlds,
+    pool: cfg.accounts.evalPool ?? [],
+    taken: evalPoolTaken(runs, [...sup.assigned.values(), ...[...sup.liveJobs.values()].flatMap((j) => j.accounts ?? (j.account !== undefined ? [j.account] : []))]),
+    held,
+    running: (name) => (sup.running.has(name) ? sup.liveJobs.get(name)?.accounts : undefined),
+  });
+  const campaignJobs = withTakenRunIds(pinnedCampaignJobs(cfg, probes, healthyFrom(states), draw, drawHeld), takenRunIds);
+  for (const h of drawHeld) pinnedSkips.push({ job: h.job, reason: h.why });
+  const pinnedNamed = (name: string): FleetJob | undefined => [...pinnedJobs(cfg), ...campaignJobs].find((j) => j.name === name);
+  // Every session already held goes on the book first — a live job of this
+  // supervisor's, pinned, pooled, drained or no longer in the file — so a
+  // fresh placement below never takes a slot a live run is on (the
+  // 2026-08-24 spill: a draining campaign cell no loop yielded).
+  for (const name of sup.running) {
+    const job = sup.liveJobs.get(name) ?? pinnedNamed(name);
+    if (job === undefined) continue;
+    countJob(book, withPlaced(job), cfg.roster, runCreds);
+  }
+  // And every live run this fleet did not launch, on the credential it
+  // bills: a hand launch takes a slot as surely as a job does.
+  countOutsideRuns(book, outsideRuns(billed, { running: ownRunIds, busyAccounts: ownAccounts }));
+  // And every live fleet run no job of this supervisor owns — a run pod
+  // still playing after its roster died with this container — on its
+  // credential and the run-pod cap (`countUnownedRuns`). It holds its
+  // account and its model below, too.
+  const unowned = unownedLiveRuns({ runs, roster: cfg.roster, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts });
   countUnownedRuns(book, unowned);
-  const placing = { credentials: config.credentials, book, gate };
-  // A pinned job that no credential has room for does not spawn: it is
-  // reported with the picks the policy held, which is where `--dry-run` says
-  // why. A party fits whole or not at all.
-  const gatedPinned: HeldPick[] = drawHeld.map((h) => ({ name: h.job.name, episode: h.job.episode, why: h.why }));
-  for (let i = 0; i < pinned.length; ) {
-    const p = pinned[i]!;
-    const r = placeJob(p.job, config.roster, placing);
-    if (!r.ok) {
-      gatedPinned.push({ name: p.job.name, episode: p.job.episode, why: r.why });
-      pinned.splice(i, 1);
+  // Resumes before anything fresh: a paused run goes back onto its own
+  // account ahead of the queue and the policy, so nothing can wipe its
+  // character first. A pinned job's spawn is replaced by its resume spawn; a
+  // pool job's resume reserves its account like an assignment.
+  const runningMap = new Map<string, string>(sup.assigned);
+  for (const job of pinnedJobs(cfg)) if (sup.running.has(job.name)) runningMap.set(job.name, job.account!);
+  const resumes = planResumes({
+    runs,
+    config: cfg,
+    running: runningMap,
+    held,
+    now,
+    campaignFileOf: (id) => snap.campaignFiles.get(id) ?? null,
+    hasImageRecord: (id) => snap.imageRecords.has(id),
+    credentialHold: (f) => resumeHoldOf(f, cfg, credGate),
+    // What each live process plays, before its run reads live.
+    inFlight: [...sup.running].flatMap((name) => {
+      const job = sup.liveJobs.get(name) ?? pinnedNamed(name);
+      return job === undefined ? [] : [{ name, refs: job.refs, episode: job.episode }];
+    }),
+  });
+  const resumingNames = new Set(resumes.resume.filter((r) => !sup.running.has(r.job.name)).map((r) => r.job.name));
+  const pinnedDone: FleetJob[] = [];
+  const pinned: TickPlan["pinned"] = [];
+  const spawnOf = (job: FleetJob, account: string, elig: Eligible | undefined): JobSpawn => jobSpawn(job, cfg.roster, account, snap.stamp, elig, cfg.campaigns, cfg.campaignDefs);
+  for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
+    if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
+      // A pinned job whose ref is not promoted into its tier: it waits,
+      // with the reason said once, exactly like a gated queue job.
+      pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode)})` });
+      out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
       continue;
     }
-    book.add(r.keys);
-    pinned[i] = { job: r.job, spawn: jobSpawn(r.job, config.roster, r.job.account!, stamp, eligible, config.campaigns) };
-    i++;
+    // While scored episodes are held (`SCORED_EPISODES_WAIT`), held as the
+    // policy's own picks are: never spawned for the launch to refuse (`scoredHold`).
+    const hold = job.enabled && !sup.running.has(job.name) ? scoredHold(job, scoredGate) : undefined;
+    if (hold !== undefined) {
+      pinnedSkips.push({ job, reason: hold });
+      out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
+      continue;
+    }
+    // A pinned job's `repeat` is met off the runs on disk, the queue's rule
+    // (`owedCopies`): one that owes nothing yields no spawn, so a supervisor
+    // boot cannot start it again. Only a job that is not running is asked —
+    // a live roster keeps its spawn and is never drained for finishing.
+    const owed = job.enabled && !sup.running.has(job.name) ? owedCopies(job, runnableRefs(job, cfg.roster, eligible), countedFrom(states)) : undefined;
+    if (owesNothing(owed)) {
+      pinnedDone.push(job);
+      continue;
+    }
+    const owing = owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } };
+    if (sup.running.has(job.name) || !job.enabled) {
+      // Live (counted above), or disabled and so a drain or a park.
+      out.push(spawnOf(withPlaced(owing), job.account!, eligible));
+      if (sup.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
+      continue;
+    }
+    // A pinned job about to resume a paused run is placed with the resume,
+    // on the credential that run is on.
+    if (resumingNames.has(job.name)) {
+      out.push({ ...spawnOf(owing, job.account!, eligible), enabled: false });
+      for (const r of job.refs) runningRefs.add(r);
+      continue;
+    }
+    // A slot on a credential with room, and a session under the driver's
+    // host cap, or it waits with the reason said — a party for all of its
+    // members at once. It spends no slot it will not use.
+    const placed = placeFresh(owing);
+    if (!placed.ok) {
+      pinnedSkips.push({ job, reason: placed.why });
+      out.push({ ...spawnOf(owing, job.account!, eligible), enabled: false });
+      continue;
+    }
+    const spawn = spawnOf(placed.job, job.account!, eligible);
+    pinned.push({ job: placed.job, spawn });
+    out.push(spawn);
+    for (const r of job.refs) runningRefs.add(r);
   }
-  // What is running, and the resumes, hold their accounts and their refs
-  // ahead of everything fresh.
-  const occupied = new Map([...inFlight.map((j) => [j.name, j.account] as const), ...resumes.map((r) => [r.job.name, r.account] as const)]);
-  const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs), ...inFlight.flatMap((j) => j.refs)]);
-  // Plus the models of live runs no job owns: held (and counted above).
-  const heldRefs = new Set([...runningRefs, ...unownedRefs]);
+  // Pool jobs with a live process: keep running whatever the file now says,
+  // drain if the file dropped them or their refs. Their sessions are on the
+  // book already.
+  for (const [name, account] of sup.assigned) {
+    const running = sup.liveJobs.get(name);
+    const fromFile = byName.get(name);
+    if (running?.source === "policy") {
+      const dropped = policyJobDropped(running, cfg.roster[running.ref]);
+      if (dropped !== undefined) {
+        // A disabled stand-in makes diffJobs drain it, and for a freeplay
+        // character a drain is an immediate SIGTERM (`pausesOnDrain`): the run
+        // pauses as `operator-pause` and `planResumes` leaves it listed while
+        // the ref stays out of the unlimited lane, so nothing respawns it.
+        // A session under SIGTERM still holds its slot until the process
+        // exits (runner backstop 60s, roster SIGKILL grace 90s), which is
+        // why it was counted above with the rest.
+        drainReasons.set(name, dropped);
+        out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
+        runningRefs.add(running.ref);
+      } else {
+        out.push(spawnOf(withPlaced(running), account, undefined));
+        runningRefs.add(running.ref);
+      }
+      continue;
+    }
+    if (fromFile === undefined || fromFile.account !== undefined || runnableRefs(fromFile, cfg.roster, eligible).length === 0) {
+      // Removed from the queue (or pinned now, or its ref vanished): a
+      // disabled stand-in makes diffJobs drain it. The process keeps its roster.
+      out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
+      continue;
+    }
+    out.push(spawnOf(withPlaced(running ?? fromFile), account, eligible));
+    for (const r of fromFile.refs) runningRefs.add(r);
+  }
+  // Live processes the file no longer YIELDS — a completed campaign cell
+  // draining to its episode boundary, a job whose config entry vanished —
+  // hold their model, and the drain line says why. Their sessions were
+  // counted with every live one above.
+  {
+    const yielded = new Set([...pinnedJobs(cfg), ...campaignJobs].map((j) => j.name));
+    for (const name of sup.running) {
+      if (yielded.has(name) || sup.assigned.has(name)) continue;
+      const job = sup.liveJobs.get(name);
+      if (job === undefined) continue;
+      // Words only: what the drain line says about a job nothing yields.
+      drainReasons.set(name, unyieldedDrainReason(job, cfg.campaigns, Object.keys(cfg.roster), probes));
+      for (const r of job.refs) runningRefs.add(r);
+    }
+  }
+  // A live fleet run none of this supervisor's jobs is playing — the two
+  // minutes a killed runner's heartbeat stays warm after a pod recreate, a
+  // runner still unwinding under an exited roster, or a run pod playing on
+  // after this container restarted — holds its model as well as its account
+  // (`held`), or the policy plans that model a second session on another
+  // free account while its character is mid-run on the first. It is on its
+  // credential and the run-pod cap (counted above), never on a driver's
+  // host cap. Once it reads cold it lets go, and `implicitPauses` has made
+  // it an `offline` pause on a lane that resumes.
+  const unownedRefs: string[] = [];
+  for (const u of unowned) {
+    const refs = u.refs.filter((r) => !runningRefs.has(r));
+    if (refs.length === 0) continue;
+    for (const r of refs) runningRefs.add(r);
+    unownedRefs.push(...refs);
+    steps.push({ kind: "say", key: `unowned:${u.runId}`, line: `hold ${refs.join("+")}: ${u.runId} is live on ${u.account} and no job of this supervisor owns it — nothing new is planned for it until the run stops or reads cold` });
+  }
+
+  // A verdict the runner recorded but could not write into the row: the
+  // facts already read it from the trajectory, and the row is told now.
+  const repairs = runs.filter((f) => f.recordedTermination !== undefined && f.archived !== true);
+  steps.push({ kind: "repair" });
+  // Runs nothing came back for are ended on every tick, boot included: the
+  // host slept, or the fleet was down past the run's own budget, and neither
+  // a live run nor a paused one survives that.
+  const ends = [
+    ...resumes.end,
+    ...planStaleRuns({
+      runs,
+      campaigns: cfg.campaigns,
+      refs: Object.keys(cfg.roster),
+      busyAccounts: new Set([...runningMap.values()].map((a) => a.toUpperCase())),
+      now,
+    }),
+  ];
+  // A lapsed run is ended through the runner's own writer, once, and leaves
+  // the paused set. Its session goes back with it, so the fresh attempt this
+  // record promises does not land on an account that is still held.
+  steps.push({ kind: "end" });
+  const applied = ends.filter((e) => snap.failed?.ends?.has(e.runId) !== true);
+  if (applied.length > 0) {
+    // The queue's gate, the policy's picks and the state file all read the
+    // post-sweep projection from here down, so a run this sweep ended is
+    // already a cooling rung when the policy picks.
+    states = project(applyEnded(runs, applied, now));
+    eligible = eligibleFrom(states);
+  }
+  const reserved = new Map<string, string>();
+  /** The resumes spawned this tick: what holds their models below. */
+  const resumedNow: ResumePlan[] = [];
+  const resumed: TickPlan["resumed"] = [];
+  for (const r of resumes.resume) {
+    const name = r.job.name;
+    if (sup.running.has(name)) continue;
+    // A probe paused before campaign files existed comes back with one
+    // rebuilt from its published definition (`pausedProbeFile`); it goes
+    // beside the run before the spawn, so the run carries it from here on.
+    // Never over a file the run already has.
+    if (r.writeCampaignFile !== undefined && (snap.campaignFiles.get(r.runId) ?? null) === null) {
+      steps.push({ kind: "campaign-file", name, runId: r.runId, file: r.writeCampaignFile });
+      if (snap.failed?.campaignFiles?.has(r.runId) === true) continue;
+    }
+    // A resumed run goes back to the credential it started on: the runner
+    // rebuilds its config from meta.json, and the credential is in it. It
+    // needs a slot there, like a fresh start, and a paused party needs one
+    // per member, whole; with none the resume waits for a tick with room.
+    // Stamped on the spawn too so the count and the state file agree with
+    // the run.
+    const recorded = runs.find((f) => f.runId === r.runId)?.credential ?? null;
+    const placedResume = placeFresh(recorded !== null ? { ...r.job, credential: recorded } : r.job);
+    if (!placedResume.ok) {
+      holds.push({ name, refs: r.job.refs, episode: r.job.episode, why: placedResume.why, by: "resume" });
+      steps.push({ kind: "say", key: `resume-held:${r.runId}:${placedResume.why}`, line: `resume ${name}: held — ${placedResume.why}` });
+      continue;
+    }
+    const job = placedResume.job;
+    resumedNow.push(r);
+    const spawn = spawnOf(job, r.account, undefined);
+    resumed.push({ plan: r, job, spawn });
+    if (r.job.account !== undefined) {
+      pending.set(name, job);
+      const idx = out.findIndex((l) => l.name === name);
+      if (idx >= 0) out[idx] = spawn;
+      else out.push(spawn);
+    } else {
+      pending.set(name, job);
+      finished.delete(name);
+      unfinished.push(name);
+      reserved.set(name, r.account);
+      out.push(spawn);
+      for (const ref of r.job.refs) runningRefs.add(ref);
+    }
+    // Once per pause, named by its instant: the streak starts over at 1
+    // after every segment that made a turn, so it cannot tell two pauses of
+    // one run apart. Not while the pause switch holds: nothing is spawned
+    // then, and the line is said on the tick the switch clears.
+    if (!snap.paused) {
+      steps.push({
+        kind: "say",
+        key: `resume:${r.runId}:${runs.find((f) => f.runId === r.runId)?.pause?.at ?? r.pauseCount}`,
+        line: `resume ${name}: ${r.runId} on ${r.account} — ${r.why}`,
+        record: { job: name, event: "resume", detail: `${r.runId} on ${r.account}: ${r.why}` },
+      });
+    }
+  }
+  // A character resuming this tick holds its model's scored episodes under
+  // every entry, as one playing does (`withResumesPlaying`).
+  states = withResumesPlaying(states, resumedNow, cfg.roster);
+  const runningAndReserved = new Map([...sup.assigned, ...reserved]);
+  // Who holds each account this tick, for the character rule (`characterStanding`):
+  // the live pool jobs, the pinned ones, and the resumes reserving theirs.
+  const occupants = new Map<string, Occupant>();
+  {
+    const claim = (account: string, job: FleetJob | undefined): void => {
+      if (job === undefined) return;
+      occupants.set(account.toUpperCase(), { ref: job.ref, unlimited: pausesOnDrain(job) && cfg.roster[job.ref]?.idle === "unlimited" });
+    };
+    for (const [name, account] of sup.assigned) claim(account, sup.liveJobs.get(name));
+    for (const job of pinnedJobs(cfg)) if (sup.running.has(job.name)) claim(job.account!, job);
+    for (const r of resumes.resume) claim(r.account, r.job);
+  }
+  // Where each model's last character is standing. Read once a tick from
+  // the same run facts everything else here reads.
+  const affinityMap = affinityFrom(runs, cfg.roster);
+  // Where each unlimited ref's freeplay character stands; a freeplay pick
+  // goes back to that account, every fresh launch keeps those characters.
+  const characters = charactersFrom(runs, cfg.roster);
+  const affinity = characterAffinity(characters, affinityOf(affinityMap));
   const queue = planQueue({
-    queue: poolJobs(config),
-    roster: config.roster,
-    pool: config.accounts.pool,
-    maxLive: config.accounts.max,
-    running: occupied,
-    finished: new Set(),
+    queue: poolJobs(cfg),
+    roster: cfg.roster,
+    pool: cfg.accounts.pool,
+    maxLive: cfg.accounts.max,
+    running: runningAndReserved,
+    finished,
     held,
+    cooling: (job) => snap.cooling.get(job.name),
+    // A slot on a credential with room, committed as the queue assigns.
+    place: placeFresh,
     eligible,
-    runningRefs: heldRefs,
-    ...(affinity !== undefined ? { affinity } : {}),
-    counted,
+    runningRefs,
+    affinity,
+    counted: countedFrom(states),
     takenRunIds,
     ...(scoredGate !== undefined ? { scoredGate } : {}),
-    place: (job) => {
-      const r = placeJob(job, config.roster, placing);
-      if (!r.ok) return { ok: false, why: r.why };
-      book.add(r.keys);
-      return { ok: true, job: r.job };
-    },
   });
-  const policyStates = states.filter((st) => policyRefs(config).has(st.name));
-  const { picks: policy, held: heldPicks } = planPolicyHeld({
-    states: policyStates,
-    pool: config.accounts.pool,
-    maxLive: config.accounts.max,
-    running: occupied,
-    held,
-    queuePlan: queue,
-    runningRefs: heldRefs,
-    place: (n, ep) => {
-      const r = placeRef(config.roster[n], ep, { ...placing, pin: config.roster[n]?.credential, sessions: episodeSessions(ep) });
-      return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;
-    },
-    take: (keys) => book.add(keys),
-    policy: config.policy,
-    ...(taskDraw(draw) !== undefined ? { drawTask: taskDraw(draw)! } : {}),
-    campaigns: unpinnedCampaigns(config),
-    probeRuns,
-    ...(affinity !== undefined ? { affinity } : {}),
-    evals,
-    ...(scoredGate !== undefined ? { scoredGate } : {}),
-  });
-  return { pinned, queue, policy, heldPicks: [...gatedPinned, ...heldPicks] };
+  queue.skipped.unshift(...pinnedSkips);
+  for (const sk of pinnedSkips) holds.push({ name: sk.job.name, refs: sk.job.refs, episode: sk.job.episode, why: sk.reason, by: "pinned" });
+  for (const sk of queue.skipped.slice(pinnedSkips.length)) holds.push({ name: sk.job.name, refs: sk.job.refs, episode: sk.job.episode, why: sk.reason, by: "queue" });
+  // Every fresh launch this tick, for the cross-account name sweep below.
+  const freshAssign: { ref: string; account: string }[] = [];
+  for (const a of queue.assign) {
+    const { account } = a;
+    // The credential was settled by the plan (`place`), and is on the book.
+    const keep = keepFor(account, characters);
+    if (keep.length > 0) a.job = { ...a.job, keepCharacters: keep };
+    pending.set(a.job.name, a.job);
+    // A launch onto a world of its own meets no name of the shared world's.
+    if (!worldUsedBy(cfg.policy.worlds, a.job.episode)) for (const r of a.job.refs) freshAssign.push({ ref: r, account });
+    out.push(spawnOf(a.job, account, eligible));
+  }
+  // The policy fills what the queue left free. A held spawn is not a
+  // problem: the pick is re-made next tick from the same projection.
+  let picks: PolicyPick[] = [];
+  let waiting: CharacterWait[] = [];
+  let dropped: CharacterDrop[] = [];
+  let policyIdle: TickPlan["policyIdle"];
+  if (scheduledAccounts(cfg).length > 0) {
+    const allowed = policyRefs(cfg);
+    const policy = planPolicyHeld({
+      states: states.filter((st) => allowed.has(st.name)),
+      pool: cfg.accounts.pool,
+      maxLive: cfg.accounts.max,
+      running: runningAndReserved,
+      held,
+      queuePlan: queue,
+      runningRefs,
+      place: (n, ep) => {
+        const r = placeRef(cfg.roster[n], ep, { ...placing, pin: cfg.roster[n]?.credential, sessions: episodeSessions(ep) });
+        return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;
+      },
+      take: (keys) => book.add(keys),
+      policy: cfg.policy,
+      drawTask: taskDraw(draw)!,
+      campaigns: unpinnedCampaigns(cfg),
+      probeRuns: probes,
+      affinity,
+      evals: snap.evals,
+      // While scored episodes are held: held with the reason rather than picked for a launch run.ts refuses.
+      ...(scoredGate !== undefined ? { scoredGate } : {}),
+    });
+    for (const h of policy.held) holds.push({ ...h, refs: [h.name], by: "policy" });
+    const continued = planContinuations(policy.picks, characters, cfg.roster, occupants);
+    ({ picks, waiting, dropped } = continued);
+    for (const w of waiting) {
+      const ref = policy.picks.find((p) => p.job.name === w.name)?.job.ref ?? w.name;
+      holds.push({ name: w.name, refs: [ref], episode: "freeplay", why: `${w.why}; not starting fresh on ${w.offered}`, by: "character" });
+      steps.push({
+        kind: "say",
+        key: `${w.name}:character:${w.head.runId}:${w.why}`,
+        line: `policy ${w.name}: waiting — ${w.why}; not starting fresh on ${w.offered}`,
+        record: { job: w.name, event: "character-waiting", detail: `${w.why}; offered ${w.offered}` },
+      });
+    }
+    for (const d of dropped) {
+      steps.push({
+        kind: "say",
+        key: `${d.name}:character-dropped:${d.head.runId}`,
+        line: `policy ${d.name}: ${d.head.account} is occupied by ${d.occupant}'s character — starting fresh on ${d.account}, lineage ${d.head.runId} (${d.head.character}) dropped`,
+        record: { job: d.name, event: "character-dropped", detail: `${d.head.runId} (${d.head.character} on ${d.head.account}) account_occupied_by ${d.occupant}; fresh on ${d.account}` },
+      });
+    }
+    // A character whose head is on another ref's account and that got NO pick
+    // this tick (no free account, the cap, the gate) says so once, so the
+    // wait reads as a wait for a free account and not as the item-94 hold.
+    for (const [ref, st] of characters) {
+      if (!allowed.has(ref) || runningRefs.has(ref)) continue;
+      if (picks.some((p) => p.job.ref === ref) || waiting.some((w) => w.name === `${ref}-freeplay`)) continue;
+      const standing = characterStanding(ref, st, occupants);
+      if (standing.kind !== "occupied") continue;
+      steps.push({ kind: "say", key: `${ref}:character-blocked:${st.runId}:${standing.occupant}`, line: `policy ${ref}: ${describeStanding(st, standing)} — none free this tick` });
+    }
+    for (const { job, account, why } of picks) {
+      // Remember the credential the pick was placed on: the run does not
+      // exist on disk yet, and the next tick must count it there.
+      if (job.placed !== undefined) placedMemo.set(job.name, job.placed);
+      pending.set(job.name, job);
+      // A policy job that finished an earlier attempt is fair game again;
+      // the projection, not the finished set, decides whether it runs.
+      finished.delete(job.name);
+      unfinished.push(job.name);
+      // As with a resume: a pick is announced when it can spawn, not while the switch holds.
+      if (!snap.paused) {
+        const tag = (isExtraJob(job) ? " (extra)" : "") + (job.continueFrom !== undefined ? ` (continues ${job.continueFrom})` : "");
+        steps.push({
+          kind: "say",
+          key: `${job.name}:${job.attempt}`,
+          line: `policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`,
+          record: { job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` },
+        });
+      }
+      if (!worldUsedBy(cfg.policy.worlds, job.episode)) for (const r of job.refs) freshAssign.push({ ref: r, account });
+      out.push(spawnOf(job, account, undefined));
+    }
+    const taken = new Set([...runningAndReserved.values(), ...queue.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
+    const free = scheduledAccounts(cfg).filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
+    const idle =
+      free.length === 0
+        ? undefined
+        : queue.waiting.length > 0
+          ? `${free.length} free account(s) but manual job(s) waiting (${queue.waiting.map((j) => j.name).join(", ")}) — they outrank the policy`
+          : `${free.length} free account(s), nothing schedulable: ${states
+              .filter((st) => allowed.has(st.name))
+              .map((st) => `${st.name}=${st.status}`)
+              .join(" ")}`;
+    policyIdle = { idle };
+    steps.push({ kind: "idle", idle });
+  }
+  // Cross-account name hygiene: a name the launching account's own
+  // hygiene cannot see, on an account this tick calls free.
+  let sweeps: NameSweep[] = [];
+  if (freshAssign.length > 0) {
+    const busy = new Set([...runningAndReserved.values(), ...queue.assign.map((a) => a.account), ...freshAssign.map((a) => a.account)].map((a) => a.toUpperCase()));
+    sweeps = planNameSweeps({
+      assign: freshAssign,
+      affinity: affinityMap,
+      isFree: (a) => !busy.has(a.toUpperCase()) && held(a) === undefined,
+      // Every freeplay head, and the character of every run that has not
+      // ended — whatever its lane, a run without a verdict still owns it.
+      protect: new Set([
+        ...[...characters.values()].map((s) => characterKey(s.account, s.character)),
+        ...runs.filter((f) => f.terminationReason === null && f.account !== null && f.character !== null).map((f) => characterKey(f.account!, f.character!)),
+      ]),
+    });
+  }
+  if (sweeps.length > 0) steps.push({ kind: "sweep" });
+  for (const sk of queue.skipped) steps.push({ kind: "skip", name: sk.job.name, reason: sk.reason });
+  // A job whose `repeat` is met says so once, not once a tick; raising its
+  // repeat and meeting it again says so again.
+  const counted = countedFrom(states);
+  for (const j of [...pinnedDone, ...queue.done]) steps.push({ kind: "done", job: j, progress: progressLabel(j, counted) ?? "met" });
+  // The credentials' budgets over every spawn, last: a running job's next
+  // episode on a held credential. A running freeplay job is its driver's to
+  // pause; a running scored one drains to its boundary.
+  const gated = gateSpawns(out, credGate, sup.running);
+  for (const g of gated.gated) {
+    if (g.drained) drainReasons.set(g.name, g.why);
+    else {
+      const job = pending.get(g.name) ?? [...pinnedJobs(cfg), ...campaignJobs].find((j) => j.name === g.name);
+      holds.push({ name: g.name, refs: job?.refs ?? [], episode: job?.episode ?? null, why: g.why, by: "credential" });
+    }
+    steps.push({
+      kind: "say",
+      key: `gate:${g.name}:${g.drained}:${g.why}`,
+      line: `${g.drained ? "drain" : "hold"} ${g.name}: ${g.why}${g.drained ? " — its live episode finishes, the next does not start" : ""}`,
+      record: { job: g.name, event: "credential-budget", detail: g.why },
+    });
+  }
+  return {
+    config: cfg,
+    runs,
+    states,
+    spawns: gated.spawns,
+    pinned,
+    resumed,
+    resumes,
+    queue,
+    picks,
+    waiting,
+    dropped,
+    holds,
+    drainReasons,
+    ends,
+    repairs,
+    sweeps,
+    campaignJobs,
+    pinnedDone,
+    ...(policyIdle !== undefined ? { policyIdle } : {}),
+    unownedRefs,
+    credentials: { gate: credGate, book, credentials: cfg.credentials, runs: billed },
+    memory: { pending, placedMemo, unfinished },
+    steps,
+  };
 }

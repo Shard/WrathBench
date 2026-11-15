@@ -1,3 +1,5 @@
+import { planOf, snapshotOf, type RunningJob } from "./fixtures/tick";
+import { planTick } from "./run-fleet-plan";
 import { launchRouting } from "../runner/test/fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import {
@@ -41,7 +43,6 @@ import {
   poolJobs,
   policyRefs,
   policyExclusion,
-  planTick,
   jobSpawn,
   implicitPauses,
   OFFLINE_QUIET_FLOOR_MS,
@@ -50,7 +51,6 @@ import {
   withResumesPlaying,
   planStaleRuns,
   applyEnded,
-  statesAfterSweep,
   formatEndedRun,
   formatPaused,
   formatEnded,
@@ -116,6 +116,7 @@ import {
   inFlightRuns,
   jobOfRun,
   planDryRun,
+  type InFlightRun,
   runningJobs,
   runningRefsOf,
   showsJob,
@@ -124,7 +125,6 @@ import {
   unyieldedDrainReason,
   countUnownedRuns,
   publishedVersion,
-  type InFlight,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
 import { parseCredentials } from "../runner/src/credential-slots";
@@ -699,9 +699,9 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(Object.keys(config.roster)).toEqual(["glm", "son", "ox"]);
     // The board: the good campaign's square on its account, and the scored
     // lanes filling the pool as if the bad rows were not there.
-    const plan = planTick(config, modelStatesOf(rosterModels(config.roster)), () => undefined, "20261011");
+    const plan = planOf(config, { stamp: "20261011" });
     expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["solo-probe-coldridge-base", "SOLO"]]);
-    expect(plan.policy.map((p) => [p.job.ref, p.job.episode, p.account])).toEqual([
+    expect(plan.picks.map((p) => [p.job.ref, p.job.episode, p.account])).toEqual([
       ["glm", "e90", "RUNNER"],
       ["ox", "e90", "RUNNER2"],
     ]);
@@ -1788,9 +1788,9 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(scoredHold({ episode: "e90" }, undefined)).toBeUndefined();
     // A pinned scored job is held the same way, beside the policy's held picks.
     const config = parseFleet(fleetJson([{ ref: "glm", episode: "e90", account: "SHAKEOUT", repeat: 1 }]));
-    const tick = planTick(config, modelStatesOf(rosterModels(config.roster)), () => undefined, "20261114", [], [], undefined, new Map(), new Set(), [], [], undefined, true, [], [], undefined, gate);
+    const tick = planOf(config, { stamp: "20261114", scoredWait: gate });
     expect(tick.pinned).toEqual([]);
-    expect(tick.heldPicks.find((h) => h.name === "glm-e90")?.why).toBe(`e90: ${gate}`);
+    expect(tick.holds.find((h) => h.name === "glm-e90")?.why).toBe(`e90: ${gate}`);
   });
 
   test("queue drains in order: as accounts come free the next jobs take them; finished jobs are not restarted", () => {
@@ -2005,7 +2005,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     ).toMatch(/!! also live here: a-e90/);
   });
 
-  test("planTick: pinned jobs spawn on their accounts, the queue then the policy fill the pool, the host cap counts the pinned run", () => {
+  test("the tick: pinned jobs spawn on their accounts, the queue then the policy fill the pool, the host cap counts the pinned run", () => {
     const config = parseFleet({
       accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
       roster: {
@@ -2017,8 +2017,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
       "campaign-defs": FLEET_DEFS,
       campaigns: { "solo-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } },
     });
-    const states = modelStatesOf(rosterModels(config.roster));
-    const plan = planTick(config, states, () => undefined, "20260101");
+    const plan = planOf(config, { stamp: "20260101" });
     // The campaign's pinned square shows up HERE, not only in the live loop:
     // `--status` and `--dry-run` read this planner, and a probe the supervisor
     // would spawn but its own report never mentions is the disagreement this
@@ -2027,15 +2026,15 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(plan.queue.assign).toEqual([]);
     // The campaign holds `son`, so the second claude-code run is `sonlo` —
     // and the cap counts the probe's run wherever it was scheduled from.
-    expect(plan.policy.map((p) => [p.job.ref, p.account])).toEqual([["sonlo", "RUNNER"], ["glm", "RUNNER2"]]);
+    expect(plan.picks.map((p) => [p.job.ref, p.account])).toEqual([["sonlo", "RUNNER"], ["glm", "RUNNER2"]]);
     // Without the cap, the other sonnet goes too.
-    const uncapped = planTick({ ...config, policy: { ...config.policy, maxSessions: {} } }, states, () => undefined, "20260101");
-    expect(uncapped.policy.map((p) => p.job.ref)).toEqual(["sonlo", "glm"]);
+    const uncapped = planOf({ ...config, policy: { ...config.policy, maxSessions: {} } }, { stamp: "20260101" });
+    expect(uncapped.picks.map((p) => p.job.ref)).toEqual(["sonlo", "glm"]);
     // A disabled campaign does not spawn and does not count against the cap.
     const off = { ...config, campaigns: config.campaigns.map((c) => ({ ...c, enabled: false })) };
-    const held = planTick(off, states, (a) => (a === "RUNNER" ? "hand" : undefined), "20260101");
+    const held = planOf(off, { stamp: "20260101", held: (a) => (a === "RUNNER" ? "hand" : undefined) });
     expect(held.pinned).toEqual([]);
-    expect(held.policy.map((p) => [p.job.ref, p.account])).toEqual([["son", "RUNNER2"], ["sonlo", "RUNNER3"]]);
+    expect(held.picks.map((p) => [p.job.ref, p.account])).toEqual([["son", "RUNNER2"], ["sonlo", "RUNNER3"]]);
   });
 
   // Which credential a run takes, the budgets, the host cap and the pool's
@@ -2231,15 +2230,15 @@ describe("scheduling policy: defer ladder and retirement", () => {
       return { ...rest, serving: LOCAL_SERVING, harnessSeries: config.policy.series };
     };
     const one = [run("qwen/q", "e90", 1)].map(onBox);
-    const partial = planTick(config, modelStatesOf(rosterModels(config.roster), one, NOW, config.policy), () => undefined, "20260101");
-    expect(partial.policy.find((p) => p.account === "LOCALBOX")!.job).toMatchObject({ name: "local-e90", episode: "e90" });
+    const partial = planOf(config, { runs: one, now: NOW, stamp: "20260101" });
+    expect(partial.picks.find((p) => p.account === "LOCALBOX")!.job).toMatchObject({ name: "local-e90", episode: "e90" });
 
     // 3/3 and unpromoted (no counted run reached L5): the extra is freeplay.
     const met = [1, 2, 3].map((i) => run("qwen/q", "e90", i, { bestLevel: 3 })).map(onBox);
     const states = modelStatesOf(rosterModels(config.roster), met, NOW, config.policy);
     expect(states.find((st) => st.name === "local")!.eligible).toEqual(["e90"]);
-    const plan = planTick(config, states, () => undefined, "20260101");
-    const pick = plan.policy.find((p) => p.account === "LOCALBOX")!;
+    const plan = planOf(config, { runs: met, now: NOW, stamp: "20260101" });
+    const pick = plan.picks.find((p) => p.account === "LOCALBOX")!;
     expect(pick.job).toMatchObject({ name: "local-freeplay", episode: "freeplay", attempt: 1, source: "policy" });
     expect(isExtraJob(pick.job)).toBe(true);
     expect(pick.why).toContain("unlimited session");
@@ -2277,7 +2276,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(line).toMatch(/local\s+free\s+t1\s+active\s+3\/3 L3\s+-\s+1\s+free: targets met on e90 — unlimited sessions/);
     expect(formatModels(afterStates, new Set(), NOW, new Map(), config.policy)[0]).toContain("idle unlimited (idle watchdog only; no wall clock)");
     // The next freeplay run is attempt 2, so its run id cannot collide with the first.
-    const next = planTick(config, afterStates, () => undefined, "20260101").policy.find((p) => p.account === "LOCALBOX")!;
+    const next = planOf(config, { runs: after, now: NOW, stamp: "20260101" }).picks.find((p) => p.account === "LOCALBOX")!;
     expect(next.job).toMatchObject({ name: "local-freeplay", attempt: 2 });
     expect(jobSpawn(next.job, config.roster, "LOCALBOX", "20260101").entries[0]!.runId).toContain("-a2");
   });
@@ -2429,27 +2428,28 @@ describe("run pods in flight under the chart's cap", () => {
     "campaign-defs": FLEET_DEFS,
     campaigns: { "solo-probe": { version: 1, assignments: ["a", "b", "c", "d", "e"].map((model) => ({ model })) } },
   });
-  const states = modelStatesOf(rosterModels(config.roster));
-  const probes = (plan: ReturnType<typeof planTick>): string[] => plan.policy.filter((p) => p.job.episode === "probing").map((p) => p.job.ref);
-  const tick = (o: { runPods?: { max: number | undefined }; inFlight?: InFlight[]; unowned?: { credential: string | null; episode: string | null }[] } = {}) =>
-    planTick(config, states, () => undefined, "20261112", [], [], undefined, new Map(), new Set(), o.inFlight ?? [], [], undefined, true, [], o.unowned ?? [], o.runPods);
+  const probes = (plan: ReturnType<typeof planOf>): string[] => plan.picks.filter((p) => p.job.episode === "probing").map((p) => p.job.ref);
+  /** A live fleet run no job owns, of a model off the roster, on an account off the pool: what it holds is its credential and, as a pod, the cap. */
+  const unownedRun = (episode: EpisodeId, i: number): RunFact => ({ ...liveProbe(1_800_000_000_000), runId: `fleet-orphan-${i}`, model: "other/model", ref: null, campaign: null, cell: null, episode, credential: "or-free", account: `ORPHAN${i}` });
+  const tick = (o: { runPods?: { max: number | undefined }; running?: RunningJob[]; unowned?: EpisodeId[] } = {}) =>
+    planOf(config, { stamp: "20261112", runs: (o.unowned ?? []).map((ep, i) => unownedRun(ep, i)), running: o.running ?? [], ...(o.runPods !== undefined ? { runPods: o.runPods } : {}) });
 
   test("no cap plans a probe on every free account; the cap stops it at maxPods, and the held picks say why", () => {
     expect(probes(tick({ runPods: { max: undefined } }))).toEqual(["a", "b", "c", "d", "e"]);
     const capped = tick({ runPods: { max: 3 } });
     expect(probes(capped)).toEqual(["a", "b", "c"]);
-    expect(capped.heldPicks.map((h) => h.why)).toContain("cap: run pods 3/3 in flight (the chart's runPods.maxPods)");
+    expect(capped.holds.map((h) => h.why)).toContain("cap: run pods 3/3 in flight (the chart's runPods.maxPods)");
     // Run pods off (or off the cluster): a probe is a child process, and the chart's cap is not the planner's business.
     expect(probes(tick())).toEqual(["a", "b", "c", "d", "e"]);
   });
 
   test("what is in flight counts: an owned probe job, and a run pod no job owns any more (a supervisor container restart)", () => {
-    const owned: InFlight = { name: "a-solo-probe-coldridge-base", account: "RUNNER", refs: ["a"], source: "policy", episode: "probing" };
-    expect(probes(tick({ runPods: { max: 3 }, inFlight: [owned] }))).toEqual(["b", "c"]);
+    const owned: RunningJob = { name: "a-solo-probe-coldridge-base", account: "RUNNER", refs: ["a"], source: "policy", episode: "probing", probe: { campaign: "solo-probe", version: 1, cell: "coldridge", arm: "base" } };
+    expect(probes(tick({ runPods: { max: 3 }, running: [owned] }))).toEqual(["b", "c"]);
     // The orphan from 2026-11-12: its roster died with the container, its pod played on.
-    expect(probes(tick({ runPods: { max: 3 }, inFlight: [owned], unowned: [{ credential: "or-free", episode: "probing" }] }))).toEqual(["b"]);
+    expect(probes(tick({ runPods: { max: 3 }, running: [owned], unowned: ["probing"] }))).toEqual(["b"]);
     // A scored run in flight is no run pod.
-    expect(probes(tick({ runPods: { max: 3 }, unowned: [{ credential: "or-free", episode: "e90" }] }))).toEqual(["a", "b", "c"]);
+    expect(probes(tick({ runPods: { max: 3 }, unowned: ["e90"] }))).toEqual(["a", "b", "c"]);
   });
 
   const liveProbe = (now: number): RunFact => ({
@@ -2593,10 +2593,10 @@ describe("pause and resume across a fleet stop", () => {
     expect(stopped.end[0]).toMatchObject({ reason: "manual" });
     // The tick still holds the model this pass — the pause fact is only gone
     // once the termination is written — and gives it a fresh attempt after.
-    const states = modelStatesOf(rosterModels(roster), [run], NOW);
     const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: parseCredentials(OPEN_CREDENTIALS), campaigns: [], campaignDefs: [], campaignRefusals: [], refusals: [] };
-    const tick = planTick(cfg, states, held, "20260823", plan.resume);
-    expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox", "nav"]); // glm is held by its paused run for one more tick
+    const tick = planOf(cfg, { runs: [run], now: NOW, stamp: "20260823" });
+    expect(tick.ends.map((e) => e.runId)).toEqual([run.runId]);
+    expect(tick.picks.map((p) => p.job.ref)).toEqual(["ox", "nav"]); // glm's ended attempt is a cooling rung this same tick
   });
 
   test("a pinned job's paused run replaces the job's spawn with a resume spawn on the pinned account", () => {
@@ -2722,8 +2722,15 @@ describe("pause and resume across a fleet stop", () => {
     const race1 = probe("race-probe", "human-warrior", "RUNNER6", "", NOW - 2 * H);
     const class1 = probe("class-probe", "dwarf-warrior", "RUNNER", "", NOW - 2 * H);
     // The run ids the tick then spawns fresh for a campaign square, numbered past every id on disk.
-    const freshOf = (runs: RunFact[], resumes: ResumePlan[]): string[] =>
-      planTick(cfg, modelStatesOf(rosterModels(roster), runs, NOW), held, "20261024", resumes, probeRunsOf(runs), undefined, new Map(), new Set(runs.map((f) => f.runId)))
+    // `stranded`: every paused run's account is held elsewhere, so none comes back this tick.
+    const freshOf = (runs: RunFact[], stranded = false): string[] =>
+      planOf(cfg, {
+        runs,
+        now: NOW,
+        stamp: "20261024",
+        campaignFiles: Object.fromEntries(files),
+        ...(stranded ? { held: (a: string) => (runs.some((f) => f.account === a) ? "elsewhere" : undefined) } : {}),
+      })
         .pinned.filter((p) => p.job.probe !== undefined)
         .flatMap((p) => p.spawn.entries.map((e) => e.runId ?? p.job.name));
     const resumed = (runs: RunFact[]) => {
@@ -2732,12 +2739,12 @@ describe("pause and resume across a fleet stop", () => {
         resume: plan.resume.map((r) => [r.job.name, r.account, r.runId]).sort(),
         listed: plan.listed.map((l) => [l.runId, l.why]),
         // No square of a campaign whose run came back.
-        fresh: freshOf(runs, plan.resume),
+        fresh: freshOf(runs),
       };
     };
     // What a campaign whose paused run is NOT resumed gets instead: its square
     // again, as a fresh -a2 beside the paused a1 (the stranding seen live).
-    expect(freshOf([fp, race1, class1], []).sort()).toEqual([`${class1.runId}-a2`, `${race1.runId}-a2`]);
+    expect(freshOf([fp, race1, class1], true).sort()).toEqual([`${class1.runId}-a2`, `${race1.runId}-a2`]);
 
     // The first restart: one paused run on each account, all three of one model.
     const first = resumed([fp, race1, class1]);
@@ -3181,9 +3188,8 @@ describe("pause and resume across a fleet stop", () => {
     const mine = paused({ runId: "fleet-gone-e90-old-model-20260823", model: "gone/model", account: "RUNNER3" });
     expect(planResumes({ runs: [mine], config: config(), running: new Map(), held, now: NOW }).end).toHaveLength(1);
     // And the account it sits on is free for the policy: a not-in-config run holds nothing.
-    const states = modelStatesOf(rosterModels(roster), [run], NOW);
     const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, credentials: parseCredentials(OPEN_CREDENTIALS), campaigns: [], campaignDefs: [], campaignRefusals: [], refusals: [] };
-    expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
+    expect(planOf(cfg, { runs: [run], now: NOW, stamp: "20260823" }).picks.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
   });
 
   test("a stale run — the host slept, the fleet was down — is ended, not resumed", () => {
@@ -3331,19 +3337,20 @@ describe("pause and resume across a fleet stop", () => {
 
     // After: the ends are applied, the third rung lands from now, and nothing
     // spawns for that model in this tick.
-    const after = statesAfterSweep(cfg, runs, plan.end, NOW, { version: 1, cleared: {} });
+    const tick = planOf(cfg, { runs, now: NOW, stamp: "20260825" });
+    const after = tick.states;
     const ox = after.find((st) => st.name === "ox")!;
     expect(ox.ladder).toBe(3);
     expect(ox.cooling).toMatchObject({ rung: 3, until: NOW + 5 * 60_000 });
     const v = schedulability(ox);
     expect(v.verdict).toBe("blocked");
     expect(v.why).toContain("cooling rung 3/9");
-    const tick = planTick(cfg, after, held, "20260825");
-    expect(tick.policy.map((p) => p.job.ref)).not.toContain("ox");
+    expect(tick.ends.map((e) => e.runId)).toEqual([third.runId]);
+    expect(tick.picks.map((p) => p.job.ref)).not.toContain("ox");
     // The reverse race: the run the sweep ended holds neither its model nor
     // its account, so RUNNER3 is free for the next model in the same tick.
     expect(ox.paused).toBeUndefined();
-    expect(tick.policy.map((p) => p.account).sort()).toEqual(["RUNNER3", "RUNNER4"]);
+    expect(tick.picks.map((p) => p.account).sort()).toEqual(["RUNNER3", "RUNNER4"]);
     expect(applyEnded(runs, plan.end, NOW).find((f) => f.runId === third.runId)).toMatchObject({
       terminationReason: "attempt-failed",
       pause: null,
@@ -4290,12 +4297,12 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
     const states = statesOf(c, SATISFIED);
     // The supervisor's memory is empty after a boot: nothing is `finished`.
     for (const stamp of ["20261011", "20261014"]) {
-      const plan = planTick(c, states, () => undefined, stamp, [], [], undefined, new Map(), taken(SATISFIED));
+      const plan = planOf(c, { runs: SATISFIED, now: NOW, stamp });
       expect(plan.queue.done.map((j) => j.name)).toEqual(["ox-e360"]);
       expect(plan.queue.assign).toEqual([]);
       expect(plan.queue.waiting).toEqual([]);
       // The policy owes ox no e360 either: one counted run is its whole t2 target.
-      expect(plan.policy.filter((p) => p.job.episode === "e360")).toEqual([]);
+      expect(plan.picks.filter((p) => p.job.episode === "e360")).toEqual([]);
     }
     const live = planQueue({
       queue: poolJobs(c),
@@ -4323,7 +4330,7 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
     expect(formatQueue(poolJobs(config([{ ref: "ox", episode: "e360", repeat: 3, enabled: false }])), report, counted).join("\n")).toMatch(/\(3\/3 counted\) — disabled/);
     // Raising repeat is how to get more: one more owed, on a fresh id.
     const raised = config([{ ref: "ox", episode: "e360", repeat: 4 }]);
-    const more = planTick(raised, statesOf(raised, SATISFIED), () => undefined, "20261014", [], [], undefined, new Map(), taken(SATISFIED));
+    const more = planOf(raised, { runs: SATISFIED, now: NOW, stamp: "20261014" });
     expect(more.queue.done).toEqual([]);
     const job = more.queue.assign[0]!.job;
     expect(job.owed?.copies).toEqual({ ox: 1 });
@@ -4336,7 +4343,7 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
     const runs = [run(`${OX}-20261011`), run(`${OX}-20261011-r2`, { terminationReason: "manual", bestLevel: 4 })];
     const states = statesOf(c, runs);
     const ids = (stamp: string): string[] => {
-      const plan = planTick(c, states, () => undefined, stamp, [], [], undefined, new Map(), taken(runs));
+      const plan = planOf(c, { runs, now: NOW, stamp });
       expect(plan.queue.done).toEqual([]);
       const a = plan.queue.assign.find((x) => x.job.name === "ox-e360")!;
       expect(a.job.owed?.copies).toEqual({ ox: 2 });
@@ -4350,18 +4357,18 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
     expect(ids("20261011")).toEqual([`${OX}-20261011-r3`, `${OX}-20261011-r4`]);
     // Two more counted runs and it is done, on either stamp.
     const after = [...runs, run(`${OX}-20261011-r3`), run(`${OX}-20261011-r4`)];
-    expect(planTick(c, statesOf(c, after), () => undefined, "20261015", [], [], undefined, new Map(), taken(after)).queue.done.map((j) => j.name)).toEqual(["ox-e360"]);
+    expect(planOf(c, { runs: after, now: NOW, stamp: "20261015" }).queue.done.map((j) => j.name)).toEqual(["ox-e360"]);
     expect(progressLabel(c.jobs[0]!, countedFrom(statesOf(c, after)))).toBe("3/3 counted");
   });
 
   test("a pinned job: satisfied, it is not spawned on its account; owing, it spawns only what it owes", () => {
     const pinned = config([{ ref: "ox", episode: "e360", repeat: 2, account: "PINNED1" }]);
     const one = [run(`${OX}-20261011`, { account: "PINNED1" })];
-    const owing = planTick(pinned, statesOf(pinned, one), () => undefined, "20261014", [], [], undefined, new Map(), taken(one));
+    const owing = planOf(pinned, { runs: one, now: NOW, stamp: "20261014" });
     expect(owing.pinned.map((p) => p.spawn.entries.length)).toEqual([1]);
     expect(fillEntries(owing.pinned[0]!.spawn, "20261014").map((e) => e.runId)).toEqual([`${OX}-20261014`]);
     const two = [...one, run(`${OX}-20261014`, { account: "PINNED1" })];
-    expect(planTick(pinned, statesOf(pinned, two), () => undefined, "20261015", [], [], undefined, new Map(), taken(two)).pinned).toEqual([]);
+    expect(planOf(pinned, { runs: two, now: NOW, stamp: "20261015" }).pinned).toEqual([]);
   });
 
   test("a rotation job counts per ref, and a loop job has no count to meet", () => {
@@ -4377,7 +4384,7 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
       e90("sonnet", "fleet-son-e90-sonnet-20261011"),
       e90("sonnet", "fleet-son-e90-sonnet-20261011-r2"),
     ];
-    const plan = planTick(c, statesOf(c, runs), () => undefined, "20261014", [], [], undefined, new Map(), taken(runs));
+    const plan = planOf(c, { runs: runs, now: NOW, stamp: "20261014" });
     const rotation = plan.queue.assign.find((a) => a.job.name === "glm-e90")!;
     expect(rotation.job.owed?.copies).toEqual({ glm: 0, ox: 1 });
     expect(jobSpawn(rotation.job, c.roster, rotation.account, "20261014").entries.map((e) => e.model)).toEqual(["stealth/ox-alpha:free"]);
@@ -4590,18 +4597,15 @@ describe("the read-only views read what is running, not every job the supervisor
     ];
     const a2 = (over: Partial<RunFact>): RunFact =>
       fact(A2, { episode: "freeplay", extra: true, startedAt: NOW - 86 * H, endedAt: null, terminationReason: null, bestLevel: 39, episodeMs: null, ...over });
-    const dryRun = (runs: RunFact[], opts: { held?: (a: string) => string | undefined; inFlight?: Parameters<typeof planDryRun>[0]["inFlight"] } = {}) => {
+    const dryRun = (runs: RunFact[], opts: { held?: (a: string) => string | undefined; inFlight?: InFlightRun[] } = {}) => {
       const c = config();
-      const plan = planDryRun({
-        config: c,
-        runs,
-        states: modelStatesOf(rosterModels(c.roster), runs, NOW, c.policy),
-        held: opts.held ?? (() => undefined),
-        stamp: "20261014",
-        now: NOW,
-        ...(opts.inFlight !== undefined ? { inFlight: opts.inFlight } : {}),
-      });
-      return { ...plan, text: formatAccounts(plan.rows).join("\n") };
+      // The supervisor's own jobs are the owned rows; the rest of what is in flight is on disk.
+      const running = (opts.inFlight ?? [])
+        .filter((r) => r.owned)
+        .map((r): RunningJob => ({ name: r.name, account: r.account, refs: r.refs, ...(r.source !== undefined ? { source: r.source } : {}), episode: r.episode, runIds: r.runId !== undefined ? [r.runId] : [] }));
+      const snap = snapshotOf(c, { runs, now: NOW, stamp: "20261014", running, ...(opts.held !== undefined ? { held: opts.held } : {}) });
+      const dry = planDryRun({ plan: planTick(snap), holders: snap.holders, stamp: "20261014", ...(opts.inFlight !== undefined ? { inFlight: opts.inFlight } : {}) });
+      return { ...dry, resumes: dry.plan.resumes, text: formatAccounts(dry.rows).join("\n") };
     };
     const heldByA2 = (a: string): string | undefined => (a === "RUNNER3" ? A2 : undefined);
 
@@ -4609,8 +4613,9 @@ describe("the read-only views read what is running, not every job the supervisor
       const runs = [...history, a2({ pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 86 * H } })];
       const { resumes, plan, rows, spawns, text } = dryRun(runs);
       expect(resumes.resume.map((r) => [r.job.name, r.runId, r.account])).toEqual([[`${REF}-freeplay`, A2, "RUNNER3"]]);
-      expect(plan.policy).toEqual([]);
-      expect(text).toContain(`RUNNER3   pool   ${REF}-freeplay (paused: operator-pause, 86h00m elapsed): gpt-6.1-sol freeplay attempt 2 extra — resumes ${A2} in place`);
+      expect(plan.picks).toEqual([]);
+      // Placed as the tick places it: on the credential its run started on.
+      expect(text).toContain(`RUNNER3   pool   ${REF}-freeplay (paused: operator-pause, 86h00m elapsed): gpt-6.1-sol freeplay attempt 2 extra [chatgpt] — resumes ${A2} in place`);
       expect(text).toMatch(/RUNNER +pool +free$/m);
       expect(text).not.toContain("-a3");
       // The argv is the live spawn's: the paused run first, --resume-roster.
@@ -4639,12 +4644,12 @@ describe("the read-only views read what is running, not every job the supervisor
       // projection reads the live run itself now (`ModelState.playing`), so
       // even a plan told nothing is in flight starts no fresh session beside it.
       const blind = dryRun(runs, { held: heldByA2 });
-      expect(blind.plan.policy).toEqual([]);
+      expect(blind.plan.picks).toEqual([]);
       const jobs = new Map([[`${REF}-freeplay`, stateJob({ ref: REF, account: "RUNNER3", episode: "freeplay", attempt: 2, models: ["gpt-6.1-sol"], runIds: [A2], resuming: A2, resumesInPlace: true })]]);
       const inFlight = inFlightRuns({ jobs, runs, roster: config().roster, campaigns: [] });
       expect(inFlight.map((r) => [r.name, r.owned, r.runId, r.resumesInPlace])).toEqual([[`${REF}-freeplay`, true, A2, true]]);
       const { plan, text } = dryRun(runs, { held: heldByA2, inFlight });
-      expect(plan.policy).toEqual([]);
+      expect(plan.picks).toEqual([]);
       expect(text).toContain(`RUNNER3   pool   ${REF}-freeplay: gpt-6.1-sol freeplay attempt 2 extra — in flight as ${A2}; a restart pauses it and it resumes in place here`);
       expect(text).toMatch(/RUNNER +pool +free$/m);
       expect(text).not.toContain("-a3");
@@ -4659,7 +4664,7 @@ describe("the read-only views read what is running, not every job the supervisor
       const inFlight = inFlightRuns({ jobs: new Map(), runs, roster: config().roster, campaigns: [] });
       expect(inFlight.map((r) => [r.name, r.owned, r.refs, r.resumesInPlace])).toEqual([[A2, false, [REF], true]]);
       const { plan, text } = dryRun(runs, { held: heldByA2, inFlight });
-      expect(plan.policy).toEqual([]);
+      expect(plan.picks).toEqual([]);
       expect(text).not.toContain("-a3");
       expect(text).toMatch(/RUNNER +pool +free$/m);
       expect(text).toContain(
@@ -4763,8 +4768,8 @@ describe("the read-only views read what is running, not every job the supervisor
         characters,
         c.roster,
       ).picks;
-      // What --dry-run prints for the same moment: `planTick` with the unowned refs.
-      const printed = planTick(c, states, held, "20261016", resumes.resume, [], affinity, new Map(), new Set(runs.map((f) => f.runId)), [], unowned.flatMap((u) => u.refs));
+      // What the tick itself plans, and so what --dry-run prints, for the same moment.
+      const printed = planOf(c, { runs: raw, now: NOW, stamp: "20261016", held });
       return { unowned, states, resumes, picks, printed };
     };
     const picked = (picks: readonly { job: FleetJob; account: string }[]) => picks.map((p) => [p.job.ref, p.job.episode, p.account, p.job.continueFrom ?? null]);
@@ -4780,7 +4785,7 @@ describe("the read-only views read what is running, not every job the supervisor
       const { unowned, states, picks, printed } = tick(runs, heldBy(A2), { refs: [REF] });
       expect(unowned).toEqual([{ runId: A2, account: "RUNNER3", refs: [REF], model: MODEL, episode: "freeplay", credential: null, resumesInPlace: true }]);
       expect(picks).toEqual([]);
-      expect(printed.policy).toEqual([]);
+      expect(printed.picks).toEqual([]);
       // The model is held the way a job's is, and says so.
       expect(schedulability(states.find((s) => s.name === REF)!, new Set([REF])).why).toBe("running (one character per model)");
       // The free account still goes to a model that owes work.
@@ -4793,7 +4798,7 @@ describe("the read-only views read what is running, not every job the supervisor
       // No proof to wait for: its heartbeat went cold, so no process owns it.
       expect(resumes.resume.map((r) => [r.runId, r.account])).toEqual([[A2, "RUNNER3"]]);
       expect(picks).toEqual([]);
-      expect(printed.policy).toEqual([]);
+      expect(printed.picks).toEqual([]);
     });
 
     test("a live, unowned scored run holds its model, and the model is free again once the run reads cold", () => {
@@ -4802,7 +4807,7 @@ describe("the read-only views read what is running, not every job the supervisor
       const live = tick([e1(WARM)], heldBy(E1), { refs: [EVAL] });
       expect(live.unowned.map((u) => [u.runId, u.refs, u.resumesInPlace])).toEqual([[E1, [EVAL], false]]);
       expect(live.picks).toEqual([]);
-      expect(live.printed.policy).toEqual([]);
+      expect(live.printed.picks).toEqual([]);
       // Cold, a scored run is not resumed and holds nothing until the stale
       // sweep ends it, as before: the model owes e90s and is planned again.
       const cold = tick([e1(COLD)], heldBy(E1), { refs: [EVAL] });
@@ -5069,8 +5074,8 @@ describe("one character per model: a paused run holds its own way back, never a 
     expect(verdictOf(states, "haiku-shakedown").verdict).toBe("free");
     expect(verdictOf(states, "haiku-longclock").verdict).toBe("free");
     // The tick picks the scored e90.
-    const tick = planTick(config(), states, held, "20261115", plan.resume);
-    expect(tick.policy.map((p) => [p.job.ref, p.job.episode])).toEqual([["sub-haiku-55", "e90"]]);
+    const tick = planOf(config(), { runs, now: NOW, stamp: "20261115" });
+    expect(tick.picks.map((p) => [p.job.ref, p.job.episode])).toEqual([["sub-haiku-55", "e90"]]);
   });
 
   test("the same with the long-clock entry deleted from the roster: nothing names the run, and it still blocks nothing", () => {
@@ -5079,7 +5084,7 @@ describe("one character per model: a paused run holds its own way back, never a 
     expect(plan.listed.map((l) => l.runId)).toEqual([operatorPaused.runId]);
     const states = statesOf([operatorPaused], rest);
     expect(verdictOf(states, "sub-haiku-55")).toEqual({ verdict: "eval", why: "schedulable on e90" });
-    expect(planTick(config(rest), states, held, "20261115", plan.resume).policy.map((p) => p.job.ref)).toEqual(["sub-haiku-55"]);
+    expect(planOf(config(rest), { runs: [operatorPaused], now: NOW, stamp: "20261115" }).picks.map((p) => p.job.ref)).toEqual(["sub-haiku-55"]);
   });
 
   test("a live freeplay character still blocks a scored run of its model: under its own entry and under another", () => {
@@ -5092,8 +5097,9 @@ describe("one character per model: a paused run holds its own way back, never a 
     expect(verdictOf(states, "sub-haiku-55")).toEqual({ verdict: "blocked", why: `running (one character per model): ${live.runId} plays its freeplay character` });
     // A campaign's probe entry is not held by it, as before.
     expect(verdictOf(states, "haiku-shakedown").verdict).toBe("free");
-    const tick = planTick(config(longclock), states, held, "20261115", [], [], undefined, new Map(), new Set([live.runId]), [], ["haiku-longclock"]);
-    expect(tick.policy).toEqual([]);
+    const tick = planOf(config(longclock), { runs: [live], now: NOW, stamp: "20261115" });
+    expect(tick.unownedRefs).toEqual(["haiku-longclock"]);
+    expect(tick.picks).toEqual([]);
   });
 
   test("the paused freeplay comes back only when no scored run of its model is playing: it waits, listed, and the tick it resumes picks none", () => {
@@ -5134,8 +5140,9 @@ describe("one character per model: a paused run holds its own way back, never a 
     expect(verdictOf(states, "sub-haiku-55").verdict).toBe("eval");
     const resumed = withResumesPlaying(states, back.resume, longclock);
     expect(verdictOf(resumed, "sub-haiku-55").why).toBe(`running (one character per model): ${operatorPaused.runId} resumes its freeplay character`);
-    const tick = planTick(config(longclock), states, held, "20261115", back.resume);
-    expect(tick.policy).toEqual([]);
+    const tick = planOf(config(longclock), { runs: [operatorPaused], now: NOW, stamp: "20261115" });
+    expect(tick.resumed.map((r) => r.plan.runId)).toEqual([operatorPaused.runId]);
+    expect(tick.picks).toEqual([]);
   });
 
   test("a scored run playing holds the model's fresh freeplay session too", () => {
