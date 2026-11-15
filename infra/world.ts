@@ -771,9 +771,14 @@ export class WorldLauncher {
     }
   }
 
-  private async boot(rec: WorldRecord): Promise<{ ok: true } | { ok: false; reason: string; noCapacity?: true }> {
+  /**
+   * `camera` false boots without the camera whatever the slots say: the retry
+   * after a camera kept the pod from the namespace or the node, so a camera
+   * never costs an attempt its world.
+   */
+  private async boot(rec: WorldRecord, cameraAllowed = true): Promise<{ ok: true } | { ok: false; reason: string; noCapacity?: true }> {
     let body: Pod;
-    const camera = await this.cameraSlot(this.podName(rec.id));
+    const camera = cameraAllowed && (await this.cameraSlot(this.podName(rec.id)));
     try {
       body = buildWorldPod(this.opts.template, { id: rec.id, realmId: rec.realmId, accounts: rec.accounts, owner: this.opts.owner, rosterPid: this.opts.rosterPid, images: rec.images, camera });
     } catch (e) {
@@ -793,6 +798,10 @@ export class WorldLauncher {
       const reason = `world pod create refused: ${e instanceof Error ? e.message : String(e)}`;
       boot.failed = reason;
       this.opts.store.write(rec);
+      if (camera && isQuotaRefusal(e)) {
+        this.opts.log(`world ${rec.id}: the camera does not fit the quota; booting without it`);
+        return this.boot(rec, false);
+      }
       // A full namespace is no capacity, not a broken world: it does not count towards the hold.
       if (isQuotaRefusal(e)) return { ok: false, reason, noCapacity: true };
       noteBoot(this.opts.store.dir, reason, this.now());
@@ -823,13 +832,24 @@ export class WorldLauncher {
         await this.saveLog(rec.id, name, `boot ${rec.boots.length}`);
         return this.bootFailed(rec, boot, waiting !== undefined ? `the world pod will not start: ${waiting}` : `the world pod ended while it booted (${status?.phase ?? "?"}${status?.reason !== undefined ? `, ${status.reason}` : ""})`);
       }
-      if (status?.phase === "Running") {
+      // Its camera can hold the pod short of Running (an image pull, a
+      // claim), so the worldserver container's own state is what counts.
+      const wsRunning = own.find((c) => c.name === "worldserver")?.state?.running !== undefined;
+      const unschedulable = status?.conditions?.some((c) => c.type === "PodScheduled" && c.status === "False" && c.reason === "Unschedulable") === true;
+      if (camera && unschedulable) {
+        this.opts.log(`world ${rec.id}: the pod cannot be scheduled with its camera; booting without it`);
+        boot.failed = "unschedulable with its camera";
+        this.opts.store.write(rec);
+        await this.removePod(rec.id, 0);
+        return this.boot(rec, false);
+      }
+      if (status?.phase === "Running" || wsRunning) {
         const h = await this.health(url);
         if (h.ready) {
           boot.readyAt = this.now();
           boot.bootMs = boot.readyAt - at;
-          const ws = status.containerStatuses?.find((c) => c.name === "worldserver");
-          const di = status.initContainerStatuses?.find((c) => c.name === "db-import");
+          const ws = status?.containerStatuses?.find((c) => c.name === "worldserver");
+          const di = status?.initContainerStatuses?.find((c) => c.name === "db-import");
           const wsImage = body.spec.containers.find((c) => c.name === "worldserver")?.image;
           const diImage = initContainers(body).find((c) => c.name === "db-import")?.image;
           rec.images = {

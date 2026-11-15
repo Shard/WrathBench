@@ -13,7 +13,7 @@
  * `.appear` is preceded by the invisibility check, and a camera found
  * visible logs out and stays out.
  *
- *   bun infra/camera/director.ts [--run <id>] [--no-label] [--create-only] [--forward-world host:port [--forward-only]]
+ *   bun infra/camera/director.ts [--run <id>] [--create-only] [--forward-world host:port [--forward-only]]
  *
  * Environment: CAMERA_WORLD (a world id, or `shared`), CAMERA_INTERVAL_SECONDS
  * (10), CAMERA_PORT (17980), CAMERA_RUN_DIR (/run/camera: the client's token),
@@ -27,7 +27,6 @@ import { DEADMINES_BOSSES } from "../../runner/viewer/dungeons";
 import { assembleRun } from "./assemble";
 import { CameraClient, INVISIBLE_LUA, luaString, subjectDistanceLua, WORLD_ONLY_LUA } from "./client";
 import { forwardLoopback } from "./forward";
-import { labelRun } from "./label";
 import { cameraDir, FRAMES_DIR, FRAMES_INDEX, frameFile, JPEG_QUALITY, parseFrames, type FrameLine } from "./layout";
 import { cameraEventOf, Shutter, type Kept, type SessionEventRow } from "./shutter";
 import { notLive, subjectOf, subjectsOn, type Subject } from "./subjects";
@@ -42,6 +41,7 @@ const APPEAR_COOLDOWN_MS = 3_000;
 /** A cross-map `.appear` sent during the loading screen is lost: wait it out before trying again. */
 const LOADING_WAIT_MS = 12_000;
 const SUBJECT_CHECK_MS = 10_000;
+const SWEEP_EVERY_MS = 10 * 60_000;
 /**
  * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
@@ -55,8 +55,9 @@ export interface DirectorOptions {
   intervalMs: number;
   race: number;
   pinnedRun?: string;
-  label: boolean;
   createOnly: boolean;
+  /** Set when the process is asked to stop: the follow loop keeps what the ring holds and returns. */
+  stopping?: () => boolean;
   log: (line: string) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -209,8 +210,8 @@ export class Director {
     const shutter = new Shutter({ intervalMs: this.o.intervalMs });
     const session = new StoredSessionHandle(subject.runId, subject.sessionDir);
     let cursor = await session.end("events");
+    // The run's `camera` label is the runner's to write, from the frame index (runner/src/trajectory.ts); never written here into a live run's meta.json.
     this.log(`following ${subject.runId} (${subject.character})`);
-    if (this.o.label) void labelRun(subject.runDir).then((ok) => this.log(ok ? `labelled ${subject.runId} camera:true` : `could not label ${subject.runId}`));
 
     let lastAppear = 0;
     let appearMap: number | null = null;
@@ -220,7 +221,7 @@ export class Director {
     let started = false;
     let skips = 0;
     for (;;) {
-      if (this.refused || this.lost) break;
+      if (this.refused || this.lost || this.o.stopping?.() === true) break;
       const tick = this.now();
       // Events since the last tick.
       try {
@@ -286,7 +287,7 @@ export class Director {
           this.log(`${subject.runId}: ${why}; leaving it`);
           shutter.event({ ts: this.now(), type: "end", detail: why === "ended" ? "run ended" : `run ${why}` });
           for (const k of shutter.flush()) keep(k);
-          if (why === "ended") this.assemble(subject);
+          this.assemble(subject);
           return;
         }
       }
@@ -313,7 +314,7 @@ export class Director {
       return;
     }
     for (;;) {
-      if (this.refused || this.lost) return;
+      if (this.refused || this.lost || this.o.stopping?.() === true) return;
       const subject = this.pick();
       if (subject === null) {
         await this.sleep(15_000);
@@ -356,15 +357,35 @@ if (import.meta.main) {
     if (args.includes("--forward-only")) await new Promise(() => {});
   }
   const intervalS = Number(env["CAMERA_INTERVAL_SECONDS"] ?? 10);
+  let stopping = false;
+  // A parked world's pod gets its grace: keep what the ring holds, then go.
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => (stopping = true));
+  const world = env["CAMERA_WORLD"] ?? "shared";
+  const runsDir = env["CAMERA_RUNS_DIR"] ?? join("data", "runs");
+  // The shared world's director also sweeps the runs no camera follows any
+  // more (sweep.ts): a world per eval's pod is gone at the verdict, with no
+  // grace, before its own director can assemble. A child process, so the
+  // follow loop never waits on an encode.
+  if (world === "shared" && fwd === undefined) {
+    let sweeping = false;
+    const sweep = () => {
+      if (sweeping) return;
+      sweeping = true;
+      const p = Bun.spawn(["bun", join(import.meta.dir, "sweep.ts"), runsDir, "--interval-seconds", String(intervalS)], { stdout: "inherit", stderr: "inherit" });
+      void p.exited.finally(() => (sweeping = false));
+    };
+    setTimeout(sweep, 60_000);
+    setInterval(sweep, SWEEP_EVERY_MS);
+  }
   const director = new Director({
     client: new CameraClient(`http://127.0.0.1:${env["CAMERA_PORT"] ?? "17980"}`, token),
-    runsDir: env["CAMERA_RUNS_DIR"] ?? join("data", "runs"),
-    world: env["CAMERA_WORLD"] ?? "shared",
+    runsDir,
+    world,
     intervalMs: (Number.isFinite(intervalS) && intervalS > 0 ? intervalS : 10) * 1000,
     race: Number(env["CAMERA_RACE"] ?? 1),
     ...(flag(args, "--run") !== undefined ? { pinnedRun: flag(args, "--run")! } : {}),
-    label: !args.includes("--no-label"),
     createOnly: args.includes("--create-only"),
+    stopping: () => stopping,
     log,
   });
   // A world pod never restarts a container: the director outlives its own failures.
@@ -374,7 +395,7 @@ if (import.meta.main) {
     } catch (e) {
       log(`director: ${e instanceof Error ? e.message : String(e)}`);
     }
-    if (args.includes("--create-only") || flag(args, "--run") !== undefined) break;
+    if (stopping || args.includes("--create-only") || flag(args, "--run") !== undefined) break;
     // Refused once (found visible), the camera never logs in again in this process.
     if (director.refusedForGood) await new Promise(() => {});
     await Bun.sleep(30_000);

@@ -292,6 +292,18 @@ export function writeMetaFile(dir: string, meta: object): void {
   renameSync(tmp, path);
 }
 
+/**
+ * Whether a camera followed this run: the label `camera: true` (a label,
+ * never part of the condition; docs/METHODOLOGY.md, "Worlds"). The runner
+ * owns meta.json, so it is the runner that writes the label, on any rewrite,
+ * once the camera's frame index exists beside it (infra/camera/layout.ts);
+ * the camera's director writes it itself only into a run with no live owner
+ * (infra/camera/label.ts). Kept once there.
+ */
+function filmed(dir: string, meta: object | null): boolean {
+  return (meta as { camera?: unknown } | null)?.camera === true || existsSync(join(dir, "camera", "frames.jsonl"));
+}
+
 export class Trajectory {
   readonly dir: string;
   readonly jsonlPath: string;
@@ -364,7 +376,9 @@ export class Trajectory {
     const meta = this.readMetaFile();
     if (meta === null) return;
     try {
-      writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(change(meta)))) as object);
+      const next = change(meta) as RunMeta & RunVerdictFields & { camera?: boolean };
+      if (filmed(this.dir, meta)) next.camera = true;
+      writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(next))) as object);
     } catch {
       /* a full or read-only disk: the record still carries it */
     }
@@ -404,8 +418,7 @@ export class Trajectory {
     for (const k of [...VERDICT_FIELDS, "reflectingSince"] as const) delete given[k];
     const kept: RunVerdictFields = {};
     for (const k of VERDICT_FIELDS) if (before?.[k] !== undefined) (kept as Record<string, unknown>)[k] = before[k];
-    // The camera's label (infra/camera/label.ts) is the director's to write, never the runner's: kept as found.
-    if ((before as { camera?: unknown } | null)?.camera === true) (kept as Record<string, unknown>)["camera"] = true;
+    if (filmed(this.dir, before)) (kept as Record<string, unknown>)["camera"] = true;
     const next = { ...given, ...kept };
     writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(next))) as object);
     this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });

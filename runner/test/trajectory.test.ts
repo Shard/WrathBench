@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -148,6 +148,18 @@ describe("Trajectory", () => {
     expect(traj.runRow("run-z")?.["harness_version"]).toBe("v2");
     // A repair writes only where there is no verdict.
     expect(traj.repairTermination("run-z", "idle", null, 9)).toBe(false);
+    traj.close();
+  });
+
+  test("a filmed run is labelled by the runner's next rewrite, from the camera's frame index", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    traj.writeMeta({ runId: "run-film", harnessVersion: "v", startedAt: 1, config: loadRunConfig({}) });
+    expect(JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"))["camera"]).toBeUndefined();
+    mkdirSync(join(dir, "camera"), { recursive: true });
+    writeFileSync(join(dir, "camera", "frames.jsonl"), "");
+    traj.setTermination("run-film", "no-xp", "done");
+    expect(JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"))["camera"]).toBe(true);
     traj.close();
   });
 

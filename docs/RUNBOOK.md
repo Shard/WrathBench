@@ -2998,14 +2998,19 @@ accounts are not GMs and are untouched; the operator's `SPECTATOR` now enters
 invisible too (`.gm visible on` shows it). The shared world's camera follows
 the newest live freeplay character; a world per eval gets a camera when it
 boots and a slot is free (the shared world's counts as one), and keeps it to
-its verdict. The director labels each run it follows `camera: true` in
-meta.json, and assembles the clips when the run ends.
+its verdict. The runner labels each filmed run `camera: true` in meta.json
+on its next rewrite (a pause or the verdict). A world per eval's pod is gone
+at the verdict with no grace, so the shared world's director sweeps the runs
+tree every ten minutes (`infra/camera/sweep.ts`): it assembles the clips of
+any filmed run with no live owner whose frames are newer than its clips, and
+deletes still frames older than three days once the clips are up to date.
+The shared world's camera must be on for eval worlds' clips to be made.
 
 **Disable.** `camera.enabled: false` and a release. Frames and clips already
 written stay with their runs; the frames age out with the logs.
 
 **Troubleshoot.** The two containers are `camera` (the client; its log is also
-`/run/camera/client.log` in the pod) and `camera-director`:
+its stdout) and `camera-director`:
 
 ```
 kubectl -n <ns> logs deploy/<release>-worldserver -c camera-director --tail=50
@@ -3030,8 +3035,10 @@ kubectl -n <ns> logs <world pod> -c camera --tail=50
 - A world per eval's realm row must exist with `flag` 0, or the client is
   handed another realm and the world refuses it (`login: refused (World(39),
   0x27)` in the client's log).
-- No clips: assembly runs at the run's verdict. By hand, in the runner pod:
-  `bun infra/camera/assemble.ts data/runs/<run-id>`; it is idempotent.
+- No clips: assembly runs when the camera leaves its subject, and in the
+  sweep. By hand, in the runner pod:
+  `bun infra/camera/assemble.ts data/runs/<run-id>` (idempotent), or the
+  whole sweep: `bun infra/camera/sweep.ts data/runs`.
 - Is the camera ever in an agent's record? Search the run's trajectory and the
   module audit log of its session for the camera character's name and guid
   (counts only); expect zero. The session record is not a test: its writer

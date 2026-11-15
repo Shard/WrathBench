@@ -2,13 +2,12 @@
  * The run label `camera: true` in meta.json (docs/METHODOLOGY.md, "Worlds":
  * a label, never part of the condition).
  *
- * The runner owns meta.json and rewrites it whole and atomically
- * (runner/src/trajectory.ts `writeMetaFile`); `writeMeta` carries `camera`
- * over from the file it replaces, as it does the verdict fields, so a
- * launch or a resume keeps the label. A read-modify-write of the runner's
- * (`updateMeta`) racing this one can still drop it, so the label is written
- * the same way (a temporary file beside it, renamed into place), read back
- * after a pause, and written again until it holds.
+ * The runner owns meta.json and writes the label itself, on its next rewrite
+ * once the camera's frame index exists (runner/src/trajectory.ts `filmed`),
+ * so a live run's meta.json is never written from here. These write it only
+ * into a run with no live owner (sweep.ts): the same way the runner does (a
+ * temporary file beside it, renamed into place), and not at all if the file
+ * changed since it was read.
  */
 
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
