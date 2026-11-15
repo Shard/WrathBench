@@ -155,6 +155,8 @@ name it, which narrows what the agent may see and never widens it. Quest
 objective areas the server sends in answer to a client's quest POI query
 (`SMSG_QUEST_POI_QUERY_RESPONSE`) are a packet the client receives and are
 served (operator, 2026-10-29); quest locations read from the database stay out.
+A successful accept returns the quest's objective areas, asked with the query
+the client itself sends after an accept (operator decision, 2026-11-15).
 
 **Changing the contracts.** Any widening of either contract is a major harness
 version. Any narrowing is at least a minor version and is noted here. Before
@@ -227,7 +229,9 @@ first sending nothing and saying what will happen. It is in the SDK
 reference like any helper, and the hints of the two refusals a stranded
 character keeps meeting, a route that ends (`path_incomplete`) and a step
 that cannot be climbed (a climb's `drop`), name it (operator decision,
-2026-11-12). The system prompt does not.
+2026-11-12), once per stretch of these refusals: the first carries the
+sentence and the later ones leave it off until a move arrives (operator
+decision, 2026-11-15). The system prompt does not.
 
 ## Context policy
 
