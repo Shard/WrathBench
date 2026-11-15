@@ -893,11 +893,12 @@ export function createRenderer(
      * so it names only keys the run wave has written. The model is the run's
      * own, a public fact on every row.
      */
+    const modelOf = new Map(results.runs.map((r) => [r.runId, r.model]));
     const highlight: HighlightResponse = projectHighlight({
       highlight: pickHighlight(
         rows.flatMap((r) => {
           const clips = clipsOf.get(r.runId);
-          return clips === undefined ? [] : [{ runId: r.runId, model: served.get(r.runId)?.model ?? null, clips }];
+          return clips === undefined ? [] : [{ runId: r.runId, model: modelOf.get(r.runId) ?? null, clips }];
         }),
       ),
     });

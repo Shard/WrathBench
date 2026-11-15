@@ -44,6 +44,7 @@ import {
   rawPath,
   SNAPSHOT_MODE,
   type ApiInfoResponse,
+  type ClipsResponse,
   type ComparabilityView,
   type EventsServedEntry,
   type FeedEntry,
@@ -60,6 +61,7 @@ import { Coins, QuestCount } from "../components/CharacterFacts";
 import { EventFeed, InventoryPanel, XpBar, createInspectorClient, type SessionSummary } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
+import { ReplayBlock } from "../components/Replay";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
@@ -204,6 +206,15 @@ export default function RunDetail() {
    * failure never a banner — the pad is one panel, not the page.
    */
   const [pad, setPad] = createSignal<string | null>(null);
+  /*
+   * The camera's clips, or null for a run that has none: read with the pad
+   * and on the same changes, since a director may add them after the run.
+   * Compared by the clip list, so a re-read that brings the same clips back
+   * leaves the player alone.
+   */
+  const [clips, setClips] = createSignal<ClipsResponse | null>(null, {
+    equals: (a, b) => JSON.stringify(a) === JSON.stringify(b),
+  });
 
   /*
    * The run's session record as the inspector reads it (`/api/inspector`, the
@@ -219,6 +230,15 @@ export default function RunDetail() {
       .then((s) => setSession(s.session))
       .catch(() => setSession(null));
   }
+  const loadClips = (): void => {
+    void api
+      .clips(params.id)
+      .then(setClips)
+      .catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) setClips(null);
+        else logError("run clips", e);
+      });
+  };
   const loadPad = (): void => {
     void api
       .scratchpad(params.id)
@@ -326,6 +346,7 @@ export default function RunDetail() {
 
     void api.info().then(setInfo).catch(() => undefined);
     loadPad();
+    loadClips();
 
     /*
      * The feed's window is asked for beside the detail rather than after it:
@@ -438,6 +459,7 @@ export default function RunDetail() {
             }
             // The pad has no tail in either build; it moves with the detail.
             loadPad();
+            loadClips();
           });
         });
         // Only a live run needs the tail; a finished one never grows again.
@@ -801,6 +823,8 @@ export default function RunDetail() {
                     tally. The cards below keep the run's own figures, under a
                     heading that says which they are.
                   */}
+                  <Show when={clips()}>{(c) => <ReplayBlock clips={c()} />}</Show>
+
                   <Show when={d().character}>
                     {(st) => (
                       <>
@@ -834,6 +858,9 @@ export default function RunDetail() {
                         {/* The world it played on, a world per eval's id; nothing for the shared one. */}
                         <Show when={run().world !== undefined && run().world !== "shared" ? run().world : undefined}>
                           {(w) => <span class="mono" title="world"> · {w()}</span>}
+                        </Show>
+                        <Show when={d().camera === true}>
+                          <span title="a camera followed this run; it changes nothing about the run"> · camera</span>
                         </Show>
                       </div>
                       {/* The id the provider actually served, plus the CLI that
