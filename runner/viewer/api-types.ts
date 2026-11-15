@@ -1046,6 +1046,7 @@ export interface CaptionCueView {
  * `/api/run/<id>/clips`: a run's one video, its parts back to back, with its
  * chapters, the model's words, and the time map between the timeline and run
  * time (`[videoSeconds, runTimeMs]` keypoints; `runner/viewer/video-time.ts`).
+ * A run with none is `null` to a private handle and a 404 to a public one.
  */
 export interface ClipsResponse {
   runId: string;
@@ -1057,7 +1058,8 @@ export interface ClipsResponse {
 
 /**
  * `/api/run/<id>/camera/latest`: the run's newest camera frame, private only
- * (`runner/viewer/camera-live.ts`). The picture is `/camera/latest.jpg`.
+ * (`runner/viewer/camera-live.ts`), or `null` when it has none. The picture is
+ * `/camera/latest.jpg`.
  */
 export interface LatestFrameResponse {
   runId: string;

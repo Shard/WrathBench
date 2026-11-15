@@ -2068,11 +2068,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
      * each clip's video and poster, which only a clip the list names reaches
      * and the frames never do. Public mode serves both too: the snapshot
      * publishes the same clips, and the list crosses `projectClips`, which
-     * redacts each caption as model text is. A run with no clips is a 404.
+     * redacts each caption as model text is. A run with no clips is a 404 to
+     * a public handle and `null` to a private one: the private pages ask on
+     * every run, filmed or not (the `camera` label lags a live run's filming),
+     * and a 404 there is a console error on every page.
      */
     if (rest === "/clips") {
       const body = clipsView(runsDir, runId);
-      if (body === null) return notFound("no clips");
+      if (body === null) return publicMode ? notFound("no clips") : json(null);
       return pub(body, projectClips, [runId]);
     }
     /*
