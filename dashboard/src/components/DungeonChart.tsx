@@ -6,7 +6,7 @@
  * Drawn as the ladder's scatter draws (`LadderChart`): the same frame, axes
  * and cue (`ChartParts`), the same label placement (`ladderChartLayout`), the
  * model's logo puck ringed in its harness colour, and only the labels on the
- * front standing, the rest named while pointed at. The row the reader points
+ * fronts standing (`standingKeys`), the rest named while pointed at. The row the reader points
  * at, here or in the table, lights in both through the page's one hover
  * signal. A point is a link to its best attempt, as the table's "k of n" is.
  * There is no card: a board row has no means for one to read, so the point's
@@ -16,10 +16,9 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { DungeonRowView, EpisodeIdView } from "../api/client";
-import { type DungeonPoint, attemptHref, bossTicks, clearTimeTicks, dungeonPoints, pointTitle } from "../lib/dungeons";
+import { type DungeonPoint, attemptHref, bossTicks, clearTimeTicks, dungeonPoints, pointTitle, standingKeys } from "../lib/dungeons";
 import { fmtPlaytimeTick } from "../lib/format";
 import { LABEL_FONT, type PlacedPoint, ladderChartLayout } from "../lib/ladder";
-import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { InfoHint } from "./InfoHint";
 import { harnessColour } from "./LadderChart";
@@ -46,7 +45,7 @@ export function DungeonChart(props: {
   boardNote: string;
 }) {
   const model = createMemo(() => dungeonPoints(props.rows));
-  const standing = createMemo(() => new Set(paretoSteps(model().points, { x: X_SPEC.better, y: Y_SPEC.better }).front.map((p) => p.key)));
+  const standing = createMemo(() => standingKeys(model().points));
   const layout = createMemo(() => ladderChartLayout(model().points, BOX, X_SPEC, Y_SPEC, standing()));
   const lit = (p: DungeonPoint): boolean => props.hovered === p.key;
   const named = (d: PlacedPoint<DungeonPoint>): boolean => d.labelled || lit(d.point);
@@ -56,7 +55,7 @@ export function DungeonChart(props: {
 
   const note = (): string => {
     const lines = [
-      `Time from launch against bosses killed, one point per model condition at its best attempt: a cleared attempt at its time to clear, the rest at the time of their last boss. Only the points on the front are named; pointing at any other names it.`,
+      `Time from launch against bosses killed, one point per model condition at its best attempt: a cleared attempt at its time to clear, the rest at the time of their last boss. The order is the table's, cleared rows first. Only the points on a front, of the cleared attempts or of the rest, are named; pointing at any other names it.`,
       props.boardNote,
     ];
     if (model().omitted.length > 0) lines.push(`Not plotted: ${model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.`);

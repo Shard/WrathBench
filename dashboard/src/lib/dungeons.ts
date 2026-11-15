@@ -6,7 +6,8 @@
 
 import type { DungeonAttemptView, DungeonRowView, EpisodeIdView } from "../api/client";
 import { fmtDuration } from "./format";
-import { characterSeriesLabel, rungSixKey, timeTicks } from "./ladder";
+import { characterSeriesLabel, timeTicks } from "./ladder";
+import { paretoSteps } from "./pareto";
 import { partyHref } from "./party";
 
 /** The Deadmines bosses by entry, in the board's order (docs/proposals/GROUP-PLAY.md §6). */
@@ -61,8 +62,11 @@ export function attemptTitle(a: DungeonAttemptView): string {
   return `${entered}; ended ${a.reason ?? "—"}`;
 }
 
-/** What a board row is keyed on, for the chart and the table to light together: the key rung 6 joins on. */
-export const boardRowKey = (row: DungeonRowView): string => rungSixKey(row);
+/** What a board row is keyed on, for the chart and the table to light together: the model and the condition's public dimensions. */
+export function boardRowKey(row: DungeonRowView): string {
+  const c = row.condition;
+  return JSON.stringify([row.model ?? "", row.effort ?? "", row.compactWindow ?? "", row.harness ?? "", row.series ?? "", c.loop, c.yield, c.pinned, c.wiki]);
+}
 
 /** Where a row's best attempt opens: its party's page on five agents, its run on one. */
 export function attemptHref(row: DungeonRowView): string {
@@ -92,9 +96,10 @@ export interface DungeonPointsModel {
 /**
  * The chart's points: one per row, at its best attempt, so a point and a row
  * read the same attempt. A cleared attempt is placed at its time to clear, an
- * uncleared one at the time of its last boss; either way more bosses in less
- * time is the board's own order, top-left. A row whose best attempt killed no
- * boss is left off and named in the chart's note.
+ * uncleared one at the time of its last boss: speed against progress, more
+ * bosses in less time top-left. The order is the table's, which puts every
+ * cleared row first; the chart does not restate it. A row whose best attempt
+ * killed no boss is left off and named in the chart's note.
  */
 export function dungeonPoints(rows: readonly DungeonRowView[]): DungeonPointsModel {
   const points: DungeonPoint[] = [];
@@ -126,6 +131,18 @@ export function clearTimeTicks(maxMs: number): number[] {
 
 /** The bosses axis: every count from none to all eight, so a step is a boss. */
 export const bossTicks = (): number[] => Array.from({ length: BOSS_NAMES.size + 1 }, (_, i) => i);
+
+/**
+ * The points whose labels stand: the front of the cleared points and the
+ * front of the rest, each by less time and more bosses. One front over both
+ * would let an uncleared attempt that got further faster hide the label of a
+ * cleared one the table ranks above it.
+ */
+export function standingKeys(points: readonly DungeonPoint[]): Set<string> {
+  const better = { x: "lower", y: "higher" } as const;
+  const front = (cleared: boolean): string[] => paretoSteps(points.filter((p) => p.row.best.cleared === cleared), better).front.map((p) => p.key);
+  return new Set([...front(true), ...front(false)]);
+}
 
 /** A point's hover: the row's name, its best attempt, and its k of n. */
 export function pointTitle(p: DungeonPoint): string {

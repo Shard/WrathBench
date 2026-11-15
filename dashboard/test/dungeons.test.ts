@@ -5,8 +5,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { DungeonAttemptView, DungeonRowView } from "../src/api/client";
-import { attemptHref, boardRowKey, bossTicks, clearTimeTicks, dungeonPoints, pointTitle } from "../src/lib/dungeons";
-import { ladderChartLayout, rungSixKey } from "../src/lib/ladder";
+import { attemptHref, boardRowKey, bossTicks, clearTimeTicks, dungeonPoints, pointTitle, standingKeys } from "../src/lib/dungeons";
+import { ladderChartLayout } from "../src/lib/ladder";
 
 const attempt = (o: Partial<DungeonAttemptView> = {}): DungeonAttemptView => ({
   runIds: ["r1"],
@@ -52,10 +52,20 @@ describe("dungeonPoints", () => {
     expect(m.omitted[0]!.label).toContain("none");
   });
 
-  test("a point and a row light together on the key rung 6 joins on", () => {
+  test("a point and a row light together on one key, distinct per condition", () => {
     const [p] = dungeonPoints([cleared]).points;
     expect(p!.key).toBe(boardRowKey(cleared));
-    expect(p!.key).toBe(rungSixKey(cleared));
+    expect(boardRowKey({ ...cleared, effort: "low" })).not.toBe(boardRowKey(cleared));
+  });
+
+  test("an uncleared attempt that got further faster never hides a cleared one's label", () => {
+    // Every boss but VanCleef in an hour, against a clear in 1h40m without Cookie: 7 and 7.
+    const quick = row("quick", attempt({ bosses: [644, 643, 642, 1763, 646, 647, 645], lastBossMs: 3_600_000 }));
+    const behind = row("behind", attempt({ bosses: [644], lastBossMs: 5_000_000 }));
+    const stand = standingKeys(dungeonPoints([cleared, quick, behind]).points);
+    expect(stand.has(boardRowKey(cleared))).toBe(true);
+    expect(stand.has(boardRowKey(quick))).toBe(true);
+    expect(stand.has(boardRowKey(behind))).toBe(false);
   });
 
   test("the best attempt opens on its party's page, or its run's", () => {
