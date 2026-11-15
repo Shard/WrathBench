@@ -73,6 +73,11 @@ jobs:
       - name: Dashboard build
         run: bun run dashboard:build
 
+      # The camera's clip assembly test encodes testsrc frames
+      # (infra/camera-assemble.test.ts); it needs ffmpeg and ffprobe.
+      - name: ffmpeg
+        run: command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
+
       - name: Test suite
         run: bun test
 

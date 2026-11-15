@@ -12,11 +12,14 @@ These are the lines the project does not cross. They are rules, not arguments; t
 
 `minimap/`, our MPQ/BLP reader, ships as tooling only: the tiles it produces stay in `data/` and out of git. The one exception to the line above is those tiles on the public dashboard's map — the minimap tiles, their zoomed-out levels and, by the operator's decision of 2026-10-18, the painted world-map layer baked from the client's zone maps — which are served from the published bucket's `tiles/` prefix, put there by an explicit upload step and never by the snapshot loop; `docs/PUBLIC-DASHBOARD.md` and `infra/cloudflare/README.md` hold the mechanics. Item icons are not an exception and are neither extracted nor served: the dashboard links an item's `item_template.entry` to Wowhead and that site's tooltip script supplies the art in the reader's browser, a request consequence recorded in `docs/PUBLIC-DASHBOARD.md`.
 
+Screenshots and video are a second exception (operator, 2026-11-15). A camera may take still frames of a run, and video made from them may be published. A frame shows the game world only: no interface, chat or game text, and no sound. Frames live under `data/`, never in git, and no client file is ever published.
+
 ## Never a way for a human to play
 
 - No game client can connect. The game protocol is never exposed publicly; the only outside surface is the MCP.
 - No web client, no spectate-and-type, no interface that amounts to a person playing through an agent.
 - The one client login that exists is the operator's own inspection account, created by `infra/spectator-account.ts` on the operator's realm and reached only over a port-forward on the operator's machine. It is how the operator watches a run, not a way for anyone else to play, and it stays in the tree.
+- The camera is an unattended client on its own account. It is invisible to every other session and only takes pictures; no one can play through it.
 - No recruited players, no public realm listing, no advertised server.
 
 ## Never money
