@@ -53,6 +53,7 @@ const ROSTER: Record<string, FleetRosterEntry> = {
   "sonnet-100k": { model: "sonnet", driver: "claude-code", effort: "low", compactWindow: "100k", tier: "t2", idle: "none" },
   sonnet: { model: "sonnet", driver: "claude-code", effort: "low", tier: "t2", idle: "none" },
   astra: { model: "gpt-6-astra", driver: "codex", effort: "high", tier: "t1", idle: "none" },
+  chooser: { model: "x/chooser:free", tier: "t1", idle: "unlimited", billing: "free", chooseStart: true },
 };
 
 function job(over: Partial<FleetJob> & Pick<FleetJob, "ref" | "episode">): FleetJob {
@@ -140,6 +141,7 @@ function everyLane(): { name: string; spec: Resolved; resume: boolean }[] {
     specsOf(job({ ref: "glm-free", episode: "freeplay", attempt: 1, continueDropped: { runId: "fleet-x", reason: "account occupied" } })),
   );
   add("freeplay, a hand-written job", specsOf(job({ ref: "glm-free", episode: "freeplay", source: "queue", repeat: "loop" })));
+  add("freeplay, the model chooses its start", specsOf(job({ ref: "chooser", episode: "freeplay", attempt: 1 })));
   add("queue job, pinned", specsOf(job({ ref: "sonnet", episode: "e90", source: "pinned", account: "SHAKEOUT", repeat: 2 })));
   add("probe, release image", specsOf(job({ ref: "glm-free", episode: "probing", attempt: 1, probe: { campaign: "race-probe", version: 1, cell: "orc-warrior", arm: "base" } }), campaigns));
   add(

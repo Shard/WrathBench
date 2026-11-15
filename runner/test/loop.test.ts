@@ -788,6 +788,39 @@ describe("runLoop fresh-character precondition", () => {
     expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(0);
   });
 
+  test("a run whose model chooses its start records the race and class its character has, once (operator, 2026-11-15)", async () => {
+    const adapter = new StubAdapter([
+      { content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] },
+      { content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "2+2" } }] },
+    ]);
+    const { dir, options } = setup(
+      adapter,
+      { episode: "freeplay", chooseStart: true },
+      { self: { guid: "301", name: "Brannoc", level: { value: 1 }, fields: { race: { value: 6 }, class: { value: 7 } } } },
+    );
+    // The launch's placeholder, before the character is seen.
+    expect(readMeta(dir)?.config.race).toBe(1);
+    await runLoop(options);
+    expect(readMeta(dir)?.config.race).toBe(6);
+    expect(readMeta(dir)?.config.class).toBe(7);
+    expect(readMeta(dir)?.config.chooseStart).toBe(true);
+    const chosen = readTrajectory(dir).filter((r) => r.t === "harness" && r["kind"] === "start_chosen");
+    expect(chosen).toHaveLength(1);
+    expect(chosen[0]).toMatchObject({ race: 6, class: 7 });
+  });
+
+  test("a run that does not choose its start records none, whatever its character's fields say", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(
+      adapter,
+      { episode: "freeplay", race: 3, class: 2 },
+      { self: { guid: "301", name: "Brannoc", level: { value: 1 }, fields: { race: { value: 6 }, class: { value: 7 } } } },
+    );
+    await runLoop(options);
+    expect(readMeta(dir)?.config.race).toBe(3);
+    expect(readTrajectory(dir).some((r) => r.t === "harness" && r["kind"] === "start_chosen")).toBe(false);
+  });
+
   test("a fresh level-1 character with an unlisted guid plays on", async () => {
     const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
     const { options } = setup(adapter, {}, { self: { guid: "301", level: { value: 1 } } });

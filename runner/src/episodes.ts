@@ -100,6 +100,14 @@ export interface EpisodeTier {
    * on every other id.
    */
   task?: { agents: number; characters: number };
+  /**
+   * The fresh character a level episode starts as, by the client's own race
+   * and class ids (operator, 2026-11-15): fixed by the id, identical for every
+   * model, and not a roster entry's to change (`episodeStart`). Absent on the
+   * ids whose start is someone else's: a probe's cell, a task episode's
+   * staged party, a freeplay entry's own.
+   */
+  start?: { race: number; class: number };
 }
 
 export const EPISODES = {
@@ -111,9 +119,10 @@ export const EPISODES = {
     toolCalls: 3000,
     objectiveAllowed: false,
     scored: true,
+    start: { race: 1, class: 2 },
     summary:
       "The default episode, and the one every model starts on. Ninety minutes of wall clock, a " +
-      "fresh level-1 character, no operator objective, idle and no-XP watchdogs at " +
+      "fresh level-1 Human Paladin, no operator objective, idle and no-XP watchdogs at " +
       "twenty minutes each, and a 3000-call runaway ceiling — 1000 calls per thirty minutes, " +
       "a guard against a loop rather than a task budget. Short " +
       "enough that a full roster gets several episodes a night, which is what makes it the " +
@@ -132,9 +141,10 @@ export const EPISODES = {
     toolCalls: 12_000,
     objectiveAllowed: false,
     scored: true,
+    start: { race: 3, class: 2 },
     summary:
-      "The long scored episode: six hours of wall clock, otherwise identical to e90 — same fresh " +
-      "start, same fixed prompt, same tools, no objective. Idle watchdog only; the no-XP " +
+      "The long scored episode: six hours of wall clock and a fresh level-1 Dwarf Paladin, otherwise " +
+      "identical to e90 — same fixed prompt, same tools, no objective. Idle watchdog only; the no-XP " +
       "watchdog is deliberately off, because walking across a continent earns nothing for " +
       "hours and that is the behaviour this episode exists to permit. Scored in its own group: an " +
       "e360 row never shares a chart with an e90 row, since four times the budget is four " +
@@ -235,6 +245,30 @@ export type LevelEpisodeId = Exclude<ScoredEpisodeId, TaskEpisodeId>;
 
 export function isLevelEpisode(id: EpisodeId): id is LevelEpisodeId {
   return isScoredEpisode(id) && !isTaskEpisode(id);
+}
+
+/**
+ * The start an episode fixes, or undefined when the id leaves it to someone
+ * else (`EpisodeTier.start`). An unknown or absent id fixes nothing.
+ */
+export function episodeStart(id: string | null | undefined): { race: number; class: number } | undefined {
+  return isEpisodeId(id) ? (EPISODES[id] as EpisodeTier).start : undefined;
+}
+
+/**
+ * Why a launch's race or class cannot apply to its episode, or null when it
+ * can: an episode that fixes its start takes it from its id, and a stated
+ * race or class that differs is refused rather than run under the episode's
+ * name (operator, 2026-11-15). Undefined means not stated.
+ */
+export function startRefusal(id: string | null | undefined, race: number | undefined, klass: number | undefined): string | null {
+  const start = episodeStart(id);
+  if (start === undefined) return null;
+  if ((race === undefined || race === start.race) && (klass === undefined || klass === start.class)) return null;
+  return (
+    `--episode ${String(id)} starts every model on race ${start.race}, class ${start.class}, fixed by the episode; ` +
+    `--race ${race ?? start.race} --class ${klass ?? start.class} cannot apply to it (a chosen start is a freeplay run's)`
+  );
 }
 
 /** The tiers as a list, in the order they are presented. */

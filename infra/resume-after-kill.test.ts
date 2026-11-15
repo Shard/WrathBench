@@ -181,7 +181,7 @@ describe("2026-09-20: the evicted pod's freeplay runs come back where they left 
           "--driver", "stub", "--stub", script,
           "--run-id", runId, "--episode", "e90",
           "--runs-dir", runsDir, "--module-url", `http://127.0.0.1:${server.port}`,
-          "--account", "RUNNER2", "--race", "3", "--class", "2",
+          "--account", "RUNNER2", "--race", "1", "--class", "2",
           "--step-interval-ms", "0", "--max-turns", "1",
         ],
         cwd: runsDir,

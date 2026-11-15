@@ -523,8 +523,23 @@ export const runConfigSchema = z.object({
   /** Game account for this run's sessions. Parallel runs need distinct accounts
    * (the core allows one live session per account). Created via bootstrap. */
   account: accountSchema.default(DEFAULT_ACCOUNT),
+  /**
+   * The character's race and class, by the client's ids. A level episode's
+   * are its id's (`EpisodeTier.start`, filled in at launch); otherwise the
+   * launch's, else Human Paladin. On a run whose model chooses its start
+   * they are a placeholder until the character is in the world, then what it
+   * chose (`trajectory.setStart`).
+   */
   race: z.number().int().min(1).max(11).default(1),
   class: z.number().int().min(1).max(11).default(2),
+  /**
+   * The model chooses its own race and class (`--choose-start`; operator,
+   * 2026-11-15): told so at its first launch, it names them at createSession,
+   * and the run records what it chose over the placeholder above. A freeplay
+   * run's only (`loadRunConfig`), so never part of a comparison; a
+   * continuation keeps the character it has and drops it.
+   */
+  chooseStart: z.literal(true).optional(),
 
   /**
    * Which driver reaches the model.
@@ -1061,6 +1076,13 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // objective's place, and it carries exactly as many agents and characters
   // as the id says: one agent driving the party's five (`deadmines-solo`,
   // the grant), or one member of five (`deadmines`, the party stamp).
+  // Refused, never ignored: a chosen start is freeplay's alone (operator,
+  // 2026-11-15); a level episode's start is its id's, a probe's its cell's
+  // and a task episode's its staged party's.
+  if (config.chooseStart === true && config.episode !== "freeplay") {
+    throw new Error(`a start the model chooses is a freeplay run's; --episode ${config.episode ?? "(none)"} has its own`);
+  }
+  if (config.chooseStart === true && config.fanout !== undefined) throw new Error("a start the model chooses is one character's; a fan-out run's characters are staged");
   const taskProblem = taskEpisodeRefusal(config);
   if (taskProblem !== null) throw new Error(taskProblem);
   // Refused at launch as well as in the scheduler: a probe-only driver's run

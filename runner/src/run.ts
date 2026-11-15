@@ -61,7 +61,8 @@ import { comparabilityOf, fetchServerBuild, harnessSeries, sameComparability } f
 import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
 import { holdsOnlyLaunchFiles, readCampaignFile } from "./campaign-file";
 import { RunArgsError, parseRunArgs } from "./run-flags";
-import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
+import { EPISODES, EPISODE_IDS, episodeStart, isEpisodeId, startRefusal } from "./episodes";
+import { INVALID_START_FAILURE } from "./starts";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
 import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
@@ -91,7 +92,7 @@ import {
 } from "./config";
 import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
-import { continuedSessionNote, freshCharacterNote, resumeSessionNote, stagedCharacterNote } from "./prompt";
+import { chooseCharacterNote, continuedSessionNote, freshCharacterNote, invalidStartNote, resumeSessionNote, stagedCharacterNote } from "./prompt";
 import { CLIENT_CACHE_FILE, ClientCacheStore } from "@wrathbench/mcp/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { Workspace } from "@wrathbench/mcp/workspace";
@@ -107,6 +108,7 @@ import { partyOwnGuids } from "./party";
 import { fanoutSessionNote, openFanout, writeRoster } from "./fanout-run";
 import { openSessionRecord, RecordSignals, removeSessionRing, SHARED_WORLD, worldPointerOf } from "./session-record";
 import type { CharacterRoster } from "@wrathbench/mcp/fanout";
+import type { SnippetResult } from "@wrathbench/mcp";
 import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
@@ -262,8 +264,13 @@ export function configFromArgs(
         : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
     token: typeof args["token"] === "string" ? args["token"] : newSessionToken(),
     account: typeof args["account"] === "string" ? args["account"] : fanout?.accounts[0],
-    race: num(args["race"]),
-    class: num(args["class"]),
+    // A level episode's start is its id's (operator, 2026-11-15): filled in
+    // here when the launch states none, and a stated one that differs is
+    // refused in `main` before this runs (`startRefusal`).
+    race: num(args["race"]) ?? episodeStart(typeof args["episode"] === "string" ? args["episode"] : undefined)?.race,
+    class: num(args["class"]) ?? episodeStart(typeof args["episode"] === "string" ? args["episode"] : undefined)?.class,
+    // A freeplay run's model chooses its own race and class (`loadRunConfig` refuses it elsewhere).
+    ...(flag(args["choose-start"]) === true ? { chooseStart: true as const } : {}),
     episode: typeof args["episode"] === "string" ? args["episode"] : undefined,
     driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
     model: typeof args["model"] === "string" ? args["model"] : undefined,
@@ -351,6 +358,18 @@ export function configFromArgs(
   const id = c.runId ?? runId;
   // The world its launcher made for it, else the shared one: identity from here on.
   return { ...c, runId: id, token: c.token ?? newSessionToken(), world: worldPointerOf(join(c.runsDir, id)) ?? SHARED_WORLD };
+}
+
+/**
+ * The runner's note on a snippet whose createSession named a race and class
+ * no character can have, on a run whose model chooses its start
+ * (`SandboxHost`'s `resultNote`): the pairs the server allows, said with the
+ * failure. Read from everything the snippet returned, since a snippet that
+ * caught the error itself still holds it in its value or its console.
+ */
+export function chosenStartNote(res: Pick<SnippetResult, "error" | "value" | "logs">): string | undefined {
+  const text = [res.error ?? "", res.value ?? "", ...res.logs.map((l) => l.text)].join("\n");
+  return INVALID_START_FAILURE.test(text) ? invalidStartNote() : undefined;
 }
 
 /**
@@ -582,7 +601,7 @@ async function main(): Promise<void> {
    * `campaign-launch.ts` decides which launches may name one at all.
    */
   if (args["character"] !== undefined) {
-    const clash = (["race", "class", "resume", "continue-from"] as const).filter((f) => args[f] !== undefined);
+    const clash = (["race", "class", "choose-start", "resume", "continue-from"] as const).filter((f) => args[f] !== undefined);
     if (clash.length > 0) {
       console.error(
         `--character launches on a staged character, whose race and class are the staging's and which a resume or a continuation already names; it cannot be given with ${clash.map((f) => `--${f}`).join(", ")}`,
@@ -593,6 +612,22 @@ async function main(): Promise<void> {
   if (args["episode"] !== undefined && !isEpisodeId(args["episode"])) {
     console.error(`unknown --episode ${String(args["episode"])} (one of: ${EPISODE_IDS.join(", ")})`);
     process.exit(2);
+  }
+  /*
+   * A level episode's start is its id's (operator, 2026-11-15): a launch that
+   * states another race or class is refused, never run under the episode's
+   * name. A resume restates neither and keeps the start it was launched on.
+   */
+  if (args["resume"] === undefined) {
+    const startWhy = startRefusal(typeof args["episode"] === "string" ? args["episode"] : undefined, num(args["race"]), num(args["class"]));
+    if (startWhy !== null) {
+      console.error(startWhy);
+      process.exit(2);
+    }
+    if (flag(args["choose-start"]) === true && (args["race"] !== undefined || args["class"] !== undefined)) {
+      console.error("--choose-start lets the model choose its race and class; it cannot be given with --race or --class");
+      process.exit(2);
+    }
   }
   /*
    * A tier that forbids an objective forbids it at launch, not on the chart.
@@ -733,7 +768,8 @@ async function main(): Promise<void> {
       continuation = loaded;
       // The character's identity is the predecessor's; the launch's race/class
       // flags are the fleet restating the entry, and they must not disagree.
-      config = { ...config, character: loaded.character, race: loaded.race, class: loaded.class };
+      // A chosen start was chosen by the predecessor: the character it has is kept.
+      config = { ...config, character: loaded.character, race: loaded.race, class: loaded.class, chooseStart: undefined };
     }
   }
   // Deliberately NOT registered with `trajectory.redact`: meta.json is scrubbed
@@ -1030,6 +1066,8 @@ async function main(): Promise<void> {
     clientCache,
     ...(session !== undefined ? { session } : {}),
     ...(config.fanout !== undefined ? { fanout: { maxCharacters: config.fanout.characters }, signals: fanoutSignals } : {}),
+    // A run whose model chooses its start is told the pairs again whenever a createSession names one no character can have.
+    ...(config.chooseStart === true ? { resultNote: chosenStartNote } : {}),
   });
   /** A fan-out run's roster, on that sandbox: its seats, their leases and their records (`fanout-run.ts`). */
   const roster: CharacterRoster | undefined =
@@ -1394,6 +1432,7 @@ async function main(): Promise<void> {
       raceName: raceName(config.race),
       className: className(config.class),
       ...(config.loop === "program" ? { program: true } : {}),
+      ...(config.chooseStart === true ? { chooseStart: true } : {}),
     });
   };
 
@@ -1466,13 +1505,16 @@ async function main(): Promise<void> {
           {
             ts: Date.now(),
             kind: "session_note",
-            text: freshCharacterNote({
-              race: config.race,
-              class: config.class,
-              raceName: raceName(config.race),
-              className: className(config.class),
-              taken: takenNames,
-            }),
+            text:
+              config.chooseStart === true
+                ? chooseCharacterNote({ taken: takenNames })
+                : freshCharacterNote({
+                    race: config.race,
+                    class: config.class,
+                    raceName: raceName(config.race),
+                    className: className(config.class),
+                    taken: takenNames,
+                  }),
           } as const,
         ];
 

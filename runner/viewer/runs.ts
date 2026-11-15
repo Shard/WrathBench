@@ -93,6 +93,8 @@ interface MetaShape {
     character?: string;
     race?: number;
     class?: number;
+    /** The model chooses its start (`RunConfig.chooseStart`). */
+    chooseStart?: boolean;
     apiBase?: string;
     billing?: string;
     objective?: string;
@@ -318,10 +320,13 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     /*
      * Race and class are config, not comparability: they are read here beside
      * the character name and nothing recomputes or back-labels them. A run
-     * written before the fields existed keeps null.
+     * written before the fields existed keeps null, and so does a run whose
+     * model chooses its start until its character is seen: its config holds
+     * a placeholder until then (`trajectory.setStart`).
      */
-    row.race = num(meta.config?.race);
-    row.class = num(meta.config?.class);
+    const startUnchosen = meta.config?.chooseStart === true && meta.config?.character === undefined;
+    row.race = startUnchosen ? null : num(meta.config?.race);
+    row.class = startUnchosen ? null : num(meta.config?.class);
     row.raceName = raceName(row.race);
     row.className = className(row.class);
     row.characterLabel = characterLabel(row.race, row.class);

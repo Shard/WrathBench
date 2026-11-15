@@ -361,8 +361,12 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             (runner/src/roster-refusal.ts) and nothing else; anything else REFUSES the entry by
             name ("Strict keys").
             NO character name: the model names its own at createSession. `character` is REFUSED
-            by name here (as it is in a campaign or a cell). `race` and `class` stay: they are
-            the episode's comparability dimensions. Never an account. Two scheduling axes
+            by name here (as it is in a campaign or a cell). `race` and `class` (client ids, 1-11)
+            are the entry's FREEPLAY start: `e90` (Human Paladin) and `e360` (Dwarf Paladin)
+            fix their own and ignore them, a probe takes its cell's, and `fleet status` and the
+            dry run say so. `chooseStart: true`, never beside them, lets a freeplay run's model
+            choose its race and class at createSession (operator, 2026-11-15). Never an
+            account. Two scheduling axes
             (docs/METHODOLOGY.md, "The tier is the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
@@ -583,7 +587,7 @@ to the median counted `e90` of this series on the wrathbench harness
 estimate.
 
 **promote** writes an ordinary roster entry, `{ model, tier }` plus `race`
-and `class` when given, through the same validation and attributed write as
+and `class` (its freeplay start) when given, through the same validation and attributed write as
 any roster edit. The tier has no default: promotion never picks one
 (docs/METHODOLOGY.md, "The tier is the evidence budget"). The entry states no
 `routing`, `billing` or `idle`, so each takes its default. A refusal (a name

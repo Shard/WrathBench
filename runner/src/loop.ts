@@ -217,6 +217,13 @@ export class ContextBuilder {
   private lastStateAt = 0;
   private live = false;
   /**
+   * A run whose model chooses its start, before its character has been seen:
+   * the race and class it chose are recorded at the first snapshot that
+   * carries both (`recordChosenStart`). A resumed run with a character on
+   * record chose already.
+   */
+  private startPending: boolean | undefined;
+  /**
    * The child's observation cursor at the last written sample, and how many
    * written samples in a row have found it standing still behind a stream that
    * is no longer open. See `noteObservationStall`.
@@ -329,10 +336,26 @@ export class ContextBuilder {
           await this.o.trajectory.setCharacter(this.o.config.runId, name);
         }
       }
+      if (this.live) await this.recordChosenStart(snap);
       return snap;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The race and class the model chose, from its character's own fields, once:
+   * recorded over the launch's placeholder on a run whose model chooses its
+   * start (`RunConfig.chooseStart`). Every other run's start is its launch's.
+   */
+  private async recordChosenStart(snap: SnapshotLike): Promise<void> {
+    this.startPending ??= this.o.config.chooseStart === true && this.o.config.character === undefined;
+    if (!this.startPending) return;
+    const race = Number(snap.self?.fields?.["race"]?.value);
+    const klass = Number(snap.self?.fields?.["class"]?.value);
+    if (!Number.isInteger(race) || !Number.isInteger(klass) || race < 1 || race > 11 || klass < 1 || klass > 11) return;
+    this.startPending = false;
+    await this.o.trajectory.setStart(this.o.config.runId, race, klass);
   }
 
   /**

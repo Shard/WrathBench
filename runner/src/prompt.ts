@@ -23,6 +23,8 @@
 import type { Harness, RunConfig } from "./config";
 import { harnessDriver } from "./drivers";
 import { EPISODES, type EpisodeId } from "./episodes";
+import { VALID_STARTS } from "./starts";
+import { CLASS_NAMES, RACE_NAMES } from "../viewer/characters";
 
 /**
  * The opening of every prompt is two kinds of sentence, and they are kept
@@ -546,6 +548,57 @@ export function freshCharacterNote(o: { race: number; class: number; taken?: rea
 }
 
 /**
+ * The pairs a chosen start may take, in one plain line: every class by id
+ * and name once, then each race by id and name with its class ids
+ * (`VALID_STARTS`). Said in the launch note of a run whose model chooses its
+ * start and again with every refused pair (`INVALID_START_NOTE`), because the
+ * ids are the client's and a model cannot be expected to know them.
+ */
+export function validStartsText(): string {
+  const classIds = [...new Set(Object.values(VALID_STARTS).flat())].sort((a, b) => a - b);
+  const classes = classIds.map((c) => `${c} ${CLASS_NAMES[c]}`).join(", ");
+  const races = Object.entries(VALID_STARTS)
+    .map(([r, cs]) => `${r} ${RACE_NAMES[Number(r)]}: ${cs.join(", ")}`)
+    .join("; ");
+  return `Classes: ${classes}. Races, each with the class ids it may be: ${races}.`;
+}
+
+/**
+ * The launch session note of a fresh freeplay run whose model chooses its
+ * own race and class (`RunConfig.chooseStart`; operator, 2026-11-15): the
+ * sibling of `freshCharacterNote`, the same sentences about the name, the
+ * taken names and the account, with the start the model's to name instead of
+ * the episode's.
+ */
+export function chooseCharacterNote(o: { taken?: readonly string[] }): string {
+  const taken = o.taken ?? [];
+  return (
+    `name your character: 2-12 letters, no spaces, no three identical letters in a row — ` +
+    `pick something you like and be creative, it is yours for the episode. ` +
+    `Your race and class are yours to choose as well: any pair the server allows, listed below. ` +
+    `Create the character with ` +
+    `\`await sdk.createSession({ character: "<your name>", race: <race id>, class: <class id> })\` ` +
+    `after \`await connect()\` — the name, race and class are all required, race and class as numeric ids. ` +
+    `If the server answers \`char_create_failed_code_50\` the name is already in use: pick a different one and call ` +
+    `createSession again.` +
+    (taken.length > 0
+      ? ` These names are already taken on this account and must not be used: ${taken.join(", ")}.`
+      : "") +
+    ` The game account is assigned and bound for you by the harness — do not pass an account; ` +
+    `createSession is issued on the correct one automatically. ${validStartsText()}`
+  );
+}
+
+/**
+ * Added to a snippet's result when a run whose model chooses its start
+ * created no character because the race and class it named cannot be one
+ * (`INVALID_START_FAILURE`, `runner/src/starts.ts`). Only such a run sees it.
+ */
+export function invalidStartNote(): string {
+  return `That race and class cannot be created. Call createSession again with a pair the server allows. ${validStartsText()}`;
+}
+
+/**
  * The staged-character launch note: a run launched on a character the
  * operator's stager made before it (`--character`, a party member). The
  * sibling of `freshCharacterNote` for that one start, in the words the
@@ -650,11 +703,14 @@ export function resumeSessionNote(o: {
   className?: string | null;
   /** The run is on the program loop: what it kept is said in that loop's words (`PROGRAM_RESUME_KEPT`). */
   program?: boolean | undefined;
+  /** The model chooses its start (`RunConfig.chooseStart`): a run with no character yet is told so again. */
+  chooseStart?: boolean | undefined;
 }): string {
   const head =
     `the runner process was restarted and this run resumed after a pause, ${o.clock}. ` +
     (o.program === true ? `${PROGRAM_RESUME_KEPT} ` : `Conversation history was not preserved; your scratchpad was. `);
   if (o.character === undefined) {
+    if (o.chooseStart === true) return head + chooseCharacterNote({});
     return head + freshCharacterNote({ race: o.race, class: o.class, raceName: o.raceName ?? null, className: o.className ?? null });
   }
   const race = o.raceName ?? null;

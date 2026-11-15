@@ -89,6 +89,7 @@ describe("what a fresh probe launch must name", () => {
       objective: "reach level 10",
       race: "1",
       class: "1",
+      "choose-start": "true",
       "wiki-coords": "true",
       wiki: "false",
       "max-tool-calls": "100",
