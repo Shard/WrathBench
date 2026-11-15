@@ -18,6 +18,7 @@ import { displayError } from "../lib/errors";
 import { modelDisplay } from "../lib/format";
 import { InfoHint } from "../components/InfoHint";
 import { HighlightClip } from "../components/Replay";
+import { STACK_URL } from "../lib/repo";
 import type { HighlightResponse } from "../api/client";
 import { useFeeds } from "../lib/feeds";
 import { groupsOf } from "../lib/nav";
@@ -108,6 +109,13 @@ export default function Home() {
           </p>
         </Show>
       </section>
+      </div>
+
+      <Show when={evals()}>
+        <HomeLadder />
+      </Show>
+
+      <div class="home-col">
       <Show when={highlight()}>
         {(h) => (
           <>
@@ -116,16 +124,16 @@ export default function Home() {
           </>
         )}
       </Show>
-      </div>
-
-      <Show when={evals()}>
-        <HomeLadder />
-      </Show>
-
-      <div class="home-col">
       <h2 class="section">
-        the loop
+        the agent loop
         <InfoHint label="about this diagram" text={LOOP_NOTE} />
+        <Show when={STACK_URL}>
+          {(url) => (
+            <a class="dim" href={url()} target="_blank" rel="noopener" title="the agent stack: the game module, the SDK and the MCP server">
+              wrath-mcp
+            </a>
+          )}
+        </Show>
       </h2>
       <div class="wide-scroll">
         <LoopDiagram />

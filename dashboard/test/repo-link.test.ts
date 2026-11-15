@@ -88,3 +88,12 @@ describe("nothing spells the repository URL itself", () => {
     }
   });
 });
+
+describe("the agent stack link", () => {
+  test("is the configured repository's sibling wrath-mcp, and absent without one", async () => {
+    const { stackUrlFrom } = await import("../src/lib/repo");
+    expect(stackUrlFrom(null)).toBeNull();
+    expect(stackUrlFrom("https://example.org/owner/WrathBench")).toBe("https://example.org/owner/wrath-mcp");
+    expect(stackUrlFrom("https://example.org")).toBeNull();
+  });
+});
