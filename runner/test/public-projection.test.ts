@@ -872,6 +872,19 @@ describe("projectResults", () => {
     const out = projectResults({ ...resultsFixture(), runs: [withId("a", "z"), withId("b", "a"), withId("c", "z")] });
     expect(out.runs.map((r) => r.condition!.id)).toEqual(["c2", "c1", "c2"]);
   });
+
+  test("a response with ten or more conditions is a fixed point of its own projection", () => {
+    const base = resultsFixture().runs[0]!;
+    // Canonical-JSON-shaped private ids, as `conditionKey` spells them; 12 so `c10` exists.
+    const runs = Array.from({ length: 12 }, (_, i): ResultRun => ({
+      ...base,
+      runId: `r${i}`,
+      condition: { ...base.condition!, id: `{"effort":"e${String(i).padStart(2, "0")}"}` },
+    }));
+    const once = projectResults({ ...resultsFixture(), runs });
+    expect(once.runs.map((r) => r.condition!.id)).toEqual(runs.map((_, i) => `c${i + 1}`));
+    expect(projectResults(once)).toEqual(once);
+  });
 });
 
 describe("projectPositions and projectTrack", () => {

@@ -692,9 +692,27 @@ function projectResultExpected(c: CostFigure): CostFigure {
  * the order the private ids sort. The private id spells the requested
  * routing, which names providers; the public row keeps only whether it was
  * pinned, and the number still keeps two routings of one model two rows.
+ *
+ * Ids already public sort by their number, so a published body is a fixed
+ * point of its own projection, which is what `bun wb site verify` checks: in
+ * code-unit order `c10` sorts before `c2`, and a response with ten or more
+ * conditions came back renumbered. A private id is canonical JSON and never
+ * takes that shape, so the private order, and every number published from it,
+ * is the code-unit order it always was.
  */
+const PUBLIC_CONDITION_ID = /^c([1-9]\d*)$/;
+
+function byConditionId(a: string, b: string): number {
+  const na = PUBLIC_CONDITION_ID.exec(a)?.[1];
+  const nb = PUBLIC_CONDITION_ID.exec(b)?.[1];
+  if (na !== undefined && nb !== undefined) return Number(na) - Number(nb);
+  if (na !== undefined) return -1;
+  if (nb !== undefined) return 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function publicConditionIds(runs: readonly ResultRun[]): Map<string, string> {
-  const ids = [...new Set(runs.flatMap((r) => (r.condition === undefined ? [] : [r.condition.id])))].sort();
+  const ids = [...new Set(runs.flatMap((r) => (r.condition === undefined ? [] : [r.condition.id])))].sort(byConditionId);
   return new Map(ids.map((id, i) => [id, `c${i + 1}`]));
 }
 
