@@ -28,6 +28,9 @@ import { buildSystemPrompt, programPromptOf, steeringOf } from "../src/prompt";
 import { configFromArgs } from "../src/run";
 import { taskDefinition, taskDefinitionProblem, taskHash } from "../src/task-episodes";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { countedFact } from "./fixtures/counted-fact";
+import { DEFAULT_POLICY, projectModel, schedulability, type RosterModel } from "../src/models";
+import { withoutUnpublishedEpisodes } from "../viewer/public-projection";
 
 const tempDir = tempDirs();
 const ROOT = join(import.meta.dir, "..", "campaigns");
@@ -236,8 +239,24 @@ describe("the public projection of the task episodes", () => {
       "targets met on e90, e360, deadmines-solo — unlimited sessions while its account is idle",
     );
     expect(project("schedulable on deadmines, e90").schedulable.why).toBe("schedulable on e90");
-    // A list of nothing else is kept whole: dropping every item would say something false.
-    expect(project("schedulable on deadmines").schedulable.why).toBe("schedulable on deadmines");
+    // A list of nothing else loses the list, never naming the id (the scheduler's own line for a t2
+    // entry opted into the five-agent id with every other target met).
+    expect(project("schedulable on deadmines").schedulable.why).toBe("schedulable");
     expect(project("cooling until 12:00").schedulable.why).toBe("cooling until 12:00");
+  });
+
+  test("the scheduler's own lines for a t2 entry opted into both ids never name the five-agent one in public", () => {
+    const now = Date.now();
+    const policy = { ...DEFAULT_POLICY, series: "1.0" };
+    const entry = { name: "s", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true } as unknown as RosterModel;
+    const lines: string[] = [];
+    for (const level of [7, 8]) {
+      const s = projectModel(entry, [countedFact(entry, "e90", 6, { now, series: "1.0" }), countedFact(entry, "e360", level, { now, series: "1.0" })], policy, { now });
+      lines.push(schedulability(s, new Set(), policy).why);
+      for (const ep of ["e90", "e360", "deadmines-solo"] as const) if (s.perEpisode[ep] !== undefined) s.perEpisode[ep]!.counted = s.perEpisode[ep]!.target;
+      lines.push(schedulability(s, new Set(), policy).why);
+    }
+    expect(lines.some((l) => /\bdeadmines\b(?!-)/.test(l))).toBe(true);
+    for (const l of lines) expect({ l, named: /\bdeadmines\b(?!-)/.test(withoutUnpublishedEpisodes(l)) }).toEqual({ l, named: false });
   });
 });

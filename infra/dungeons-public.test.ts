@@ -97,6 +97,11 @@ describe("a publisher pass over the fixture", () => {
       for (const [key, body] of objects) expect({ key, id, named: key.includes(id) || body.includes(id) }).toEqual({ key, id, named: false });
     }
     for (const id of SOLO) expect(res.withdrawn).not.toContain(id);
+    // The solo runs' grant (FIXTURE2-5 are in no other run's config) and the
+    // characters' session ids are in the raw files, and in no published body.
+    for (const [key, body] of objects) {
+      expect({ key, grant: /FIXTURE[2-5]/.test(body), token: body.includes("fixture-token"), session: SOLO.some((id) => body.includes(`${id}~`)) }).toEqual({ key, grant: false, token: false, session: false });
+    }
     const dungeons = JSON.parse(objects.get(res.snap["dungeons.json"]!)!) as DungeonsResponse;
     expect(dungeons.boards.map((b) => b.episode)).toEqual(["deadmines-solo"]);
     const episodes = JSON.parse(objects.get(res.snap["episodes.json"]!)!) as EpisodesResponse;

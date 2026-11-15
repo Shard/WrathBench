@@ -1165,14 +1165,16 @@ export function isUnpublishedEpisode(id: string): boolean {
  * A scheduler's "schedulable on …" or "targets met on …" with the unpublished
  * ids (`isUnpublishedEpisode`) left out of its list, as the rest of the row
  * leaves them out. What follows the list (what `deadmines-solo` still waits
- * on, the session note) is kept. A list of nothing else is kept whole:
- * dropping every item would say something false.
+ * on, the session note) is kept. A list of nothing else (a model whose only
+ * open work is the five-agent id) loses the list and keeps its verb, so the
+ * line says nothing false and names no unpublished id.
  */
 export function withoutUnpublishedEpisodes(why: string): string {
   const m = /^(schedulable on|targets met on) (.+?)((?:; | — ).*)?$/.exec(why);
   if (m === null) return why;
   const kept = m[2]!.split(", ").filter((x) => !isUnpublishedEpisode(x));
-  return kept.length === 0 ? why : `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
+  if (kept.length === 0) return `${m[1] === "schedulable on" ? "schedulable" : "targets met"}${m[3] ?? ""}`;
+  return `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
 }
 
 function projectModelRow(row: ModelRowView): ModelRowView {
