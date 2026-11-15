@@ -1008,7 +1008,9 @@ describe("probe campaigns in the schedule", () => {
     expect(v).toEqual({ verdict: "free", why: "campaignOnly: no scored runs — unlimited sessions while its account is idle" });
     expect(wantsIdle(v, held)).toBe(true);
     const plan = planNextJobs([held], ["R1", "R2"], new Set());
-    expect(plan.jobs.map((j) => [j.name, j.episode, j.account])).toEqual([["held", "freeplay", "R1"]]);
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.why])).toEqual([
+      ["held", "freeplay", "R1", "extra #1: unlimited session (campaignOnly: no targets; one continuous session, idle watchdog only)"],
+    ]);
     expect(plan.held).toEqual([]);
     // Unchanged: a probe-only driver's entry, campaignOnly or not, has no idle work.
     for (const campaignOnly of [undefined, true] as const) {

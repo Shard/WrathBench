@@ -2996,7 +2996,7 @@ export function planNextJobs(
       episode: c.ep,
       account: accounts.shift()!,
       attempt: st.attempts + 1,
-      why: `extra #${n + 1}: unlimited session (targets met; one continuous session, idle watchdog only)`,
+      why: `extra #${n + 1}: unlimited session (${c.s.campaignOnly === true ? "campaignOnly: no targets" : "targets met"}; one continuous session, idle watchdog only)`,
     });
   }
   return { jobs, held };
