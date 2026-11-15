@@ -46,6 +46,7 @@ import { digestOf, K8sClient, type Pod, type PodEnvVar } from "./k8s-client";
 import { isQuotaRefusal, readLauncherSettings, ROSTER_PID_LABEL } from "./run-pod";
 import { WORLDS_SECRET_ENV } from "./episode-launcher";
 import { worldsOf, type WorldsSetting } from "./run-fleet-credentials";
+import { readCameraTemplate, startWorldCamera } from "./camera-pods";
 import type { FleetWorldView } from "../runner/viewer/api-types";
 
 // ------------------------------------------------------------------ names
@@ -69,12 +70,6 @@ export const WORLD_LOG_FILE = "server.log";
 /** The pointer a launcher leaves in a run directory: `{ "id": … }`, one of the launch files. */
 export const WORLD_POINTER_FILE = "world.json";
 export const MODULE_PORT = 8086;
-/** A world pod carrying the camera (templates/_camera.tpl): what the slot count selects on. */
-export const CAMERA_LABEL = `${LABEL_PREFIX}camera`;
-/** On the template: how many cameras may run at once, the shared world's included (values.yaml `camera.maxConcurrent`). */
-export const CAMERA_MAX_ANNOTATION = `${LABEL_PREFIX}camera-max`;
-const CAMERA_CONTAINERS = new Set(["camera", "camera-director"]);
-const CAMERA_VOLUMES = new Set(["camera-run", "camera-client-data"]);
 /** The name a world's realm row carries (`putRealm`), which its camera picks. */
 export function worldRealmName(id: string): string {
   return `WrathBench ${id}`;
@@ -464,34 +459,6 @@ export interface BuildWorldPodOptions {
   rosterPid: number;
   /** A re-boot's recorded digests (`repo@sha256:…`); the template's images otherwise. */
   images?: { worldserver?: string; dbImport?: string };
-  /**
-   * Whether this world takes a camera slot (`cameraSlotFree`). A template with
-   * the camera's containers keeps them, stamped with this world's realm, only
-   * when true; otherwise they and their volumes are removed, so a world
-   * without a slot claims no camera resources at all.
-   */
-  camera?: boolean;
-}
-
-/** Whether a template carries the camera (the chart's `camera.enabled`). */
-export function templateHasCamera(template: Pod): boolean {
-  return template.spec.containers.some((c) => CAMERA_CONTAINERS.has(c.name));
-}
-
-/**
- * Whether a world may take a camera now: fewer cameras run than the
- * template's `camera-max`, counting the shared world's, which runs whenever
- * the block is on, and every other world pod still carrying one. A template
- * without a max (an older chart) gives none.
- */
-export function cameraSlotFree(template: Pod, worldPods: readonly Pod[], self: string): boolean {
-  if (!templateHasCamera(template)) return false;
-  const max = Number(template.metadata.annotations?.[CAMERA_MAX_ANNOTATION]);
-  if (!Number.isInteger(max) || max < 1) return false;
-  const others = worldPods.filter(
-    (p) => p.metadata.name !== self && p.metadata.labels?.[CAMERA_LABEL] === "true" && p.metadata.deletionTimestamp === undefined && p.status?.phase !== "Succeeded" && p.status?.phase !== "Failed",
-  ).length;
-  return 1 + others < max;
 }
 
 const ACCOUNT_RE = /^[A-Z0-9]{1,16}$/;
@@ -540,11 +507,6 @@ export function worldPodRefusal(pod: Pod): string | undefined {
   if (list.some((a) => !ACCOUNT_RE.test(a))) return `the allowlist ${JSON.stringify(accounts)} holds a name that is not an account`;
   if (pod.spec["hostname"] === undefined || !isWorldId(pod.spec["hostname"])) return "the world pod has no world id as its hostname";
   if (pod.spec["subdomain"] !== WORLDS_SERVICE) return `the world pod template's subdomain is ${JSON.stringify(pod.spec["subdomain"])}, not the ${WORLDS_SERVICE} Service`;
-  // A camera picks its realm by name: one stamped for any other world would film that world's run.
-  const cam = pod.spec.containers.find((c) => c.name === "camera");
-  if (cam !== undefined && envValue(cam, "CAMERA_REALM") !== worldRealmName(pod.spec["hostname"])) return "the world pod's camera is not stamped with this world's realm";
-  const director = pod.spec.containers.find((c) => c.name === "camera-director");
-  if (director !== undefined && envValue(director, "CAMERA_WORLD") !== pod.spec["hostname"]) return "the world pod's camera director is not stamped with this world's id";
   return undefined;
 }
 
@@ -573,19 +535,6 @@ export function buildWorldPod(template: Pod, o: BuildWorldPodOptions): Pod {
     if (c.name !== "worldserver") continue;
     c.env = setEnv(setEnv(setEnv(c.env, "AC_CHARACTER_DATABASE_INFO", info), "AC_REALM_ID", String(o.realmId)), "AC_WRATH_BENCH_ACCOUNTS", accounts);
     if (o.images?.worldserver !== undefined) c.image = o.images.worldserver;
-  }
-  if (templateHasCamera(pod)) {
-    if (o.camera === true) {
-      for (const c of pod.spec.containers) {
-        if (c.name === "camera") c.env = setEnv(c.env, "CAMERA_REALM", worldRealmName(o.id));
-        if (c.name === "camera-director") c.env = setEnv(c.env, "CAMERA_WORLD", o.id);
-      }
-      pod.metadata.labels[CAMERA_LABEL] = "true";
-    } else {
-      pod.spec.containers = pod.spec.containers.filter((c) => !CAMERA_CONTAINERS.has(c.name));
-      const vols = pod.spec["volumes"] as { name: string }[] | undefined;
-      if (vols !== undefined) pod.spec["volumes"] = vols.filter((v) => !CAMERA_VOLUMES.has(v.name));
-    }
   }
   const refusal = worldPodRefusal(pod);
   if (refusal !== undefined) throw new Error(`world pod ${o.id} refused: ${refusal}`);
@@ -654,6 +603,8 @@ export interface WorldLauncherOptions {
   /** Cross-process liveness, for the lock; a test injects its own. */
   alive?: (pid: number) => boolean;
   random?: (n: number) => Uint8Array;
+  /** The chart's camera pod template (infra/camera-pods.ts), when the camera block is on. */
+  cameraTemplate?: Pod;
 }
 
 export type WorldStart = { ok: true; id: string; url: string } | { ok: false; reason: string; noCapacity?: true };
@@ -744,6 +695,7 @@ export class WorldLauncher {
     if (pod !== null && pod.metadata.deletionTimestamp === undefined && pod.status?.phase === "Running" && (await this.health(url)).ready) {
       rec.state = "up";
       this.opts.store.write(rec);
+      this.startCamera(id, pod);
       return { ok: true, id, url };
     }
     const hold = worldsHold(this.opts.store.dir, this.now());
@@ -757,30 +709,27 @@ export class WorldLauncher {
     return locked.ok ? locked.value : { ok: false, reason: locked.reason, noCapacity: true };
   }
 
+  /**
+   * A camera beside a world that is up (infra/camera-pods.ts), when the block
+   * is on and a slot is free: its own pod, owned by the world's, so it goes
+   * with it. Not awaited and never thrown: the world's start is not the
+   * camera's to decide or delay.
+   */
+  private startCamera(id: string, pod: Pod): void {
+    const template = this.opts.cameraTemplate;
+    const uid = pod.metadata.uid;
+    if (template === undefined || uid === undefined || pod.metadata.name === undefined) return;
+    void startWorldCamera({ client: this.opts.client, template, world: id, realm: worldRealmName(id), worldPod: { name: pod.metadata.name, uid }, log: this.opts.log });
+  }
+
   podName(id: string): string {
     return `${this.opts.template.metadata.generateName ?? "world-"}${id}`;
   }
 
-  /** Whether this world's next pod takes a camera slot; never on an API failure. */
-  private async cameraSlot(podName: string): Promise<boolean> {
-    if (!templateHasCamera(this.opts.template)) return false;
-    try {
-      return cameraSlotFree(this.opts.template, await this.opts.client.listPods(`app.kubernetes.io/component=${WORLD_COMPONENT},${CAMERA_LABEL}=true`), podName);
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * `camera` false boots without the camera whatever the slots say: the retry
-   * after a camera kept the pod from the namespace or the node, so a camera
-   * never costs an attempt its world.
-   */
-  private async boot(rec: WorldRecord, cameraAllowed = true): Promise<{ ok: true } | { ok: false; reason: string; noCapacity?: true }> {
+  private async boot(rec: WorldRecord): Promise<{ ok: true } | { ok: false; reason: string; noCapacity?: true }> {
     let body: Pod;
-    const camera = cameraAllowed && (await this.cameraSlot(this.podName(rec.id)));
     try {
-      body = buildWorldPod(this.opts.template, { id: rec.id, realmId: rec.realmId, accounts: rec.accounts, owner: this.opts.owner, rosterPid: this.opts.rosterPid, images: rec.images, camera });
+      body = buildWorldPod(this.opts.template, { id: rec.id, realmId: rec.realmId, accounts: rec.accounts, owner: this.opts.owner, rosterPid: this.opts.rosterPid, images: rec.images });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       noteBoot(this.opts.store.dir, reason, this.now());
@@ -798,16 +747,12 @@ export class WorldLauncher {
       const reason = `world pod create refused: ${e instanceof Error ? e.message : String(e)}`;
       boot.failed = reason;
       this.opts.store.write(rec);
-      if (camera && isQuotaRefusal(e)) {
-        this.opts.log(`world ${rec.id}: the camera does not fit the quota; booting without it`);
-        return this.boot(rec, false);
-      }
       // A full namespace is no capacity, not a broken world: it does not count towards the hold.
       if (isQuotaRefusal(e)) return { ok: false, reason, noCapacity: true };
       noteBoot(this.opts.store.dir, reason, this.now());
       return { ok: false, reason };
     }
-    this.opts.log(`world ${rec.id}: pod ${name} created${rec.images.worldserver !== undefined ? ` on ${rec.images.worldserver}` : ""}${camera ? ", with a camera" : ""}`);
+    this.opts.log(`world ${rec.id}: pod ${name} created${rec.images.worldserver !== undefined ? ` on ${rec.images.worldserver}` : ""}`);
     const deadline = at + (this.opts.startupMs ?? 6 * 60_000);
     const url = worldModuleUrl(rec.id);
     let last = "not yet scheduled";
@@ -822,34 +767,21 @@ export class WorldLauncher {
         return this.bootFailed(rec, boot, "the world pod disappeared while it booted");
       }
       const status = pod?.status;
-      // The world's own containers decide its boot; a camera's state never does.
-      const own = (status?.containerStatuses ?? []).filter((c) => !CAMERA_CONTAINERS.has(c.name ?? ""));
-      const ended = status?.phase === "Failed" || status?.phase === "Succeeded" || own.some((c) => c.state?.terminated !== undefined);
-      const waiting = [...(status?.initContainerStatuses ?? []), ...own]
+      const ended = status?.phase === "Failed" || status?.phase === "Succeeded" || status?.containerStatuses?.some((c) => c.state?.terminated !== undefined);
+      const waiting = [...(status?.initContainerStatuses ?? []), ...(status?.containerStatuses ?? [])]
         .map((c) => c.state?.waiting?.reason)
         .find((r) => r !== undefined && FATAL_WAITING.has(r));
       if (ended === true || waiting !== undefined) {
         await this.saveLog(rec.id, name, `boot ${rec.boots.length}`);
         return this.bootFailed(rec, boot, waiting !== undefined ? `the world pod will not start: ${waiting}` : `the world pod ended while it booted (${status?.phase ?? "?"}${status?.reason !== undefined ? `, ${status.reason}` : ""})`);
       }
-      // Its camera can hold the pod short of Running (an image pull, a
-      // claim), so the worldserver container's own state is what counts.
-      const wsRunning = own.find((c) => c.name === "worldserver")?.state?.running !== undefined;
-      const unschedulable = status?.conditions?.some((c) => c.type === "PodScheduled" && c.status === "False" && c.reason === "Unschedulable") === true;
-      if (camera && unschedulable) {
-        this.opts.log(`world ${rec.id}: the pod cannot be scheduled with its camera; booting without it`);
-        boot.failed = "unschedulable with its camera";
-        this.opts.store.write(rec);
-        await this.removePod(rec.id, 0);
-        return this.boot(rec, false);
-      }
-      if (status?.phase === "Running" || wsRunning) {
+      if (status?.phase === "Running") {
         const h = await this.health(url);
         if (h.ready) {
           boot.readyAt = this.now();
           boot.bootMs = boot.readyAt - at;
-          const ws = status?.containerStatuses?.find((c) => c.name === "worldserver");
-          const di = status?.initContainerStatuses?.find((c) => c.name === "db-import");
+          const ws = status.containerStatuses?.find((c) => c.name === "worldserver");
+          const di = status.initContainerStatuses?.find((c) => c.name === "db-import");
           const wsImage = body.spec.containers.find((c) => c.name === "worldserver")?.image;
           const diImage = initContainers(body).find((c) => c.name === "db-import")?.image;
           rec.images = {
@@ -861,6 +793,7 @@ export class WorldLauncher {
           this.opts.store.write(rec);
           noteBoot(this.opts.store.dir, undefined, this.now());
           this.opts.log(`world ${rec.id}: ready at ${url} in ${Math.round(boot.bootMs / 1000)}s`);
+          if (pod !== null) this.startCamera(rec.id, pod);
           return { ok: true };
         }
         last = `module /health: ${h.detail}`;
@@ -1179,6 +1112,7 @@ export function loadWorldLauncher(opts: {
     rosterPid: opts.rosterPid,
     log: opts.log,
     startupMs: probeMs + 3 * 60_000,
+    ...(readCameraTemplate(env) !== undefined ? { cameraTemplate: readCameraTemplate(env)! } : {}),
   });
 }
 
