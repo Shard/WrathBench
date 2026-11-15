@@ -191,8 +191,7 @@ takes from the stack and how.
   and the party chat the viewer's routes serve, so its codecs are the ones
   the public site publishes. Its API is mounted at `/api/inspector` on a
   private viewer, and the dashboard embeds its views: the unit frame,
-  inventory and quest log on the map, the run page and the character page,
-  and a v1 run's session events on the run page. The map's session-side
+  inventory and quest log on the map, the run page and the character page. The map's session-side
   logic is the inspector's too: the trace player and its clocks, the replay's
   cursor maths and route, the transport's arithmetic, the movement
   intentions, the camera's fit, and the position and track shapes the feeds

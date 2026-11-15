@@ -58,7 +58,7 @@ import { ChartCard } from "../components/ChartCard";
 import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
 import { Coins, QuestCount } from "../components/CharacterFacts";
-import { EventFeed, InventoryPanel, XpBar, createInspectorClient, type SessionSummary } from "@wrathbench/inspector/views";
+import { InventoryPanel, XpBar, createInspectorClient } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
 import { LiveFrame, ReplayBlock } from "../components/Replay";
@@ -217,19 +217,10 @@ export default function RunDetail() {
   });
 
   /*
-   * The run's session record as the inspector reads it (`/api/inspector`, the
-   * viewer's private mount): a v1 run's events feed, embedded from the
-   * inspector's views. The public build has no such mount and draws none, and
-   * a 0.5 run, which has no `session.json`, draws none either.
+   * The inspector's API (`/api/inspector`, the viewer's private mount), for a
+   * fan-out run's characters. The public build has no such mount and draws none.
    */
   const inspector = SNAPSHOT_MODE ? null : createInspectorClient("/api/inspector");
-  const [session, setSession] = createSignal<SessionSummary["session"]>(null);
-  if (inspector !== null) {
-    void inspector
-      .session(params.id)
-      .then((s) => setSession(s.session))
-      .catch(() => setSession(null));
-  }
   const loadClips = (): void => {
     void api
       .clips(params.id)
@@ -1071,14 +1062,6 @@ export default function RunDetail() {
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
 
-                  <Show when={inspector !== null && session()}>
-                    {(sess) => (
-                      <>
-                        <h2 class="section">session events</h2>
-                        <EventFeed client={inspector!} id={params.id} live={run().live} end={sess().ended} />
-                      </>
-                    )}
-                  </Show>
                   {/* A fan-out run has no session of its own: a record per character, picked here. */}
                   <Show when={inspector !== null && detail()?.fanout}>
                     {(f) => <FanoutCharacters client={inspector!} runId={params.id} sessions={f()} live={run().live} now={now()} />}
