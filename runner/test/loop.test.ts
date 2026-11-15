@@ -146,6 +146,26 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("a resumed run's turn number continues the run's in what the model reads", async () => {
+    const seen: string[] = [];
+    let n = 0;
+    const adapter: ChatAdapter = {
+      label: "seen",
+      complete: async (r: ChatRequest): Promise<AdapterOutcome> => {
+        const last = r.messages.filter((m) => m.role === "user").at(-1);
+        seen.push(typeof last?.content === "string" ? last.content : "");
+        if (++n > 2) return { kind: "stub-complete" };
+        return { kind: "ok", turn: { content: null, toolCalls: [{ id: `c${n}`, name: "write_scratchpad", arguments: JSON.stringify({ content: "# NOW (turn 41)" }) }] } };
+      },
+    };
+    const { dir, options } = setup(adapter);
+    await runLoop({ ...options, turnOffset: 40 });
+    expect(seen.map((t) => t.split("\n")[0])).toEqual(["[turn 41]", "[turn 42]", "[turn 43]"]);
+    // The request records keep this process's own count, which their windows are rebuilt by.
+    expect(readTrajectory(dir).filter((r) => r.t === "request").map((r) => r["turn"])).toEqual([1, 2, 3]);
+    options.trajectory.close();
+  });
+
   test("snippet trajectory entry logs the normalized code when an alias key was used", async () => {
     const adapter = new StubAdapter([
       { content: "acting", toolCalls: [{ name: "run_snippet", arguments: { snippet: "await connect()" } }] },

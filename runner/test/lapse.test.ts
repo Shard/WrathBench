@@ -31,6 +31,12 @@ describe("what happens to a lapsed run", () => {
       want: { kind: "fail", reason: "attempt-failed" },
     },
     {
+      what: "an e90 whose provider answered nothing: a provider pause like rate-limited, the same rung",
+      episode: "e90",
+      pause: { reason: "provider-unresponsive" },
+      want: { kind: "fail", reason: "attempt-failed" },
+    },
+    {
       what: "an e90 stopped by the operator (a fleet stop, a deploy): a failed attempt that is no rung",
       episode: "e90",
       pause: { reason: "operator-pause" },
