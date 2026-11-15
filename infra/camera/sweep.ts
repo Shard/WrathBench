@@ -26,10 +26,13 @@ import { CLIPS_FILE, FRAMES_DIR, FRAMES_INDEX, cameraDir, type ClipsFile } from 
 import { notLive } from "./subjects";
 
 export const KEEP_FRAMES_DAYS = 3;
+/** A live run's clips are rebuilt this often, so its frames are always in one before they go. */
+export const REFRESH_LIVE_MS = 12 * 3_600_000;
 
 export interface SweepOptions {
   intervalMs: number;
   keepFramesMs?: number;
+  refreshLiveMs?: number;
   assemble?: (runDir: string) => ClipsFile | null;
   log?: (line: string) => void;
 }
@@ -51,6 +54,7 @@ function mtime(path: string): number {
 export function sweepCameraRuns(runsDir: string, now: number, o: SweepOptions): SweepResult {
   const log = o.log ?? (() => {});
   const keep = o.keepFramesMs ?? KEEP_FRAMES_DAYS * 86_400_000;
+  const refreshLive = o.refreshLiveMs ?? REFRESH_LIVE_MS;
   const assemble = o.assemble ?? ((dir: string) => assembleRun(dir, { intervalMs: o.intervalMs, log }));
   const out: SweepResult = { labelled: [], assembled: [], prunedFrames: 0 };
   let names: string[];
@@ -70,17 +74,25 @@ export function sweepCameraRuns(runsDir: string, now: number, o: SweepOptions): 
     } catch {
       continue;
     }
-    if (notLive(runDir, meta, now) === null) continue;
-    if (!hasCameraLabel(runDir) && writeCameraLabel(runDir)) out.labelled.push(runId);
+    const live = notLive(runDir, meta, now) === null;
+    // Only an ended run: a paused or ownerless one may be resumed, and its
+    // runner rewrite meta.json, at any moment. The runner labels every run it
+    // rewrites once the frame index exists, so this is only for a run that
+    // ended within the camera's first minute.
+    if (meta?.termination != null && !hasCameraLabel(runDir) && writeCameraLabel(runDir)) out.labelled.push(runId);
     const clips = join(cam, CLIPS_FILE);
-    if (mtime(index) > mtime(clips)) {
+    const clipsAt = mtime(clips);
+    // A run no camera follows, once its frames are newer than its clips; a
+    // live one twice a day, so every frame is in an assembly before it is pruned.
+    const due = mtime(index) > clipsAt && (!live || now - clipsAt > refreshLive);
+    if (due) {
       try {
         if (assemble(runDir) !== null) out.assembled.push(runId);
       } catch (e) {
         log(`${runId}: assembly failed: ${e instanceof Error ? e.message : String(e)}`);
       }
-      continue;
     }
+    const covered = mtime(clips);
     const frames = join(cam, FRAMES_DIR);
     let entries: string[] = [];
     try {
@@ -91,7 +103,9 @@ export function sweepCameraRuns(runsDir: string, now: number, o: SweepOptions): 
     for (const f of entries) {
       if (!f.endsWith(".jpg")) continue;
       const p = join(frames, f);
-      if (now - mtime(p) > keep) {
+      const at = mtime(p);
+      // Past the window, and in an assembly made after it was taken.
+      if (now - at > keep && at < covered) {
         rmSync(p, { force: true });
         out.prunedFrames++;
       }

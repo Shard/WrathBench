@@ -3003,8 +3003,23 @@ on its next rewrite (a pause or the verdict). A world per eval's pod is gone
 at the verdict with no grace, so the shared world's director sweeps the runs
 tree every ten minutes (`infra/camera/sweep.ts`): it assembles the clips of
 any filmed run with no live owner whose frames are newer than its clips, and
-deletes still frames older than three days once the clips are up to date.
-The shared world's camera must be on for eval worlds' clips to be made.
+a live run's twice a day; and it deletes still frames older than three days
+that an assembly already covers, live run or not. An event clip outlives its
+frames; a run's timelapse covers the frames still on disk, so a run longer
+than three days gets its last three. The shared world's camera must be on
+for eval worlds' clips to be made, and for any frame to be pruned.
+
+**Disk.** Frames go on the data PVC beside the runs. A camera keeps about
+1.3 GB a day of interval frames, and up to about 2.5 GB in a day full of
+events (the live proof: 30 MB in 17 minutes). Over the three-day window that
+is 4 to 7.5 GB a camera, so two always-on cameras need the data PVC grown
+first (it had 13 GB free on v1 at 2026-11-15), or a shorter `--keep-days`,
+or `maxConcurrent: 1`.
+
+**Quota.** On, the shared worldserver's pod requests about 3.25 GiB more
+memory and 0.3 more CPU (`gpu`), and a world with a camera the same; the
+worldserver's Deployment is `Recreate`, so if eval worlds hold the rest of the
+namespace's requests at release time its new pod waits.
 
 **Disable.** `camera.enabled: false` and a release. Frames and clips already
 written stay with their runs; the frames age out with the logs.

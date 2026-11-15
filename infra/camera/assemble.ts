@@ -6,8 +6,11 @@
  *
  *   bun infra/camera/assemble.ts <run-dir> [--interval-seconds 10]
  *
- * The director runs it when its subject's run ends; it is idempotent, so a
- * re-run (an operator's, or after a resume) rebuilds every clip.
+ * The director runs it when it leaves a subject, and the sweep (sweep.ts)
+ * when a run's frames are newer than its clips. It is idempotent: every clip
+ * whose frames are still on disk is rebuilt, and an event clip whose frames
+ * have been pruned is kept as it was. The timelapse covers the frames on
+ * disk, so for a run longer than the frames' window, its last three days.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -142,6 +145,16 @@ export function ffmpegArgs(list: string, ass: string, out: string, fps: number):
   return ["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-vf", vf, "-r", String(fps), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", out];
 }
 
+/** The clips.json there is, or none. */
+function previousClips(cam: string): ClipEntry[] {
+  try {
+    const doc = JSON.parse(readFileSync(join(cam, CLIPS_FILE), "utf8")) as ClipsFile;
+    return Array.isArray(doc.clips) ? doc.clips.filter((c) => typeof c?.name === "string" && typeof c.file === "string" && typeof c.poster === "string" && typeof c.to === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface AssembleOptions {
   intervalMs: number;
   ffmpeg?: string;
@@ -155,6 +168,9 @@ export function assembleRun(runDir: string, o: AssembleOptions): ClipsFile | nul
   const index = join(cam, FRAMES_INDEX);
   if (!existsSync(index)) return null;
   const frames = parseFrames(readFileSync(index, "utf8")).filter((f) => existsSync(join(cam, f.file)));
+  // Event clips made before their frames were pruned (sweep.ts) are kept as they are.
+  const earliest = frames.length > 0 ? Math.min(...frames.map((f) => Date.parse(f.t))) : Infinity;
+  const kept = previousClips(cam).filter((c) => c.kind === "event" && Date.parse(c.to) < earliest && existsSync(join(cam, c.file)) && existsSync(join(cam, c.poster)));
   const runId = basename(runDir);
   const { model, said } = readRunWords(runDir);
   const modelName = modelNameOf(model);
@@ -164,7 +180,7 @@ export function assembleRun(runDir: string, o: AssembleOptions): ClipsFile | nul
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
   const ffmpeg = o.ffmpeg ?? Bun.which("ffmpeg") ?? "ffmpeg";
-  const clips: ClipEntry[] = [];
+  const clips: ClipEntry[] = [...kept];
   try {
     for (const plan of planClips(frames, { intervalMs: o.intervalMs })) {
       const list = join(work, `${plan.name}.txt`);
@@ -198,6 +214,8 @@ export function assembleRun(runDir: string, o: AssembleOptions): ClipsFile | nul
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
+  // The timelapse first, then events in time order.
+  clips.sort((a, b) => (a.kind === b.kind ? Date.parse(a.from) - Date.parse(b.from) : a.kind === "timelapse" ? -1 : 1));
   const doc: ClipsFile = { version: 1, runId, clips };
   const out = join(cam, CLIPS_FILE);
   writeFileSync(`${out}.tmp`, `${JSON.stringify(doc, null, 2)}\n`);

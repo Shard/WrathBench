@@ -37,10 +37,45 @@ function run(runsDir: string, id: string, o: { live?: boolean; ended?: boolean; 
 }
 
 describe("the camera sweep", () => {
+  test("a live run: its frames are assembled twice a day and pruned once covered; its meta.json is never written", () => {
+    const runs = tmp("camera-sweep-live-");
+    const dir = run(runs, "r-live-long", { live: true, framesAgeMs: 4 * DAY });
+    // Its clips are older than half a day and than its index: due.
+    const seen: string[] = [];
+    const meta = readFileSync(join(dir, "meta.json"), "utf8");
+    const r = sweepCameraRuns(runs, NOW, {
+      intervalMs: 10_000,
+      assemble: (d) => {
+        seen.push(d);
+        writeFileSync(join(d, "camera", "clips.json"), "{}");
+        utimesSync(join(d, "camera", "clips.json"), NOW / 1000, NOW / 1000);
+        return { version: 1, runId: "r", clips: [] } as ClipsFile;
+      },
+    });
+    expect(seen).toEqual([dir]);
+    expect(r.prunedFrames).toBe(2);
+    expect(readFileSync(join(dir, "meta.json"), "utf8")).toBe(meta);
+    // Assembled minutes ago: not again yet.
+    const again: string[] = [];
+    writeFileSync(join(dir, "camera", "frames.jsonl"), "x");
+    sweepCameraRuns(runs, NOW + 60_000, { intervalMs: 10_000, assemble: (d) => (again.push(d), null) });
+    expect(again).toEqual([]);
+  });
+
+  test("a paused run is assembled but never labelled: it may be resumed at any moment", () => {
+    const runs = tmp("camera-sweep-paused-");
+    const dir = run(runs, "r-paused", {});
+    const seen: string[] = [];
+    const r = sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (seen.push(d), null) });
+    expect(seen).toEqual([dir]);
+    expect(r.labelled).toEqual([]);
+    expect(JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")).camera).toBeUndefined();
+  });
+
   test("labels and assembles a run no one owns; leaves a live run alone", () => {
     const runs = tmp("camera-sweep-");
     const ended = run(runs, "r-ended", { ended: true });
-    const live = run(runs, "r-live", { live: true });
+    const live = run(runs, "r-live", { live: true, clipsAfterIndex: true });
     const seen: string[] = [];
     const r = sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (seen.push(d), { version: 1, runId: "x", clips: [] } as ClipsFile) });
     expect(r.assembled).toEqual(["r-ended"]);

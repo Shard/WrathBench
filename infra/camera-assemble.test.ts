@@ -5,7 +5,7 @@
  * and ffprobe on PATH; CI installs them (.github/workflows/ci.yml).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./temp-dirs";
 import { assembleRun, concatListOf, planClips, subtitlesOf } from "./camera/assemble";
@@ -154,6 +154,12 @@ describe.skipIf(ffmpeg === null || ffprobe === null)("assembly with ffmpeg", () 
       expect(existsSync(join(dir, "camera", ".work"))).toBe(false);
       // Idempotent: a second pass rebuilds the same list.
       expect(assembleRun(dir, { intervalMs: 10_000 })!.clips.map((c) => c.name)).toEqual(doc.clips.map((c) => c.name));
+      // The burst's frames pruned (sweep.ts): its clip stays listed as it was; the timelapse covers what is left.
+      for (const f of frames.filter((f) => Date.parse(f.t) <= levelAt + 10_000)) rmSync(join(dir, "camera", f.file));
+      const after = assembleRun(dir, { intervalMs: 10_000 })!;
+      expect(after.clips.find((c) => c.name === "event-3-level")).toEqual(ev);
+      expect(after.clips.map((c) => c.kind)).toEqual(["timelapse", "event"]);
+      expect(Date.parse(after.clips[0]!.from)).toBeGreaterThan(levelAt + 10_000);
     },
     ENCODE_MS,
   );
