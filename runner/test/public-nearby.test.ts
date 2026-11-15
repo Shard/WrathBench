@@ -107,7 +107,8 @@ function memoryBucket(): { store: ObjectStore; objects: Map<string, string>; put
     objects,
     puts,
     store: {
-      put: async (path, body) => {
+      put: async (path, blob) => {
+        const body = typeof blob === "string" ? blob : await blob.text();
         puts.push({ path, body });
         objects.set(path, body);
       },

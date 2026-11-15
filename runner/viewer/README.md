@@ -638,6 +638,40 @@ a run's ring goes overwrites its window with nothing, and no history of
 positions accumulates anywhere (docs/PUBLIC-DASHBOARD.md, "The units around a live
 run").
 
+## Camera replays
+
+A camera may follow a run (`docs/DATA-AND-LEGAL.md`; the director that runs
+it writes `camera/` in the run's directory). The viewer reads one file to find
+the clips, `camera/clips.json`, and serves three routes off it (`camera.ts`):
+
+- `/api/run/<id>/clips`: the clips, timelapse first, each with its moment, its
+  caption, and its `video` and `poster` named by the routes below. A run with
+  no camera, or a list that does not read (a director mid-write, another run's
+  id, not version 1), is a 404 and never a fault, so a publisher pass loses
+  that run's replay and nothing else. An entry that does not read is dropped.
+- `/api/run/<id>/clip/<name>.mp4` and `.jpg`: a clip's video and poster.
+  Single byte ranges are honoured (206, `Content-Range`, 416 past the end;
+  several ranges get the whole file), because a video seeks with them and
+  Safari plays nothing without them. Validators are size and mtime, revalidated
+  every time, since a director may re-render a clip under its name.
+- `/api/highlight`: the home page's one clip, the newest event clip of any
+  listed run (the newest timelapse when there is none), on a 15 s window.
+
+What is served is only what the list names, and only `clips/<file>` with a
+plain file name: the frames under `camera/frames/` are never reachable, by
+name or by any path. Every step is checked with `lstat`, so a symbolic link
+anywhere on the way (the run, `camera/`, `clips/`, the list, the file) is a
+404 rather than a file outside the run. A run's detail carries `camera: true`
+when its meta.json does: a label, read off the file, and no part of the
+listing or the condition.
+
+In public mode the list crosses `projectClips`: the clip and its moment pass,
+the caption and an event's detail get the strikes model text gets (credential
+shapes masked, the container prefix made relative, the session token struck
+by value at the route), clipped to one line. The media routes serve in public
+mode too, since the snapshot publishes the same files, and a run that is never
+published is a 404 on all three like on every other per-run route.
+
 ## How it handles big files
 
 `request` entries embed the model's message array (the whole of it on an older

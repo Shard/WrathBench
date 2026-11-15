@@ -856,12 +856,15 @@ describe("the public build's call sites", () => {
     // re-reads it: each tick privately, each new version publicly (the poll
     // only reports a body that changed, and a new version is a new detail).
     const src = read("../src/pages/RunDetail.tsx");
-    expect(src).toMatch(/detailPoll\.latest[\s\S]{0,1600}\n\s*loadPad\(\);\n\s*\}\);/);
-    const at = src.indexOf("const loadPad");
-    expect(at).toBeGreaterThan(-1);
-    const loader = src.slice(at, src.indexOf("\n  };", at));
-    expect(loader).toContain("e.status === 404");
-    expect(loader).not.toContain("setError");
+    // The camera's clips move with it the same way: a director adds them after the fact.
+    expect(src).toMatch(/detailPoll\.latest[\s\S]{0,1600}\n\s*loadPad\(\);\n\s*loadClips\(\);\n\s*\}\);/);
+    for (const name of ["const loadPad", "const loadClips"]) {
+      const at = src.indexOf(name);
+      expect(at).toBeGreaterThan(-1);
+      const loader = src.slice(at, src.indexOf("\n  };", at));
+      expect(loader).toContain("e.status === 404");
+      expect(loader).not.toContain("setError");
+    }
   });
 
   test("the map asks lib/tiles for a URL rather than hard-coding the path", () => {

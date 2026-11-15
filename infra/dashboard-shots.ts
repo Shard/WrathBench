@@ -11,7 +11,7 @@
  *
  *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: four live runs
  *    and a live fan-out run kept live while the rig runs, one ended run to
- *    replay), or copies of the
+ *    replay, with camera clips made of a synthetic test pattern), or copies of the
  *    run directories `--run` names, which are never served or written in place;
  *  - the private viewer: the viewer's own `createApi` over those runs, with an
  *    in-memory run store and a config store of its own, hosting a private build;
@@ -115,6 +115,8 @@ const TYPES: Record<string, string> = {
   ".html": "text/html",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".mp4": "video/mp4",
   ".webp": "image/webp",
   ".woff2": "font/woff2",
   ".ico": "image/x-icon",

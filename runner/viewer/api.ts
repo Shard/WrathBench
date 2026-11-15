@@ -29,6 +29,8 @@ import { EPISODES, EPISODE_IDS, EPISODE_LIST, hasBoard, isTaskEpisode } from "..
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import { badEvidenceReason, countedRun } from "../src/lapse";
 import type {
+  ClipsResponse,
+  HighlightResponse,
   ApiInfoResponse,
   CampaignsResponse,
   DungeonsResponse,
@@ -84,6 +86,8 @@ import {
   projectPositions,
   projectResults,
   projectRunDetail,
+  projectClips,
+  projectHighlight,
   projectRuns,
   projectTools,
   projectTrack,
@@ -98,6 +102,7 @@ import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
 import { fanoutSession, fanoutSessions, isFanoutRun, isWithheldFanoutRun, runSession, runsSource } from "./runs-source";
 import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
+import { CLIP_CONTENT_TYPE, CLIP_MEDIA_ROUTE, clipMedia, clipsView, fileResponse, hadCamera, pickHighlight, type ClipMediaKind } from "./camera";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -385,6 +390,9 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
  * exactly that reason.
  */
 export const SERIES_CACHE_MS = 300_000;
+
+/** How long `/api/highlight` is held: it reads every listed run's `camera/clips.json`. */
+const HIGHLIGHT_CACHE_MS = 15_000;
 
 /**
  * How long one whole-fleet listing build stands in for the next.
@@ -866,6 +874,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
   // The series census for /api/info, on a window: every open tab polls that
   // route, and the answer only moves when a run starts.
   let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
+  // The home page's clip, on a short window: it reads every listed run's camera directory.
+  let highlightCache: { at: number; value: HighlightResponse } | undefined;
   const seriesCensus = async (): Promise<{ series: string; runs: number }[]> => {
     const now = Date.now();
     if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
@@ -1702,6 +1712,21 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body: RunsResponse = { runs: await listWithTotals() };
       return pub(body, projectRuns);
     }
+    // The home page's one clip, over the runs this handle lists: a public
+    // handle's listing has already left out every run that is never published.
+    if (path === "/api/highlight") {
+      const at = Date.now();
+      if (highlightCache === undefined || at - highlightCache.at >= HIGHLIGHT_CACHE_MS) {
+        const runs: { runId: string; model: string | null; clips: ClipsResponse }[] = [];
+        for (const r of await runRows(at)) {
+          const clips = clipsView(runsDir, r.runId);
+          if (clips !== null) runs.push({ runId: r.runId, model: r.model, clips });
+        }
+        highlightCache = { at, value: { highlight: pickHighlight(runs) } };
+      }
+      const body = highlightCache.value;
+      return pub(body, projectHighlight, body.highlight === null ? [] : [body.highlight.runId]);
+    }
     if (path === "/api/positions") {
       const listed = publicMode ? new Set((await runRows()).map((r) => r.runId)) : null;
       // A public handle keeps a position only for a run its own listing holds:
@@ -2022,8 +2047,31 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // and the one whose level and xp the run's row reads.
         ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
         ...(lead === null ? {} : { fanoutLead: lead }),
+        // A label off meta.json, read here rather than carried on the row:
+        // it is no part of the listing and no store column holds it.
+        ...(hadCamera(runsDir, runId) ? { camera: true as const } : {}),
       };
       return pub(body, projectRunDetail, [runId]);
+    }
+
+    /*
+     * The camera's clips (`camera.ts`): the list off `camera/clips.json`, and
+     * each clip's video and poster, which only a clip the list names reaches
+     * and the frames never do. Public mode serves both too: the snapshot
+     * publishes the same clips, and the list crosses `projectClips`, which
+     * redacts each caption as model text is. A run with no clips is a 404.
+     */
+    if (rest === "/clips") {
+      const body = clipsView(runsDir, runId);
+      if (body === null) return notFound("no clips");
+      return pub(body, projectClips, [runId]);
+    }
+    const media = CLIP_MEDIA_ROUTE.exec(rest);
+    if (media !== null) {
+      const kind = media[2] as ClipMediaKind;
+      const hit = clipMedia(runsDir, runId, media[1]!, kind);
+      if (hit === null) return notFound("no such clip");
+      return fileResponse(req, hit.file, hit.stat, CLIP_CONTENT_TYPE[kind]);
     }
 
     if (rest === "/track") {

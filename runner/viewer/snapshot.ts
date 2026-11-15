@@ -70,11 +70,15 @@
  */
 
 import { statSync } from "node:fs";
+import { clipMedia, CLIP_CONTENT_TYPE, pickHighlight, readClips, type ClipMediaKind } from "./camera";
 import { join } from "node:path";
 import { createApi, withoutRuns, type ApiHandle } from "./api";
 import { lineageIndex } from "./lineage";
 import { EPISODE_IDS, isTaskEpisode } from "../src/episodes";
 import type {
+  ClipsResponse,
+  ClipView,
+  HighlightResponse,
   ApiInfoResponse,
   CampaignsResponse,
   EntriesResponse,
@@ -95,12 +99,14 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { unpackSegs } from "@wrathbench/inspector/codec/trace";
-import { traceSegmentKey } from "./public-keys";
+import { clipMediaKey, traceSegmentKey } from "./public-keys";
 import { PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
+  projectClips,
   projectEntries,
+  projectHighlight,
   projectTools,
   projectDungeons,
   projectEpisodes,
@@ -132,6 +138,24 @@ export interface SnapshotArtifact {
   cacheControl: string;
 }
 
+/**
+ * A camera clip's video or poster: a file the publisher streams to the bucket
+ * as it is, at a key addressed by its own hash (`clipMediaKey`). Never a body
+ * this process holds: a timelapse is megabytes.
+ */
+export interface MediaArtifact {
+  path: string;
+  /** Absolute path of the file. */
+  file: string;
+  /** The file's SHA-256, hex; the key carries its first twelve characters. */
+  hash: string;
+  /** The size and mtime it was hashed at; the upload refuses a file that has moved since. */
+  size: number;
+  mtimeMs: number;
+  contentType: string;
+  cacheControl: string;
+}
+
 export interface SnapshotResult {
   /**
    * The manifest's identity: the hash of the aggregate name/version pairs. It
@@ -156,6 +180,11 @@ export interface SnapshotResult {
    * publishing for them; sorted, so a pass's result is deterministic.
    */
   withdrawn: string[];
+  /**
+   * The camera clip files the pass names (every run's that it rendered),
+   * when the caller did not take them through a `RunStream`. Absent is none.
+   */
+  media?: MediaArtifact[];
 }
 
 
@@ -280,7 +309,7 @@ export const ENTRIES_WINDOW = 200;
  * reference to those bodies as soon as the sink resolves, which is the whole
  * point of the shape.
  */
-export type RunSink = (artifacts: SnapshotArtifact[]) => Promise<void>;
+export type RunSink = (artifacts: SnapshotArtifact[], media: MediaArtifact[]) => Promise<void>;
 
 /**
  * Render the per-run artifacts in bounded groups and hand each to `sink`,
@@ -346,7 +375,18 @@ export const COLD_MS = 15 * 60_000;
  * run's session record moves `live.json` on every write and `manifest.json`
  * when it closes, so those two stand for its segments.
  */
-const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "scratchpad.md", "session/live.json", "session/manifest.json"] as const;
+const RUN_INPUT_FILES = [
+  "meta.json",
+  "trajectory.jsonl",
+  "run.sqlite",
+  "run.sqlite-wal",
+  "scratchpad.md",
+  "session/live.json",
+  "session/manifest.json",
+  // A director writes clips after the fact, often once the run has gone cold;
+  // the list is the one file it rewrites when a clip lands.
+  "camera/clips.json",
+] as const;
 
 /**
  * Everything a cold run's four objects are a function of, hashed, or null when
@@ -381,8 +421,8 @@ function coldFingerprint(runsDir: string, row: { runId: string }, character: str
     try {
       st = statSync(join(runsDir, row.runId, name));
     } catch {
-      // A 0.5 run has no session record; its hash stays what it was.
-      if (!name.startsWith("session/")) parts.push(`${name} -`);
+      // A 0.5 run has no session record, and most runs no camera; their hash stays what it was.
+      if (!name.startsWith("session/") && !name.startsWith("camera/")) parts.push(`${name} -`);
       continue;
     }
     if (st.mtimeMs > wall - COLD_MS) return null;
@@ -460,8 +500,66 @@ export function createRenderer(
    */
   const coldRuns = new Map<
     string,
-    { fingerprint: string; snapshot: NonNullable<RunListRow["snapshot"]>; trace: number[] | null; renderedAt: number }
+    {
+      fingerprint: string;
+      snapshot: NonNullable<RunListRow["snapshot"]>;
+      trace: number[] | null;
+      renderedAt: number;
+      /** The clip keys its `clips.json` names, and that body, for the home page's clip. */
+      media: string[];
+      clips: ClipsResponse | null;
+    }
   >();
+  /**
+   * Each clip file's hash by path, at the size, mtime and inode it was read
+   * at: a timelapse is hashed once per process, not once per pass.
+   */
+  const fileHashes = new Map<string, { size: number; mtimeMs: number; ino: number; hash: string }>();
+  const hashFile = async (file: string, st: { size: number; mtimeMs: number; ino: number }): Promise<string> => {
+    const hit = fileHashes.get(file);
+    if (hit !== undefined && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ino === st.ino) return hit.hash;
+    const hasher = new Bun.CryptoHasher("sha256");
+    for await (const chunk of Bun.file(file).stream()) hasher.update(chunk);
+    const hash = hasher.digest("hex");
+    fileHashes.set(file, { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, hash });
+    return hash;
+  };
+
+  /**
+   * A run's clips as published: the handle's projected list with each video
+   * and poster named by its bucket key, and the files behind those keys. A
+   * clip whose video is gone by now is left out, a poster that is gone is
+   * null, and a list left empty is no list.
+   */
+  const publishClips = async (runId: string, body: ClipsResponse): Promise<{ clips: ClipsResponse; media: MediaArtifact[] } | null> => {
+    const media: MediaArtifact[] = [];
+    const listed = readClips(opts.runsDir, runId) ?? [];
+    const keyOf = async (name: string, kind: ClipMediaKind): Promise<string | null> => {
+      const hit = clipMedia(opts.runsDir, runId, name, kind, listed);
+      if (hit === null) return null;
+      const hash = await hashFile(hit.file, hit.stat);
+      const path = clipMediaKey(runId, name, hash.slice(0, 12), kind);
+      media.push({
+        path,
+        file: hit.file,
+        hash,
+        size: hit.stat.size,
+        mtimeMs: hit.stat.mtimeMs,
+        contentType: CLIP_CONTENT_TYPE[kind],
+        cacheControl: IMMUTABLE_CACHE,
+      });
+      return path;
+    };
+    const clips: ClipView[] = [];
+    for (const c of body.clips) {
+      const video = await keyOf(c.name, "mp4");
+      if (video === null) continue;
+      const poster = c.poster === null ? null : await keyOf(c.name, "jpg");
+      clips.push({ ...c, video, poster });
+    }
+    if (clips.length === 0) return null;
+    return { clips: projectClips({ runId, clips }), media };
+  };
   const fullRenderMs = opts.fullRenderMs ?? FULL_RENDER_MS;
   const clock = opts.clock ?? Date.now;
 
@@ -620,6 +718,9 @@ export function createRenderer(
     const groupSize =
       stream === undefined || !Number.isFinite(stream.batch) ? Math.max(1, rows.length) : Math.max(1, Math.floor(stream.batch));
     const artifacts: SnapshotArtifact[] = [];
+    const media: MediaArtifact[] = [];
+    /** Each run's published clips this pass, rendered or cold: the home page's clip is picked from them. */
+    const clipsOf = new Map<string, ClipsResponse>();
     /*
      * Each run's character, as the rows of all its attempts: part of a chained
      * run's cold fingerprint, built once a pass off the results already in hand
@@ -653,6 +754,7 @@ export function createRenderer(
     for (let start = 0; start < rows.length; start += groupSize) {
       const group = rows.slice(start, start + groupSize);
       const perRun: (SnapshotArtifact[] | undefined)[] = new Array(group.length);
+      const perRunMedia: (MediaArtifact[] | undefined)[] = new Array(group.length);
       let next = 0;
       const worker = async (): Promise<void> => {
         for (let i = next++; i < group.length; i = next++) {
@@ -668,10 +770,12 @@ export function createRenderer(
             // The safety net under everything the fingerprint cannot see.
             wall - cold.renderedAt < fullRenderMs &&
             Object.values(cold.snapshot).every((key) => holds!(key)) &&
+            cold.media.every((key) => holds!(key)) &&
             (cold.trace ?? []).every((t0) => published!.traceSegment(row.runId, t0))
           ) {
             row.snapshot = cold.snapshot;
             if (cold.trace !== null) traceListed.set(row.runId, new Set(cold.trace));
+            if (cold.clips !== null) clipsOf.set(row.runId, cold.clips);
             continue;
           }
           const [detail, track, entries, scratchpad] = await Promise.all([
@@ -687,6 +791,9 @@ export function createRenderer(
           // mid-pass; a row must never point at part of a set, so all are
           // dropped together.
           if (detail === null || track === null || entries === null) continue;
+          // The camera's clips, on a run that has any: a 404 is a run without.
+          const clipsBody = await getIfPresent<ClipsResponse>(`/api/run/${id}/clips`);
+          const camera = clipsBody === null ? null : await publishClips(row.runId, projectClips(clipsBody));
           /*
            * The run's closed trace windows the bucket does not hold yet, each its
            * own immutable object. Only listed windows are asked for, so a 404 is
@@ -719,7 +826,11 @@ export function createRenderer(
           // out because a successor attempt moves the detail's `character`
           // with it; that covers nothing else, and a key the edge caches for
           // a year cannot be corrected in place.
-          const ver = hash12([addressable(detail), addressable(track), addressable(entries), scratchpad ?? ""].join("\n"));
+          // The clips join the hash only where there are any, so a run without
+          // keeps the key it always had.
+          const ver = hash12(
+            [addressable(detail), addressable(track), addressable(entries), scratchpad ?? "", ...(camera === null ? [] : [addressable(camera.clips)])].join("\n"),
+          );
           // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
           // keys as-is; anything else never got a run directory to be listed from.
           const base = `v1/run/${row.runId}/${ver}`;
@@ -728,6 +839,7 @@ export function createRenderer(
             track: `${base}/track.json`,
             entries: `${base}/entries.json`,
             ...(scratchpad === null ? {} : { scratchpad: `${base}/scratchpad.json` }),
+            ...(camera === null ? {} : { clips: `${base}/clips.json` }),
           };
           const immutable = (path: string, body: string): SnapshotArtifact => ({
             path,
@@ -740,10 +852,13 @@ export function createRenderer(
             immutable(paths.track, envelope(track)),
             immutable(paths.entries!, envelope(entries)),
             ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
+            ...(paths.clips === undefined || camera === null ? [] : [immutable(paths.clips, envelope(camera.clips))]),
             // In the same batch, so in the same run wave as the track listing them.
             ...segments,
           ];
           row.snapshot = paths;
+          perRunMedia[i] = camera?.media ?? [];
+          if (camera !== null) clipsOf.set(row.runId, camera.clips);
           // Remembered whatever this pass's upload does: a later pass skips
           // only once the bucket holds every key, so a failed PUT renders again.
           if (fingerprint !== null) {
@@ -752,15 +867,20 @@ export function createRenderer(
               snapshot: paths,
               trace: track.trace === undefined ? null : unpackSegs(track.trace.segs, track.trace.segMs),
               renderedAt: wall,
+              media: (camera?.media ?? []).map((m) => m.path),
+              clips: camera?.clips ?? null,
             });
           } else coldRuns.delete(row.runId);
         }
       };
       await Promise.all(Array.from({ length: Math.min(RUN_CONCURRENCY, group.length) }, worker));
       const made = perRun.flatMap((a) => a ?? []);
-      if (stream === undefined) artifacts.push(...made);
-      else {
-        await stream.sink(made);
+      const madeMedia = perRunMedia.flatMap((m) => m ?? []);
+      if (stream === undefined) {
+        artifacts.push(...made);
+        media.push(...madeMedia);
+      } else {
+        await stream.sink(made, madeMedia);
         // Only after the sink has taken them: until it returns, this pass may
         // still need the run it is holding.
         if (stream.release !== false && releaseRun !== undefined) {
@@ -768,6 +888,21 @@ export function createRenderer(
         }
       }
     }
+
+    /*
+     * The home page's one clip, picked from the clips this pass published,
+     * so it names only keys the run wave has written. The model is the run's
+     * own, a public fact on every row.
+     */
+    const modelOf = new Map(results.runs.map((r) => [r.runId, r.model]));
+    const highlight: HighlightResponse = projectHighlight({
+      highlight: pickHighlight(
+        rows.flatMap((r) => {
+          const clips = clipsOf.get(r.runId);
+          return clips === undefined ? [] : [{ runId: r.runId, model: modelOf.get(r.runId) ?? null, clips }];
+        }),
+      ),
+    });
 
     /*
      * The snap set, in a fixed order. Each aggregate is addressed by its own
@@ -788,6 +923,9 @@ export function createRenderer(
       ...(models === null ? [] : [["models.json", models] as [string, object]]),
       ...(campaigns === null ? [] : [["campaigns.json", campaigns] as [string, object]]),
       ["tools.json", tools],
+      // Only when a published run has a clip, so a tree without a camera
+      // publishes the set it always did.
+      ...(highlight.highlight === null ? [] : [["highlight.json", highlight] as [string, object]]),
     ];
     const versions = snap.map(([name, payload]): [string, object, string] => [name, payload, hash12(addressable(payload))]);
     const paths: Record<string, string> = {};
@@ -852,7 +990,7 @@ export function createRenderer(
       ...artifacts,
     ];
 
-    return { gen, snap: paths, artifacts: out, withdrawn };
+    return { gen, snap: paths, artifacts: out, withdrawn, media };
   };
 }
 
