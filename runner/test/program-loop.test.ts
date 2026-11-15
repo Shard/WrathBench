@@ -869,18 +869,18 @@ describe("ProgramWake", () => {
       ...(seat !== undefined ? { seat } : {}),
       fresh: true,
     });
-    expect(refusalPairOf("q52run||moveTo|target_off_mesh")).toBe("|moveTo|target_off_mesh");
+    expect(refusalPairOf("cull||moveTo|target_off_mesh")).toBe("|moveTo|target_off_mesh");
     c.schedule(10_000, () => p.push(refusal(c.now(), "walk", "target_off_mesh"), wake));
     const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 12s · woke for: new refusal (walk: moveTo target_off_mesh)]");
     // The same refusal from a routine started under a new name is not news.
-    c.schedule(10_000, () => p.push(refusal(c.now(), "q52run", "target_off_mesh"), wake));
+    c.schedule(10_000, () => p.push(refusal(c.now(), "cull", "target_off_mesh"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true });
     expect(second.fired).toBe("cap");
-    expect(second.block).toContain("refusals:\n  q52run moveTo target_off_mesh — h");
+    expect(second.block).toContain("refusals:\n  cull moveTo target_off_mesh — h");
     // A hint a result carried counts for every routine name too.
     wake.hintsDelivered([{ action: "moveTo", status: "drop", count: 1, hint: "h", ts: c.now(), routine: "walk" }]);
-    c.schedule(10_000, () => p.push(refusal(c.now(), "fargoFarm", "drop"), wake));
+    c.schedule(10_000, () => p.push(refusal(c.now(), "farm", "drop"), wake));
     expect((await wake.sleep(p, { via: "yield", turn: 3, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true })).fired).toBe("cap");
     // At fan-out, another character's refusal is its own news.
     c.schedule(10_000, () => p.push(refusal(c.now(), "walk", "drop", "Bravo"), wake));
@@ -891,7 +891,7 @@ describe("ProgramWake", () => {
     const c = fakeClock(10_000_000);
     const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
     const p = fakeProgram();
-    const refusal = (ts: number, status: string, hint: string): ProgramFact => ({ kind: "refusal", ts, routine: "q52run", deploy: 6, action: "moveTo", status, hint, signature: `q52run||moveTo|${status}`, fresh: true });
+    const refusal = (ts: number, status: string, hint: string): ProgramFact => ({ kind: "refusal", ts, routine: "cull", deploy: 6, action: "moveTo", status, hint, signature: `cull||moveTo|${status}`, fresh: true });
     c.schedule(10_000, () => {
       p.push(refusal(c.now(), "interrupted", "the move stopped because the character died. A corpse cannot move: sdk.repop() releases the spirit, and a ghost can walk."), wake);
       wake.onDeath(c.now());
@@ -900,8 +900,8 @@ describe("ProgramWake", () => {
     const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(woke.block.split("\n")[0]).toBe("[wake 1 · slept 12s · woke for: your character died]");
     // They are still listed among the wake's refusals, with their hints.
-    expect(woke.block).toContain("q52run moveTo dead — you are dead");
-    expect(woke.block).toContain("q52run moveTo interrupted — the move stopped because the character died.");
+    expect(woke.block).toContain("cull moveTo dead — you are dead");
+    expect(woke.block).toContain("cull moveTo interrupted — the move stopped because the character died.");
     // An interrupted move with another cause is still news beside a death; with no death in the wake, a dead refusal is too.
     const r = (o: Partial<WakeReason>): WakeReason => ({ key: "refusal", ts: 1, text: "t", inContext: false, ...o });
     const died: WakeReason = { key: "died", ts: 1, text: "your character died", inContext: true };
