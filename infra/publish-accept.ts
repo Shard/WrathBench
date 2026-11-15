@@ -117,6 +117,10 @@ export interface AcceptSource {
   head?(key: string): Promise<ObjectHead | null>;
 }
 
+/** How many times a rate-limited read is asked again, and the longest wait between. */
+const HTTP_RETRIES = 6;
+const HTTP_RETRY_CAP_MS = 30_000;
+
 /**
  * The same read-only view, over the public hostname instead of the S3 API.
  *
@@ -139,18 +143,39 @@ export interface AcceptSource {
  * `encodeURIComponent` would eat its separators. `encodeURI` leaves a
  * well-formed key alone and still refuses to emit a raw space or quote.
  */
-export function httpSource(base: string, fetchImpl: typeof globalThis.fetch = globalThis.fetch): AcceptSource {
+export function httpSource(
+  base: string,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+  wait: (ms: number) => Promise<void> = Bun.sleep,
+): AcceptSource {
   const root = base.trim().replace(/\/+$/, "");
   const url = (key: string): string => encodeURI(`${root}/${key.replace(/^\/+/, "")}`);
+  /*
+   * The edge rate-limits a walk of a few thousand objects at eight at a time
+   * (429). That is the zone defending itself from us, not a fault in what is
+   * published, so a 429 or 503 waits and asks again: `Retry-After` when the
+   * edge sends one, doubling from a second otherwise, capped, and a bounded
+   * number of times before it is an error after all.
+   */
+  const fetchPatiently = async (key: string, init?: RequestInit): Promise<Response> => {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetchImpl(url(key), init);
+      if ((res.status !== 429 && res.status !== 503) || attempt >= HTTP_RETRIES) return res;
+      const after = Number(res.headers.get("retry-after") ?? "");
+      const ms = Number.isFinite(after) && after > 0 ? after * 1000 : 1000 * 2 ** attempt;
+      await res.body?.cancel();
+      await wait(Math.min(ms, HTTP_RETRY_CAP_MS));
+    }
+  };
   return {
     get: async (key) => {
-      const res = await fetchImpl(url(key));
+      const res = await fetchPatiently(key);
       if (res.status === 404 || res.status === 403) return null;
       if (!res.ok) throw new Error(`GET ${key}: ${res.status}`);
       return await res.text();
     },
     head: async (key) => {
-      const res = await fetchImpl(url(key), { method: "HEAD" });
+      const res = await fetchPatiently(key, { method: "HEAD" });
       if (res.status === 404 || res.status === 403) return null;
       if (!res.ok) throw new Error(`HEAD ${key}: ${res.status}`);
       const len = Number(res.headers.get("content-length") ?? "");

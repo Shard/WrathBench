@@ -745,6 +745,34 @@ describe("the HTTP source reads the same bucket through the host", () => {
     expect((await src.head?.("v1/snap/abc/runs.json"))?.cacheControl).toBe("public, max-age=31536000, immutable");
   });
 
+  test("a 429 from the edge waits and asks again, Retry-After first, then doubling", async () => {
+    const h = host(new Map([["v1/manifest.json", "{}"]]));
+    const answers = [
+      new Response("slow down", { status: 429, headers: { "retry-after": "3" } }),
+      new Response("slow down", { status: 429 }),
+      new Response("busy", { status: 503 }),
+    ];
+    const limited = (async (input: string | URL | Request, init?: RequestInit) =>
+      answers.shift() ?? h.fetch(input, init)) as typeof globalThis.fetch;
+    const waits: number[] = [];
+    const src = httpSource("https://d.example", limited, async (ms) => void waits.push(ms));
+    expect(await src.get("v1/manifest.json")).toBe("{}");
+    expect(waits).toEqual([3000, 2000, 4000]);
+  });
+
+  test("an edge that keeps refusing is an error after a bounded number of tries", async () => {
+    let calls = 0;
+    const always = (async () => {
+      calls++;
+      return new Response("slow down", { status: 429 });
+    }) as unknown as typeof globalThis.fetch;
+    const waits: number[] = [];
+    const src = httpSource("https://d.example", always, async (ms) => void waits.push(ms));
+    await expect(src.get("v1/manifest.json")).rejects.toThrow("GET v1/manifest.json: 429");
+    expect(calls).toBe(7);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(30_000);
+  });
+
   test("a whole clean generation verifies through the host, with no credential", async () => {
     const h = host(cleanBucket().objects);
     const report = await verifyPublication(httpSource("https://d.example", h.fetch));
