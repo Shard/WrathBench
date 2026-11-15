@@ -2951,6 +2951,115 @@ the allowlist are read when the worldserver starts:
    the window as usual (`bun wb release run`).
 3. Set `policy.worlds` to `evals` before any gateway is live.
 
+### Camera
+
+The camera follows a run's character and keeps frames and clips under the
+run's `camera/` (`docs/ARCHITECTURE.md`, "Camera"). It ships dark behind the
+chart's `camera` block. Turning it on or off changes the shared worldserver's
+pod (two sidecars, and the GM settings below), so it is a deploy window like
+any worldserver change ("Updating the live fleet").
+
+**Enable.** Four things first, then the block:
+
+1. The client's 3.3.5a `Data` folder on a PVC in the namespace, at the
+   claim's `Data/` (the speech and backup MPQs can be left out: the camera
+   has no sound). Blizzard-derived, so it is copied in by hand from the
+   operator's machine and never baked into an image:
+   a throwaway pod that mounts the claim (scheduled by `nodeSelector`, not
+   `nodeName`, or a `WaitForFirstConsumer` claim never binds), then
+   `tar -c … Data | kubectl exec -i <pod> -- tar -x -C /client`.
+2. The camera client image in the private registry.
+3. The `CAMERA` GM account, and its password in the env Secret under
+   `camera.passwordKey` (`WRATHBENCH_CAMERA_PASSWORD`), the same password:
+
+   ```
+   read -rs P && printf '%s\n' "$P" | bun wb accounts camera
+   ```
+
+4. The renderer. `gpu` claims one `devic.es/dri` per camera through the
+   node's device plugin, so `maxConcurrent` is at most the free claims:
+   about 0.25 core and 3 GiB on the reference node's Intel Iris Xe at 5 fps.
+   `software` renders on the CPU (Mesa's lavapipe) and claims none: about one
+   core and 3 GiB at 2 fps. Size either against the namespace quota.
+
+```yaml
+camera:
+  enabled: true
+  image: <registry>/wrathbench-camera:<tag>
+  renderer: gpu
+  maxConcurrent: 2
+  clientData:
+    claimName: <the PVC>
+```
+
+With the block on, every worldserver gets `GM.LoginState = 1` and
+`GM.Visible = 0`: a GM enters the world in GM mode and invisible. The harness
+accounts are not GMs and are untouched; the operator's `SPECTATOR` now enters
+invisible too (`.gm visible on` shows it). The shared world's camera follows
+the newest live freeplay character; a world per eval gets a camera when it
+boots and a slot is free (the shared world's counts as one), and keeps it to
+its verdict. The runner labels each filmed run `camera: true` in meta.json
+on its next rewrite (a pause or the verdict). A world per eval's pod is gone
+at the verdict with no grace, so the shared world's director sweeps the runs
+tree every ten minutes (`infra/camera/sweep.ts`): it assembles the clips of
+any filmed run with no live owner whose frames are newer than its clips, and
+a live run's twice a day; and it deletes still frames `camera.frameKeepHours`
+(24) after the assembly that covers them, live run or not (a live run's frames
+that long after they were taken). Clips are kept, and an event clip outlives
+its frames; a run's timelapse covers the frames still on disk, so a long live
+run's covers about its last day. The shared world's camera must be on for
+eval worlds' clips to be made, and for any frame to be pruned.
+
+**Disk.** Frames go on the data PVC beside the runs. A camera takes about
+1.3 GB a day of interval frames, and up to about 2.5 GB in a day full of
+events (the live proof: 30 MB in 17 minutes). With `frameKeepHours: 24` and a
+live run's clips rebuilt every twelve hours, that is at most about 2.5 to
+4.5 GB a camera on disk at once, plus its clips (a few MB an hour). Size
+`maxConcurrent` against the PVC's free space.
+
+**Quota.** On, the shared worldserver's pod requests about 3.25 GiB more
+memory and 0.3 more CPU (`gpu`), and a world with a camera the same; the
+worldserver's Deployment is `Recreate`, so if eval worlds hold the rest of the
+namespace's requests at release time its new pod waits.
+
+**Disable.** `camera.enabled: false` and a release. Frames and clips already
+written stay with their runs; the frames age out with the logs.
+
+**Troubleshoot.** The two containers are `camera` (the client; its log is also
+its stdout) and `camera-director`:
+
+```
+kubectl -n <ns> logs deploy/<release>-worldserver -c camera-director --tail=50
+kubectl -n <ns> logs <world pod> -c camera --tail=50
+```
+
+- `REFUSED: the camera entered the world without GM invisibility`: the world
+  did not apply `GM.Visible = 0` (a worldserver from before the block, or a
+  conf without the key). The camera logged out and stays out until its pod
+  restarts; nothing else was sent. Fix the world first.
+- `skip: <name> not in view`: the subject is not streamed to the camera,
+  usually a loading screen after a map change; it rejoins on its own.
+- The `camera` container stuck in `Pending`: no free `devic.es/dri` claim, or
+  the quota. A world per eval never waits on it: without a slot the launcher
+  leaves the sidecars out, and a camera container's state never decides a
+  world's boot.
+- No adapter: the client's log names the Vulkan device it picked; `llvmpipe`
+  on a `gpu` camera means the device was not visible in the container.
+- `skip: a blank frame`: the client answered with a flat image (seen once
+  on the Intel GPU, in a client's first minutes in the world). Blank frames
+  are never kept; if it persists, switch `renderer` to `software`.
+- A world per eval's realm row must exist with `flag` 0, or the client is
+  handed another realm and the world refuses it (`login: refused (World(39),
+  0x27)` in the client's log).
+- No clips: assembly runs when the camera leaves its subject, and in the
+  sweep. By hand, in the runner pod:
+  `bun infra/camera/assemble.ts data/runs/<run-id>` (idempotent), or the
+  whole sweep: `bun infra/camera/sweep.ts data/runs`.
+- Is the camera ever in an agent's record? Search the run's trajectory and the
+  module audit log of its session for the camera character's name and guid
+  (counts only); expect zero. The session record is not a test: its writer
+  drops every other player anyway.
+
 ### Harness version stamping
 
 Every episode is stamped with a harness version. On the cluster it is the

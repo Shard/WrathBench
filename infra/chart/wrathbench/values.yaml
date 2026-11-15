@@ -504,6 +504,80 @@ worlds:
   # applied); the module's audit dir under it is the shared one on the PVC.
   logsSizeLimit: 1Gi
 
+# The camera (docs/RUNBOOK.md, "Camera"; templates/_camera.tpl): an
+# unattended, invisible GM client that follows a run's character and keeps
+# still frames and clips under the run's `camera/` (docs/ARCHITECTURE.md,
+# "Camera"). OFF by default, and off renders exactly what the chart rendered
+# before it existed. On:
+#
+#   - the shared world's pod and the world-per-eval template carry the camera
+#     client and its director as sidecars; a world gets them only while a
+#     camera slot is free (`maxConcurrent`, the shared world's own counted),
+#     so a world without one is unchanged;
+#   - every worldserver makes a GM invisible before it is on the map
+#     (GM.LoginState = 1, GM.Visible = 0). The harness accounts never carry
+#     GM; the operator's SPECTATOR now also enters invisible, in GM mode;
+#   - turning it on or off changes the shared worldserver's pod, so it is a
+#     release window like any worldserver change.
+#
+# Needs, before it is turned on: the CAMERA account (`bun wb accounts camera`,
+# password on stdin) with the same password under `passwordKey` in
+# `envSecretName`; a PVC holding the client's 3.3.5a Data folder
+# (`clientData`); and the camera client image in the private registry.
+camera:
+  enabled: false
+  # The camera client image, repository and tag, in the operator's private
+  # registry (it is built outside this repository).
+  image: ""
+  # Cameras at once, the shared world's included. With `renderer: gpu` each
+  # holds one `devic.es/dri` claim, so this is at most the free claims.
+  maxConcurrent: 2
+  # Seconds between the timelapse's frames. Events keep a burst whatever this is.
+  intervalSeconds: 10
+  # Hours still frames are kept after the assembly that covers them; the clips
+  # are kept. The shared world's director prunes them (infra/camera/sweep.ts),
+  # so its camera must be on for any frame to be pruned.
+  frameKeepHours: 24
+  # gpu: Vulkan on the node's /dev/dri, through the device plugin. software:
+  # Mesa's lavapipe on the CPU, no claim, several cores per camera.
+  renderer: gpu
+  account: CAMERA
+  passwordKey: WRATHBENCH_CAMERA_PASSWORD
+  # A read-only PVC with the Data folder (common.MPQ, …, enUS/) at `subPath`.
+  # Blizzard-derived: operator-supplied, never in git or an image.
+  clientData:
+    claimName: ""
+    subPath: Data
+  resources:
+    # Measured on the reference node (Intel Iris Xe through devic.es/dri, 5
+    # fps, 1280x720, following an e90 in Elwynn): about 0.25 core and 3 GiB.
+    gpu:
+      requests:
+        cpu: 250m
+        memory: 3Gi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 5Gi
+        devic.es/dri: 1
+    # Measured the same way on lavapipe at 2 fps: about 0.9 core and 2.9 GiB.
+    software:
+      requests:
+        cpu: "1"
+        memory: 3Gi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 6Gi
+  director:
+    # The follow loop, the frame ring (about 45 s of JPEGs in memory) and
+    # ffmpeg's encode at the run's end.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 1Gi
+
 # Hosted mode's share of the cluster (wrath-mcp's docs/ARCHITECTURE.md,
 # "Hosted"): invited people drive characters through a hosted wrath-mcp
 # gateway, on the long-lived `worldserver` above (the freeplay world) and never

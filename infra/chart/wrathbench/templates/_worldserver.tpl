@@ -64,6 +64,8 @@ the `worlds` block's resources and startup budget.
     # implements no Warden is dropped by it.
     - name: AC_WARDEN_ENABLED
       value: "0"
+    {{- /* A camera's GM settings (templates/_camera.tpl), with the block on. */}}
+    {{- with include "wrathbench.camera.worldEnv" $ctx | trim }}{{ . | nindent 4 }}{{ end }}
     # SOAP is off until the party staging turns it on (`staging` in
     # values.yaml), in-cluster only, for the operator's admin STAGER
     # account; the worldserver's ingress rule, the run pods' egress

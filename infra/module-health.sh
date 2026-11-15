@@ -27,4 +27,4 @@ PROBE='
   print $s "GET /health HTTP/1.0\r\nAuthorization: Bearer $ENV{AC_WRATH_BENCH_SECRET}\r\n\r\n";
   local $/; my $r = <$s>; my ($b) = $r =~ /\r\n\r\n(.*)/s; print $b, "\n";'
 
-exec kubectl -n "${NAMESPACE}" exec -i "deployment/${RELEASE}-worldserver" -- perl -MIO::Socket::INET -e "${PROBE}"
+exec kubectl -n "${NAMESPACE}" exec -i "deployment/${RELEASE}-worldserver" -c worldserver -- perl -MIO::Socket::INET -e "${PROBE}"

@@ -1,0 +1,9 @@
+{"ts":1762003000000,"kind":"key","state":{"level":18,"zone":1581,"area":1581,"map":36,"instanceType":1,"dead":false,"released":false,"taxi":false,"group":{"members":4,"foreign":0,"count":5}}}
+{"ts":1762003000000,"kind":"zone","to":1581}
+{"ts":1762003000000,"kind":"level","to":18,"xp":900}
+{"ts":1762003120000,"seq":41,"kind":"kill","killerGuid":"12","victimGuid":"5001","entry":657,"rank":1,"self":true,"member":false}
+{"ts":1762003300000,"seq":77,"kind":"kill","killerGuid":"14","victimGuid":"5002","entry":644,"rank":1,"self":false,"member":true}
+{"ts":1762003420000,"seq":90,"kind":"death","position":{"source":"death_spot","map":36,"x":-50.1,"y":-380.2,"z":55.0},"zone":1581,"area":1581}
+{"ts":1762003450000,"kind":"release","graveyard":true}
+{"ts":1762003600000,"seq":120,"kind":"kill","killerGuid":"12","victimGuid":"5003","entry":99999,"rank":3,"self":true,"member":false}
+{"ts":1762003700000,"kind":"level","from":18,"to":18,"xp":40}
