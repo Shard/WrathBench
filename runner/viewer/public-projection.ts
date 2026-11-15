@@ -86,6 +86,8 @@ import type {
   FleetResponse,
   FleetServerView,
   LevelMark,
+  MilestoneMark,
+  MilestoneTimes,
   ModelEpisodeView,
   ModelRowView,
   ModelRunView,
@@ -436,6 +438,23 @@ function projectTrades(f: TradeFacts): TradeFacts {
   };
 }
 
+/**
+ * Where on a run's clock the freeplay milestones were first shown: two
+ * instants and two active times per mark, the clock every row already
+ * carries, and whether the run recorded what each reads. No id, no name.
+ */
+function projectMilestoneTimes(m: MilestoneTimes): MilestoneTimes {
+  const mark = (x: MilestoneMark | null): MilestoneMark | null => (x === null ? null : { ts: x.ts, playtimeMs: x.playtimeMs });
+  return {
+    areas: m.areas,
+    flights: m.flights,
+    leftStartArea: mark(m.leftStartArea),
+    capitalZone: mark(m.capitalZone),
+    flight: mark(m.flight),
+    expansion: mark(m.expansion),
+  };
+}
+
 function projectAreas(a: AreaFacts): AreaFacts {
   return {
     startArea: a.startArea,
@@ -736,6 +755,7 @@ function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string
     money: r.money,
     questsCompleted: r.questsCompleted,
     maps: [...r.maps],
+    ...(r.milestoneAt !== undefined ? { milestoneAt: projectMilestoneTimes(r.milestoneAt) } : {}),
     character: r.character,
     playtimeMs: r.playtimeMs,
     ...(r.sessions !== undefined ? { sessions: projectSessions(r.sessions) } : {}),
@@ -1131,11 +1151,12 @@ function projectModelRun(r: ModelRunView): ModelRunView {
 /**
  * A scheduler's "schedulable on …" or "targets met on …" with the task
  * episodes left out of its list, as the rest of the row leaves them out
- * (`projectEpisodes`). A list of nothing else is
- * kept whole: dropping every item would say something false.
+ * (`projectEpisodes`), and without what the Deadmines evals still wait on
+ * (`; not yet on deadmines-solo: …`), for the same reason. A list of nothing
+ * else is kept whole: dropping every item would say something false.
  */
 export function withoutTaskEpisodes(why: string): string {
-  const m = /^(schedulable on|targets met on) (.+?)( — .*)?$/.exec(why);
+  const m = /^(schedulable on|targets met on) (.+?)(?:; not yet on [a-z-]+: [^—]*?)?( — .*)?$/.exec(why);
   if (m === null) return why;
   const kept = m[2]!.split(", ").filter((x) => !isTaskEpisode(x));
   return kept.length === 0 ? why : `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
@@ -1150,7 +1171,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     if (isTaskEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;
-    // Not emitted: `otherSeries`, `reachedL5`, `lastEnded`, `lastReason` and
+    // Not emitted: `otherSeries`, `countedLevel`, `lastEnded`, `lastReason` and
     // `runIds`. The roster table prints the counts and the target; the run
     // list under it is `runs`.
     perEpisode[id] = lean<ModelEpisodeView>({
@@ -1172,7 +1193,8 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     billing: row.billing,
     declaredTier: row.declaredTier,
     tier: row.tier,
-    earnedRung1: row.earnedRung1,
+    earnedPromotion: row.earnedPromotion,
+    // Not emitted: `earnedDeadmines`, for the reason the task episodes are not.
     idle: row.idle,
     status: row.status,
     eligible: row.eligible.filter((id) => !isTaskEpisode(id)),
@@ -1399,6 +1421,7 @@ function projectCharacterAttempt(a: CharacterAttempt): CharacterAttempt {
     flights: a.flights,
     levels: a.levels.map(projectLevelMark),
     ...(a.sessions !== undefined ? { sessions: projectSessions(a.sessions) } : {}),
+    ...(a.milestoneAt !== undefined ? { milestoneAt: projectMilestoneTimes(a.milestoneAt) } : {}),
   };
 }
 
@@ -1448,6 +1471,7 @@ function projectCharacter(s: CharacterView): CharacterView {
     harnessVersion: s.harnessVersion,
     name: s.name,
     characterLabel: s.characterLabel,
+    ...(s.episode !== undefined ? { episode: s.episode } : {}),
     attempt: s.attempt,
     attempts: s.attempts,
     previous: s.previous,

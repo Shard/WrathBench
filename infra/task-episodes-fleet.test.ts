@@ -1,6 +1,7 @@
 /**
  * The task episodes in the fleet (operator, 2026-11-14): `t2` buys three
- * `deadmines-solo` attempts, the five-agent `deadmines` only where the roster
+ * `deadmines-solo` attempts, once a counted `e360` reached level 8 (operator,
+ * 2026-11-15), the five-agent `deadmines` only where the roster
  * entry opts in (`deadmines: true`), and the policy holds the five-agent id
  * and any codex row until a rehearsal clears it (`policy.rehearsed`) — all of
  * it behind the scored-episode hold. A pick draws its party from the eval
@@ -19,6 +20,7 @@ import { stagingHash, taskLaunchFile } from "./task-launch";
 import { configFromArgs } from "../runner/src/run";
 import { writeCampaignFile } from "../runner/src/campaign-file";
 import { tempDirs } from "../runner/test/fixtures/temp-dirs";
+import { countedFact } from "../runner/test/fixtures/counted-fact";
 
 const tempDir = tempDirs();
 const STAMP = "20261114";
@@ -33,9 +35,9 @@ function fleet(roster: Record<string, unknown>, policy: Record<string, unknown> 
   return parseFleet({ _notes: ["n"], accounts: { pool: ["RUNNER"] }, roster, credentials: CREDENTIALS, policy, queue: [] }, { env: ENV });
 }
 
-/** A model whose level evals are all counted, so a Deadmines id is what it owes. */
+/** A model whose level evals are all counted, one e360 at level 8, so a Deadmines id is what it owes. */
 function owing(entry: RosterModel, policy: SchedulingPolicy): ModelState {
-  const s = projectModel(entry, [], policy, { now: NOW });
+  const s = projectModel(entry, [countedFact(entry, "e360", 8, { now: NOW, series: policy.series ?? undefined })], policy, { now: NOW });
   for (const ep of ["e90", "e360"] as const) s.perEpisode[ep]!.counted = s.perEpisode[ep]!.target;
   return s;
 }
@@ -48,16 +50,23 @@ function plan(cfg: FleetConfig, states: ModelState[], scoredGate?: string) {
 const SON = { tier: "t2", model: "sonnet", driver: "claude-code", effort: "max" };
 
 describe("what buys an attempt", () => {
-  test("t2 buys three deadmines-solo attempts; the five-agent id only with the entry's opt-in", () => {
-    const plain = projectModel({ name: "s", model: "sonnet", driver: "claude-code", tier: "t2" }, [], DEFAULT_POLICY, { now: NOW });
+  test("t2 buys three deadmines-solo attempts once a counted e360 reached level 8; the five-agent id only with the entry's opt-in", () => {
+    const son = { name: "s", model: "sonnet", driver: "claude-code" } as const;
+    const l8 = [countedFact(son, "e360", 8, { now: NOW })];
+    const plain = projectModel({ ...son, tier: "t2" }, l8, DEFAULT_POLICY, { now: NOW });
     expect(plain.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
     expect(plain.perEpisode["deadmines-solo"]!.target).toBe(3);
     expect(plain.perEpisode.deadmines!.target).toBe(0);
-    const opted = projectModel({ name: "s", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true }, [], DEFAULT_POLICY, { now: NOW });
+    const opted = projectModel({ ...son, tier: "t2", deadmines: true }, l8, DEFAULT_POLICY, { now: NOW });
     expect(opted.eligible).toEqual(["e90", "e360", "deadmines-solo", "deadmines"]);
     expect(opted.perEpisode.deadmines!.target).toBe(3);
+    // No witness, no attempt: a hand-placed t2 buys none, opted in or not.
+    const bare = projectModel({ ...son, tier: "t2", deadmines: true }, [], DEFAULT_POLICY, { now: NOW });
+    expect(bare.eligible).toEqual(["e90", "e360"]);
+    expect(bare.perEpisode["deadmines-solo"]!.target).toBe(0);
+    expect(bare.perEpisode.deadmines!.target).toBe(0);
     for (const tier of ["t0", "t1"] as const) {
-      const s = projectModel({ name: "s", model: "sonnet", driver: "claude-code", tier, deadmines: true }, [], DEFAULT_POLICY, { now: NOW });
+      const s = projectModel({ ...son, tier, deadmines: true }, l8, DEFAULT_POLICY, { now: NOW });
       expect(s.perEpisode["deadmines-solo"]!.target).toBe(0);
       expect(s.perEpisode.deadmines!.target).toBe(0);
     }

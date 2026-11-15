@@ -2,8 +2,9 @@
  * The homepage's tool inspector, in the pure layer: which tool is shown, and
  * the few lines about the SDK that ride under it.
  *
- * The tool list itself comes off `/api/tools` — the runner's `TOOLS` at
- * request time — so nothing here restates a description. The SDK families
+ * The tool list itself comes off `/api/tools` — the runner's `toolsFor` at
+ * request time, the program loop's list as a default launch is given it — so
+ * nothing here restates a description. The SDK families
  * below are dashboard prose about the shape of the surface, not a copy of the
  * prompt; the prompt (`runner/src/prompt.ts`) stays the authority on what
  * the model is told.

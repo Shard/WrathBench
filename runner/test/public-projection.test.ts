@@ -1741,7 +1741,7 @@ describe("projectModels", () => {
           billing: "paid",
           declaredTier: "t0",
           tier: "t1",
-          earnedRung1: true,
+          earnedPromotion: true,
           idle: "none",
           status: "active",
           eligible: ["e90", "e360"],
@@ -1753,7 +1753,7 @@ describe("projectModels", () => {
               otherSeries: 1,
               target: 3,
               bestLevel: 5,
-              reachedL5: true,
+              countedLevel: 6,
               lastEnded: 2000,
               lastReason: "episode-limit",
               runIds: ["fixture-run-1"],
@@ -1824,7 +1824,7 @@ describe("projectModels", () => {
       "extras",
       "target",
       "bestLevel",
-      // no `otherSeries`, `reachedL5`, `lastEnded`, `lastReason`, `runIds`: the roster table prints
+      // no `otherSeries`, `countedLevel`, `lastEnded`, `lastReason`, `runIds`: the roster table prints
       // the counts and the target, and the run list under it is `runs`.
     ];
     const MODEL_RUN_KEYS = [
@@ -1863,7 +1863,7 @@ describe("projectModels", () => {
           "billing",
           "declaredTier",
           "tier",
-          "earnedRung1",
+          "earnedPromotion",
           "idle",
           "status",
           "eligible",
@@ -2430,7 +2430,7 @@ describe("no public page reads what the projection leaves out", () => {
   // (`PublicRunListRow`, `ChartSample`) carry those.
   const LEFT_OUT = [
     "raceName", "className", "outChars", "systemChars", "adapter", "ambient", "folded",
-    "reachedL5", "lastEnded", "lastReason", "otherSeries", "mtime", "firstTs",
+    "countedLevel", "lastEnded", "lastReason", "otherSeries", "mtime", "firstTs",
   ];
 
   function sources(dir: string): string[] {

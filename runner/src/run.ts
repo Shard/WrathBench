@@ -1469,6 +1469,8 @@ async function main(): Promise<void> {
             text: freshCharacterNote({
               race: config.race,
               class: config.class,
+              raceName: raceName(config.race),
+              className: className(config.class),
               taken: takenNames,
             }),
           } as const,

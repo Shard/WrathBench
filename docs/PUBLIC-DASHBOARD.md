@@ -698,11 +698,18 @@ pass leaves out, and who reads what is left:
   only, which is the column it prints.
 - **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
   `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
-  reads the first six off the run's own row and tuple.
+  reads the first six off the run's own row and tuple. It carries
+  `milestoneAt`, and a character view's attempts carry it too, beside the
+  view's `episode`: where on the run's clock the freeplay milestones were first
+  shown (two instants and an active time per mark, and whether the run recorded
+  what each reads; no id, no name), which the freeplay tab and the character
+  page place the rungs with (operator, 2026-11-15).
 - **Models** leave out, per run, the version and series, the character's ids,
   the served model and the start time, and per tier `otherSeries`,
-  `reachedL5`, `lastEnded`, `lastReason` and the run ids; the roster table
-  prints the counts and the target, and the run list is its own.
+  `countedLevel`, `lastEnded`, `lastReason` and the run ids; the roster table
+  prints the counts and the target, and the run list is its own. Nothing about
+  the Deadmines evals rides on a model row: not the task episodes, not
+  `earnedDeadmines`, and not what they still wait on in the schedulable line.
 - **A move's `z`** (on the live feed and in a track): the map marks a
   destination on the plane.
 
@@ -809,9 +816,10 @@ which names providers.
 
 Each row's headline numbers are still maxima over a model's counted runs, and
 the page is plain about that. Beside them it shows the spread those runs
-already paid for: per rung, how many of the runs whose records can answer that
-rung reached it, and for the best level the median and range across the counted
-runs that recorded one.
+already paid for: for the best level, the median and range across the counted
+runs that recorded one. A scored row carries no milestone rung; the rungs are
+freeplay achievements, shown per character on the freeplay tab with the
+playtime each was reached at (operator, 2026-11-15).
 
 ### The controls
 
@@ -962,7 +970,7 @@ holding the tier, series, route, level and xp of the newest finished reference
 run. The public build draws from that, without a link. The private viewer
 reads the run and links it.
 
-Under the rung table, on the rail the withdrawn references used, the ladder
+Under the ladder table, on the rail the withdrawn references used, the ladder
 draws one labelled line: the level the **scripted reference run** of the tier
 and series in view reached at the clock's end. That run is a TypeScript
 program played through `run_snippet` against the SDK, under the models'
@@ -972,8 +980,8 @@ a player do. A human speedrun says nothing about that, which is why this line
 and not the band is the one drawn.
 
 - **It is never a row.** The run's result reads `unscored (scripted
-  reference)`, so `scored()` keeps it out of the table, the chart, every rung
-  count and the row order, whatever level it reached.
+  reference)`, so `scored()` keeps it out of the table, the chart and the row
+  order, whatever level it reached.
 - **Which run.** `scriptedReference` in `dashboard/src/lib/reference.ts` picks
   the newest finished run with driver `reference`, episode in view and a level
   reading. It is taken from the series-filtered set, before the reader's

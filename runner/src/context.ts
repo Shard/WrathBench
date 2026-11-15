@@ -50,6 +50,7 @@ import { compactJson } from "@wrathbench/mcp/jsonsafe";
 import { scratchpadSizeLabel } from "@wrathbench/mcp/scratchpad";
 import { FILE_MAX_CHARS, type EventSummary, type MoveIntentNote } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
+import { CLASS_NAMES, RACE_NAMES } from "../viewer/characters";
 
 export const CONTEXT_POLICY = {
   /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines and creature emotes are left out too, `spellLogShown`, `emoteShown`). */
@@ -1208,7 +1209,12 @@ export function formatStateSummary(
   // header + session + character + position
   lines.push(`== state (seq ${snapshot.lastSeq ?? -1}, ${snapshot.eventCount ?? 0} events seen) ==`);
   lines.push(`session: ${o.sessionLive ? "in world" : "not established"}`);
-  lines.push(`character: ${fmt(s.name, "none")} (guid ${fmt(s.guid, "?")}) level ${fmt(s.level?.value)}`);
+  // Race and class as the client's player frame names them, from the
+  // character's own fields: a pad that says otherwise is contradicted every turn.
+  const race = RACE_NAMES[Number(s.fields?.["race"]?.value)];
+  const klass = CLASS_NAMES[Number(s.fields?.["class"]?.value)];
+  const kind = [race, klass].filter((x) => x !== undefined).join(" ");
+  lines.push(`character: ${fmt(s.name, "none")} (guid ${fmt(s.guid, "?")}) level ${fmt(s.level?.value)}${kind !== "" ? ` ${kind}` : ""}`);
   // In flight the position is the take-off point (the SDK marks it): the
   // zone text follows the flight, the coordinates do not.
   const landsAt = (s.taxiEta?.value as { landsAt?: number } | undefined)?.landsAt;

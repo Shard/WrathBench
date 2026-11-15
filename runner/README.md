@@ -171,7 +171,8 @@ steady it is, rather than after 120 s in total, so a slow model that keeps
 producing is never cut for being slow. A failed attempt, a cut stream
 included, is retried whole, and attempts start only inside a 5-minute budget.
 When they run out on network errors before any response the run pauses
-`rate-limited`; when they run out on a failed read after the headers (a stall
+`rate-limited`, or `provider-unresponsive` when the last attempt ended by its
+own clock (the model API sent nothing), a provider pause handled the same way; when they run out on a failed read after the headers (a stall
 or a cut stream) it ends as `adapter-error`. Every retry is on the record as
 a `harness` record of kind `adapter_retry` (the attempt it starts, of how
 many, the wait before it, the cause and any status, and the failure's first

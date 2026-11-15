@@ -1,19 +1,16 @@
 /**
- * The ladder of docs/VISION.md, with the highest rung each model has reached.
+ * The ladders, one episode id at a time — e90 by default — because a level
+ * reached in six hours is not the same claim as the same level reached in
+ * ninety minutes. There is no "all" and no overridden view: neither is a
+ * comparability group, so neither can be a ladder, and there is no `probing`
+ * either (a sweep varies its cells on purpose, so ranking its runs ranks the
+ * sweep). The runs page lists every run regardless.
  *
- * Rungs are read from one episode tier at a time — e90 by default —
- * because a rung reached in six hours is not the same claim as the same rung
- * reached in ninety minutes. There is no "all" and no overridden view: neither
- * is a comparability group, so neither can be a ladder, and there is no
- * `probing` either (a sweep varies its cells on
- * purpose, so ranking its runs ranks the sweep). The runs page lists every run
- * regardless.
- *
- * `freeplay` is the one id that shows something else entirely: not rungs but
- * **the top characters on freeplay right now** — the
- * whole active field, one row per durable character, paused and in-progress
- * included. `characterRows` in `lib/ladder.ts` is that derivation; the scored
- * ladders below are untouched by it.
+ * `freeplay` is the one id that shows something else entirely: **the top
+ * characters on freeplay right now** — the whole active field, one row per
+ * durable character, paused and in-progress included — with the milestone
+ * rungs each has reached and the playtime it reached each at
+ * (`characterRows`, `characterMilestones` in `lib/ladder.ts`).
  *
  * Above the table, one scatter for the tier: average cost per run against
  * average XP earned, one point per roster entry (`components/LadderChart`),
@@ -27,11 +24,12 @@
  * one stepped series per character, level against cumulative active playtime; the
  * axis argument is in `lib/ladder.ts`.
  *
- * Rows are ordered by highest rung reached, then total XP, then gold — a stated
- * derivation over recorded signals, versioned with `lib/ladder.ts`. The two
- * tie-breaks are printed in their own columns so the order is legible rather
- * than mysterious, and neither is added to anything: there is no aggregate
- * score.
+ * Scored rows are ordered by level, then xp within it, then gold (operator,
+ * 2026-11-15) — a stated derivation over recorded signals, versioned with
+ * `lib/ladder.ts`, each key in its own column, and none added to another:
+ * there is no aggregate score. The rungs order nothing on these ladders; they
+ * are freeplay achievements, and the freeplay view prints the rule each
+ * applies, with "not instrumented" where nothing recorded can answer one.
  *
  * The two Deadmines ids are tabs of this page too, and read something else
  * again: the dungeon board (`/api/dungeons`, derived in
@@ -41,14 +39,6 @@
  * killed (`components/DungeonChart`). None of the tier's controls apply to a
  * board, so none is shown; the shell's series still is. The one-agent id's tab
  * is offered only where its table is served (`dungeonChoices`).
- *
- * One of the eight rungs cannot be answered from scored runs: only unscored
- * probe campaigns run the parties rung 6 would read. It reads
- * "not instrumented" rather than being approximated by a level threshold. Rung 2 reads the zone/area
- * milestone records and rung 4 reads those plus the flight
- * milestones, so 4 now tests both clauses of its title. Every derived rung
- * prints the exact rule it applied so a reader can disagree with the
- * derivation.
  */
 
 import { A, useSearchParams } from "@solidjs/router";
@@ -69,16 +59,15 @@ import { type DungeonChoice, EPISODE_CHOICES, dungeonChoices, dungeonParam, epis
 import { attemptHref, attemptTitle, boardHint, boardRowKey, bossesText, bossesTitle, clearTimeText, clearedText } from "../lib/dungeons";
 import {
   RUNGS,
-  BOARD_RUNG,
   billingKnown,
   entryKeyOf,
   filterRuns,
   ladderPoints,
   ladderRows,
   characterRows,
-  type LadderCell,
   type LadderRow,
   type CharacterRow,
+  type MilestoneReach,
 } from "../lib/ladder";
 import {
   chartGroups,
@@ -95,7 +84,7 @@ import {
 } from "../lib/ladderfilter";
 import { resolvedSummary } from "../lib/models";
 import { type ReferenceMark, type ReferenceScale, scriptedReference, scriptedReferenceScale } from "../lib/reference";
-import { effortLabel, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { effortLabel, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { statusTitle, statusTone } from "../lib/runs";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
@@ -132,11 +121,10 @@ export default function Ladder() {
   // The front, like the view, is a way of reading the tier and rides in the
   // URL beside it: `?pareto=1` is the one truthy form, anything else is off.
   const pareto = (): boolean => (Array.isArray(params.pareto) ? params.pareto[0] : params.pareto) === "1";
-  // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
-  // client-side, in `lib/ladder.ts`, where their tests are.
+  // `/api/ladder` is the same projection as `/api/results`; the row order and
+  // the milestone rules stay client-side, in `lib/ladder.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode()), POLL_MS);
-  // Rung 6 is filled from the dungeon board (`rungSixCell`); a board that does not load leaves it unfilled.
-  // The Deadmines tabs read the same response.
+  // The Deadmines tabs read the dungeon board.
   const dungeons = poll(() => api.dungeons(), POLL_MS);
   createEffect(on(episode, () => feed.refresh(), { defer: true }));
   /** The ids whose tables the viewer serves, once it has answered. */
@@ -155,13 +143,12 @@ export default function Ladder() {
   const board = (): DungeonBoardView | undefined => dungeons.latest?.boards.find((b) => b.episode === dungeon());
   const body = (): ResultsResponse | undefined => feed.latest;
   // The shell's harness series, applied before anything else reads
-  // the rows: a rung reached on 0.4 is not evidence about 0.5.
+  // the rows: a level reached on 0.4 is not evidence about 0.5.
   const served = (): ResultRun[] => body()?.runs ?? [];
   /*
    * Freeplay is a different page under the same address: an overview of the
-   * top characters on freeplay right now, one row per durable character. It
-   * reads no rungs, so it shows neither the scatter
-   * nor the rung table. The shell's series filter still does not apply, and
+   * top characters on freeplay right now, one row per durable character, with
+   * its milestones. It shows no scatter. The shell's series filter does not apply, and
    * that is not a convenience: a character is durable *across* series, so cutting
    * its older attempts would make the newest survivor the chain root and
    * report a thirteen-attempt character as attempt 1, which is the one number
@@ -180,7 +167,7 @@ export default function Ladder() {
    * Three multi-selects and two toggles narrow the set, and all of them are
    * applied BEFORE the rows are derived — `ladderRows` on a scored tier,
    * `characterRows` on freeplay — so the ranking is computed over exactly the
-   * rows on screen; the order itself is untouched (highest rung, XP, gold). On
+   * rows on screen; the order itself is untouched (level, XP, gold). On
    * freeplay that ordering is before the lineage walk, so a chain whose
    * ancestor the filter drops re-roots on its survivor. A mixed chain is rare
    * but real — an entry's declared `billing` changed between two attempts of
@@ -349,7 +336,7 @@ export default function Ladder() {
   // `SeriesFilterNote` states for the series filter).
   const billingUnknown = (): boolean =>
     excludeFree() && all().length > 0 && !billingKnown(all());
-  const rows = createMemo(() => ladderRows(runs(), dungeons.latest?.boards ?? []));
+  const rows = createMemo(() => ladderRows(runs()));
   /*
    * The scripted reference line, from the series-filtered set before the
    * reader's filters (`scriptedReference`); the rows on screen only decide how
@@ -544,6 +531,7 @@ export default function Ladder() {
               the table can never disagree about which characters are on screen. */}
           <CharacterChart rows={characters()} runs={runs()} />
           <CharacterTable rows={characters()} />
+          <RungRules />
         </Show>
         <Show when={!freeplay()}>
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
@@ -576,21 +564,11 @@ export default function Ladder() {
                 <th class="right">runs</th>
                 <th
                   class="right"
-                  title="the highest rung reached, and the row order's first key — nothing on this row is summed into a score"
+                  title="the row order's first key: the furthest a run got — level, then xp within it; nothing on this row is summed into a score"
                 >
-                  highest
-                </th>
-                <th class="right" title="first tie-break: the furthest a run got — level, then xp within it">
                   level · xp
                 </th>
-                <th class="right" title="second tie-break: the most a run ended holding">gold</th>
-                <For each={RUNGS}>
-                  {(rung) => (
-                    <th class="right" title={`${rung.title} — ${rung.rule}`}>
-                      {rung.n}
-                    </th>
-                  )}
-                </For>
+                <th class="right" title="the tie-break: the most a run ended holding">gold</th>
               </tr>
             </thead>
             <tbody>
@@ -651,20 +629,18 @@ export default function Ladder() {
                           : `${row.characters.length} characters`}
                     </td>
                     <td class="right mono dim">{row.runs}</td>
-                    <td class="right mono">{row.highest === 0 ? "—" : row.highest}</td>
-                    <td class="right mono dim" title={row.bestRunId ?? "not recorded"}>
+                    <td class="right mono" title={row.bestRunId ?? "not recorded"}>
                       <Furthest row={row} />
                     </td>
                     <td class="right mono dim" title={row.bestMoneyRunId ?? "not recorded"}>
                       <Coins copper={row.bestMoney} />
                     </td>
-                    <For each={row.cells}>{(cell) => <RungCell cell={cell} runs={row.runs} />}</For>
                   </tr>
                 )}
               </For>
               <Show when={rows().length === 0}>
                 <tr>
-                  <td colSpan={7 + RUNGS.length} class="dim">
+                  <td colSpan={6} class="dim">
                     No scorable runs recorded yet.
                   </td>
                 </tr>
@@ -674,32 +650,6 @@ export default function Ladder() {
         </div>
 
         <Show when={reference()}>{(ref) => <ReferenceStrip scale={ref()} />}</Show>
-
-        <h2 class="section">the rungs, and how each is decided</h2>
-        <div class="scroller">
-          <table>
-            <thead>
-              <tr>
-                <th class="right">#</th>
-                <th>rung</th>
-                <th>rule applied</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={RUNGS}>
-                {(rung) => (
-                  <tr>
-                    <td class="right mono">{rung.n}</td>
-                    <td>{rung.title}</td>
-                    <td class={rung.test === null && rung.n !== BOARD_RUNG ? "warn" : "dim"}>
-                      {rung.test === null && rung.n !== BOARD_RUNG ? `not instrumented — ${rung.rule}` : rung.rule}
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </div>
         </Show>
       </Show>
       </Show>
@@ -816,6 +766,13 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
             </th>
             <th class="right">gold</th>
             <th class="right">quests</th>
+            <For each={RUNGS}>
+              {(rung) => (
+                <th class="right" title={`milestone ${rung.n}: ${rung.title} — ${rung.rule}; the cell is the playtime it was reached at`}>
+                  {rung.n}
+                </th>
+              )}
+            </For>
             <th title="the attempt this row is reading, and when it started">latest run</th>
           </tr>
         </thead>
@@ -857,6 +814,7 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
                   <Coins copper={row.money} />
                 </td>
                 <td class="right mono dim">{row.questsCompleted ?? "—"}</td>
+                <For each={row.milestones}>{(m) => <MilestoneCell reach={m} />}</For>
                 <td class="mono">
                   <A href={`/run/${encodeURIComponent(row.latest.runId)}`}>{row.latest.runId}</A>
                   <div class="dim">{fmtWhen(row.startedAt)}</div>
@@ -866,7 +824,7 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
           </For>
           <Show when={props.rows.length === 0}>
             <tr>
-              <td colSpan={8} class="dim">
+              <td colSpan={8 + RUNGS.length} class="dim">
                 No freeplay characters recorded yet.
               </td>
             </tr>
@@ -882,7 +840,7 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
  *
  * The rail the withdrawn reference lines used, carrying one mark now: the
  * scripted reference run of this tier and series (`lib/reference.ts`). It sits
- * below the table rather than inside it, because the rung table scrolls
+ * below the table rather than inside it, because the ladder table scrolls
  * sideways on a phone and a reference behind a scroll is not one. The rail is
  * percentage-positioned HTML so it needs no measuring, and the legend carries
  * the number, linked to the run, so nothing has to be read off the rail. What
@@ -964,71 +922,59 @@ function Furthest(props: { row: LadderRow }) {
 }
 
 /**
- * One rung, for one model: how many of its runs got there out of how many
- * could be asked, linking the first that did.
- *
- * `2/3` and not a tick: a tick made a model
- * that cleared the rung once in three tries render identically to one that
- * cleared it three times out of three. The denominator is the runs whose
- * records can answer *this* rung, not the row's runs — a run that predates the
- * area or flight taps was never asked and is not counted as a failure — and
- * the hover says so whenever the two differ.
+ * One milestone for one character: the cumulative active playtime it was
+ * reached at, linking the attempt that completed it; a dash when not reached,
+ * and the state on the hover when its records cannot say.
  */
-function RungCell(props: { cell: LadderCell; runs: number }) {
-  const c = (): LadderCell => props.cell;
-  // Rung 6 is the dungeon board's: its own cell, its own counts.
-  if (props.cell.arm !== undefined) return <BoardRungCell cell={props.cell} />;
-  const short = (): boolean => c().askable < props.runs;
-  const title = (): string =>
-    `${c().reached} of ${c().askable} run${c().askable === 1 ? "" : "s"} reached this rung` +
-    (short()
-      ? `; ${props.runs - c().askable} of the row's ${props.runs} predate the record this rung reads and could not be asked`
-      : "") +
-    (c().runId === null ? "" : ` — link goes to ${c().runId}, the first that did`);
+function MilestoneCell(props: { reach: MilestoneReach }) {
+  const r = (): MilestoneReach => props.reach;
   return (
-    <td class="right">
-      <Show when={c().status === "reached"} fallback={<Unreached cell={c()} runs={props.runs} />}>
-        <A href={`/run/${encodeURIComponent(c().runId ?? "")}`} title={title()}>
-          <span class="ok mono">
-            {c().reached}/{c().askable}
+    <td class="right mono">
+      <Show
+        when={r().status === "reached" ? r().runId : null}
+        fallback={
+          <span class="dim" title={r().status.replace("-", " ")}>
+            {r().status === "not-reached" ? "—" : r().status === "not-recorded" ? "?" : "·"}
           </span>
-          <Show when={short()}>
-            <span class="dim">*</span>
-          </Show>
-        </A>
+        }
+      >
+        {(id) => (
+          <A href={`/run/${encodeURIComponent(id())}`} title={`reached at ${fmtDuration(r().playtimeMs)} of play, on ${id()}`}>
+            <span class="ok">{r().playtimeMs === null ? "yes" : fmtDuration(r().playtimeMs)}</span>
+          </A>
+        )}
       </Show>
     </td>
   );
 }
 
-/** Rung 6, filled from the dungeon board: cleared attempts of counted ones, labelled with the arm, linking the board. */
-function BoardRungCell(props: { cell: LadderCell }) {
-  const c = (): LadderCell => props.cell;
-  const title = (): string =>
-    `${c().arm}: ${c().reached} of ${c().askable} counted Deadmines attempt${c().askable === 1 ? "" : "s"} cleared, on the dungeon board — not counted in the highest rung or the order`;
+/** The milestone rungs and the rule each applies, under the freeplay table. */
+function RungRules() {
   return (
-    <td class="right">
-      <A href="/dungeons" title={title()}>
-        <span class={c().status === "reached" ? "ok mono" : "dim mono"}>
-          {c().reached}/{c().askable}
-        </span>
-      </A>
-    </td>
+    <>
+      <h2 class="section">milestones</h2>
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th class="right">#</th>
+              <th>milestone</th>
+              <th>rule applied</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={RUNGS}>
+              {(rung) => (
+                <tr>
+                  <td class="right mono">{rung.n}</td>
+                  <td>{rung.title}</td>
+                  <td class={rung.parts === null ? "warn" : "dim"}>{rung.rule}</td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
-
-function Unreached(props: { cell: LadderCell; runs: number }) {
-  const asked = (): string =>
-    props.cell.askable === 0
-      ? "no run's records can answer this rung"
-      : `0 of ${props.cell.askable} run${props.cell.askable === 1 ? "" : "s"} reached it` +
-        (props.cell.askable < props.runs
-          ? `; ${props.runs - props.cell.askable} of ${props.runs} could not be asked`
-          : "");
-  return (
-    <span class="dim" title={props.cell.status === "not-instrumented" ? "not instrumented" : asked()}>
-      {props.cell.status === "not-instrumented" ? "·" : "—"}
-    </span>
-  );
-}
-

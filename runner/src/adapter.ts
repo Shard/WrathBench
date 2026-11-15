@@ -76,7 +76,8 @@
  *   attempt, clamped to the same 30s cap and jittered upward only.
  * - Attempts exhausted on network errors that never got a response (no
  *   status, before the headers; a timer firing there included) PAUSE
- *   (`rate-limited`), as do attempts exhausted on 5xx. Attempts exhausted on a
+ *   (`provider-unresponsive` when the last attempt ended by its own timer,
+ *   `rate-limited` otherwise), as do attempts exhausted on 5xx (`rate-limited`). Attempts exhausted on a
  *   failed read after the headers — a stall mid-stream, either timer firing
  *   there, a cut or malformed stream — end as `adapter-error`, as a failed
  *   body read always has.
@@ -226,7 +227,7 @@ export type AdapterOutcome =
   | { kind: "ok"; turn: AssistantTurn }
   | {
       kind: "pause";
-      reason: "quota-exhausted" | "rate-limited" | "auth-failed" | "no-access";
+      reason: "quota-exhausted" | "rate-limited" | "provider-unresponsive" | "auth-failed" | "no-access";
       detail: string;
       /** The provider's own stated reset (`statedResetOf`), already inside the carried window. */
       notBefore?: number;
@@ -1371,9 +1372,15 @@ export class OpenAiChatAdapter implements ChatAdapter {
     // operation timed out." across two different platforms. Pause, defer,
     // come back.
     if (lastStatus === undefined && lastError.startsWith("network error:")) {
+      // The last attempt ended by its own clock (the model API sent nothing
+      // for the silence window, or passed the ceiling) is a provider that
+      // stopped answering, not one that refused: a hung stream labelled
+      // `rate-limited` read in the record as a refusal no provider made. It
+      // pauses, resumes and cools exactly as `rate-limited` does
+      // (`PROVIDER_PAUSES`, the roster's ladder).
       return {
         kind: "pause",
-        reason: "rate-limited",
+        reason: lastCause === "timeout" ? "provider-unresponsive" : "rate-limited",
         detail: `persistent network failure after ${made} attempt(s): ${lastError}`,
       };
     }

@@ -103,7 +103,7 @@ const E90 = [
   // A CLI alias the provider resolved.
   run({ runId: "opus-a", model: "opus", resolvedModel: "claude-opus-5", harness: "claude-code", driver: "claude-code", effort: "low", maxLevel: 7 }),
   // A free endpoint, with no level recorded.
-  run({ runId: "free-a", model: "minimax/minimax-m3:free", billing: "free", maxLevel: null, xp: null, money: null }),
+  run({ runId: "free-a", model: "minimax/minimax-m3:free", billing: "free", maxLevel: 3, xp: null, money: null }),
   // Never in a record: live, paused, steered, the scripted reference.
   run({ runId: "live", unscored: "unscored (live)", maxLevel: 80 }),
   run({ runId: "paused", unscored: "unscored (paused)", maxLevel: 80 }),
@@ -159,19 +159,20 @@ describe("cells", () => {
       version: "0.5",
       additional_details: { harness_versions: '["harness-0.5-12-gabc1234","harness-0.5-14-gdef5678"]', harness: "wrathbench" },
     });
-    const details = resultOf(f, "highest_rung")!.generation_config.additional_details;
+    const details = resultOf(f, "best_level")!.generation_config.additional_details;
     expect(details).toMatchObject({ harness_series: "0.5", harness: "wrathbench", effort: "default", episode: "e90", runs: "3" });
     expect(JSON.parse(details.run_ids!)).toEqual(["ds-a", "ds-b", "ds-c"]);
     expect(f.record.model_info.additional_details).toMatchObject({ agent_scaffold: "wrathbench", inference_effort: "default" });
   });
 
-  test("the ladder's three numbers, each a maximum, with the level distribution beside them", () => {
+  test("the ladder's numbers, each a maximum, with the level distribution beside them, and no rung", () => {
     const f = byId(files, "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default");
-    const rung = resultOf(f, "highest_rung")!;
-    expect(rung.score_details.score).toBe(2);
-    expect(rung.score_details.uncertainty.num_samples).toBe(3);
-    expect(rung.score_details.details).toMatchObject({ rung_1: "2 of 3 askable runs", rung_2: "3 of 3 askable runs", rung_6: "not instrumented" });
+    // The milestone rungs are freeplay achievements, on no scored ladder (operator, 2026-11-15).
+    expect(f.record.evaluation_results.map((r) => r.metric_config.metric_id)).toEqual(["wrathbench.best_level", "wrathbench.best_money"]);
+    expect(f.record.source_metadata.additional_details.ladder_order).not.toContain("rung");
     const level = resultOf(f, "best_level")!;
+    expect(level.score_details.details).toMatchObject({ ladder_position: "1 of 2 (primary key)" });
+    expect(level.score_details.uncertainty.num_samples).toBe(3);
     // The (level, xp) pair comes from one run: level 6 at 450 xp is ds-b.
     expect(level.score_details.score).toBe(6);
     expect(level.score_details.details).toMatchObject({ xp_within_level: "450", level_min: "4", level_median: "6", level_max: "6", levels: "[4,6,6]" });
@@ -180,7 +181,7 @@ describe("cells", () => {
 
   test("a null reading is no result, never a zero; a zero is a reading", () => {
     const free = byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
-    expect(free.record.evaluation_results.map((r) => r.metric_config.metric_id)).toEqual(["wrathbench.highest_rung"]);
+    expect(free.record.evaluation_results.map((r) => r.metric_config.metric_id)).toEqual(["wrathbench.best_level"]);
     const high = byId(files, "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/high");
     expect(resultOf(high, "best_money")!.score_details.score).toBe(0);
   });
@@ -193,6 +194,12 @@ describe("cells", () => {
     expect(paid.skipped).toContainEqual({ reason: "e90: free (--include-free exports them)", runs: 1 });
     expect(files.map((f) => f.record.evaluation_id)).toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
     expect(skipped.map((x) => x.reason)).not.toContain("e90: free (--include-free exports them)");
+  });
+
+  test("a cell that recorded neither a level nor money is skipped, never written empty", () => {
+    const r = eeeFromLadder("e90", ladder("e90", [run({ runId: "blank", maxLevel: null, xp: null, money: null })]));
+    expect(r.files).toEqual([]);
+    expect(r.skipped).toEqual([{ reason: "no level or money recorded", runs: 1 }]);
   });
 
   test("a compaction window is its own cell", () => {

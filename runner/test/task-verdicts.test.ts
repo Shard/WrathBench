@@ -8,6 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_POLICY, isPartyEpisode, partyAttempts, projectModel, type RosterModel, type RunFact } from "../src/models";
+import { countedFact } from "./fixtures/counted-fact";
 
 const NOW = Date.UTC(2026, 10, 14, 12);
 const ENTRY: RosterModel = { name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true };
@@ -64,7 +65,9 @@ describe("a five-agent attempt", () => {
     expect(isPartyEpisode("deadmines-solo")).toBe(false);
     const runs = [...party("p1", "kill-target"), ...party("p2", "episode-limit")];
     expect(partyAttempts(runs)).toHaveLength(2);
-    expect(stats(runs)).toMatchObject({ attempts: 2, counted: 2, target: 3 });
+    expect(stats(runs)).toMatchObject({ attempts: 2, counted: 2, target: 0 });
+    // The target is bought once a counted e360 reached level 8 (operator, 2026-11-15).
+    expect(stats([countedFact(ENTRY, "e360", 8, { now: NOW }), ...runs])).toMatchObject({ attempts: 2, counted: 2, target: 3 });
   });
 
   test("a member that went idle or reached its call ceiling: counted, and no rung", () => {
