@@ -698,11 +698,18 @@ pass leaves out, and who reads what is left:
   only, which is the column it prints.
 - **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
   `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
-  reads the first six off the run's own row and tuple.
+  reads the first six off the run's own row and tuple. It carries
+  `milestoneAt`, and a character view's attempts carry it too, beside the
+  view's `episode`: where on the run's clock the freeplay milestones were first
+  shown (two instants and an active time per mark, and whether the run recorded
+  what each reads; no id, no name), which the freeplay tab and the character
+  page place the rungs with (operator, 2026-11-15).
 - **Models** leave out, per run, the version and series, the character's ids,
   the served model and the start time, and per tier `otherSeries`,
-  `reachedL5`, `lastEnded`, `lastReason` and the run ids; the roster table
-  prints the counts and the target, and the run list is its own.
+  `countedLevel`, `lastEnded`, `lastReason` and the run ids; the roster table
+  prints the counts and the target, and the run list is its own. Nothing about
+  the Deadmines evals rides on a model row: not the task episodes, not
+  `earnedDeadmines`, and not what they still wait on in the schedulable line.
 - **A move's `z`** (on the live feed and in a track): the map marks a
   destination on the plane.
 

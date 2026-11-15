@@ -1151,11 +1151,12 @@ function projectModelRun(r: ModelRunView): ModelRunView {
 /**
  * A scheduler's "schedulable on …" or "targets met on …" with the task
  * episodes left out of its list, as the rest of the row leaves them out
- * (`projectEpisodes`). A list of nothing else is
- * kept whole: dropping every item would say something false.
+ * (`projectEpisodes`), and without what the Deadmines evals still wait on
+ * (`; not yet on deadmines-solo: …`), for the same reason. A list of nothing
+ * else is kept whole: dropping every item would say something false.
  */
 export function withoutTaskEpisodes(why: string): string {
-  const m = /^(schedulable on|targets met on) (.+?)( — .*)?$/.exec(why);
+  const m = /^(schedulable on|targets met on) (.+?)(?:; not yet on [a-z-]+: [^—]*?)?( — .*)?$/.exec(why);
   if (m === null) return why;
   const kept = m[2]!.split(", ").filter((x) => !isTaskEpisode(x));
   return kept.length === 0 ? why : `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
