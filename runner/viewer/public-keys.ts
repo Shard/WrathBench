@@ -42,3 +42,18 @@ export const PUBLIC_NEARBY_SPAN_MS = 12 * 60_000;
  * and verifier, and the dashboard's snapshot client.
  */
 export const PUBLIC_NEARBY_KEY = "v1/nearby.json";
+
+/**
+ * A camera clip's video or poster in the bucket: under the run's prefix, so
+ * the zone's `/v1/run/` cache rule and rate limit cover it, and addressed by
+ * the clip's name and the first twelve hex of the file's own SHA-256, so a
+ * re-publish of the same file lands on the key the bucket already holds and a
+ * re-rendered clip gets a new one. `infra/publish-core.ts` classifies the key
+ * (`clip`) before it could read as a run object at a version called `clip`.
+ */
+export function clipMediaKey(runId: string, name: string, hash: string, ext: "mp4" | "jpg"): string {
+  return `v1/run/${runId}/clip/${name}-${hash}.${ext}`;
+}
+
+/** `clipMediaKey`'s shape, read back: run id, clip name, hash, extension. */
+export const CLIP_MEDIA_KEY = /^v1\/run\/([A-Za-z0-9._-]+)\/clip\/([A-Za-z0-9_-]{1,80})-([0-9a-f]{12})\.(mp4|jpg)$/;

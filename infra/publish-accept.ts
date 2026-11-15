@@ -68,7 +68,9 @@
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
+  projectClips,
   projectEntries,
+  projectHighlight,
   projectEpisodes,
   projectFleet,
   projectInfo,
@@ -335,7 +337,8 @@ const WITHHELD_KEYS: ReadonlySet<string> = new Set([
  *   `edit_scratchpad`'s `old` and `new`, `log_status`'s `text`, a query). A
  *   string that IS the `args` is the loop's own parse error, and is checked;
  * - an action note's `say` text and raw payload;
- * - the scratchpad, and each live position's episodic status.
+ * - the scratchpad, and each live position's episodic status;
+ * - a camera clip's caption, the model's own words as the director quoted them.
  */
 const MODEL_AUTHORED: readonly RegExp[] = [
   /^entries\.json:(?:response|claude_result|episodic|snippet_result|tool_result)\.text$/,
@@ -343,6 +346,8 @@ const MODEL_AUTHORED: readonly RegExp[] = [
   /^entries\.json:tool_call\.args[.[]/,
   /^entries\.json:actions\.actions\[\d+\]\.args\.(?:text|payload)(?:\[\d+\])*$/,
   /^scratchpad\.json:text$/,
+  /^clips\.json:clips\[\d+\]\.caption$/,
+  /^highlight\.json:highlight\.clip\.caption$/,
   /^live\.json:positions\.positions\[\d+\]\.status\.text$/,
 ];
 
@@ -600,6 +605,19 @@ export function canonical(value: unknown): unknown {
   return out;
 }
 
+/** The clip files a `clips.json`-shaped body names: each clip's `video` and `poster`, when they are clip keys. */
+function clipMediaKeys(body: Record<string, unknown>): string[] {
+  const clips = body["clips"];
+  const out: string[] = [];
+  for (const c of Array.isArray(clips) ? clips : []) {
+    for (const k of ["video", "poster"] as const) {
+      const v = (c as Record<string, unknown> | null)?.[k];
+      if (typeof v === "string" && classifyPath(v).kind === "clip") out.push(v);
+    }
+  }
+  return out;
+}
+
 /** The two envelope fields the renderer adds after projecting, stripped for the compare. */
 function withoutEnvelope(body: Record<string, unknown>): Record<string, unknown> {
   const { generatedAt: _g, attribution: _a, ...rest } = body;
@@ -650,6 +668,7 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
     if (name === "detail.json") return (p) => projectRunDetail(p as unknown as Parameters<typeof projectRunDetail>[0]);
     if (name === "track.json") return (p) => projectTrack(p as unknown as Parameters<typeof projectTrack>[0]);
     if (name === "entries.json") return (p) => projectEntries(p as unknown as Parameters<typeof projectEntries>[0]);
+    if (name === "clips.json") return (p) => projectClips(p as unknown as Parameters<typeof projectClips>[0]);
     return null; // scratchpad.json: `{ text }`, the model's own file.
   }
   if (name === "info.json") return (p) => projectInfo(p as unknown as Parameters<typeof projectInfo>[0]);
@@ -661,6 +680,7 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
   if (name === "models.json") return (p) => projectModels(p as unknown as Parameters<typeof projectModels>[0]);
   if (name === "campaigns.json") return (p) => projectCampaigns(p as unknown as Parameters<typeof projectCampaigns>[0]);
   if (name === "tools.json") return (p) => projectTools(p as unknown as Parameters<typeof projectTools>[0]);
+  if (name === "highlight.json") return (p) => projectHighlight(p as unknown as Parameters<typeof projectHighlight>[0]);
   return null;
 }
 
@@ -846,7 +866,7 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     for (const id of runs.flagged) unpublished.add(id);
     // A run's own objects name it by their key, not always by a field.
     const own = classifyPath(key);
-    if (own.kind === "run" || own.kind === "trace") runs.named.add(own.runId);
+    if (own.kind === "run" || own.kind === "trace" || own.kind === "clip") runs.named.add(own.runId);
     if (runs.named.size > 0) namedBy.set(key, runs.named);
     return obj;
   };
@@ -876,9 +896,15 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
   log(`manifest gen ${report.gen}, ${Object.keys(report.artifacts).length} aggregates`);
 
   let runsBody: Record<string, unknown> | null = null;
+  /** Every camera clip file a published `clips.json` or the home page's clip names. */
+  const mediaKeys: string[] = [];
   for (const [name, key] of Object.entries(report.artifacts)) {
     const body = await inspect(key);
     if (name === "runs.json") runsBody = body;
+    if (name === "highlight.json" && body !== null) {
+      const clip = (body["highlight"] as { clip?: unknown } | null | undefined)?.clip;
+      if (clip !== undefined) mediaKeys.push(...clipMediaKeys({ clips: [clip] }));
+    }
   }
   const liveBody = await inspect(LIVE_PATH);
   // The units, where `live.json` names them: named and absent is a missing object.
@@ -914,12 +940,13 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
       const snapshot = (row as Record<string, unknown>)["snapshot"];
       if (snapshot === null || typeof snapshot !== "object") continue;
       report.runsWithArtifacts += 1;
-      for (const which of ["detail", "track", "entries", "scratchpad"] as const) {
+      for (const which of ["detail", "track", "entries", "scratchpad", "clips"] as const) {
         const key = (snapshot as Record<string, unknown>)[which];
         // `entries` and `scratchpad` are optional pointers: a run with no
         // scratchpad.md simply has none, and that is not a missing object.
         if (typeof key !== "string") continue;
         const body = await inspect(key);
+        if (which === "clips" && body !== null) mediaKeys.push(...clipMediaKeys(body));
         const trace = which === "track" ? (body?.["trace"] as { segMs?: unknown; segs?: unknown } | undefined) : undefined;
         if (trace !== undefined && typeof trace.segMs === "number" && Array.isArray(trace.segs)) {
           const newest = unpackSegs(trace.segs as [number, number][], trace.segMs).at(-1);
@@ -931,6 +958,21 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
   };
   await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 8, Math.max(1, rows.length)) }, worker));
   for (const key of [...segmentKeys].sort()) await inspect(key);
+  /*
+   * A clip's video and poster are binary, so they are looked up, not read:
+   * named and absent is a missing object like any other. A key that is not a
+   * clip key, or names another run, is drift the re-projection has already
+   * reported.
+   */
+  for (const key of [...new Set(mediaKeys)].sort()) {
+    const there = source.head !== undefined ? (await source.head(key)) !== null : (await source.get(key)) !== null;
+    if (!there) {
+      report.missing.push(key);
+      report.findings.push({ kind: "missing-object", key, at: "", detail: "a clip file named by the generation, not in the bucket" });
+      continue;
+    }
+    report.objects += 1;
+  }
   for (const [key, ids] of namedBy) {
     for (const id of ids) {
       if (unpublished.has(id)) report.findings.push({ kind: "unpublished-run", key, at: "", detail: `names run ${id}, whose driver is not a model` });

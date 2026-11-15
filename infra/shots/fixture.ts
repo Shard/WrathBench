@@ -46,7 +46,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   SEGMENT_MS as TRACE_WINDOW_MS,
@@ -557,6 +557,45 @@ export const LIVE_RUN_2 = "fixture-live-2";
 export const LIVE_RUN_3 = "fixture-live-3";
 export const LIVE_RUN_4 = "fixture-live-4";
 
+/**
+ * A camera's output for a run, in the contract's layout: `camera/clips.json`
+ * naming a timelapse and one level clip, both the same two-second synthetic
+ * test pattern (ffmpeg's `testsrc`, `runner/test/fixtures/camera/`) and never
+ * a game image, with `meta.json` labelled `camera`. A frame on disk too, which
+ * nothing may ever serve.
+ */
+function writeCamera(runsDir: string, runId: string, from: number, to: number, model: string): void {
+  const media = join(import.meta.dir, "..", "..", "runner", "test", "fixtures", "camera");
+  const dir = join(runsDir, runId, "camera");
+  mkdirSync(join(dir, "clips"), { recursive: true });
+  mkdirSync(join(dir, "frames"), { recursive: true });
+  copyFileSync(join(media, "poster.jpg"), join(dir, "frames", "1.jpg"));
+  const iso = (t: number): string => new Date(t).toISOString();
+  const levelAt = from + Math.round((to - from) / 2);
+  const clips = [
+    { name: "timelapse", kind: "timelapse", from: iso(from), to: iso(to), seconds: 2, caption: `WrathBench · ${model} · the whole run` },
+    {
+      name: "event-12-level",
+      kind: "event",
+      event: { type: "level", detail: "reached level 5" },
+      from: iso(levelAt - 20_000),
+      to: iso(levelAt + 20_000),
+      seconds: 2,
+      caption: `WrathBench · ${model} · "Five pelts to go, then the scout by the old mill."`,
+    },
+  ];
+  for (const c of clips) {
+    copyFileSync(join(media, "clip.mp4"), join(dir, "clips", `${c.name}.mp4`));
+    copyFileSync(join(media, "poster.jpg"), join(dir, "clips", `${c.name}.jpg`));
+  }
+  writeFileSync(
+    join(dir, "clips.json"),
+    `${JSON.stringify({ version: 1, runId, clips: clips.map((c) => ({ ...c, file: `clips/${c.name}.mp4`, poster: `clips/${c.name}.jpg` })) }, null, 2)}\n`,
+  );
+  const metaPath = join(runsDir, runId, "meta.json");
+  writeFileSync(metaPath, JSON.stringify({ ...(JSON.parse(readFileSync(metaPath, "utf8")) as object), camera: true }));
+}
+
 /** Write the runs into `runsDir` relative to `now`, and hand back the live runs' ticker. */
 /**
  * The dungeon board's runs: scored Deadmines attempts on both ids, cleared
@@ -718,6 +757,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   };
   const endedRun = writeRun(runsDir, endedSpec, endedAt);
   endedRun.traj.close();
+  writeCamera(runsDir, ENDED_RUN, endedSpec.startedAt, endedAt, "fixture/ended-model");
   // A fan-out run: one agent, two characters, a record each; private only.
   const fanoutAt = at(now - 15 * 60_000);
   const fanoutSpec: Spec = {
@@ -747,6 +787,8 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   // has two buckets to offer; `fixture/e90-model` reads `unknown`.
   writeLadderRun(runsDir, E90_CLOSED_RUN, { driver: "openai", model: "anthropic/fixture-model", character: "Closewyn" }, 4, at(now - 6 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
+  // A camera on a run that is never published: the public half must show none of it.
+  writeCamera(runsDir, REFERENCE_RUN, at(now - 5 * 3_600_000), at(now - 4 * 3_600_000), "reference");
   // The dungeon board's model on the e90 ladder too, on the board runs' condition: a program-loop row of its own.
   writeLadderRun(runsDir, E90_DUNGEON_RUN, { driver: "openai", model: "fixture/dungeon-model", loop: "program", yield: true, character: "Delvara" }, 3, at(now - 7 * 3_600_000));
   const liveSpecs: Spec[] = [

@@ -13,6 +13,8 @@
 import type {
   ApiInfoResponse,
   CharacterResponse,
+  ClipsResponse,
+  HighlightResponse,
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
@@ -37,6 +39,9 @@ import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 export type {
   AgentPosition,
   ApiInfoResponse,
+  ClipView,
+  ClipsResponse,
+  HighlightResponse,
   ComparabilityView,
   CostBreakdown,
   CostView,
@@ -341,6 +346,15 @@ export function createClient(opts: ClientOptions = {}) {
     scratchpad: async (id: string): Promise<ScratchpadResponse> => ({
       text: await get(`/api/run/${encodeURIComponent(id)}/scratchpad`, getText),
     }),
+    /**
+     * The run's camera clips. A run with none is a 404. Each clip's `video`
+     * and `poster` are refs for `mediaUrl`.
+     */
+    clips: (id: string): Promise<ClipsResponse> => get<ClipsResponse>(`/api/run/${encodeURIComponent(id)}/clips`),
+    /** The home page's one clip, newest first, or none. */
+    highlight: (): Promise<HighlightResponse> => get<HighlightResponse>("/api/highlight"),
+    /** A clip's video or poster ref as a URL: the viewer's own route, same-origin. */
+    mediaUrl: (ref: string): string => `${opts.base ?? ""}${ref}`,
     /** The raw JSONL line for one entry, secrets already stripped server-side. */
     raw: async (id: string, i: number): Promise<string> => {
       // Not memoised: one raw line is fetched when a reader opens it, never polled.

@@ -155,6 +155,7 @@ its own, is `dashboard/README.md`'s.
 /v1/snap/<ver>/runs.json …           immutable max-age=1y   one aggregate, at its own content version
 /v1/run/<id>/<ver>/detail.json …     immutable max-age=1y   per-run detail and track
 /v1/run/<id>/trace/<t0>.json         immutable max-age=1y   one closed five-minute trace window
+/v1/run/<id>/clip/<name>-<h>.mp4|jpg immutable max-age=1y   a camera clip's video or poster, <h> its own hash
 ```
 
 Everything except the three mutable files is immutable and addressed by its own
@@ -346,6 +347,48 @@ holds its window.
   `Cache-Control`, so an object no rule names is not cached at the edge, and
   every read of it is a billed read against the bucket
   (`infra/cloudflare/README.md`, step 4, rule 1).
+
+### Camera replays
+
+A run a camera followed (`docs/DATA-AND-LEGAL.md`) carries clips: an H.264
+timelapse and a short clip per event, each with a poster frame. The site shows
+them as a replay block on the run page and one recent clip on the home page,
+from objects in the same bucket as everything else.
+
+- **Their own objects, not inlined.** A clip's video and poster each go up as
+  the file itself at `v1/run/<id>/clip/<name>-<h>.mp4` (or `.jpg`), where `<h>`
+  is the first twelve hex of the file's SHA-256 (`clipMediaKey`). The run's
+  `clips.json` names them, sits with its other objects under the run's content
+  version (`snapshot.clips` on its row), and joins the version's hash only on
+  a run that has clips, so no other run's key moved when this shipped.
+- **Idempotent by key.** A key the engine's state holds is never written again,
+  so a re-publish of unchanged files uploads nothing, and a clip re-rendered
+  under its name (a timelapse that grew) gets a new key. The engine keeps a
+  clip slot's last two files while it is changing and only the current one
+  once a second flip names it (`clipVersions`, the `settleRun` rule), then
+  prunes the rest. A withdrawn run takes its clips with it.
+- **Streamed, hashed once.** The renderer hashes each file once per process
+  (by size, mtime and inode) and hands the engine its path, never its bytes;
+  the upload streams it, and refuses a file whose size or mtime moved since it
+  was hashed, so no key ever holds other bytes than its name says. A clip is
+  not run through the secret scan: it is video or JPEG, and the text that goes
+  with it is in `clips.json`, which is scanned.
+- **Under `/v1/run/`, so the zone's rules cover it.** Bun cannot send
+  `Cache-Control`; the `/v1/run/*` cache rule is what makes a clip an edge
+  hit, and its rate limit (60 requests per 10 s per IP) counts each range
+  request a video makes. The player loads metadata only until it is played,
+  and the clip row draws posters for the timelapse and the newest twelve
+  event clips only, lazily; older clips are listed by name.
+- **Cold runs.** `camera/clips.json` is one of a run's watched files, so a
+  clip a director adds after the run went cold publishes on the next pass,
+  not six hours later.
+- **The home page's clip** is `highlight.json`, an aggregate in the manifest
+  only while some published run has a clip: the newest event clip, or the
+  newest timelapse, with its run and model. A tree without a camera publishes
+  the set it always did.
+- **Either deploy order is safe.** A site from before ignores
+  `snapshot.clips`, `highlight.json` and `camera`; this site reads their
+  absence as a run without clips.
 
 ### Data plane: R2 behind a custom domain with a cache rule
 
@@ -606,6 +649,22 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   links each quest id, and the reader's browser asks Wowhead for its name
   ("Third-party origins").
 
+- **Camera clips ship; frames never do.** A frame shows the game world
+  only, with no interface, chat, game text or sound (`docs/DATA-AND-LEGAL.md`).
+  The still frames under a run's `camera/frames/` are never served and never
+  published; only the clips `camera/clips.json` names, and only their
+  `clips/` files. `projectClips` rebuilds each clip field by field: name,
+  kind, event type and detail, moment, length, caption, and the video and
+  poster as this clip's bucket key and nothing else. The caption is the
+  model's own words as the director quoted them, with the benchmark's and the
+  model's names, and is published like the rest of the model's text (the
+  residual above): credential shapes masked, the container prefix made
+  relative, the session token struck, one line. A run that is never published
+  publishes no clip and no list, and `highlight.json` picks only among the
+  published runs. No run today has its model text withheld while its run is
+  published, so there is no case in which a published clip loses only its
+  caption.
+
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
@@ -712,6 +771,11 @@ pass leaves out, and who reads what is left:
   `earnedDeadmines`, and not what they still wait on in the schedulable line.
 - **A move's `z`** (on the live feed and in a track): the map marks a
   destination on the plane.
+
+**The camera label ships** on a run's `detail.json` as `camera: true`, only
+when a camera followed the run, and the run page shows it small beside the
+platform and harness. It is a label and no part of the condition, so no ladder
+or result row carries it.
 
 **A party member's stamp and records ship.** The runs table groups a party's
 rows and the party page finds its members by the stamp on a result row and a

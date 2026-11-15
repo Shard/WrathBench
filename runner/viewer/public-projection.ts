@@ -139,10 +139,13 @@ import type {
   NearbySelfView,
   NearbyStateView,
   NearbyWindow,
+  ClipView,
+  ClipsResponse,
+  HighlightResponse,
 } from "./api-types";
 import { EPISODE_IDS, isTaskEpisode } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
-import { redactGameProse } from "./redact-prose";
+import { redactGameProse, redactProseText } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
 import { REDACTED } from "@wrathbench/mcp/redact";
 import { maskCredentialShapes } from "../src/secret-scan";
@@ -176,7 +179,7 @@ import {
   type NearbyStateKey,
   type NearbyUnitTypeName,
 } from "@wrathbench/inspector/codec/nearby";
-import { PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
+import { CLIP_MEDIA_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 
 /**
  * What is published is what the public dashboard reads (operator, 2026-10-18).
@@ -1525,6 +1528,8 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       : {}),
     ...(d.character !== undefined ? { character: projectCharacter(d.character) } : {}),
     ...(d.party !== undefined ? { party: projectPartyDetail(d.party) } : {}),
+    // The camera label, a harness fact; absent unless a camera followed the run.
+    ...(d.camera === true ? { camera: true as const } : {}),
   });
 }
 
@@ -2393,5 +2398,92 @@ export function projectEntries(r: EntriesResponse): EntriesResponse {
     from: r.from,
     total: r.total,
     entries: raw.map((e, i) => projectEntry(e, codeRepeatedBy(e, raw[i + 1]))) as EntriesResponse["entries"],
+  });
+}
+
+/** A caption as the public site shows it, and a clip's event detail: one line, clipped. */
+const CAPTION_MAX = 240;
+const CLIP_DETAIL_MAX = 120;
+
+/**
+ * Text the camera's director wrote from the model's own words: the same
+ * strikes the model's text gets everywhere it is published. Game prose the
+ * redactor recognises goes, a credential's shape is masked, and a local path
+ * is made repo-relative by the projector's `scrubPathsValue`; the session
+ * token is struck by value at the route (`publicText`). One line, clipped.
+ */
+function publicClipText(text: unknown, max: number): string {
+  if (typeof text !== "string") return "";
+  const line = maskCredentialShapes(redactProseText(text), REDACTED).replace(/\s+/g, " ").trim();
+  return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
+}
+
+const CLIP_EVENT_TYPE_SET: ReadonlySet<string> = new Set(["level", "quest", "death", "zone", "boss", "start", "end"]);
+const CLIP_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+
+/**
+ * Where a clip's media may be named: the viewer's own route for this clip, or
+ * its bucket key (`clipMediaKey`). Anything else is not a place a page may be
+ * sent, so the clip (a video) or the poster is dropped.
+ */
+function clipMediaRef(v: unknown, runId: string, name: string, ext: "mp4" | "jpg"): string | null {
+  if (typeof v !== "string") return null;
+  if (v === `/api/run/${encodeURIComponent(runId)}/clip/${name}.${ext}`) return v;
+  const m = CLIP_MEDIA_KEY.exec(v);
+  return m !== null && m[1] === runId && m[2] === name && m[4] === ext ? v : null;
+}
+
+/** One clip, rebuilt field by field; null when it does not read as one. */
+function projectClip(c: ClipView, runId: string): ClipView | null {
+  if (c === null || typeof c !== "object") return null;
+  const name = typeof c.name === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(c.name) ? c.name : null;
+  if (name === null || (c.kind !== "timelapse" && c.kind !== "event")) return null;
+  const video = clipMediaRef(c.video, runId, name, "mp4");
+  if (video === null) return null;
+  if (typeof c.from !== "string" || !CLIP_ISO.test(c.from) || typeof c.to !== "string" || !CLIP_ISO.test(c.to)) return null;
+  if (typeof c.seconds !== "number" || !Number.isFinite(c.seconds) || c.seconds < 0) return null;
+  const ev = c.event;
+  const event =
+    ev !== undefined && ev !== null && typeof ev === "object" && CLIP_EVENT_TYPE_SET.has(ev.type)
+      ? { type: ev.type, detail: publicClipText(ev.detail, CLIP_DETAIL_MAX) }
+      : undefined;
+  return {
+    name,
+    kind: c.kind,
+    ...(event !== undefined ? { event } : {}),
+    from: c.from,
+    to: c.to,
+    seconds: c.seconds,
+    caption: publicClipText(c.caption, CAPTION_MAX),
+    video,
+    poster: clipMediaRef(c.poster, runId, name, "jpg"),
+  };
+}
+
+/**
+ * A run's camera clips (`/api/run/<id>/clips`, and the published
+ * `clips.json`). The clip and its moment pass; the caption and an event's
+ * detail cross the model-text strikes (`publicClipText`); the media are named
+ * only by the viewer's route or the bucket key. The frames are never named:
+ * nothing here can carry a path. A fixed point of itself, like every
+ * projector, so the bucket's verifier re-projects it.
+ */
+export function projectClips(body: ClipsResponse): ClipsResponse {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const clips = (Array.isArray(body.clips) ? body.clips : []).flatMap((c) => {
+    const p = projectClip(c, runId);
+    return p === null ? [] : [p];
+  });
+  return scrubPathsValue<ClipsResponse>({ runId, clips });
+}
+
+/** The home page's clip, under `projectClips`' rules; none when the clip does not read. */
+export function projectHighlight(body: HighlightResponse): HighlightResponse {
+  const h = body.highlight;
+  if (h === null || typeof h !== "object" || typeof h.runId !== "string") return { highlight: null };
+  const clip = projectClip(h.clip, h.runId);
+  if (clip === null) return { highlight: null };
+  return scrubPathsValue<HighlightResponse>({
+    highlight: { runId: h.runId, model: typeof h.model === "string" ? h.model : null, clip },
   });
 }

@@ -52,13 +52,13 @@
  * `docs/PUBLIC-DASHBOARD.md` is the design this implements.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 // The codec's window arithmetic, pure and import-free: the state below records
 // published trace windows in the same packed runs a track lists them in.
 import { segRunsAdd, segRunsHas, unpackSegs, type TraceSegRuns } from "@wrathbench/inspector/codec/trace";
 import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
-import { PUBLIC_NEARBY_KEY } from "../runner/viewer/public-keys";
+import { CLIP_MEDIA_KEY, PUBLIC_NEARBY_KEY } from "../runner/viewer/public-keys";
 
 // ------------------------------------------------------------------ contracts
 
@@ -74,6 +74,26 @@ export interface SnapshotArtifact {
   /** Serialized JSON. */
   body: string;
   contentType: "application/json";
+  cacheControl: string;
+}
+
+/**
+ * A camera clip's video or poster: a file on disk, not a body. Its key is
+ * content-addressed (`clipMediaKey`, `v1/run/<id>/clip/<name>-<hash12>.<ext>`)
+ * and `hash` is the file's whole SHA-256 as the renderer read it, so the
+ * engine decides by the key alone and never reads the file to diff it. The
+ * upload streams the file and refuses one whose size or mtime moved since it
+ * was hashed. Not scanned for secrets: it is H.264 or JPEG, and the text a
+ * clip carries (its caption) is in the run's `clips.json`, which is.
+ */
+export interface MediaArtifact {
+  path: string;
+  /** Absolute path of the file to upload. */
+  file: string;
+  hash: string;
+  size: number;
+  mtimeMs: number;
+  contentType: string;
   cacheControl: string;
 }
 
@@ -94,6 +114,11 @@ export interface SnapshotResult {
    * once this pass has flipped (`planWithdraw`). Absent is none.
    */
   withdrawn?: readonly string[];
+  /**
+   * Camera clips this pass names that a stream did not already hand over:
+   * uploaded in the run wave, before anything that names them. Absent is none.
+   */
+  media?: readonly MediaArtifact[];
 }
 
 /**
@@ -103,7 +128,8 @@ export interface SnapshotResult {
  * costs zero LIST requests and works the same against a fake.
  */
 export interface ObjectStore {
-  put(path: string, body: string, opts: { contentType: string; cacheControl: string }): Promise<void>;
+  /** A JSON body as a string; a clip as the file (`Bun.file`), streamed rather than read whole. */
+  put(path: string, body: string | Blob, opts: { contentType: string; cacheControl: string }): Promise<void>;
   delete(path: string): Promise<void>;
 }
 
@@ -145,6 +171,8 @@ export const PENDING_DELETE_CAP = 1000;
 export type PathKind =
   | { kind: "run"; runId: string; version: string }
   | { kind: "trace"; runId: string; t0: number }
+  /** A camera clip's video or poster; `slot` is `<name>.<ext>`, `version` the content hash. */
+  | { kind: "clip"; runId: string; slot: string; version: string }
   | { kind: "snap"; name: string; version: string }
   | { kind: "mutable" }
   | { kind: "other" };
@@ -179,9 +207,14 @@ export function classifyPath(path: string): PathKind {
     const t0 = Number(trace[2]);
     return Number.isSafeInteger(t0) ? { kind: "trace", runId: trace[1]!, t0 } : { kind: "other" };
   }
+  // Before the run branch, for the trace segment's reason: as a run object it
+  // would be at a version called `clip`, which the pruner deletes on sight.
+  const clip = CLIP_MEDIA_KEY.exec(path);
+  if (clip !== null) return { kind: "clip", runId: clip[1]!, slot: `${clip[2]!}.${clip[4]!}`, version: clip[3]! };
   if (path.startsWith(RUN_PREFIX)) {
-    // Any other shape under a run's `trace/` is not a version of the run.
-    if (path.slice(RUN_PREFIX.length).split("/")[1] === "trace") return { kind: "other" };
+    // Any other shape under a run's `trace/` or `clip/` is not a version of the run.
+    const second = path.slice(RUN_PREFIX.length).split("/")[1];
+    if (second === "trace" || second === "clip") return { kind: "other" };
     const [runId, version, ...rest] = path.slice(RUN_PREFIX.length).split("/");
     if (runId !== undefined && runId !== "" && version !== undefined && version !== "" && rest.length > 0) {
       return { kind: "run", runId, version };
@@ -220,7 +253,7 @@ export type WaveName = (typeof WAVES)[number];
  */
 export function waveOf(path: string): WaveName {
   const c = classifyPath(path);
-  if (c.kind === "run" || c.kind === "trace") return "run";
+  if (c.kind === "run" || c.kind === "trace" || c.kind === "clip") return "run";
   if (c.kind === "mutable") return "mutable";
   return "aggregate";
 }
@@ -266,6 +299,13 @@ export interface PublishState {
    * nothing here is ever removed but by throwing the file away.
    */
   traceSegs: Record<string, TraceSegRuns>;
+  /**
+   * `<run id>/<clip slot>` -> the content versions of that clip's video or
+   * poster a flip has named, most recently current last: the keep window a
+   * re-rendered clip's old file is pruned by. Absent until a pass names a
+   * clip, so a tree with no camera keeps the file it had.
+   */
+  clipVersions?: Record<string, string[]>;
   /** The generation the bucket's manifest last advertised. */
   lastGen?: string;
   /** Epoch ms of that flip. Operational breadcrumb; nothing reads it. */
@@ -306,6 +346,8 @@ export interface HeldPass {
   snap: string[];
   /** Runs its renderer said are never published. */
   withdrawn: string[];
+  /** The camera clip keys it names, registered at its flip. Absent is none. */
+  media?: string[];
 }
 
 export interface SecretScanStatus {
@@ -367,6 +409,13 @@ export function parseState(json: string): PublishState {
       if (runs.length > 0) state.traceSegs[runId] = runs.map(([t0, n]): [number, number] => [t0, n]);
     }
   }
+  const clipVersions = raw["clipVersions"];
+  if (clipVersions !== null && typeof clipVersions === "object" && !Array.isArray(clipVersions)) {
+    for (const [k, v] of Object.entries(clipVersions as Record<string, unknown>)) {
+      const versions = asStringArray(v);
+      if (versions.length > 0) (state.clipVersions ??= {})[k] = versions;
+    }
+  }
   const held = parseHeld(raw["held"]);
   if (held.length > 0) state.held = held;
   if (typeof raw["lastGen"] === "string") state.lastGen = raw["lastGen"];
@@ -406,6 +455,7 @@ function parseHeld(v: unknown): HeldPass[] {
       runPairs: pairs.map(([a, b]): [string, string] => [a, b]),
       snap: asStringArray(o["snap"]),
       withdrawn: asStringArray(o["withdrawn"]),
+      ...(Array.isArray(o["media"]) ? { media: asStringArray(o["media"]) } : {}),
     });
   }
   return out;
@@ -483,6 +533,22 @@ function settleRun(state: PublishState, runId: string, version: string): void {
   const alreadyNamed = state.runVersions[runId]?.at(-1) === version;
   registerVersion(state.runVersions, runId, version);
   if (alreadyNamed) state.runVersions[runId] = [version];
+}
+
+/**
+ * Record a clip file a flip names as its slot's current version, shedding the
+ * older ones once a second flip names the same file: `settleRun`'s rule, for
+ * the same reader. A clip re-rendered under its name (a timelapse that grew)
+ * keeps the previous file for one more flip and then loses it to the prune.
+ */
+function settleClip(state: PublishState, path: string): void {
+  const c = classifyPath(path);
+  if (c.kind !== "clip") return;
+  const index = (state.clipVersions ??= {});
+  const slot = `${c.runId}/${c.slot}`;
+  const alreadyNamed = index[slot]?.at(-1) === c.version;
+  registerVersion(index, slot, c.version);
+  if (alreadyNamed) index[slot] = [c.version];
 }
 
 /** Record a completed flip. Re-publishing the same manifest is not history. */
@@ -601,6 +667,7 @@ export function planPrune(state: PublishState, limits: PruneLimits = {}): string
     new Map(Object.entries(index).map(([key, versions]) => [key, new Set(versions.slice(-keep))]));
   const liveSnap = live(state.snapVersions, keepSnapVersions);
   const liveRuns = live(state.runVersions, keepRunVersions);
+  const liveClips = live(state.clipVersions ?? {}, keepRunVersions);
 
   const surplus: string[] = [];
   for (const path of Object.keys(state.uploaded)) {
@@ -609,6 +676,8 @@ export function planPrune(state: PublishState, limits: PruneLimits = {}): string
       if (liveSnap.get(c.name)?.has(c.version) !== true) surplus.push(path);
     } else if (c.kind === "run") {
       if (liveRuns.get(c.runId)?.has(c.version) !== true) surplus.push(path);
+    } else if (c.kind === "clip") {
+      if (liveClips.get(`${c.runId}/${c.slot}`)?.has(c.version) !== true) surplus.push(path);
     }
     // `mutable` and `other` are never prunable — see classifyPath.
   }
@@ -638,12 +707,15 @@ export function planWithdraw(state: PublishState, runIds: readonly string[]): st
   const targets: string[] = [];
   for (const path of Object.keys(state.uploaded)) {
     const c = classifyPath(path);
-    if ((c.kind === "run" || c.kind === "trace") && ids.has(c.runId)) targets.push(path);
+    if ((c.kind === "run" || c.kind === "trace" || c.kind === "clip") && ids.has(c.runId)) targets.push(path);
   }
   for (const id of ids) {
     for (const t0 of unpackSegs(state.traceSegs[id] ?? [])) targets.push(traceSegmentPath(id, t0));
     delete state.traceSegs[id];
     delete state.runVersions[id];
+    if (state.clipVersions !== undefined) {
+      for (const k of Object.keys(state.clipVersions)) if (k.startsWith(`${id}/`)) delete state.clipVersions[k];
+    }
   }
   return [...new Set(targets)].sort();
 }
@@ -658,6 +730,7 @@ function trimHistory(state: PublishState, limits: PruneLimits): void {
   };
   trim(state.snapVersions, keepSnapVersions);
   trim(state.runVersions, keepRunVersions);
+  if (state.clipVersions !== undefined) trim(state.clipVersions, keepRunVersions);
 }
 
 // -------------------------------------------------------------------- publish
@@ -757,7 +830,7 @@ export function needsPut(path: string, bodyHash: () => string, state: PublishSta
   // A closed window never changes, so a segment is immutable by its key too;
   // its record is the packed window list rather than `uploaded`.
   if (c.kind === "trace") return !hasTraceSegment(state, c.runId, c.t0);
-  if (c.kind === "run" || c.kind === "snap") return state.uploaded[path] === undefined;
+  if (c.kind === "run" || c.kind === "snap" || c.kind === "clip") return state.uploaded[path] === undefined;
   if (path === MANIFEST_PATH && gen === state.lastGen && state.uploaded[path] !== undefined) return false;
   return state.uploaded[path] !== bodyHash();
 }
@@ -816,7 +889,7 @@ function assertResult(result: SnapshotResult, seen: Set<string>): void {
  * a broken bucket still attempts everything it would have, exactly as one array
  * of artifacts always did.
  */
-export type RunSink = (artifacts: readonly SnapshotArtifact[]) => Promise<void>;
+export type RunSink = (artifacts: readonly SnapshotArtifact[], media?: readonly MediaArtifact[]) => Promise<void>;
 
 /**
  * What the bucket already holds, as far as a renderer needs to know before it
@@ -958,6 +1031,42 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
     return failed.map(({ item, error }) => ({ path: item.path, error }));
   };
 
+  /**
+   * Upload the clip files the bucket does not hold yet, by key alone (the key
+   * carries the file's hash). Each is streamed from disk, and refused when its
+   * size or mtime moved since the renderer hashed it: the object would not be
+   * what its key says, and the next pass hashes it again.
+   */
+  const uploadMedia = async (media: readonly MediaArtifact[]): Promise<{ path: string; error: unknown }[]> => {
+    const todo = [...media].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0)).filter((m) => needsPut(m.path, () => m.hash, state, ""));
+    report.unchanged += media.length - todo.length;
+    const same = (m: MediaArtifact): void => {
+      const st = statSync(m.file);
+      if (st.size !== m.size || st.mtimeMs !== m.mtimeMs) throw new Error(`${m.file} changed since it was hashed`);
+    };
+    const { failed } = await pooled(todo, concurrency, async (m) => {
+      same(m);
+      await store.put(m.path, Bun.file(m.file), { contentType: m.contentType, cacheControl: m.cacheControl });
+      same(m);
+      state.uploaded[m.path] = m.hash;
+      const queued = state.pendingDeletes.indexOf(m.path);
+      if (queued !== -1) state.pendingDeletes.splice(queued, 1);
+      report.put.push(m.path);
+      report.bytes += m.size;
+    });
+    return failed.map(({ item, error }) => ({ path: item.path, error }));
+  };
+  /** Every clip key this pass names, streamed or returned, in order: registered with the flip. */
+  const passMedia: string[] = [];
+  const claimMedia = (media: readonly MediaArtifact[]): void => {
+    for (const m of media) {
+      if (classifyPath(m.path).kind !== "clip") throw new Error(`publish: ${m.path} was handed over as a clip but is not a clip key`);
+      if (seen.has(m.path)) throw new Error(`publish: two artifacts claim the key ${m.path}`);
+      seen.add(m.path);
+      passMedia.push(m.path);
+    }
+  };
+
   // Every key the pass has claimed, streamed or returned: the duplicate check
   // spans both halves. Keys only — the bodies behind them are long gone.
   const seen = new Set<string>();
@@ -970,8 +1079,11 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   // what the single-array run wave has always done.
   const streamedFailures: { path: string; error: unknown }[] = [];
 
-  const sink: RunSink = async (batch) => {
+  const sink: RunSink = async (batch, media = []) => {
     const artifacts = [...batch];
+    // The clips first: the run objects beside them (its `clips.json`) name them.
+    claimMedia(media);
+    streamedFailures.push(...(await uploadMedia(media)));
     for (const a of artifacts) {
       const c = classifyPath(a.path);
       // A run's trace segments stream with it, and are no version of it.
@@ -1002,10 +1114,12 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
     runPairs: readonly [string, string][],
     snap: readonly string[],
     withdrawn: readonly string[],
+    media: readonly string[],
     stillHeld: readonly HeldPass[] = [],
   ): Promise<void> => {
     report.flipped = true;
     recordGen(state, gen, now());
+    for (const path of media) settleClip(state, path);
     for (const path of snap) {
       const c = classifyPath(path);
       if (c.kind === "snap") registerVersion(state.snapVersions, c.name, c.version);
@@ -1049,7 +1163,7 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
       state.held.shift();
       const rest = state.held;
       if (rest.length === 0) delete state.held;
-      await flip(h.gen, h.runPairs, h.snap, h.withdrawn, rest);
+      await flip(h.gen, h.runPairs, h.snap, h.withdrawn, h.media ?? [], rest);
     }
   };
 
@@ -1063,6 +1177,8 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   });
   report.gen = result.gen;
   assertResult(result, seen);
+  claimMedia(result.media ?? []);
+  streamedFailures.push(...(await uploadMedia(result.media ?? [])));
   if (streamedFailures.length > 0) throw new PublishError("run", streamedFailures);
 
   let heldMutable: SnapshotArtifact[] = [];
@@ -1116,14 +1232,24 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   }
   const withdrawn = [...(result.withdrawn ?? [])];
   if (!holding) {
-    await flip(result.gen, runPairs, snap, withdrawn);
+    await flip(result.gen, runPairs, snap, withdrawn, passMedia);
     return report;
   }
   // Held: shown once it is `delayMs` old, by this pass or a later one.
   const at = now();
   state.held = [
     ...(state.held ?? []),
-    { renderedAt: at, due: at + delayMs, gen: result.gen, mutable: heldMutable, traces: heldTraces, runPairs, snap, withdrawn },
+    {
+      renderedAt: at,
+      due: at + delayMs,
+      gen: result.gen,
+      mutable: heldMutable,
+      traces: heldTraces,
+      runPairs,
+      snap,
+      withdrawn,
+      ...(passMedia.length > 0 ? { media: passMedia } : {}),
+    },
   ];
   await release(at);
   report.held = state.held?.length ?? 0;
@@ -1142,6 +1268,8 @@ interface HeldNames {
   snap: ReadonlySet<string>;
   /** `<run id> <version>`. */
   runs: ReadonlySet<string>;
+  /** Clip keys. */
+  media: ReadonlySet<string>;
 }
 
 function heldNames(held: readonly HeldPass[]): HeldNames | undefined {
@@ -1149,6 +1277,7 @@ function heldNames(held: readonly HeldPass[]): HeldNames | undefined {
   return {
     snap: new Set(held.flatMap((h) => h.snap)),
     runs: new Set(held.flatMap((h) => h.runPairs.map(([id, v]) => `${id} ${v}`))),
+    media: new Set(held.flatMap((h) => h.media ?? [])),
   };
 }
 
@@ -1187,6 +1316,7 @@ async function runPrune(
   const keptForHeld = (path: string): boolean => {
     if (held === undefined) return false;
     const c = classifyPath(path);
+    if (c.kind === "clip") return held.media.has(path);
     return c.kind === "snap" ? held.snap.has(path) : c.kind === "run" ? held.runs.has(`${c.runId} ${c.version}`) : false;
   };
   const surplusKeys = surplus ? planPrune(state, limits).filter((p) => !keptForHeld(p)) : [];
