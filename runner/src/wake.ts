@@ -1001,8 +1001,8 @@ const DEATH_MATCH_MS = 30_000;
 const DEATH_LINE_CHARS = 240;
 
 /**
- * "last death: killed by Burly Rockjaw Trogg, took 412 in the 10s before:
- * Burly Rockjaw Trogg 300 (melee ×4), …", the damage in the snippet delta's
+ * "last death: killed by Defias Miner, took 355 in the 10s before: Defias
+ * Miner 260 (melee ×3), …", the damage in the snippet delta's
  * own words (`damageTaken`), or undefined when no hit landed in the window
  * (a fall, a drowning). Pure.
  */
@@ -1015,7 +1015,7 @@ export function deathLine(cause: DeathCause): string | undefined {
 
 /**
  * The character's condition when something is wrong, in the HUD's own
- * reading, or nothing: "character: ghost, died 10m09s ago" (or dead) off the
+ * reading, or nothing: "character: ghost, died 7m42s ago" (or dead) off the
  * player frame's health and the ghost bit, and the HUD's durability line
  * when worn gear is broken or low (`durabilityLine`). Nothing at fan-out,
  * whose sample is the characters' digests. Pure.

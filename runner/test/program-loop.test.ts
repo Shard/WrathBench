@@ -948,35 +948,35 @@ describe("ProgramWake", () => {
   });
 });
 
-/** A ghost with a broken weapon and low legs, as a state sample reads it; invented numbers. */
+/** A ghost with a broken weapon and low boots, as a state sample reads it; invented numbers. */
 const GHOST_BROKEN: WakeSample = {
   self: { level: { value: 4 }, health: { value: { current: 1, max: 120 } }, fields: { playerFlags: { value: 0x10 } } },
   inventory: [
-    { slot: 4, name: "Rugged Tunic", durability: { current: 40, max: 50 } },
-    { slot: 6, name: "Worn Leggings", durability: { current: 5, max: 25 } },
-    { slot: 15, name: "Battleworn Hammer", durability: { current: 0, max: 25 } },
+    { slot: 4, name: "Patched Vest", durability: { current: 48, max: 60 } },
+    { slot: 7, name: "Frayed Boots", durability: { current: 7, max: 35 } },
+    { slot: 15, name: "Rusted Cleaver", durability: { current: 0, max: 40 } },
   ],
 };
 const HEALTHY: WakeSample = {
   self: { level: { value: 4 }, health: { value: { current: 120, max: 120 } }, fields: { playerFlags: { value: 0 } } },
   inventory: [
-    { slot: 4, name: "Rugged Tunic", durability: { current: 40, max: 50 } },
-    { slot: 15, name: "Battleworn Hammer", durability: { current: 25, max: 25 } },
+    { slot: 4, name: "Patched Vest", durability: { current: 48, max: 60 } },
+    { slot: 15, name: "Rusted Cleaver", durability: { current: 40, max: 40 } },
   ],
 };
-const DURABILITY = "durability: broken main hand Battleworn Hammer (0/25); low legs Worn Leggings (5/25) — a broken item gives no stats";
-const TROGGS: DeathCause["damage"] = [
-  { name: "Rockjaw Trogg", total: 112, hits: [{ what: "melee", count: 2, total: 112 }] },
-  { name: "Burly Rockjaw Trogg", total: 300, hits: [{ what: "melee", count: 4, total: 300 }] },
+const DURABILITY = "durability: broken main hand Rusted Cleaver (0/40); low feet Frayed Boots (7/35) — a broken item gives no stats";
+const DEFIAS: DeathCause["damage"] = [
+  { name: "Defias Evoker", total: 95, hits: [{ what: "Fireball", count: 1, total: 95 }] },
+  { name: "Defias Miner", total: 260, hits: [{ what: "melee", count: 3, total: 260 }] },
 ];
-const DEATH_LINE = "last death: killed by Burly Rockjaw Trogg, took 412 in the 10s before: Burly Rockjaw Trogg 300 (melee ×4), Rockjaw Trogg 112 (melee ×2)";
+const DEATH_LINE = "last death: killed by Defias Miner, took 355 in the 10s before: Defias Miner 260 (melee ×3), Defias Evoker 95 (Fireball)";
 
 describe("the failure path: the character's condition and a death's cause", () => {
   test("nothing when all is fine; dead or a ghost with how long, and the HUD's durability line, when not", () => {
     const now = 10_000_000;
     expect(conditionLines(null, undefined, now)).toEqual([]);
     expect(conditionLines(HEALTHY, now - 60_000, now)).toEqual([]);
-    expect(conditionLines(GHOST_BROKEN, now - 609_000, now)).toEqual(["character: ghost, died 10m09s ago", DURABILITY]);
+    expect(conditionLines(GHOST_BROKEN, now - 462_000, now)).toEqual(["character: ghost, died 7m42s ago", DURABILITY]);
     const dead: WakeSample = { self: { health: { value: { current: 0, max: 120 } }, fields: { playerFlags: { value: 0 } } } };
     expect(conditionLines(dead, now - 35_000, now)).toEqual(["character: dead, died 35s ago"]);
     // No death on the record (a resumed process): the state, with no time.
@@ -988,9 +988,9 @@ describe("the failure path: the character's condition and a death's cause", () =
   });
 
   test("a death's line names the last hitter and the window's damage in the snippet delta's words; none without a hit", () => {
-    expect(deathLine({ ts: 1, killer: "Burly Rockjaw Trogg", damage: TROGGS })).toBe(DEATH_LINE);
+    expect(deathLine({ ts: 1, killer: "Defias Miner", damage: DEFIAS })).toBe(DEATH_LINE);
     expect(deathLine({ ts: 1, damage: [] })).toBeUndefined();
-    const long = deathLine({ ts: 1, killer: "x".repeat(300), damage: TROGGS })!;
+    const long = deathLine({ ts: 1, killer: "x".repeat(300), damage: DEFIAS })!;
     expect(long.length).toBe(240);
     expect(long.endsWith("…")).toBe(true);
   });
@@ -1034,7 +1034,7 @@ describe("the failure path: the character's condition and a death's cause", () =
     expect(quiet.block).not.toContain("last death");
     expect(reads).toBe(0);
     c.schedule(20_000, () => {
-      latch = { ts: c.now(), killer: "Burly Rockjaw Trogg", damage: TROGGS };
+      latch = { ts: c.now(), killer: "Defias Miner", damage: DEFIAS };
       deaths++;
       wake.onDeath(c.now());
     });
@@ -1043,7 +1043,7 @@ describe("the failure path: the character's condition and a death's cause", () =
     expect(died.block.split("\n").slice(-2)).toEqual(["since you slept: quests completed 0 · deaths 1", DEATH_LINE]);
     // A latch from another death than the record's last (a child restarted between) is not this one's cause.
     c.schedule(20_000, () => {
-      latch = { ts: c.now() - 120_000, killer: "Rockjaw Trogg", damage: TROGGS };
+      latch = { ts: c.now() - 120_000, killer: "Defias Evoker", damage: DEFIAS };
       deaths++;
       wake.onDeath(c.now());
     });
