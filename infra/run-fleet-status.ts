@@ -610,11 +610,11 @@ export function formatModels(
   /**
    * The tier column. A climb is shown as the move it was (`t1>t2`); a held
    * witness is shown as a held witness (`t0*`), because a trial model that has
-   * earned rung 1 is exactly the row an operator is looking for when deciding
+   * earned promotion is exactly the row an operator is looking for when deciding
    * what to promote — and the old table could only say `promoted, 0/0`.
    */
   const tierCell = (s: ModelState): string =>
-    s.tier !== s.declaredTier ? `${s.declaredTier}>${s.tier}` : s.earnedRung1 ? `${s.tier}*` : s.tier;
+    s.tier !== s.declaredTier ? `${s.declaredTier}>${s.tier}` : s.earnedPromotion ? `${s.tier}*` : s.tier;
   const cell = (s: ModelState, ep: "e90" | "e360"): string => {
     const st = s.perEpisode[ep]!;
     if (!s.eligible.includes(ep)) return "-";

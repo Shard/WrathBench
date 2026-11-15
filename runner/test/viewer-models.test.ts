@@ -357,8 +357,10 @@ describe("/api/models", () => {
     writeRun(runsDir, { id: "a-1", model: "vendor/alpha", responses: 5, level: 7, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
     const body = await models(runsDir, fleetPath);
     const alpha = body.models[0]!;
-    expect(alpha.perEpisode.e90!.reachedL5).toBe(true);
-    expect(alpha.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
+    expect(alpha.perEpisode.e90!.countedLevel).toBe(7);
+    // Promoted to t2, but no counted e360 reached level 8: no Deadmines eval yet (operator, 2026-11-15).
+    expect(alpha.eligible).toEqual(["e90", "e360"]);
+    expect(alpha.earnedDeadmines).toBe(false);
     expect(alpha.status).toBe("promoted");
     expect(alpha.perEpisode.e360!.counted).toBe(0);
     expect(body.policy.promoteAtLevel).toBe(5);

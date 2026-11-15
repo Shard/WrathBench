@@ -20,7 +20,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
     billing: "free",
     declaredTier: "t1",
     tier: "t1",
-    earnedRung1: false,
+    earnedPromotion: false,
     idle: "none",
     status: "active",
     eligible: ["e90"],
@@ -32,7 +32,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
         otherSeries: 0,
         target: 3,
         bestLevel: 4,
-        reachedL5: false,
+        countedLevel: null,
         lastEnded: 1000,
         lastReason: "idle",
         runIds: ["a-2", "a-1"],
@@ -96,8 +96,8 @@ describe("the tier order", () => {
   });
 
   test("the cell shows one tier, and a held witness still wears its star", () => {
-    expect(tierOf(row({ declaredTier: "t1", tier: "t2", earnedRung1: true }))).toBe("t2");
-    expect(tierOf(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe("t0*");
+    expect(tierOf(row({ declaredTier: "t1", tier: "t2", earnedPromotion: true }))).toBe("t2");
+    expect(tierOf(row({ declaredTier: "t0", tier: "t0", earnedPromotion: true }))).toBe("t0*");
     expect(tierOf(row())).toBe("t1");
   });
 
@@ -130,10 +130,10 @@ describe("promoted and highest tier agree", () => {
   test("a witness earned while lowered still wears its star", () => {
     // Pinned choice: the star answers "has this model earned rung 1", which is
     // still true here, even though the row is not shown as promoted.
-    expect(tierOf(row({ declaredTier: "t2", tier: "t1", earnedRung1: true }))).toBe("t2*");
+    expect(tierOf(row({ declaredTier: "t2", tier: "t1", earnedPromotion: true }))).toBe("t2*");
     // The hover has to say the same thing the cell does: highest tier t2,
     // scheduled lower — never "tier t1", which would contradict the `t2*`.
-    expect(tierTitle(row({ declaredTier: "t2", tier: "t1", earnedRung1: true }))).toContain("scheduled on t1");
+    expect(tierTitle(row({ declaredTier: "t2", tier: "t1", earnedPromotion: true }))).toContain("scheduled on t1");
   });
 });
 
@@ -157,11 +157,11 @@ describe("noteOf", () => {
   });
 
   test("promotion is a climb, not eligibility: a hand-placed tier never wears the badge", () => {
-    expect(isPromoted(row({ declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360"] }))).toBe(true);
+    expect(isPromoted(row({ declaredTier: "t1", tier: "t2", earnedPromotion: true, eligible: ["e90", "e360"] }))).toBe(true);
     // Placed on t2 by an operator: eligible for e360, but it earned nothing.
     expect(isPromoted(row({ declaredTier: "t2", tier: "t2", eligible: ["e90", "e360"] }))).toBe(false);
     // A t0 model holding a witness it may not spend is not promoted either.
-    expect(isPromoted(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe(false);
+    expect(isPromoted(row({ declaredTier: "t0", tier: "t0", earnedPromotion: true }))).toBe(false);
     expect(isPromoted(row())).toBe(false);
   });
 });

@@ -1150,7 +1150,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     if (isTaskEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;
-    // Not emitted: `otherSeries`, `reachedL5`, `lastEnded`, `lastReason` and
+    // Not emitted: `otherSeries`, `countedLevel`, `lastEnded`, `lastReason` and
     // `runIds`. The roster table prints the counts and the target; the run
     // list under it is `runs`.
     perEpisode[id] = lean<ModelEpisodeView>({
@@ -1172,7 +1172,8 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     billing: row.billing,
     declaredTier: row.declaredTier,
     tier: row.tier,
-    earnedRung1: row.earnedRung1,
+    earnedPromotion: row.earnedPromotion,
+    // Not emitted: `earnedDeadmines`, for the reason the task episodes are not.
     idle: row.idle,
     status: row.status,
     eligible: row.eligible.filter((id) => !isTaskEpisode(id)),

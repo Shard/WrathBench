@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { launchRouting } from "./fixtures/launch-routing";
+import { countedFact } from "./fixtures/counted-fact";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +39,7 @@ import {
   entryOwnsWindow,
   ownedWindows,
   rosterWindowKey,
+  ineligibleWhy,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
 import { parseCredentials } from "../src/credential-slots";
@@ -184,12 +186,14 @@ describe("modelStates", () => {
     const states = modelStates({ runsDir, roster, now: NOW, sidecar: { version: 1, cleared: {} } });
     const by = Object.fromEntries(states.map((s) => [s.name, s]));
 
-    // ox is t1 and earned rung 1, so it climbed to t2 — which is what unlocks
-    // e360 at all. The declared tier is unchanged: the config is not rewritten.
-    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360", "deadmines-solo"], platform: "openrouter", ladder: 0 });
+    // ox is t1 and earned promotion (a counted e90 at level 5), so it climbed
+    // to t2 — which is what unlocks e360 at all. The declared tier is
+    // unchanged: the config is not rewritten. No counted e360 reached level 8,
+    // so the Deadmines evals t2 buys stay shut (operator, 2026-11-15).
+    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedPromotion: true, earnedDeadmines: false, eligible: ["e90", "e360"], platform: "openrouter", ladder: 0 });
     // attempts 4: the archived ox run is an attempt — it numbers the next run id.
-    expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 4, target: 3, bestLevel: 6, reachedL5: true, lastReason: "episode-limit" });
-    expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 1, bestLevel: null, reachedL5: false, lastEnded: null, lastReason: null });
+    expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 4, target: 3, bestLevel: 6, countedLevel: 5, lastReason: "episode-limit" });
+    expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 1, bestLevel: null, countedLevel: null, lastEnded: null, lastReason: null });
 
     expect(by["glm"]!.status).toBe("cooling");
     expect(by["glm"]!.ladder).toBe(3);
@@ -201,7 +205,7 @@ describe("modelStates", () => {
     // The old driver spelling in a roster reads as the same harness.
     expect(by["sonnet-low"]).toMatchObject({ platform: "claude-code", harness: "claude-code" });
     expect(by["ox"]).toMatchObject({ harness: "wrathbench" });
-    expect(by["sonnet"]!.perEpisode.e90).toMatchObject({ counted: 1, bestLevel: 4, reachedL5: false });
+    expect(by["sonnet"]!.perEpisode.e90).toMatchObject({ counted: 1, bestLevel: 4, countedLevel: 4 });
 
     // A live, answered run is still in progress and cannot become score evidence.
     expect(by["sonnet-low"]!.perEpisode.e90).toMatchObject({ counted: 0, stillborn: 0, target: 1 });
@@ -232,14 +236,16 @@ describe("modelStates", () => {
 
   test("a hand-set tier is eligible without a witness, and never reads as earned", () => {
     const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t2" }], now: NOW, sidecar: { version: 1, cleared: {} } });
-    expect(s!.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
+    // e360 by the tier alone; the Deadmines evals only on the e360 witness, which no tier stands in for.
+    expect(s!.eligible).toEqual(["e90", "e360"]);
+    expect(s!.earnedDeadmines).toBe(false);
     // Hand-placed on t2: eligible, but it did not climb, so "promoted" — the
     // earned word — is not said of it, and the witness stays false.
     expect(s!.status).toBe("active");
     expect(s!.declaredTier).toBe("t2");
     expect(s!.tier).toBe("t2");
-    expect(s!.earnedRung1).toBe(false);
-    expect(s!.perEpisode.e90!.reachedL5).toBe(false);
+    expect(s!.earnedPromotion).toBe(false);
+    expect(s!.perEpisode.e90!.countedLevel).toBe(4);
   });
 });
 
@@ -584,7 +590,7 @@ describe("paid and free", () => {
     // A tier that buys no e360 is not eligible for one: the target and the
     // eligibility are one statement, so `promoted, 0/0` cannot be said again.
     const trial = st({ name: "p", model: "vendor/big", tier: "t0" }, [good("vendor/big", "e90", 1, 5)]);
-    expect(trial.earnedRung1).toBe(true);
+    expect(trial.earnedPromotion).toBe(true);
     expect(trial.tier).toBe("t0");
     expect(trial.eligible).toEqual(["e90"]);
     expect(trial.perEpisode.e360!.target).toBe(0);
@@ -1421,5 +1427,78 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
     expect(st.perEpisode.e90).toMatchObject({ attempts: 3, counted: 0, target: 3, bestLevel: 4 });
     const program = [...snippet, done(4, { loop: "program", yield: true })];
     expect(projectModel(entry, program, policy, { now: NOW5 }).perEpisode.e90).toMatchObject({ attempts: 4, counted: 1 });
+  });
+});
+
+/*
+ * The two thresholds (operator, 2026-11-15): a counted e90 at level 5 climbs
+ * t1 to t2, which buys the e360; a counted e360 at level 8 opens the
+ * Deadmines evals t2 buys. Each is read off counted runs only.
+ */
+describe("promotion and the Deadmines witness", () => {
+  const entry = { name: "m", model: "vendor/big", tier: "t1" as const };
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, series: "0.5" };
+  const at = (runs: RunFact[], tier: RosterModel["tier"] = "t1") => projectModel({ ...entry, tier }, runs, policy, { now: Date.UTC(2026, 10, 15, 12) });
+
+  test("level 4 in a counted e90 does not promote; level 5 does", () => {
+    const l4 = at([countedFact(entry, "e90", 4)]);
+    expect(l4).toMatchObject({ tier: "t1", earnedPromotion: false, eligible: ["e90"] });
+    expect(l4.perEpisode.e90!.countedLevel).toBe(4);
+    const l5 = at([countedFact(entry, "e90", 5)]);
+    expect(l5).toMatchObject({ tier: "t2", earnedPromotion: true, status: "promoted", eligible: ["e90", "e360"] });
+    expect(l5.perEpisode.e360!.target).toBe(1);
+  });
+
+  test("level 7 in a counted e360 does not open the Deadmines evals; level 8 does", () => {
+    const e90 = countedFact(entry, "e90", 5, { i: 1 });
+    const l7 = at([e90, countedFact(entry, "e360", 7, { i: 2 })]);
+    expect(l7).toMatchObject({ tier: "t2", earnedDeadmines: false, eligible: ["e90", "e360"] });
+    expect(l7.perEpisode["deadmines-solo"]!.target).toBe(0);
+    const l8 = at([e90, countedFact(entry, "e360", 8, { i: 2 })]);
+    expect(l8).toMatchObject({ tier: "t2", earnedDeadmines: true, eligible: ["e90", "e360", "deadmines-solo"] });
+    expect(l8.perEpisode["deadmines-solo"]!.target).toBe(3);
+    // The five-agent id still wants the entry's opt-in.
+    expect(l8.perEpisode.deadmines!.target).toBe(0);
+    expect(projectModel({ ...entry, tier: "t1", deadmines: true }, [e90, countedFact(entry, "e360", 8, { i: 2 })], policy, { now: Date.UTC(2026, 10, 15, 12) }).eligible).toEqual(["e90", "e360", "deadmines-solo", "deadmines"]);
+  });
+
+  test("level 8 on e90, or on an uncounted e360, is no Deadmines witness", () => {
+    const e90At8 = at([countedFact(entry, "e90", 8)]);
+    expect(e90At8.earnedDeadmines).toBe(false);
+    for (const spoilt of [
+      { ...countedFact(entry, "e360", 9, { i: 2 }), episodeOverride: true },
+      { ...countedFact(entry, "e360", 9, { i: 2 }), extra: true },
+      { ...countedFact(entry, "e360", 9, { i: 2 }), modelResponses: 0 },
+      countedFact(entry, "e360", 9, { i: 2, series: "0.4" }),
+    ]) {
+      const s = at([countedFact(entry, "e90", 5, { i: 1 }), spoilt]);
+      expect(s.earnedDeadmines).toBe(false);
+      expect(s.eligible).toEqual(["e90", "e360"]);
+      // `bestLevel` may read the run; the witness never does.
+      expect(s.perEpisode.e360!.countedLevel).toBeNull();
+    }
+  });
+
+  test("no tier stands in for the e360 witness, and t0 keeps it without spending it", () => {
+    const handPlaced = at([], "t2");
+    expect(handPlaced).toMatchObject({ tier: "t2", earnedPromotion: false, earnedDeadmines: false, eligible: ["e90", "e360"] });
+    const trial = at([countedFact(entry, "e90", 6, { i: 1 }), countedFact(entry, "e360", 8, { i: 2 })], "t0");
+    expect(trial).toMatchObject({ tier: "t0", earnedPromotion: true, earnedDeadmines: true, eligible: ["e90"] });
+  });
+
+  test("the verdict says what the Deadmines evals wait on, and stops once they are open", () => {
+    const e90 = countedFact(entry, "e90", 5, { i: 1 });
+    const waiting = at([e90, countedFact(entry, "e360", 7, { i: 2 })]);
+    expect(schedulability(waiting, new Set(), policy).why).toContain("not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360");
+    const open = at([e90, countedFact(entry, "e360", 8, { i: 2 })]);
+    expect(schedulability(open, new Set(), policy).why).not.toContain("not yet on deadmines-solo");
+    // A t1 model's tier buys none, so it has nothing to wait on there.
+    expect(schedulability(at([countedFact(entry, "e90", 3)]), new Set(), policy).why).not.toContain("deadmines");
+  });
+
+  test("the refusal names what opens each episode", () => {
+    expect(ineligibleWhy("e360")).toBe("its tier buys no e360 runs — earn it with a level-5 e90, or set a tier that includes it");
+    expect(ineligibleWhy("deadmines-solo")).toBe("the Deadmines evals open on level 8 in a counted e360, on a tier that buys them");
+    expect(ineligibleWhy("deadmines")).toContain("deadmines: true");
   });
 });

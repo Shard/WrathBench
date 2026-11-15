@@ -2498,8 +2498,11 @@ export interface ModelEpisodeView {
   /** Runs the policy wants at this tier before it stops scheduling them. */
   target: number;
   bestLevel: number | null;
-  /** A counted run reached the promotion level — the e360 witness. */
-  reachedL5: boolean;
+  /**
+   * The highest level a counted run reached: on e90 the promotion witness
+   * (`policy.promoteAtLevel`), on e360 the Deadmines one (`policy.deadminesAtLevel`).
+   */
+  countedLevel: number | null;
   lastEnded: number | null;
   lastReason: string | null;
   /** The counted runs, newest first. The ids behind `counted`, not a sample. */
@@ -2596,14 +2599,20 @@ export interface ModelRowView {
   billing: "free" | "paid";
   /** The tier the config admitted this model to. */
   declaredTier: TierView;
-  /** The tier it is scheduled under: `declaredTier` advanced once if it earned rung 1. */
+  /** The tier it is scheduled under: `declaredTier` advanced once if it earned promotion. */
   tier: TierView;
   /**
    * A counted e90 in this series reached the promotion level. What the model
    * EARNED, kept apart from where it was ADMITTED: a `t0` model can hold this
    * without spending it, and a hand-promoted model never shows it falsely.
    */
-  earnedRung1: boolean;
+  earnedPromotion: boolean;
+  /**
+   * A counted e360 in this series reached `policy.deadminesAtLevel`, which
+   * opens the Deadmines evals its tier buys. Operator-only: the public build
+   * shows no Deadmines episode on this page and ships none.
+   */
+  earnedDeadmines?: boolean;
   /** What it does with an account once its tier is spent. */
   idle: IdleModeView;
   status: ModelStatusView;
@@ -2654,6 +2663,8 @@ export interface ModelsResponse extends SnapshotEnvelope {
   };
   policy: {
     promoteAtLevel: number;
+    /** The level a counted e360 must reach to open the Deadmines evals. Operator-only, as `earnedDeadmines` is. */
+    deadminesAtLevel?: number;
     /** The series the counts are keyed on (this checkout's); null when unversioned, which counts every run. */
     series: string | null;
     /** The ladder itself, so a page can name a tier's budget without hardcoding it. */
