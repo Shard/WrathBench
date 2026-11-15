@@ -47,6 +47,7 @@ import {
   OFFLINE_QUIET_FLOOR_MS,
   OFFLINE_QUIET_MARGIN_MS,
   planResumes,
+  withResumesPlaying,
   planStaleRuns,
   applyEnded,
   statesAfterSweep,
@@ -127,7 +128,7 @@ import {
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
 import { parseCredentials } from "../runner/src/credential-slots";
-import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, TIERS, TIER_TABLE, modelStates, planNextJobs, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, TIERS, TIER_TABLE, modelStates, planNextJobs, schedulability, wantsIdle, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -4132,13 +4133,17 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     // `--status` filters its paused runs with the same predicate, so it shows
     // the run the tick listed instead of hiding it.
     expect(runs.filter((f) => isStandingPause(f, NOW)).map((f) => f.runId)).toEqual([stuck.runId]);
-    // The projection the policy picks from: the ref is held by its paused run,
-    // so there is no fresh freeplay pick for `planContinuations` to hang a
-    // `continueFrom` on — the run with no termination is never continued.
+    // The projection the policy picks from: the ref's freeplay is held by its
+    // paused run, so there is no fresh freeplay pick for `planContinuations`
+    // to hang a `continueFrom` on — the run with no termination is never
+    // continued. Its scored episodes are not held: the paused run plays nothing.
     const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(roster), policy: config().policy, runs, now: NOW });
     const st = states.find((x) => x.name === "deepseek-v41-flash")!;
     expect(st.paused?.runId).toBe(stuck.runId);
-    expect(schedulability(st).verdict).toBe("blocked");
+    expect(schedulability(st).verdict).toBe("eval");
+    const met = { ...st, eligible: [] };
+    expect(schedulability(met).why).toContain(`no freeplay session: paused run ${stuck.runId} (quota-exhausted, ?m elapsed) is resumed, never started over`);
+    expect(planNextJobs([met], ["RUNNER2"]).jobs).toEqual([]);
     // And it is still the head, so every other launch on RUNNER2 keeps Aurelian.
     expect(keepFor("RUNNER2", charactersFrom(runs, roster), "ox")).toEqual(["Aurelian"]);
   });
@@ -4616,9 +4621,11 @@ describe("the read-only views read what is running, not every job the supervisor
 
     test("a run in flight under the supervisor keeps its account and its model, and says what a restart does to it", () => {
       const runs = [...history, a2({ live: true })];
-      // What the dry-run used to print: a second character on RUNNER.
+      // The dry-run used to print a second character on RUNNER here. The
+      // projection reads the live run itself now (`ModelState.playing`), so
+      // even a plan told nothing is in flight starts no fresh session beside it.
       const blind = dryRun(runs, { held: heldByA2 });
-      expect(blind.plan.policy.map((p) => [p.job.name, p.job.attempt, p.account])).toEqual([[`${REF}-freeplay`, 3, "RUNNER"]]);
+      expect(blind.plan.policy).toEqual([]);
       const jobs = new Map([[`${REF}-freeplay`, stateJob({ ref: REF, account: "RUNNER3", episode: "freeplay", attempt: 2, models: ["gpt-6.1-sol"], runIds: [A2], resuming: A2, resumesInPlace: true })]]);
       const inFlight = inFlightRuns({ jobs, runs, roster: config().roster, campaigns: [] });
       expect(inFlight.map((r) => [r.name, r.owned, r.runId, r.resumesInPlace])).toEqual([[`${REF}-freeplay`, true, A2, true]]);
@@ -4751,9 +4758,11 @@ describe("the read-only views read what is running, not every job the supervisor
     test("a live, unowned freeplay run and a second free account: nothing is planned for its model", () => {
       const runs = [...history, a2(WARM)];
       const before = tick(runs, heldBy(A2), { refs: [REF], holdUnowned: false });
-      // The tick before the fix: Thalvorn's account is free, so the policy
-      // continued a1 there beside Brannoc's live a2 — two sessions of one model.
-      expect(picked(before.picks)).toEqual([[REF, "freeplay", "RUNNER", A1]]);
+      // The tick before the fix continued a1 on Thalvorn's free account beside
+      // Brannoc's live a2 — two sessions of one model. The projection now reads
+      // the live run itself (`ModelState.playing`), so even without the hold no
+      // fresh session is picked.
+      expect(picked(before.picks)).toEqual([]);
       const { unowned, states, picks, printed } = tick(runs, heldBy(A2), { refs: [REF] });
       expect(unowned).toEqual([{ runId: A2, account: "RUNNER3", refs: [REF], model: MODEL, episode: "freeplay", credential: null, resumesInPlace: true }]);
       expect(picks).toEqual([]);
@@ -4970,5 +4979,160 @@ describe("--status names the log of the install it is about", () => {
     const tpl = readFileSync(new URL("./chart/wrathbench/templates/runner.yaml", import.meta.url).pathname, "utf8");
     expect(tpl).toMatch(/- name: WRATHBENCH_K8S_NAMESPACE\n\s+valueFrom:\n\s+fieldRef:\n\s+fieldPath: metadata.namespace/);
     expect(tpl).toMatch(/- name: WRATHBENCH_K8S_RELEASE\n\s+value: \{\{ include "wrathbench.fullname" \. \| quote \}\}/);
+  });
+});
+
+describe("one character per model: a paused run holds its own way back, never a scored episode (2026-11-15)", () => {
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const HAIKU = "claude-haiku-5-5";
+  const haiku = { model: HAIKU, driver: "claude-code", credential: "claude" } as const;
+  // The v1 shape: the long-clock entry taken out of the freeplay lane by hand
+  // (idle none, campaignOnly), a shakedown entry, and the scoring entry.
+  const roster: Record<string, FleetRosterEntry> = {
+    "haiku-longclock": { ...haiku, tier: "t0", idle: "none", campaignOnly: true },
+    "haiku-shakedown": { ...haiku, tier: "t0", idle: "none", campaignOnly: true },
+    "sub-haiku-55": { ...haiku, tier: "t1", idle: "none" },
+  };
+  const config = (r: Record<string, FleetRosterEntry> = roster, pool = ["POOL01", "POOL02", "POOL03"]): FleetConfig => ({
+    jobs: [],
+    roster: r,
+    policy: { ...DEFAULT_POLICY, series: "0.5" },
+    accounts: { pinned: {}, pool, max: pool.length },
+    notes: [],
+    preflight: DEFAULT_PREFLIGHT,
+    credentials: parseCredentials(OPEN_CREDENTIALS),
+    campaigns: [],
+    campaignDefs: [],
+    campaignRefusals: [],
+    refusals: [],
+  });
+  const held = (): string | undefined => undefined;
+  const run = (over: Partial<RunFact>): RunFact => ({
+    runId: `fleet-haiku-longclock-freeplay-${HAIKU}-20261114`,
+    model: HAIKU,
+    effort: null,
+    driver: "claude-code",
+    episode: "freeplay",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-1500-g0000000",
+    harnessSeries: "0.5",
+    loop: "program",
+    yield: true,
+    extra: true,
+    startedAt: NOW - 13 * H,
+    endedAt: null,
+    terminationReason: null,
+    modelResponses: 400,
+    bestLevel: 9,
+    live: false,
+    pause: null,
+    account: "POOL01",
+    character: "Brannoc",
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    credential: "claude",
+    ref: "haiku-longclock",
+    ...over,
+  });
+  const operatorPaused = run({ pause: { reason: "operator-pause", at: NOW - 12 * H, count: 1, episodeElapsedMs: 744 * 60_000 } });
+  const statesOf = (runs: RunFact[], r: Record<string, FleetRosterEntry> = roster): ModelState[] =>
+    modelStates({ runsDir: "/nonexistent", roster: rosterModels(r), policy: config(r).policy, runs, sidecar: { version: 1, cleared: {} }, now: NOW });
+  const verdictOf = (states: ModelState[], name: string, running: ReadonlySet<string> = new Set()) => schedulability(states.find((s) => s.name === name)!, running);
+
+  test("the Haiku shape: an operator-paused freeplay run out of config is listed as before and blocks no scored episode", () => {
+    const runs = [operatorPaused];
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.listed.map((l) => [l.runId, l.why])).toEqual([[operatorPaused.runId, "paused, not in config — resume by hand or archive"]]);
+    const states = statesOf(runs);
+    // Every entry of the model still sees the paused run…
+    for (const name of Object.keys(roster)) expect(states.find((s) => s.name === name)!.paused?.runId).toBe(operatorPaused.runId);
+    // …and none is held by it: the scoring entry owes its e90s, the others are a campaign's.
+    expect(verdictOf(states, "sub-haiku-55")).toEqual({ verdict: "eval", why: "schedulable on e90" });
+    expect(verdictOf(states, "haiku-shakedown").verdict).toBe("free");
+    expect(verdictOf(states, "haiku-longclock").verdict).toBe("free");
+    // The tick picks the scored e90.
+    const tick = planTick(config(), states, held, "20261115", plan.resume);
+    expect(tick.policy.map((p) => [p.job.ref, p.job.episode])).toEqual([["sub-haiku-55", "e90"]]);
+  });
+
+  test("the same with the long-clock entry deleted from the roster: nothing names the run, and it still blocks nothing", () => {
+    const { "haiku-longclock": _gone, ...rest } = roster;
+    const plan = planResumes({ runs: [operatorPaused], config: config(rest), running: new Map(), held, now: NOW });
+    expect(plan.listed.map((l) => l.runId)).toEqual([operatorPaused.runId]);
+    const states = statesOf([operatorPaused], rest);
+    expect(verdictOf(states, "sub-haiku-55")).toEqual({ verdict: "eval", why: "schedulable on e90" });
+    expect(planTick(config(rest), states, held, "20261115", plan.resume).policy.map((p) => p.job.ref)).toEqual(["sub-haiku-55"]);
+  });
+
+  test("a live freeplay character still blocks a scored run of its model: under its own entry and under another", () => {
+    const longclock: Record<string, FleetRosterEntry> = { ...roster, "haiku-longclock": { ...haiku, tier: "t1", idle: "unlimited" } };
+    const live = run({ live: true });
+    const states = statesOf([live], longclock);
+    // Its own entry, by its live job, as before.
+    expect(verdictOf(states, "haiku-longclock", new Set(["haiku-longclock"])).why).toBe("running (one character per model)");
+    // Another entry of the model, by the live run.
+    expect(verdictOf(states, "sub-haiku-55")).toEqual({ verdict: "blocked", why: `running (one character per model): ${live.runId} plays its freeplay character` });
+    // A campaign's probe entry is not held by it, as before.
+    expect(verdictOf(states, "haiku-shakedown").verdict).toBe("free");
+    const tick = planTick(config(longclock), states, held, "20261115", [], [], undefined, new Map(), new Set([live.runId]), [], ["haiku-longclock"]);
+    expect(tick.policy).toEqual([]);
+  });
+
+  test("the paused freeplay comes back only when no scored run of its model is playing: it waits, listed, and the tick it resumes picks none", () => {
+    // Back in the freeplay lane: the run is resumable.
+    const longclock: Record<string, FleetRosterEntry> = { ...roster, "haiku-longclock": { ...haiku, tier: "t0", idle: "unlimited" } };
+    const e90 = run({ runId: `fleet-sub-haiku-55-e90-${HAIKU}-20261115`, ref: "sub-haiku-55", episode: "e90", extra: false, live: true, startedAt: NOW - H, account: "POOL02", character: "Gorvak", episodeMs: 90 * 60_000 });
+    // A scored run of the model is playing under another entry: the resume waits.
+    const waiting = planResumes({ runs: [operatorPaused, e90], config: config(longclock), running: new Map(), held, now: NOW });
+    expect(waiting.resume).toEqual([]);
+    expect(waiting.listed.map((l) => [l.runId, l.why])).toEqual([[operatorPaused.runId, `waiting: ${e90.runId} plays ${HAIKU} (e90) — one character per model`]]);
+    // Spawned but not yet live: the job holds it too.
+    const spawned = planResumes({
+      runs: [operatorPaused],
+      config: config(longclock),
+      running: new Map([["sub-haiku-55-e90", "POOL02"]]),
+      held,
+      now: NOW,
+      inFlight: [{ name: "sub-haiku-55-e90", refs: ["sub-haiku-55"], episode: "e90" }],
+    });
+    expect(spawned.listed.map((l) => l.why)).toEqual([`waiting: job sub-haiku-55-e90 plays ${HAIKU} (e90) — one character per model`]);
+    // Its own entry's scored run holds it the same way.
+    const own = planResumes({
+      runs: [operatorPaused],
+      config: config(longclock),
+      running: new Map([["haiku-longclock-e90", "POOL02"]]),
+      held,
+      now: NOW,
+      inFlight: [{ name: "haiku-longclock-e90", refs: ["haiku-longclock"], episode: "e90" }],
+    });
+    expect(own.resume).toEqual([]);
+    // A probe of the model is not a wait, as before.
+    const probe = run({ runId: "fleet-probe-run", ref: "haiku-shakedown", episode: "probing", live: true, account: "POOL03", campaign: "program-shakedown", cell: "c1", arm: "a" });
+    expect(planResumes({ runs: [operatorPaused, probe], config: config(longclock), running: new Map(), held, now: NOW }).resume.map((r) => r.runId)).toEqual([operatorPaused.runId]);
+    // Nothing playing: it resumes, and on that tick the scored entry is held behind it.
+    const back = planResumes({ runs: [operatorPaused], config: config(longclock), running: new Map(), held, now: NOW });
+    expect(back.resume.map((r) => [r.runId, r.account])).toEqual([[operatorPaused.runId, "POOL01"]]);
+    const states = statesOf([operatorPaused], longclock);
+    expect(verdictOf(states, "sub-haiku-55").verdict).toBe("eval");
+    const resumed = withResumesPlaying(states, back.resume, longclock);
+    expect(verdictOf(resumed, "sub-haiku-55").why).toBe(`running (one character per model): ${operatorPaused.runId} resumes its freeplay character`);
+    const tick = planTick(config(longclock), states, held, "20261115", back.resume);
+    expect(tick.policy).toEqual([]);
+  });
+
+  test("a scored run playing holds the model's fresh freeplay session too", () => {
+    const longclock: Record<string, FleetRosterEntry> = { "haiku-longclock": { ...haiku, tier: "t0", idle: "unlimited" }, "sub-haiku-55": roster["sub-haiku-55"]! };
+    const met = [1, 2].map((n) => run({ runId: `fleet-haiku-longclock-e90-${HAIKU}-2026111${n}`, episode: "e90", extra: false, terminationReason: "episode-limit", endedAt: NOW - (20 - n) * H, startedAt: NOW - (21 - n) * H, modelResponses: 90, character: null, episodeMs: 90 * 60_000 }));
+    const e90 = run({ runId: `fleet-sub-haiku-55-e90-${HAIKU}-20261115`, ref: "sub-haiku-55", episode: "e90", extra: false, live: true, startedAt: NOW - H, account: "POOL02", character: "Gorvak", episodeMs: 90 * 60_000 });
+    const before = statesOf(met, longclock);
+    expect(wantsIdle(verdictOf(before, "haiku-longclock"), before.find((s) => s.name === "haiku-longclock")!)).toBe(true);
+    const states = statesOf([...met, e90], longclock);
+    const v = verdictOf(states, "haiku-longclock");
+    expect(v.why).toContain(`no freeplay session: ${e90.runId} plays this model (one character per model)`);
+    expect(wantsIdle(v, states.find((s) => s.name === "haiku-longclock")!)).toBe(false);
   });
 });

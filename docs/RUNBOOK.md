@@ -965,6 +965,17 @@ supervisor does with it, per tick:
   with `archive.ts --run-ids` ("Archiving runs"), which is a decision about
   listings and nothing else: the character is untouched and the scheduler
   still reads the archived runs.
+- **A paused character holds only its way back.** The rule is about play
+  at once, across every entry of the model: a freeplay character playing (or
+  resuming that tick) holds the model's scored episodes, and a scored run
+  playing holds its freeplay. A paused run plays nothing, so it holds no
+  scored episode of its model, under any entry, whether the supervisor will
+  resume it or the operator took it out of config; it only keeps a fresh
+  freeplay session from starting over it (a scored run that paused is not
+  coming back: it is ended as a failed attempt on the next tick). When it
+  comes due while a scored
+  run of the model is playing, its resume waits, listed under "paused runs
+  not resumed" with the run it waits for. A probe is outside this, as before.
 - **Nothing else deletes it.** Every fresh launch on an account that holds
   another ref's freeplay character gets `--keep-characters`, so a scored run's
   hygiene leaves it standing (the model is told the name is taken), and the
