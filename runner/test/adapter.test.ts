@@ -785,6 +785,53 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("persistent network failure");
   });
 
+  test("an empty choices is retried like a 5xx, and the next answer is the turn", async () => {
+    // The OpenCode Go shape (deepseek-v4.1-flash): 200 with `choices: []`,
+    // which ended a scored attempt as adapter-error on the schema's min(1).
+    const out = await adapterPlaying([
+      status(200, JSON.stringify({ id: "x", choices: [] })),
+      status(200, JSON.stringify({ choices })),
+    ]).complete(req);
+    expect(out.kind).toBe("ok");
+    expect(out.kind === "ok" && out.turn.content).toBe("hi");
+  });
+
+  test("an empty answer that persists pauses as provider-unresponsive, never adapter-error", async () => {
+    for (const empty of [{ choices: [] }, {}, { choices: null }, { choices: [{ finish_reason: "stop" }] }]) {
+      const body = JSON.stringify(empty);
+      const out = await adapterPlaying([status(200, body), status(200, body)]).complete(req);
+      expect(out.kind).toBe("pause");
+      expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
+      expect(out.kind === "pause" && out.detail).toContain("persistent empty answer after 2 attempt(s)");
+    }
+  });
+
+  test("a 2xx body that is malformed rather than empty is still a fatal schema mismatch", async () => {
+    let calls = 0;
+    for (const bad of [
+      { choices: "nope" },
+      { choices: [{ message: { content: 7 } }] },
+      { choices: [{ message: { tool_calls: [{ function: { name: "f" } }] } }] },
+    ]) {
+      const adapter = new OpenAiChatAdapter({
+        baseUrl: "http://model.invalid/v1",
+        apiKey: "k",
+        model: "m",
+        maxAttempts: 3,
+        fetchImpl: Object.assign(
+          (): Promise<Response> => {
+            calls++;
+            return Promise.resolve(status(200, JSON.stringify(bad)));
+          },
+          { preconnect: () => {} },
+        ) as unknown as typeof fetch,
+        sleep: () => Promise.resolve(),
+      });
+      await expect(adapter.complete(req)).rejects.toThrow(/did not match schema/);
+    }
+    expect(calls).toBe(3);
+  });
+
   test("a 2xx error body without any status shape still hard-errors", async () => {
     const errBody = JSON.stringify({ error: { message: "something odd, no code" } });
     await expect(

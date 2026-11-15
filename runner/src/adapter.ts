@@ -81,6 +81,13 @@
  *   failed read after the headers — a stall mid-stream, either timer firing
  *   there, a cut or malformed stream — end as `adapter-error`, as a failed
  *   body read always has.
+ * - A 2xx whose body is an empty answer — no `choices`, an empty `choices`, or
+ *   a first choice with no `message`, and no error object — is retried like a
+ *   5xx: the provider served nothing, which is its fault, not the model's
+ *   (observed: OpenCode Go answering `choices: []`, which ended a scored
+ *   attempt as `adapter-error`). Attempts exhausted on it PAUSE as
+ *   `provider-unresponsive`. A body that is malformed rather than empty stays
+ *   a schema mismatch and fatal.
  * - Any 429 or 402 seen during the attempts makes the outcome a PAUSE, not a
  *   failure: a spent budget says nothing about the model, so the run is
  *   suspended and resumable. The body wording only picks which pause it is —
@@ -368,7 +375,9 @@ export type AdapterRetryCause =
   /** The body failed to read after the headers. */
   | "body_read"
   /** A 2xx stream that ended before the model finished. */
-  | "stream_cut";
+  | "stream_cut"
+  /** A 2xx whose body answered nothing: no choice, or a choice with no message (`isEmptyAnswer`). */
+  | "empty_answer";
 
 /** One retry, as `onRetry` hears it: the attempt about to start (from 2), of how many, the wait before it, and why. */
 export interface AdapterRetry {
@@ -575,6 +584,22 @@ export function statedResetOf(headers: Headers, body: unknown): number | null {
 }
 
 /** A body as JSON, or null: a refusal's body is often plain text ("slow down"). */
+/**
+ * A 2xx body that answered nothing rather than something malformed: an
+ * object with no `choices`, an empty `choices`, or a first choice that is an
+ * object with no `message`. Retried and paused, never fatal (the retry
+ * policy above). Anything else the schema refuses stays a schema mismatch.
+ */
+function isEmptyAnswer(json: unknown): boolean {
+  if (typeof json !== "object" || json === null || Array.isArray(json)) return false;
+  const choices = (json as { choices?: unknown }).choices;
+  if (choices === undefined || choices === null) return true;
+  if (!Array.isArray(choices)) return false;
+  if (choices.length === 0) return true;
+  const first: unknown = choices[0];
+  return typeof first === "object" && first !== null && (first as { message?: unknown }).message == null;
+}
+
 function jsonOrNull(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;
@@ -1275,6 +1300,14 @@ export class OpenAiChatAdapter implements ChatAdapter {
             }
             continue;
           }
+          if (isEmptyAnswer(json)) {
+            lastError = `empty answer in 2xx body${requestId !== undefined ? ` [req ${requestId}]` : ""}: ${
+              JSON.stringify(json).slice(0, 300)
+            }`;
+            lastStatus = undefined;
+            lastCause = "empty_answer";
+            continue;
+          }
           throw new AdapterError(`model API response did not match schema: ${parsed.error.message}`);
         }
         const choice = parsed.data.choices[0]!;
@@ -1382,6 +1415,15 @@ export class OpenAiChatAdapter implements ChatAdapter {
         kind: "pause",
         reason: lastCause === "timeout" ? "provider-unresponsive" : "rate-limited",
         detail: `persistent network failure after ${made} attempt(s): ${lastError}`,
+      };
+    }
+    // Attempts exhausted on empty answers: the provider served nothing, the
+    // same as one that stopped answering, so the same pause.
+    if (lastCause === "empty_answer") {
+      return {
+        kind: "pause",
+        reason: "provider-unresponsive",
+        detail: `persistent empty answer after ${made} attempt(s): ${lastError}`,
       };
     }
     // The last request id even when the final attempt died on the socket and
