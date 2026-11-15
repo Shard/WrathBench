@@ -747,7 +747,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   // has two buckets to offer; `fixture/e90-model` reads `unknown`.
   writeLadderRun(runsDir, E90_CLOSED_RUN, { driver: "openai", model: "anthropic/fixture-model", character: "Closewyn" }, 4, at(now - 6 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
-  // The dungeon board's model on the solo ladder, on the board runs' condition, so rung 6 fills.
+  // The dungeon board's model on the e90 ladder too, on the board runs' condition: a program-loop row of its own.
   writeLadderRun(runsDir, E90_DUNGEON_RUN, { driver: "openai", model: "fixture/dungeon-model", loop: "program", yield: true, character: "Delvara" }, 3, at(now - 7 * 3_600_000));
   const liveSpecs: Spec[] = [
     liveSpec,
