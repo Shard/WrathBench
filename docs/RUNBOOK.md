@@ -384,7 +384,8 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Flipping
               `unlimited` → `none` pauses the live session at once; flipping it back brings the
-              same character back ("Freeplay characters are durable").
+              same character back ("Freeplay characters are durable"). A `campaignOnly` entry's
+              tier buys nothing, so `unlimited` on it is freeplay at once and nothing scored.
             `routing` — which backend behind OpenRouter may serve this entry. Three spellings:
               a provider name (`"Z.AI"`), a list in preference order (`["Z.AI", "Together"]`), or
               the object `{ order, sort, allowFallbacks, requireParameters }`. `sort`
@@ -453,12 +454,15 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             `credential` — optional: pin this entry's runs to one credential, by id. They take that
               one or wait for it, never another. Normally absent. A pin that cannot carry the entry
               (not configured, another provider's, the other billing side) refuses the entry by name.
-            `campaignOnly` — `true` or absent. The entry runs only as a probe campaign's
-              assignment, as a probe-only driver's entry does: its tier buys no scored run, it has
-              no idle work (`idle` other than `none` is refused), and a queue job naming it for a
-              scored or freeplay episode is gated. For a harness variant that is an arm rather than
-              a driver, so a probe of it needs no scored run first. Its probe runs map back to it
-              by name, so copies of one model never pool.
+            `campaignOnly` — `true` or absent. The entry is held from the scored lane, as a
+              probe-only driver's entry is: its tier buys no scored run and a queue job naming it
+              for a scored or freeplay episode is gated. A probe campaign may assign it, and
+              `idle: "unlimited"` still gives it the policy's freeplay session — a freeplay
+              character and no scored runs (operator, 2026-11-15); with `idle: "none"` it runs only
+              as a campaign's assignment. For a harness variant that is an arm rather than a
+              driver, so a probe of it needs no scored run first, and for a model that plays
+              freeplay with no scored field. Its probe runs map back to it by name, so copies of
+              one model never pool.
             `deadmines` — `true` or absent: opts the entry into the five-agent Deadmines
               episode, which its tier then buys as it buys the one-agent one (`t2`: three
               attempts each, opened by a counted level-8 e360; docs/EPISODES.md). Refused with
@@ -936,12 +940,12 @@ A freeplay character — the one an `idle: "unlimited"` ref plays across its
 sessions — is the operator's to disable and re-enable at will, and it
 survives that.
 
-The character's identity is the ref's latest freeplay run that is not live
-and recorded an account and a character, ended **or paused**
-(`charactersFrom`; matched on model + effort, so a renamed ref keeps its
-character). Latest means newest **start**, so of two paused runs of one
-character the one resumed is the head, whichever paused last. What the
-supervisor does with it, per tick:
+The character's identity is the ref's latest freeplay run **of the
+supervisor's harness series** that is not live and recorded an account and a
+character, ended **or paused** (`charactersFrom`; matched on model + effort,
+so a renamed ref keeps its character). Latest means newest **start**, so of
+two paused runs of one character the one resumed is the head, whichever paused
+last. What the supervisor does with it, per tick:
 
 - **Disable** (`idle: "unlimited"` → `"none"`, or the fleet pause switch): the
   policy job is drained, and for this lane a drain is an immediate SIGTERM.
@@ -997,11 +1001,21 @@ supervisor does with it, per tick:
   comes due while a scored
   run of the model is playing, its resume waits, listed under "paused runs
   not resumed" with the run it waits for. A probe is outside this, as before.
+- **A character does not carry across a harness series** (operator,
+  2026-11-15). A run of another series is neither a head nor a predecessor,
+  so a series' first session of a model starts fresh, with no
+  `--continue-from`, on whatever pool account it is offered. A paused run of
+  an older series is never resumed by this supervisor (listed while fresh, as
+  every other series' pause is) and holds nothing: not its model, not the
+  fresh session. Its character, and the newest character of every roster
+  entry in every older series, stays in the realm (`formerCharactersFrom`):
+  kept by every fresh launch on its account, the entry's own included, and
+  skipped by the name sweep.
 - **Nothing else deletes it.** Every fresh launch on an account that holds
-  another ref's freeplay character gets `--keep-characters`, so a scored run's
-  hygiene leaves it standing (the model is told the name is taken), and the
-  cross-account name sweep skips freeplay characters and the character of
-  every run that has not ended.
+  another ref's freeplay character, or an older series' one, gets
+  `--keep-characters`, so a scored run's hygiene leaves it standing (the model
+  is told the name is taken), and the cross-account name sweep skips freeplay
+  characters and the character of every run that has not ended.
 - **Hygiene has a guard of its own.** Before deleting, the runner reads the
   run directories for the account (`characterOwners`) and never deletes a
   character whose newest run has no termination. A character above level 1
@@ -1634,7 +1648,8 @@ over, a fix commit does not. How many paid runs are in flight at once is the
 paid credentials' slots — never a budget: how much a paid model runs is its
 tier. A model whose entry
 says `idle: "unlimited"` takes one continuous freeplay session at a time once
-its targets are met, stamped `extra: true`: an attempt but never counted.
+its targets are met (a `campaignOnly` entry has none, so at once), stamped
+`extra: true`: an attempt but never counted.
 
 Everything it decides is derived from `data/runs/` each tick; nothing is
 stored except an operator's clear.

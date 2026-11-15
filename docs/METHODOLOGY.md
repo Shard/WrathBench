@@ -497,8 +497,9 @@ moves with its evidence and two conditions never pool; no chart holds
 conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a
 leaderboard (2026-08-29): the whole active field, paused and in-progress
 characters included, one row per character across attempts with its
-milestones, with the reader's filters applied — except the series, because a character is durable across
-series and cutting its older attempts would misreport its age.
+milestones, with the reader's filters applied — except the series, because a character begun before
+characters stopped carrying across series (below) may span two, and cutting its older attempts would
+misreport its age.
 
 **The Deadmines evals, and rung 6** (operator, 2026-11-14). The Deadmines
 eval, `deadmines-solo`, is shown like the other evals, on a ladder tab of its
@@ -518,7 +519,12 @@ its instance, the rung reads "not instrumented".
 **The character is the universal unit, and a scored run is a character of one
 attempt** (2026-09-16). Every run belongs to a character, so the scored case is
 the degenerate one rather than an exception; "stream" is retired for
-"character", a consolidation and not a change of meaning.
+"character", a consolidation and not a change of meaning. A freeplay character
+does not carry across a harness series: a series' first freeplay session of a
+model starts a fresh character, and the earlier series' characters stay in the
+realm (operator, 2026-11-15). A held (`campaignOnly`) entry may still play
+freeplay: `idle: "unlimited"` on it gives the model a freeplay character and
+no scored runs (operator, 2026-11-15).
 
 **No single number is promised**; the honest artifact is the scorecard.
 

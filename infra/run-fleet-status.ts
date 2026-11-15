@@ -1202,7 +1202,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
     for (const r of resumePlan.resume) {
       occupants.set(r.account.toUpperCase(), { ref: r.job.ref, unlimited: pausesOnDrain(r.job) && config.roster[r.job.ref]?.idle === "unlimited" });
     }
-    const characters = charactersFrom(facts, config.roster);
+    const characters = charactersFrom(facts, config.roster, config.policy.series);
     for (const line of formatCharacters(config.roster, characters, occupants, running, liveCharactersFrom(facts, config.roster))) console.log(`  ${line}`);
     for (const line of formatStartKeys(config.roster)) console.log(`  ${line}`);
     /*

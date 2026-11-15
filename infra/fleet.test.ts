@@ -600,7 +600,7 @@ describe("parseFleet", () => {
     ).toThrow(/routing is an OpenRouter setting — this entry runs on the pi CLI/);
   });
 
-  test("campaignOnly parses as true or absent, carries to the projection, and leaves no idle work", () => {
+  test("campaignOnly parses as true or absent, carries to the projection, and keeps the entry's idle", () => {
     const ds = { tier: "t0", model: "deepseek/deepseek-v4.1-flash", routing: "DeepInfra" };
     const config = parseFleet(fleetJson([], { roster: { "ds-a": { ...ds, campaignOnly: true }, "ds-b": { ...ds, campaignOnly: true }, ds } }));
     expect(config.roster["ds-a"]).toMatchObject({ campaignOnly: true, idle: "none" });
@@ -609,7 +609,8 @@ describe("parseFleet", () => {
     for (const bad of [false, "yes", 1]) {
       expect(() => parseFleet(fleetJson([], { roster: { ds: { ...ds, campaignOnly: bad } } }))).toThrow(/campaignOnly is true or absent/);
     }
-    expect(() => parseFleet(fleetJson([], { roster: { ds: { ...ds, campaignOnly: true, idle: "unlimited" } } }))).toThrow(/campaignOnly entry has no idle work/);
+    // A held entry may still play freeplay (operator, 2026-11-15).
+    expect(parseFleet(fleetJson([], { roster: { ds: { ...ds, campaignOnly: true, idle: "unlimited" } } })).roster["ds"]).toMatchObject({ campaignOnly: true, idle: "unlimited" });
   });
 
   test("policy.routing is the fleet default, and an entry's own routing wins", () => {

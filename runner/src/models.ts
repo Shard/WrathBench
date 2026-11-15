@@ -46,7 +46,9 @@
  *   execute, never how many a model gets; the tier does that.
  * - **The one extra is a freeplay session** (`idle: "unlimited"` on the
  *   entry): past its targets, a model so marked gets one unbounded freeplay
- *   run at a time, restarted when it ends, at lowest priority. An extra is an
+ *   run at a time, restarted when it ends, at lowest priority. A held
+ *   (`campaignOnly`) entry has no targets, so it is past them at once: so
+ *   marked, it plays freeplay and nothing scored (operator, 2026-11-15). An extra is an
  *   attempt, stamped `extra: true` and reported apart, never counted toward a
  *   target. The scored-tier extras that rolled a race and class are probe
  *   campaigns now.
@@ -878,8 +880,9 @@ export interface ModelState {
   idle: IdleMode;
   /**
    * The entry's driver is probe-only (`DriverEntry.probeOnly`), or the entry
-   * says `campaignOnly`: no target, no eligible episode and no idle work, so
-   * only a probe campaign runs it.
+   * says `campaignOnly`: no target and no eligible episode, so no scored run.
+   * A probe-only driver has no idle work either; a campaignOnly entry keeps
+   * its `idle` (operator, 2026-11-15).
    */
   probeOnly?: true;
   /** The probe-only status is the entry's own `campaignOnly`, not its driver's. */
@@ -2536,7 +2539,9 @@ export function projectModel(
     tier,
     earnedPromotion,
     earnedDeadmines,
-    idle: probeOnly ? "none" : (r.idle ?? "none"),
+    // A probe-only driver plays nothing but its campaigns; a held entry may
+    // still play freeplay (operator, 2026-11-15).
+    idle: isProbeOnlyDriver(r.driver) ? "none" : (r.idle ?? "none"),
     ...(probeOnly ? { probeOnly: true as const } : {}),
     ...(r.campaignOnly === true ? { campaignOnly: true as const } : {}),
     eligible,
@@ -2714,7 +2719,9 @@ export function schedulability(
 /** The verdict from the entry's own state, before anything another run holds. */
 function ownVerdict(s: ModelState, policy: Pick<SchedulingPolicy, "promoteAtLevel" | "deadminesAtLevel">): Verdict {
   // Free, so a probe campaign may take it, and owing nothing, so nothing else does.
-  if (s.campaignOnly === true) return { verdict: "free", why: "campaignOnly: it runs only as a probe campaign's assignment" };
+  if (s.campaignOnly === true) {
+    return { verdict: "free", why: s.idle === "none" ? "campaignOnly: it runs only as a probe campaign's assignment" : `campaignOnly: no scored runs${idleWords(s)}` };
+  }
   if (s.probeOnly === true) return { verdict: "free", why: probeOnlyRefusal(harnessDriver(s.harness)?.id ?? s.harness) };
   // A provider refusing a scored attempt is a cooling rung (above), not a stop of
   // its own: one ladder per model, cleared one way.
@@ -2729,9 +2736,7 @@ function ownVerdict(s: ModelState, policy: Pick<SchedulingPolicy, "promoteAtLeve
     // One idle mode past `none`, so one thing to say. (The retired third,
     // `idle: "characters"`, is a probe campaign now — nothing here rolls a
     // start state, and nothing anywhere names a character.)
-    const held = idleHold(s);
-    const how = s.idle === "none" ? "" : held !== undefined ? ` — no freeplay session: ${held}` : " — unlimited sessions while its account is idle";
-    return { verdict: "free", why: `targets met on ${s.eligible.join(", ")}${deadminesWait(s, policy)}${how}` };
+    return { verdict: "free", why: `targets met on ${s.eligible.join(", ")}${deadminesWait(s, policy)}${idleWords(s)}` };
   }
   return { verdict: "eval", why: `schedulable on ${open.join(", ")}${deadminesWait(s, policy)}` };
 }
@@ -2744,6 +2749,13 @@ function ownVerdict(s: ModelState, policy: Pick<SchedulingPolicy, "promoteAtLeve
 function deadminesWait(s: Pick<ModelState, "tier" | "earnedDeadmines">, policy: Pick<SchedulingPolicy, "promoteAtLevel" | "deadminesAtLevel">): string {
   if (s.earnedDeadmines || TIER_TABLE[s.tier].runsPerEpisode["deadmines-solo"] === 0) return "";
   return `; not yet on deadmines-solo: ${ineligibleWhy("deadmines-solo", policy)}`;
+}
+
+/** What a model owing nothing does with a spare account, said after its verdict; empty for `idle: "none"`. */
+function idleWords(s: ModelState): string {
+  if (s.idle === "none") return "";
+  const held = idleHold(s);
+  return held !== undefined ? ` — no freeplay session: ${held}` : " — unlimited sessions while its account is idle";
 }
 
 /**
@@ -2767,7 +2779,9 @@ function idleHold(s: ModelState): string | undefined {
  * work" are two questions, and only the second is a property of the entry.
  */
 export function wantsIdle(v: Verdict, s: ModelState): boolean {
-  return v.verdict === "free" && s.idle !== "none" && s.probeOnly !== true && idleHold(s) === undefined;
+  // A held (`campaignOnly`) entry may have freeplay work (operator,
+  // 2026-11-15); a probe-only driver's entry never has (its idle is `none`).
+  return v.verdict === "free" && s.idle !== "none" && (s.probeOnly !== true || s.campaignOnly === true) && idleHold(s) === undefined;
 }
 
 /**
