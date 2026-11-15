@@ -36,6 +36,7 @@ function recorder(fail = false): { api: Parameters<typeof routePreloads>[0]; cal
     models: answer("models"),
     episodes: answer("episodes"),
     campaigns: answer("campaigns"),
+    dungeons: answer("dungeons"),
     runs: answer("runs"),
     character: answer("character"),
   } as unknown as Parameters<typeof routePreloads>[0];
@@ -54,9 +55,11 @@ describe("routePreloads", () => {
   test("each route asks for what its page asks for first", () => {
     const cases: [keyof ReturnType<typeof routePreloads>, PreloadArgs, Call[]][] = [
       ["home", nav(), [["tools"], ["positions"], ["ladder", "e90"]]],
-      ["ladder", nav(), [["ladder", "e90"]]],
-      ["ladder", nav({ episode: "freeplay" }), [["ladder", episodeParam("freeplay")]]],
-      ["ladder", nav({ episode: "nonsense" }), [["ladder", episodeParam("nonsense")]]],
+      ["ladder", nav(), [["ladder", "e90"], ["dungeons"]]],
+      ["ladder", nav({ episode: "freeplay" }), [["ladder", episodeParam("freeplay")], ["dungeons"]]],
+      ["ladder", nav({ episode: "nonsense" }), [["ladder", episodeParam("nonsense")], ["dungeons"]]],
+      // A Deadmines tab never names its id to the ladder, which refuses it.
+      ["ladder", nav({ episode: "deadmines" }), [["ladder", "e90"], ["dungeons"]]],
       ["map", nav(), [["positions"]]],
       ["runs", nav(), [["results", "all", true, "all"]]],
       ["models", nav(), [["models"], ["ladder", "freeplay"]]],
@@ -82,6 +85,7 @@ describe("routePreloads", () => {
     expect(page("Home")).toContain("api.positions()");
     expect(page("Ladder")).toContain("api.ladder(episode())");
     expect(page("Ladder")).toContain("episodeParam(params.episode)");
+    expect(page("Ladder")).toContain("api.dungeons()");
     expect(page("MapPage")).toContain("api.positions()");
     expect(page("Runs")).toContain('api.results("all", true, "all")');
     expect(page("Models")).toContain("api.models()");
@@ -141,7 +145,8 @@ describe("the page finds the preload's request", () => {
     const api = createClient({ fetch: f, now: () => 1_000 });
     routePreloads(api).ladder(nav({ episode: "e90" }));
     await api.ladder("e90");
-    expect([...hits.values()]).toEqual([1]);
+    await api.dungeons();
+    expect([...hits.values()]).toEqual([1, 1]);
   });
 
   test("on the published snapshot, manifest included", async () => {

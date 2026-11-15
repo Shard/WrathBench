@@ -426,6 +426,9 @@ export function refuseTenantAccount(name: string, ctx: z.RefinementCtx): void {
   if (why !== null) ctx.addIssue({ code: "custom", message: why });
 }
 
+/** The account a launch that names none plays on. */
+export const DEFAULT_ACCOUNT = "RUNNER";
+
 const accountSchema = z.string().min(2).max(16).superRefine(refuseTenantAccount);
 
 /**
@@ -519,7 +522,7 @@ export const runConfigSchema = z.object({
   continuedFrom: z.string().min(1).optional(),
   /** Game account for this run's sessions. Parallel runs need distinct accounts
    * (the core allows one live session per account). Created via bootstrap. */
-  account: accountSchema.default("RUNNER"),
+  account: accountSchema.default(DEFAULT_ACCOUNT),
   race: z.number().int().min(1).max(11).default(1),
   class: z.number().int().min(1).max(11).default(2),
 

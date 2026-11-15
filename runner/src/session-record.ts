@@ -26,6 +26,7 @@ import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import {
   SessionWriter,
   ownGuidIndex,
+  readSessionFile,
   type EventRow,
   type OwnGuid,
   type PartySignal,
@@ -212,6 +213,23 @@ export function sameWorldSessionDirs(runsDir: string, world: string, known: Map<
     // Every run's one record, and every character's of a fan-out run.
     return runWorld === world ? [join(runDir, SESSION_DIR), ...characterSessionDirs(runDir)] : [];
   });
+}
+
+/**
+ * The character guids the records of the other runs on `world` name now: what
+ * the index would find, read once by a launcher for a run that cannot list
+ * the runs directory itself (a run pod mounts only its own run directory,
+ * `infra/run-pod.ts`). A sibling that records its character later is not in
+ * it, and reads as foreign, the side the gate already errs on.
+ */
+export function deploymentOwnGuids(runsDir: string, world: string, exceptRunId: string): string[] {
+  const out = new Set<string>();
+  for (const dir of sameWorldSessionDirs(runsDir, world, new Map())) {
+    if (dir.startsWith(join(runsDir, exceptRunId) + "/")) continue;
+    const g = readSessionFile(dir)?.character?.guid;
+    if (typeof g === "string" && g !== "") out.add(g);
+  }
+  return [...out].sort();
 }
 
 /** The gate's own set: the seeded guids first, then whatever the index finds. */

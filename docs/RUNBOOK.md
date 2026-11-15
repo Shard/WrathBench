@@ -1878,9 +1878,9 @@ A run pod gets the module secret and the one credential its driver bills (its
 credential's `CLAUDE_CODE_OAUTH_TOKEN*`, its endpoint key, or the mounted codex home;
 a key or token the config store holds arrives sealed with the store key's
 reference, "Secrets set from the browser"),
-`WRATHBENCH_LOCAL_MODEL_HOSTS` from the chart's `localModelHosts`, the runs
-and wiki volumes, and no config store, no database variables and no
-`ANTHROPIC_*` variable. Its harness stamp is the arm's image tag, never
+`WRATHBENCH_LOCAL_MODEL_HOSTS` from the chart's `localModelHosts`, its own
+run directory read-write and the wiki read-only, and no config store, no
+database variables and no `ANTHROPIC_*` variable. Its harness stamp is the arm's image tag, never
 master's; a digest-only pin stamps `<repository basename>@sha256:<12 hex>`.
 The launcher writes `runs/<id>/image.json` (`ref`, `digest`, `pod`, `node`,
 `startedAt`) when the container starts, and a resume in a pod relaunches that
@@ -1891,14 +1891,33 @@ a pinned arm waits, listed, until the switch is back on, and the supervisor
 exempts a probe from the harness-series gate only when it has an
 `image.json` and resumes as a pod.
 
+**The runs tree.** A run pod mounts `runs/<id>` and nothing else of the runs
+directory, at the path the fleet pod has it, so a model's own runtime cannot
+read another run's records; a freeplay continuation also gets its
+predecessor's directory read-only, live or archived, wherever it is (none when
+it is in neither place, and the run starts fresh as it always has). The
+launcher makes the directory as the fleet's user before the pod exists, and
+reads for it what run.ts would read from the other runs, handed over as
+`WRATHBENCH_LAUNCH_CONTEXT`: hygiene's character owners on the launch's
+accounts (a fresh launch in a pod without them exits 2 before writing
+anything), the run's credential's newest usage reading, and the guids the
+other runs on its world have recorded, which its session record counts as
+the deployment's own. That last is a snapshot: a character a sibling records
+after the launch reads as foreign in this run's record. Two things the runner
+does to the runs directory are the launcher's for a pod: refusing a fresh id
+the archive already holds, and archiving a run that terminated with no model
+response, which it does once the pod is gone. An arm image built before this
+reads none of the context: its hygiene sees no owners but the ones on its own
+account's `keep` list, and its own archive attempt fails and is logged.
+
 **Codex episodes.** On the cluster every codex episode runs as a run pod —
 freeplay, probing and scored alike — whatever `runPods` says, and no store
 write can put one back in the fleet pod (`runPod` on the driver's entry,
 `episodeRunsInPod`). The CLI gives GPT-6 models tools no flag removes and no
 sandbox confines: code mode's `view_image` opens any file its user can read.
 In the fleet pod that is the env Secret, the config store and its key; in a
-run pod it is the run's own module secret, the runs and wiki volumes, and the
-Codex home it bills. The pod is the release image (an arm's image still
+run pod it is the run's own module secret, its own run directory, the wiki,
+and the Codex home it bills. The pod is the release image (an arm's image still
 needs `probes`) with the module secret, `CODEX_HOME`, and the `codex-home`
 volume mounted whole and read-write. It has to be whole: the CLI refreshes
 `auth.json` in place and keeps its thread stores beside the sessions, and a
