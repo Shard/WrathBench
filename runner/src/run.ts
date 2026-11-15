@@ -65,7 +65,8 @@ import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
 import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
-import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, inProcessRunPodRefusal, isDriver, type Driver } from "./drivers";
+import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, inProcessRunPodRefusal, isDriver, RUN_POD_STAMP_ENV, type Driver } from "./drivers";
+import { LAUNCH_CONTEXT_ENV, launchContextOf, launchOwners } from "./launch-context";
 import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { providerOfModel } from "./credential-slots";
@@ -753,6 +754,29 @@ async function main(): Promise<void> {
   // and the path holds a different reference surface after every rebuild.
   const wikiBundle = wikiBundleMeta(wiki);
 
+  // A run pod mounts its own run directory and nothing else of the runs tree
+  // (infra/run-pod.ts): what the runner would read from the other runs, its
+  // launcher read for it and handed over in the env (`launch-context.ts`). A fresh
+  // launch there without hygiene's owners for every account it clears is
+  // refused before anything is written, never run on an empty map.
+  const inRunPod = process.env[RUN_POD_STAMP_ENV] === "1";
+  const launchContext = launchContextOf(process.env);
+  if (inRunPod && !resumed) {
+    const accounts = config.fanout !== undefined && config.fanout.accounts.length > 0 ? config.fanout.accounts : [config.account];
+    const unread = accounts.filter((a) => launchOwners(launchContext, a) === undefined);
+    if (unread.length > 0) {
+      console.error(`[wrathbench] launch refused: a run pod's launcher left no character owners for ${unread.join(", ")} (${LAUNCH_CONTEXT_ENV}), and hygiene cannot read the other runs here`);
+      process.exit(2);
+    }
+  }
+  /** Hygiene's owners on an account: the launcher's reading in a run pod, the runs directory's otherwise. */
+  const ownersOf = (account: string) => launchOwners(launchContext, account) ?? characterOwners(config.runsDir, account, config.runId);
+  /**
+   * A run that ended with no model response is archived (`archiveIfNoResponses`).
+   * A run pod cannot see the archive; its launcher archives it once the pod is gone.
+   */
+  const archiveStillborn = (): string | null => (inRunPod ? null : archiveIfNoResponses(config.runsDir, config.runId));
+
   // Nothing is written until the name is known to be free: a fresh launch onto
   // an existing run directory is a projection fault (see `assertRunDirFree`),
   // and continuing would write a second run into the first one's trajectory.
@@ -970,7 +994,7 @@ async function main(): Promise<void> {
   const session =
     config.fanout !== undefined
       ? undefined
-      : openSessionRecord({ runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), ownGuids: partyOwnGuids(config.party), token: config.token, scrub: (text) => trajectory.scrub(text) });
+      : openSessionRecord({ runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), ownGuids: [...partyOwnGuids(config.party), ...(launchContext?.ownGuids ?? [])], token: config.token, scrub: (text) => trajectory.scrub(text) });
   const fanoutSignals = config.fanout !== undefined ? new RecordSignals() : undefined;
   process.on("exit", () => removeSessionRing(runDir));
   if (session !== undefined) void moduleIdentity(config.moduleUrl, moduleAuthHeaders()).then((m) => session.writer.setModule(m));
@@ -1213,7 +1237,7 @@ async function main(): Promise<void> {
         account,
         log: (line) => console.error(`[wrathbench] ${account}: ${line}`),
         keep: (config.fanout?.staged ?? []).filter((s) => s.account.toUpperCase() === account.toUpperCase()).map((s) => s.character),
-        owners: characterOwners(config.runsDir, account, config.runId),
+        owners: ownersOf(account),
         allowCharacterDelete,
       });
       if (!h.ok) {
@@ -1221,7 +1245,7 @@ async function main(): Promise<void> {
         await trajectory.setTermination(config.runId, "stale-character", `${account}: ${h.reason}`);
         await trajectory.finish();
         try {
-          const moved = archiveIfNoResponses(config.runsDir, config.runId);
+          const moved = archiveStillborn();
           if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
         } catch (err) {
           console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1248,7 +1272,7 @@ async function main(): Promise<void> {
         ...keepCharacters,
         ...(lastAccount !== undefined ? (config.fanout?.staged ?? []).filter((s) => s.account.toUpperCase() === lastAccount.toUpperCase()).map((s) => s.character) : []),
       ],
-      owners: characterOwners(config.runsDir, lastAccount ?? config.account, config.runId),
+      owners: ownersOf(lastAccount ?? config.account),
       allowCharacterDelete,
     });
     if (!hygiene.ok) {
@@ -1256,7 +1280,7 @@ async function main(): Promise<void> {
       await trajectory.setTermination(config.runId, "stale-character", hygiene.reason);
       await trajectory.finish();
       try {
-        const moved = archiveIfNoResponses(config.runsDir, config.runId);
+        const moved = archiveStillborn();
         if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
       } catch (err) {
         console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1299,7 +1323,7 @@ async function main(): Promise<void> {
         await trajectory.setTermination(config.runId, "stale-character", detail);
         await trajectory.finish();
         try {
-          const moved = archiveIfNoResponses(config.runsDir, config.runId);
+          const moved = archiveStillborn();
           if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
         } catch (err) {
           console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1591,7 +1615,7 @@ async function main(): Promise<void> {
    */
   if (outcome.kind === "terminated") {
     try {
-      const moved = archiveIfNoResponses(config.runsDir, config.runId);
+      const moved = archiveStillborn();
       if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
     } catch (err) {
       console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);

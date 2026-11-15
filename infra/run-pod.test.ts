@@ -9,7 +9,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { harnessSeries } from "../runner/src/comparability";
 import { chooseLauncher, EPISODE_TERM_GRACE_MS, episodeRunsInPod, parseLaunchSpec, type EpisodeLaunch } from "./episode-launcher";
 import { K8sClient, K8sError, type Pod, type PodEnvVar, type PodStatus } from "./k8s-client";
@@ -40,6 +40,9 @@ import { RUN_POD_KEY, runPodsOf, SlotBook } from "./run-fleet-credentials";
 import { tempDirs } from "./temp-dirs";
 import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { RUN_POD_STAMP_ENV } from "../runner/src/drivers";
+import { loadRunConfig, newSessionToken } from "../runner/src/config";
+import { LAUNCH_CONTEXT_ENV, launchContextOf } from "../runner/src/launch-context";
+import { Trajectory } from "../runner/src/trajectory";
 import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
 import { KEY_HEX, SENTINEL } from "../runner/test/fixtures/store-secrets";
 
@@ -378,6 +381,36 @@ describe("buildRunPod", () => {
     expect(codex.spec.containers[0]!.volumeMounts!.map((m) => m.name)).toContain("codex-home");
   });
 
+  test("the runs tree: its own run directory read-write where the fleet pod has it, never the runs directory, and the wiki as the template mounts it", () => {
+    const mounts = buildRunPod(template(), base).spec.containers[0]!.volumeMounts!;
+    expect(mounts).toEqual([
+      { name: "data", mountPath: `/wrathbench/data/runs/${base.runId}`, subPath: `runs/${base.runId}` },
+      { name: "data", mountPath: "/wrathbench/data/wiki", subPath: "wiki" },
+      { name: "tmp", mountPath: "/tmp" },
+    ]);
+    expect(mounts.some((m) => m.subPath === "runs")).toBe(false);
+    // The template is not mutated.
+    expect(template().spec.containers[0]!.volumeMounts![0]).toEqual({ name: "data", mountPath: "/wrathbench/data/runs", subPath: "runs" });
+  });
+
+  test("a continuation's predecessor, live or archived, is the one other run directory, read-only", () => {
+    for (const predecessor of ["fleet-freeplay-codex-sol-20261101", "archive/fleet-freeplay-codex-sol-20261101"]) {
+      const runs = buildRunPod(template(), { ...base, predecessor }).spec.containers[0]!.volumeMounts!.filter((m) => m.subPath?.startsWith("runs") === true);
+      expect(runs).toEqual([
+        { name: "data", mountPath: `/wrathbench/data/runs/${base.runId}`, subPath: `runs/${base.runId}` },
+        { name: "data", mountPath: `/wrathbench/data/runs/${predecessor}`, subPath: `runs/${predecessor}`, readOnly: true },
+      ]);
+    }
+  });
+
+  test("a run id or predecessor that is not one directory, or a template with no runs mount, builds no pod", () => {
+    for (const runId of ["", "..", "a/b", "../etc", ".hidden"]) expect(() => buildRunPod(template(), { ...base, runId })).toThrow("one path segment");
+    for (const predecessor of ["", "..", "archive/../x", "a/b", base.runId, "archive/"]) expect(() => buildRunPod(template(), { ...base, predecessor })).toThrow("another run's directory");
+    const tpl = template();
+    tpl.spec.containers[0]!.volumeMounts = tpl.spec.containers[0]!.volumeMounts!.filter((m) => m.subPath !== "runs");
+    expect(() => buildRunPod(tpl, base)).toThrow("mounts no runs directory");
+  });
+
   test("pull secrets are added to the template's, never duplicated", () => {
     const tpl = template();
     tpl.spec["imagePullSecrets"] = [{ name: "harbor" }];
@@ -597,6 +630,109 @@ describe("PodLauncher against a fake API", () => {
       const exit = await h.exited;
       expect(exit.code).toBe(1);
       expect(exit.failure).toContain("disappeared");
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("the run directory is staged before the pod: made by the fleet, its launch context in the env, a continuation's predecessor found where it is", async () => {
+    const api = new FakeApi();
+    try {
+      const runs = tempDir("wb-run-pod-runs-");
+      const dir = join(runs, launch("").spec.runId);
+      const pred = "fleet-freeplay-codex-sol-20261101";
+      const argsOf = (from: string) => ["--driver", "codex", "--model", "gpt-6", "--account", "runner7", "--continue-from", from];
+      const mountsOf = (pod: Pod) => pod.spec.containers[0]!.volumeMounts!.filter((m) => m.subPath?.startsWith("runs") === true).map((m) => [m.subPath, m.readOnly ?? false]);
+
+      const contextOf = (pod: Pod) => launchContextOf({ [LAUNCH_CONTEXT_ENV]: envOf(pod)[LAUNCH_CONTEXT_ENV]?.value });
+
+      // Found nowhere: no mount at all, so the kubelet never makes an empty one.
+      const h0 = await launcher(api).start(launch(dir, { args: argsOf(pred) }));
+      expect(existsSync(dir)).toBe(true);
+      expect(contextOf(api.only())?.characterOwners).toEqual({ RUNNER7: {} });
+      expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false]]);
+      await h0.stop(0);
+
+      mkdirSync(join(runs, "archive", pred), { recursive: true });
+      writeFileSync(join(runs, "archive", pred, "meta.json"), "{}");
+      const h1 = await launcher(api).start(launch(dir, { args: argsOf(pred) }));
+      expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false], [`runs/archive/${pred}`, true]]);
+      await h1.stop(0);
+
+      // Live wins, as the runner reads it.
+      mkdirSync(join(runs, pred), { recursive: true });
+      writeFileSync(join(runs, pred, "meta.json"), "{}");
+      const h2 = await launcher(api).start(launch(dir, { args: argsOf(pred) }));
+      expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false], [`runs/${pred}`, true]]);
+      await h2.stop(0);
+
+      // A resume mounts no predecessor and reads no owners.
+      const h3 = await launcher(api).start(launch(dir, { resume: true, args: ["--resume", basename(dir)] }));
+      expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false]]);
+      expect(contextOf(api.only())?.characterOwners).toBeUndefined();
+      await h3.stop(0);
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("an arm with its own command and flags run.ts does not know is staged all the same: only the supervisor's flags are read", async () => {
+    const api = new FakeApi();
+    try {
+      const dir = join(tempDir("wb-run-pod-runs-"), launch("").spec.runId);
+      const h = await launcher(api).start(launch(dir, { image: "ghcr.io/shard/wrathbench-runner:probe-x-0123456789ab", command: ["/app/harness"], args: ["--driver", "claude-code", "--account", "runner3", "--their-own", "--knob", "7"] }));
+      const pod = api.only();
+      expect(pod.spec.containers[0]!.command).toEqual(["/app/harness"]);
+      expect(launchContextOf({ [LAUNCH_CONTEXT_ENV]: envOf(pod)[LAUNCH_CONTEXT_ENV]?.value })?.characterOwners).toEqual({ RUNNER3: {} });
+      await h.stop(0);
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("a fresh launch onto an archived run's id never becomes a pod: the half of the runner's check the pod cannot make", async () => {
+    const api = new FakeApi();
+    try {
+      const runs = tempDir("wb-run-pod-runs-");
+      const dir = join(runs, launch("").spec.runId);
+      mkdirSync(join(runs, "archive", basename(dir)), { recursive: true });
+      writeFileSync(join(runs, "archive", basename(dir), "meta.json"), "{}");
+      const exit = await (await launcher(api).start(launch(dir))).exited;
+      expect(exit.code).toBe(2);
+      expect(exit.failure).toContain("an archived run answers to");
+      expect(api.requests.filter((r) => r.startsWith("POST"))).toEqual([]);
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("a run that terminated with no model response is archived by the launcher once its pod is gone; a paused one is not", async () => {
+    const api = new FakeApi();
+    try {
+      const runs = tempDir("wb-run-pod-runs-");
+      for (const [runId, end] of [["fleet-stillborn-1", "terminate"], ["fleet-paused-1", "pause"]] as const) {
+        const dir = join(runs, runId);
+        const lines: string[] = [];
+        const h = await launcher(api).start(launch(dir, { spec: { ...launch(dir).spec, runId }, log: (l) => lines.push(l) }));
+        // What the runner leaves in the pod: a meta.json, no response, and its verdict.
+        const traj = new Trajectory(dir);
+        const config = loadRunConfig({ runId, token: newSessionToken(), driver: "stub", runsDir: runs, moduleUrl: "http://127.0.0.1:9" });
+        await traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
+        if (end === "terminate") await traj.setTermination(runId, "launch-failed", "no response");
+        else await traj.setPause(runId, "operator-pause", "test");
+        await traj.finish();
+        const name = api.only().metadata.name!;
+        api.setStatus(name, terminated(1, `harbor.example/library/wrathbench-runner@${DIGEST}`, "Error"));
+        expect((await h.exited).code).toBe(1);
+        if (end === "terminate") {
+          expect(existsSync(join(runs, "archive", runId, "meta.json"))).toBe(true);
+          expect(existsSync(dir)).toBe(false);
+          expect(lines.some((l) => l.includes("no model response — archived to"))).toBe(true);
+        } else {
+          expect(existsSync(join(dir, "meta.json"))).toBe(true);
+          expect(existsSync(join(runs, "archive", runId))).toBe(false);
+        }
+      }
     } finally {
       api.stop();
     }
@@ -1002,6 +1138,11 @@ describe("the chart's run-pod template", () => {
     expect(env[STORE_KEY_ENV]).toBeUndefined();
     expect(env["CODEX_HOME"]).toEqual({ name: "CODEX_HOME", value: "/home/bun/.codex" });
     expect(Object.keys(env).some((n) => n.startsWith("ANTHROPIC_") || n.startsWith("WRATHBENCH_DB_") || n === "WRATHBENCH_CONFIG_DB")).toBe(false);
+    // Its own run directory and nothing else of the runs tree; the wiki read-only.
+    expect(pod.spec.containers[0]!.volumeMounts!.filter((m) => m.name === "data")).toEqual([
+      { name: "data", mountPath: "/wrathbench/data/runs/fleet-freeplay-codex-sol-20261114", subPath: "runs/fleet-freeplay-codex-sol-20261114" },
+      { name: "data", mountPath: "/wrathbench/data/wiki", subPath: "wiki", readOnly: true },
+    ]);
     const mount = pod.spec.containers[0]!.volumeMounts!.find((m) => m.name === "codex-home");
     expect(mount).toEqual({ name: "codex-home", mountPath: "/home/bun/.codex" });
     expect(pod.spec.volumes!.find((v) => v.name === "codex-home")).toEqual({ name: "codex-home", persistentVolumeClaim: { claimName: "wrathbench-codex-home" } });

@@ -77,8 +77,8 @@ export function characterOwners(runsDir: string, account: string, exceptRunId?: 
       if (runId === exceptRunId) continue;
       const meta = readMeta(join(dir, runId));
       if (meta === null) continue;
-      if (meta.config.account?.toUpperCase() !== account.toUpperCase()) continue;
-      const name = meta.config.character;
+      if (meta.config?.account?.toUpperCase() !== account.toUpperCase()) continue;
+      const name = meta.config?.character;
       if (name === undefined || name === "") continue;
       const owner = { runId, ended: terminated(join(dir, runId), runId), startedAt: meta.startedAt };
       const key = name.toLowerCase();

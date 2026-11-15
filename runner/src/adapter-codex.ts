@@ -179,6 +179,7 @@ import { CodexLastCallReader, CodexRolloutFollower, deleteCodexThread, removeThr
 import { CompactionAsk, codexAutoCompactLimit, codexWindowCapRefusal, compactionNotice, compactWindowTokens, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
+import { launchContextOf } from "./launch-context";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import type { ToolContext } from "./tools";
@@ -1022,7 +1023,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   const usage = new SubscriptionUsageTracker(usageKeyOf(config, credentialEnv)!, (u) => trajectory.recordSubscriptionUsage(u, turn));
   // The credential's newest reading from before this run, so a first turn
   // that meets a spent quota still knows the window it was spent in.
-  usage.seed(newestCredentialUsage(config.runsDir, usage.credential));
+  usage.seed(newestCredentialUsage(config.runsDir, usage.credential, launchContextOf(process.env)?.subscriptionUsage));
 
   // ---- one process at a time; the group kill and the exit net track it
   const spawnCodex = (args: string[]) =>

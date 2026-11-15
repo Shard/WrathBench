@@ -52,7 +52,7 @@ import { join } from "node:path";
 import { listRuns, runDir } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { countModelResponses } from "./models";
-import { fanoutCharacters, fanoutSessionDir, SESSIONS_DIR } from "./run-reader";
+import { fanoutCharacters, fanoutSessionDir, readRunRow, SESSIONS_DIR } from "./run-reader";
 import { removeSessionRing } from "./session-record";
 import { CLIENT_CACHE_FILE } from "@wrathbench/mcp/client-cache";
 
@@ -349,6 +349,18 @@ export function archiveIfNoResponses(runsDir: string, runId: string): string | n
   const n = countModelResponses(join(runsDir, runId, "trajectory.jsonl"));
   if (n === null || n > 0) return null;
   return archiveRun(runsDir, runId);
+}
+
+/**
+ * The same archive, by a run pod's launcher once the pod is gone: a run pod
+ * mounts only its own run directory, so the runner cannot move it. The
+ * termination row is the runner's word that it terminated rather than paused;
+ * without one nothing moves.
+ */
+export function archiveIfStillborn(runsDir: string, runId: string): string | null {
+  const reason = readRunRow(join(runsDir, runId), runId)?.["termination_reason"];
+  if (typeof reason !== "string" || reason === "") return null;
+  return archiveIfNoResponses(runsDir, runId);
 }
 
 if (import.meta.main) {

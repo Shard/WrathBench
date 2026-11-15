@@ -368,10 +368,14 @@ export function readCredentialUsage(runsDir: string): SubscriptionUsage[] {
   return out;
 }
 
-/** The newest reading of one credential in a runs directory, or undefined. Never throws. */
-export function newestCredentialUsage(runsDir: string, credential: string): SubscriptionUsage | undefined {
+/**
+ * The newest reading of one credential in a runs directory, or undefined, with
+ * `staged` readings beside it (a run pod's launcher reads the others for it,
+ * `launch-context.ts`). Never throws.
+ */
+export function newestCredentialUsage(runsDir: string, credential: string, staged: readonly SubscriptionUsage[] = []): SubscriptionUsage | undefined {
   try {
-    return newestByCredential(readCredentialUsage(runsDir)).get(credential);
+    return newestByCredential([...readCredentialUsage(runsDir), ...staged]).get(credential);
   } catch {
     return undefined;
   }

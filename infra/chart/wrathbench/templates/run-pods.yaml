@@ -55,12 +55,17 @@ spec:
         {{- end }}
       resources: {{ toYaml .Values.runPods.resources | nindent 8 }}
       volumeMounts:
+        # Never mounted as it stands: the launcher replaces it with the run's
+        # own directory, runs/<id>, and a continuation's predecessor read-only
+        # (infra/run-pod.ts runPodRunsMounts). A model's runtime can read any
+        # file in its pod, and the other runs' records are not its to read.
         - name: data
           mountPath: /wrathbench/data/runs
           subPath: runs
         - name: data
           mountPath: /wrathbench/data/wiki
           subPath: wiki
+          readOnly: true
         {{- if include "wrathbench.on.codex" $ }}
         # Kept by the launcher for the codex driver only.
         - name: codex-home
@@ -102,8 +107,11 @@ docs/RUNBOOK.md "Run pods"). Three objects:
     credential the episode's driver does not bill. The template carries the
     release image, which is what an arm with no image of its own runs.
 
-    What a run pod does NOT get, deliberately: the config store (run.ts never
-    opens it), the database env (fixture staging is the fleet's), and any
+    What a run pod does NOT get, deliberately: the runs directory (only its
+    own run directory, and a continuation's predecessor read-only; the
+    launcher reads what run.ts needs of the other runs and hands it over as
+    WRATHBENCH_LAUNCH_CONTEXT), write access to the wiki, the config store (run.ts
+    never opens it), the database env (fixture staging is the fleet's), and any
     ANTHROPIC_* variable (claude-code is subscription-only; infra/run-pod.ts
     refuses to build a pod carrying one, and infra/run-pod.test.ts asserts it
     on this rendering).
