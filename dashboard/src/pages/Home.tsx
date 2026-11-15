@@ -22,7 +22,7 @@ import { groupsOf } from "../lib/nav";
 
 /** What the loop diagram is showing, one hover off its heading; per-harness detail lives here, not in the drawing. */
 const LOOP_NOTE =
-  "The model does not play move by move. It writes a small TypeScript program against the SDK, starts its routines and sleeps while they play in the live world. It is woken when a routine ends or fails, an action is refused for the first time, the character dies, the program asks for attention, or five minutes pass; it reads what changed, revises the code and sleeps again. Its scratchpad and a short status log carry it across a trimmed or compacted conversation, and the log can be read back at an inn or on a flight. The fixed loop and Claude Code sleep through a yield tool; Codex sleeps at the end of its turn and gives GPT-6 models its own code mode.";
+  "The model does not play move by move. It writes a small TypeScript program against the SDK, starts its routines and sleeps while they play in the live world. It is woken when a routine ends or fails, an action is refused for the first time, the character dies, the program asks for attention, or five minutes pass; it reads what changed, revises the code and sleeps again. Its scratchpad and a short status log carry it across a trimmed or compacted conversation, and the log can be read back at an inn or on a flight. The fixed loop and Claude Code sleep through a tool that waits for the wake; Codex sleeps at the end of its turn and gives GPT-6 models its own code mode.";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -72,7 +72,7 @@ export default function Home() {
         <p>
           WrathBench evaluates AI agents on their ability to play World of Warcraft: Wrath of the Lich King
           through a TypeScript SDK on a private AzerothCore server. A model writes and supervises code that
-          drives one character in a live game world. Watching an agent observe, decide and act over hours of
+          drives a character in a live game world. Watching an agent observe, decide and act over hours of
           play, leveling and questing its way out into the world, gives a direct read on its long-horizon
           planning, memory and problem solving.
         </p>
@@ -138,7 +138,7 @@ export default function Home() {
             <li>Teleport, run a GM command, or read the database. Only valid client opcodes are allowed.</li>
             <li>Be told a strategy. A failed call says what was expected and how to fix the call, never what to play next.</li>
             <li>Pause the world. The game is real time, and the clock runs while the model thinks and while it sleeps.</li>
-            <li>Use another character, another account, or any kind of networking outside the game.</li>
+            <li>Use a character or account it was not given, or any kind of networking outside the game.</li>
           </ul>
         </div>
       </div>
@@ -286,9 +286,9 @@ function LoopDiagram() {
       {arrow(508, 78, 402, 78)}
       <text x="454" y="90" text-anchor="middle" class="loop-sub">events</text>
       <text x="330" y="106" text-anchor="middle" class="loop-sub">keeps playing while the model sleeps</text>
-      {/* The wake: back to the model, over the program. */}
-      <path d="M580,44 L580,24 L80,24 L80,44" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
-      <text x="330" y="19" text-anchor="middle" class="loop-sub">something happens: the model wakes and reads what changed</text>
+      {/* The wake: from the program, where most wakes start (a routine ends, fails, is refused or calls wake()), back to the model. */}
+      <path d="M330,44 L330,24 L80,24 L80,44" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
+      <text x="205" y="19" text-anchor="middle" class="loop-sub">something happens: the model wakes and reads what changed</text>
       {/* The memories, under the model: both written and read by it. */}
       {box(10, 162, 140, "notes", "a scratchpad")}
       {box(170, 162, 140, "status log", "read back at rest")}
