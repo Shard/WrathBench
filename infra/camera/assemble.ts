@@ -1,90 +1,225 @@
 /**
- * Clips from a run's camera frames (docs/ARCHITECTURE.md, "Camera"): a
- * timelapse of the interval frames and one clip per event burst, each with a
- * poster and the model's own words as its caption, and `clips.json` beside
+ * The run's one video from its camera frames (docs/ARCHITECTURE.md, "Camera"):
+ * every frame kept, interval and event alike, in the order it was taken, cut
+ * into parts of at most six hours of run time, each with a poster; the
+ * chapters, the model's own words and the time map in `clips.json` beside
  * them, written last so a reader that finds it finds every file it names.
  *
  *   bun infra/camera/assemble.ts <run-dir> [--interval-seconds 10]
  *
- * The director runs it when it leaves a subject, and the sweep (sweep.ts)
- * when a run's frames are newer than its clips. It is idempotent: every clip
- * whose frames are still on disk is rebuilt, and an event clip whose frames
- * have been pruned is kept as it was. The timelapse covers the frames on
- * disk, so for a long live run, about its last day.
+ * The rate: the video runs at `VIDEO_FPS` (8) frames a second and an interval
+ * frame is on screen for one of them, so at the default ten-second interval a
+ * minute of video is 80 minutes of play, and a 90-minute run about a minute
+ * and a half before its events. An event's burst is thinned to the twelve
+ * seconds around its moment (`BURST_LEAD_MS`, `BURST_TAIL_MS`), one video
+ * frame each, and the moment itself is held a second (`HOLD_TICKS`): about
+ * two and a half seconds of video per level, quest, death, zone or boss.
+ *
+ * A part closes when the next frame would take it past six hours of run time
+ * (`PART_MS`). Every part but the last is closed, and a closed part is never
+ * encoded again: its file, poster, chapters, captions and time map are taken
+ * from the previous `clips.json` as they were, since its frames may have been
+ * pruned since (sweep.ts). Only the last, open part is rebuilt, from the first
+ * frame after the last closed part, so a long freeplay run costs one part's
+ * encode and one part's upload per assembly, not its whole history.
+ *
+ * The model's words are not burned into the picture: they are `captions` in
+ * `clips.json`, which the public site redacts like any model text. The
+ * picture carries only our own line: the benchmark, the model and, during an
+ * event, its detail.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { clipCaption, modelNameOf, readRunWords, saidAt, BENCHMARK_NAME, type Said } from "./captions";
+import { modelNameOf, readRunWords, saidAt, BENCHMARK_NAME, type Said } from "./captions";
 import {
   cameraDir,
-  CLIP_EVENT_TYPES,
+  CHAPTER_TYPES,
   CLIPS_DIR,
   CLIPS_FILE,
   FRAME_HEIGHT,
   FRAME_WIDTH,
   FRAMES_INDEX,
+  PART_MS,
   parseFrames,
+  partFiles,
   type CameraEvent,
-  type ClipEntry,
+  type CaptionCue,
+  type Chapter,
   type ClipsFile,
   type FrameLine,
+  type TimemapPoint,
+  type VideoPart,
 } from "./layout";
 
-export const TIMELAPSE_FPS = 12;
-export const EVENT_FPS = 4;
-/** An event clip holds its last frame this long. */
-export const EVENT_HOLD_S = 1.5;
-/** Fewer frames than this make no event clip. */
-export const MIN_EVENT_FRAMES = 4;
+/** The video's frame rate; every frame's time on screen is a whole number of these. */
+export const VIDEO_FPS = 8;
+/** The event's own frame stays on screen this many video frames longer (one second). */
+export const HOLD_TICKS = 8;
+/** Of an event's burst, the frames this long before its moment are kept whole… */
+export const BURST_LEAD_MS = 8_000;
+/** …and this long after; the rest of the burst is thinned like interval frames. */
+export const BURST_TAIL_MS = 4_000;
+/** A new caption waits until the one before has been up this long, in video seconds. */
+export const CAPTION_MIN_S = 3;
+/** How far the compacted time map may be off a frame's own run time. */
+export const TIMEMAP_TOLERANCE_MS = 2_000;
 /** Two frames of one burst are never further apart than this. */
 const BURST_GAP_MS = 5_000;
 
-export interface ClipPlan {
-  name: string;
-  kind: "timelapse" | "event";
-  frames: FrameLine[];
-  fps: number;
-  holdS: number;
-  event?: CameraEvent;
-  poster: FrameLine;
-  /** The moment whose words caption the clip as a whole. */
-  captionAt: number;
+/** A frame as the video shows it: for `ticks` video frames. */
+export interface Shot {
+  frame: FrameLine;
+  ticks: number;
+  /** The first shot of an event's window opens its chapter. */
+  chapter?: { event: CameraEvent; moment: number };
+  /** The event's own frame, held: the chapter's detail is on screen until it ends. */
+  moment?: true;
 }
 
 const ms = (f: FrameLine): number => Date.parse(f.t);
 
-/** Which clips the frames make. Pure. */
-export function planClips(all: readonly FrameLine[], o: { intervalMs: number }): ClipPlan[] {
-  const frames = [...all].sort((a, b) => ms(a) - ms(b));
-  const plans: ClipPlan[] = [];
-
-  // The timelapse: one frame per interval, whatever kind it was kept as.
-  const lapse: FrameLine[] = [];
-  for (const f of frames) if (lapse.length === 0 || ms(f) - ms(lapse.at(-1)!) >= o.intervalMs * 0.8) lapse.push(f);
-  if (lapse.length >= 2) {
-    plans.push({ name: "timelapse", kind: "timelapse", frames: lapse, fps: TIMELAPSE_FPS, holdS: 0, poster: lapse[Math.floor(lapse.length / 2)]!, captionAt: ms(lapse.at(-1)!) });
-  }
-
-  // Event bursts: consecutive frames tagged with one event.
-  let burst: FrameLine[] = [];
-  const close = () => {
-    const first = burst[0];
-    if (first?.event !== undefined && CLIP_EVENT_TYPES.includes(first.event.type) && burst.length >= MIN_EVENT_FRAMES) {
-      // The window is lead then tail (shutter.ts): the event sits three quarters in.
-      const poster = burst[Math.min(burst.length - 1, Math.floor(burst.length * 0.75))]!;
-      plans.push({ name: `event-${first.seq}-${first.event.type}`, kind: "event", frames: burst, fps: EVENT_FPS, holdS: EVENT_HOLD_S, event: first.event, poster, captionAt: ms(poster) });
+/** Every frame the video shows, in order, and for how long. Pure. */
+export function planShots(all: readonly FrameLine[], o: { intervalMs: number }): Shot[] {
+  const frames = [...all].sort((a, b) => ms(a) - ms(b) || a.seq - b.seq);
+  // Bursts: consecutive frames tagged with one event.
+  const window = new Map<number, { event: CameraEvent; moment: number; from: number; to: number }>();
+  let burst: number[] = [];
+  const close = (): void => {
+    const first = frames[burst[0] ?? -1];
+    if (first?.event !== undefined && CHAPTER_TYPES.includes(first.event.type)) {
+      // The shutter's window is lead then tail: the event sits three quarters in.
+      const moment = ms(frames[burst[Math.min(burst.length - 1, Math.floor(burst.length * 0.75))]!]!);
+      const w = { event: first.event, moment, from: moment - BURST_LEAD_MS, to: moment + BURST_TAIL_MS };
+      for (const i of burst) window.set(i, w);
     }
     burst = [];
   };
-  for (const f of frames) {
-    const prev = burst.at(-1);
+  frames.forEach((f, i) => {
+    const prev = frames[burst.at(-1) ?? -1];
     const same = prev !== undefined && f.kind === "event" && f.event !== undefined && prev.event?.type === f.event.type && prev.event.detail === f.event.detail && ms(f) - ms(prev) <= BURST_GAP_MS;
     if (!same) close();
-    if (f.kind === "event" && f.event !== undefined) burst.push(f);
-  }
+    if (f.kind === "event" && f.event !== undefined) burst.push(i);
+  });
   close();
-  return plans;
+
+  const shots: Shot[] = [];
+  const opened = new Set<object>();
+  const held = new Set<object>();
+  let last = Number.NEGATIVE_INFINITY;
+  frames.forEach((f, i) => {
+    const t = ms(f);
+    const w = window.get(i);
+    if (w !== undefined && t >= w.from && t <= w.to) {
+      const shot: Shot = { frame: f, ticks: 1 };
+      if (!opened.has(w)) {
+        opened.add(w);
+        shot.chapter = { event: w.event, moment: w.moment };
+      }
+      if (t >= w.moment && !held.has(w)) {
+        held.add(w);
+        shot.ticks += HOLD_TICKS;
+        shot.moment = true;
+      }
+      shots.push(shot);
+      last = t;
+    } else if (t - last >= o.intervalMs * 0.8) {
+      shots.push({ frame: f, ticks: 1 });
+      last = t;
+    }
+  });
+  return shots;
+}
+
+/** The shots cut into parts: a part closes when the next frame would take it past `PART_MS` of run time. Pure. */
+export function splitParts(shots: readonly Shot[], partMs: number = PART_MS): Shot[][] {
+  const parts: Shot[][] = [];
+  for (const s of shots) {
+    const cur = parts.at(-1);
+    if (cur === undefined || ms(s.frame) - ms(cur[0]!.frame) > partMs) parts.push([s]);
+    else cur.push(s);
+  }
+  return parts;
+}
+
+/** A part's length as video, in seconds. */
+export function partSeconds(part: readonly Shot[]): number {
+  return part.reduce((n, s) => n + s.ticks, 0) / VIDEO_FPS;
+}
+
+export interface PartTimeline {
+  chapters: Chapter[];
+  captions: CaptionCue[];
+  /** One point per frame shown, and one at the end of a hold; not yet compacted. */
+  points: TimemapPoint[];
+  /** Our own line's event details, in the part's own seconds. */
+  details: { from: number; to: number; text: string }[];
+}
+
+/**
+ * A part's chapters, captions and time map on the whole video's timeline,
+ * `offset` seconds in. `lastCue` is the cue before the part, so a caption
+ * that has not changed is not said again. Pure.
+ */
+export function timelineOf(part: readonly Shot[], index: number, offset: number, said: readonly Said[], lastCue: CaptionCue | null): PartTimeline {
+  const out: PartTimeline = { chapters: [], captions: [], points: [], details: [] };
+  let cue = lastCue;
+  let tick = 0;
+  let open: { from: number; text: string } | null = null;
+  for (const s of part) {
+    const local = tick / VIDEO_FPS;
+    const v = offset + local;
+    const r = ms(s.frame);
+    out.points.push([v, r]);
+    if (s.ticks > 1) out.points.push([offset + (tick + s.ticks - 1) / VIDEO_FPS, r]);
+    if (s.chapter !== undefined) {
+      out.chapters.push({ t: v, part: index, type: s.chapter.event.type, detail: s.chapter.event.detail, caption: saidAt(said, s.chapter.moment) });
+      if (open !== null) out.details.push({ from: open.from, to: local, text: open.text });
+      open = { from: local, text: s.chapter.event.detail };
+    }
+    const words = saidAt(said, r);
+    if (words !== "" && words !== cue?.text && (cue === null || v - cue.t >= CAPTION_MIN_S)) {
+      cue = { t: v, text: words };
+      out.captions.push(cue);
+    }
+    tick += s.ticks;
+    if (s.moment === true && open !== null) {
+      out.details.push({ from: open.from, to: tick / VIDEO_FPS, text: open.text });
+      open = null;
+    }
+  }
+  if (open !== null) out.details.push({ from: open.from, to: tick / VIDEO_FPS, text: open.text });
+  return out;
+}
+
+/**
+ * The time map compacted: a point is dropped when the line between the points
+ * kept around it puts every dropped frame within `tolerance` of its own run
+ * time. The first and last points always stay. Pure.
+ */
+export function compactTimemap(points: readonly TimemapPoint[], tolerance: number = TIMEMAP_TOLERANCE_MS): TimemapPoint[] {
+  if (points.length <= 2) return points.map((p) => [p[0], p[1]]);
+  const out: TimemapPoint[] = [[points[0]![0], points[0]![1]]];
+  let a = 0;
+  const fits = (from: number, to: number): boolean => {
+    const [va, ra] = points[from]!;
+    const [vb, rb] = points[to]!;
+    for (let i = from + 1; i < to; i++) {
+      const [v, r] = points[i]!;
+      const at = vb === va ? ra : ra + ((v - va) * (rb - ra)) / (vb - va);
+      if (Math.abs(at - r) > tolerance) return false;
+    }
+    return true;
+  };
+  for (let j = a + 2; j < points.length; j++) {
+    if (!fits(a, j)) {
+      a = j - 1;
+      out.push([points[a]![0], points[a]![1]]);
+    }
+  }
+  const lastPoint = points.at(-1)!;
+  out.push([lastPoint[0], lastPoint[1]]);
+  return out;
 }
 
 function assTime(s: number): string {
@@ -99,34 +234,25 @@ function assText(s: string): string {
   return s.replace(/[{}\\]/g, "").replace(/\n/g, " ");
 }
 
-/** The subtitle track: our line at the top, the model's words at the bottom, frame by frame. */
-export function subtitlesOf(plan: ClipPlan, said: readonly Said[], modelName: string): string {
+/** Our own line over a part: the benchmark and the model throughout, an event's detail while it shows. Never the model's words. */
+export function subtitlesOf(seconds: number, details: PartTimeline["details"], modelName: string): string {
   const head =
     `[Script Info]\nScriptType: v4.00+\nPlayResX: ${FRAME_WIDTH}\nPlayResY: ${FRAME_HEIGHT}\nWrapStyle: 0\n\n` +
     `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\n` +
-    `Style: Cap,DejaVu Sans,30,&H00FFFFFF,&H00000000,&H90000000,0,3,1,0,2,60,60,40\n` +
-    `Style: Hud,DejaVu Sans,22,&H00E8E8E8,&H00000000,&H90000000,0,3,1,0,7,28,28,24\n\n` +
+    `Style: Hud,DejaVu Sans,22,&H00E8E8E8,&H00000000,&H90000000,0,3,1,0,7,28,28,24\n` +
+    `Style: Ev,DejaVu Sans,26,&H00FFFFFF,&H00000000,&H90000000,0,3,1,0,9,28,28,24\n\n` +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-  const hud = [BENCHMARK_NAME, modelName, ...(plan.event !== undefined ? [plan.event.detail] : [])].join(" · ");
-  const dur = 1 / plan.fps;
-  const total = plan.frames.length * dur + plan.holdS;
-  const lines = [`Dialogue: 0,${assTime(0)},${assTime(total)},Hud,,0,0,0,,${assText(hud)}`];
-  plan.frames.forEach((f, i) => {
-    const words = saidAt(said, ms(f));
-    if (words === "") return;
-    const end = i === plan.frames.length - 1 ? total : (i + 1) * dur;
-    lines.push(`Dialogue: 0,${assTime(i * dur)},${assTime(end)},Cap,,0,0,0,,${assText(words)}`);
-  });
+  const lines = [`Dialogue: 0,${assTime(0)},${assTime(seconds)},Hud,,0,0,0,,${assText(`${BENCHMARK_NAME} · ${modelName}`)}`];
+  for (const d of details) lines.push(`Dialogue: 0,${assTime(d.from)},${assTime(d.to)},Ev,,0,0,0,,${assText(d.text)}`);
   return `${head}${lines.join("\n")}\n`;
 }
 
-/** The concat demuxer's list: each frame for one frame's time, the last held. */
-export function concatListOf(plan: ClipPlan, dir: string): string {
-  const dur = 1 / plan.fps;
+/** The concat demuxer's list: each frame for its whole number of video frames. */
+export function concatListOf(part: readonly Shot[], dir: string): string {
   const quote = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
-  const rows = plan.frames.map((f, i) => `file ${quote(join(dir, f.file))}\nduration ${(i === plan.frames.length - 1 ? dur + plan.holdS : dur).toFixed(4)}`);
+  const rows = part.map((s) => `file ${quote(join(dir, s.frame.file))}\nduration ${(s.ticks / VIDEO_FPS).toFixed(4)}`);
   // The demuxer ignores the last entry's duration unless the file is listed again.
-  rows.push(`file ${quote(join(dir, plan.frames.at(-1)!.file))}`);
+  rows.push(`file ${quote(join(dir, part.at(-1)!.frame.file))}`);
   return `${rows.join("\n")}\n`;
 }
 
@@ -135,23 +261,29 @@ function filterPath(p: string): string {
   return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
-export function ffmpegArgs(list: string, ass: string, out: string, fps: number): string[] {
+export function ffmpegArgs(list: string, ass: string, out: string, seconds: number): string[] {
   const vf = [
     `scale=${FRAME_WIDTH}:${FRAME_HEIGHT}:force_original_aspect_ratio=decrease:out_range=tv`,
     `pad=${FRAME_WIDTH}:${FRAME_HEIGHT}:(ow-iw)/2:(oh-ih)/2`,
     `subtitles=filename=${filterPath(ass)}`,
+    `fps=${VIDEO_FPS}`,
     "format=yuv420p",
   ].join(",");
-  return ["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-vf", vf, "-r", String(fps), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", out];
+  return ["-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-vf", vf, "-t", seconds.toFixed(3), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", out];
 }
 
-/** The clips.json there is, or none. */
-function previousClips(cam: string): ClipEntry[] {
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** The version-2 clips.json there is, or null (none, another version, unreadable). */
+export function previousDoc(cam: string): ClipsFile | null {
   try {
-    const doc = JSON.parse(readFileSync(join(cam, CLIPS_FILE), "utf8")) as ClipsFile;
-    return Array.isArray(doc.clips) ? doc.clips.filter((c) => typeof c?.name === "string" && typeof c.file === "string" && typeof c.poster === "string" && typeof c.to === "string") : [];
+    const doc = JSON.parse(readFileSync(join(cam, CLIPS_FILE), "utf8")) as unknown;
+    if (!isRecord(doc) || doc["version"] !== 2) return null;
+    const d = doc as unknown as ClipsFile;
+    if (!Array.isArray(d.parts) || !Array.isArray(d.chapters) || !Array.isArray(d.captions) || !Array.isArray(d.timemap)) return null;
+    return d;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -161,65 +293,83 @@ export interface AssembleOptions {
   log?: (line: string) => void;
 }
 
-/** Build every clip of a run's camera directory and write clips.json. Returns it, or null when there were no frames. */
+/**
+ * Build the open part of a run's video, keep its closed parts as they were,
+ * and write clips.json. Returns it, or null when there is nothing to show.
+ */
 export function assembleRun(runDir: string, o: AssembleOptions): ClipsFile | null {
   const log = o.log ?? (() => {});
   const cam = cameraDir(runDir);
   const index = join(cam, FRAMES_INDEX);
   if (!existsSync(index)) return null;
   const frames = parseFrames(readFileSync(index, "utf8")).filter((f) => existsSync(join(cam, f.file)));
-  // Event clips made before their frames were pruned (sweep.ts) are kept as they are.
-  const earliest = frames.length > 0 ? Math.min(...frames.map((f) => Date.parse(f.t))) : Infinity;
-  const kept = previousClips(cam).filter((c) => c.kind === "event" && Date.parse(c.to) < earliest && existsSync(join(cam, c.file)) && existsSync(join(cam, c.poster)));
+  const prev = previousDoc(cam);
+
+  // The closed parts: every part but the previous last, while their files are there.
+  const kept: VideoPart[] = [];
+  for (const p of prev?.parts.slice(0, -1) ?? []) {
+    if (!existsSync(join(cam, p.file)) || !existsSync(join(cam, p.poster))) break;
+    kept.push(p);
+  }
+  const offset = kept.reduce((n, p) => n + p.seconds, 0);
+  const cutoff = kept.length > 0 ? Date.parse(kept.at(-1)!.to) : Number.NEGATIVE_INFINITY;
+  const parts = splitParts(planShots(frames.filter((f) => ms(f) > cutoff), { intervalMs: o.intervalMs }));
+  if (parts.length === 0) return prev;
+
   const runId = basename(runDir);
   const { model, said } = readRunWords(runDir);
   const modelName = modelNameOf(model);
+  const keptChapters = (prev?.chapters ?? []).filter((c) => c.part < kept.length);
+  const keptCaptions = (prev?.captions ?? []).filter((c) => c.t < offset);
+  const keptPoints = (prev?.timemap ?? []).filter((p) => p[0] < offset);
+  const doc: ClipsFile = { version: 2, runId, parts: [...kept], chapters: keptChapters, captions: keptCaptions, timemap: [] };
+  const newPoints: TimemapPoint[] = [];
+
   const clipsDir = join(cam, CLIPS_DIR);
   const work = join(cam, ".work");
   mkdirSync(clipsDir, { recursive: true });
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
   const ffmpeg = o.ffmpeg ?? Bun.which("ffmpeg") ?? "ffmpeg";
-  const clips: ClipEntry[] = [...kept];
   try {
-    for (const plan of planClips(frames, { intervalMs: o.intervalMs })) {
-      const list = join(work, `${plan.name}.txt`);
-      const ass = join(work, `${plan.name}.ass`);
-      const tmp = join(work, `${plan.name}.mp4`);
-      writeFileSync(list, concatListOf(plan, cam));
-      writeFileSync(ass, subtitlesOf(plan, said, modelName));
-      const r = Bun.spawnSync([ffmpeg, ...ffmpegArgs(list, ass, tmp, plan.fps)], { stdout: "pipe", stderr: "pipe" });
+    let at = offset;
+    for (const [j, part] of parts.entries()) {
+      const i = kept.length + j;
+      const { file, poster } = partFiles(i);
+      const seconds = partSeconds(part);
+      const line = timelineOf(part, i, at, said, doc.captions.at(-1) ?? null);
+      const list = join(work, `${i}.txt`);
+      const ass = join(work, `${i}.ass`);
+      const tmp = join(work, `${i}.mp4`);
+      writeFileSync(list, concatListOf(part, cam));
+      writeFileSync(ass, subtitlesOf(seconds, line.details, modelName));
+      const r = Bun.spawnSync([ffmpeg, ...ffmpegArgs(list, ass, tmp, seconds)], { stdout: "pipe", stderr: "pipe" });
       if (r.exitCode !== 0) {
-        log(`clip ${plan.name}: ffmpeg failed (${r.exitCode}): ${r.stderr.toString().trim().slice(0, 400)}`);
-        continue;
+        // A part that would not encode ends the video there: the timeline has no gaps.
+        log(`part ${i}: ffmpeg failed (${r.exitCode}): ${r.stderr.toString().trim().slice(0, 400)}`);
+        break;
       }
-      const file = `${CLIPS_DIR}/${plan.name}.mp4`;
-      const poster = `${CLIPS_DIR}/${plan.name}.jpg`;
-      copyFileSync(join(cam, plan.poster.file), join(work, `${plan.name}.jpg`));
-      renameSync(join(work, `${plan.name}.jpg`), join(cam, poster));
+      copyFileSync(join(cam, part[Math.floor(part.length / 2)]!.frame.file), join(work, `${i}.jpg`));
+      renameSync(join(work, `${i}.jpg`), join(cam, poster));
       renameSync(tmp, join(cam, file));
-      clips.push({
-        name: plan.name,
-        kind: plan.kind,
-        file,
-        poster,
-        ...(plan.event !== undefined ? { event: plan.event } : {}),
-        from: plan.frames[0]!.t,
-        to: plan.frames.at(-1)!.t,
-        seconds: Math.round((plan.frames.length / plan.fps + plan.holdS) * 10) / 10,
-        caption: clipCaption(saidAt(said, plan.captionAt), modelName),
-      });
-      log(`clip ${plan.name}: ${plan.frames.length} frames`);
+      doc.parts.push({ file, poster, from: part[0]!.frame.t, to: part.at(-1)!.frame.t, seconds });
+      doc.chapters.push(...line.chapters);
+      doc.captions.push(...line.captions);
+      newPoints.push(...line.points);
+      log(`part ${i}: ${part.length} frames, ${seconds} s`);
+      at += seconds;
     }
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
-  // The timelapse first, then events in time order.
-  clips.sort((a, b) => (a.kind === b.kind ? Date.parse(a.from) - Date.parse(b.from) : a.kind === "timelapse" ? -1 : 1));
-  const doc: ClipsFile = { version: 1, runId, clips };
+  if (doc.parts.length === 0) return null;
+  doc.timemap = [...keptPoints, ...compactTimemap(newPoints)];
   const out = join(cam, CLIPS_FILE);
-  writeFileSync(`${out}.tmp`, `${JSON.stringify(doc, null, 2)}\n`);
+  writeFileSync(`${out}.tmp`, `${JSON.stringify(doc)}\n`);
   renameSync(`${out}.tmp`, out);
+  // Whatever the list no longer names goes: an older layout's clips, a part that would not encode.
+  const named = new Set(doc.parts.flatMap((p) => [p.file, p.poster]));
+  for (const f of readdirSync(clipsDir)) if (!named.has(`${CLIPS_DIR}/${f}`)) rmSync(join(clipsDir, f), { force: true });
   return doc;
 }
 
@@ -233,5 +383,5 @@ if (import.meta.main) {
     process.exit(2);
   }
   const doc = assembleRun(dir, { intervalMs: intervalS * 1000, log: (l) => console.log(l) });
-  console.log(doc === null ? "no frames" : `${doc.clips.length} clip(s) -> ${join(cameraDir(dir), CLIPS_FILE)}`);
+  console.log(doc === null ? "no frames" : `${doc.parts.length} part(s), ${doc.chapters.length} chapter(s) -> ${join(cameraDir(dir), CLIPS_FILE)}`);
 }

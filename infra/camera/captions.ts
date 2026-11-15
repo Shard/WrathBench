@@ -1,8 +1,8 @@
 /**
  * Captions: the model's own words at a moment (docs/ARCHITECTURE.md,
  * "Camera"). A caption is the nearest preceding model text or scratchpad line
- * in the run's trajectory, trimmed to about 120 characters, beside the
- * benchmark's name and the model's display name. Only text the model wrote is
+ * in the run's trajectory, trimmed to about 120 characters; the pages show it
+ * under the video beside the model's display name. Only text the model wrote is
  * read: a `response`'s content and what it wrote to its pad. Tool results,
  * snippet output and events are never read, so no quest, gossip, item or mail
  * text can reach a caption from the game's side.
@@ -121,10 +121,4 @@ export function readRunWords(runDir: string): { model: string | null; said: Said
     /* no trajectory */
   }
   return { model, said };
-}
-
-/** The caption a clip carries in clips.json: the model's words, then whose and where. */
-export function clipCaption(words: string, modelName: string): string {
-  const tag = `${modelName} · ${BENCHMARK_NAME}`;
-  return words === "" ? tag : `“${words}” — ${tag}`;
 }
