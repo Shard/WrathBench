@@ -14,6 +14,14 @@ describe("homeLadderRuns", () => {
   test("a run with no billing verdict is kept, as on the ladder page", () => {
     expect(homeLadderRuns([run("a", "harness-0.5-1-gabc")], true)).toHaveLength(1);
   });
+  test("a preview series is left out: the homepage stays on the established one", () => {
+    const runs = [run("a", "harness-0.5-10-gabc", "paid"), run("b", "harness-1.0-2-gdef", "paid")];
+    expect(homeLadderRuns(runs, true).map((r) => r.runId)).toEqual(["b"]);
+    expect(homeLadderRuns(runs, true, null).map((r) => r.runId)).toEqual(["b"]);
+    expect(homeLadderRuns(runs, true, "1.0").map((r) => r.runId)).toEqual(["a"]);
+    // With nothing else to show, the preview is shown rather than nothing.
+    expect(homeLadderRuns([run("b", "harness-1.0-2-gdef", "paid")], true, "1.0").map((r) => r.runId)).toEqual(["b"]);
+  });
   test("nothing served is nothing shown", () => {
     expect(homeLadderRuns([], true)).toEqual([]);
   });

@@ -169,6 +169,7 @@ describe("the runs page", () => {
       seriesChoice: series,
       setSeriesChoice: setSeries,
       seriesAvailable: () => [],
+      seriesPreview: () => null,
     };
     const mount = document.createElement("div");
     document.body.appendChild(mount);

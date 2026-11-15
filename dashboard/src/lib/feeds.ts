@@ -30,6 +30,12 @@ export interface Feeds {
   setSeriesChoice: (v: SeriesChoice) => void;
   /** The series `/api/info` says have runs, newest first; empty on an older viewer. */
   seriesAvailable: () => string[];
+  /**
+   * The series the operator offers as a preview rather than as latest
+   * (`defaultSeries` in `lib/harness.ts`), or null when none is named or the
+   * viewer predates the field.
+   */
+  seriesPreview: () => string | null;
 }
 
 /**
@@ -86,6 +92,7 @@ export function createFeeds(url: SeriesUrl): Feeds {
     return p;
   }, 60_000);
   const seriesAvailable = (): string[] => (info.latest?.harnessSeries ?? []).map((s) => s.series);
+  const seriesPreview = (): string | null => info.latest?.previewSeries ?? null;
   /*
    * URL first, then what this browser last chose, then `latest`. The URL wins
    * so a shared link means what its sender saw; the remembered choice is a
@@ -122,6 +129,7 @@ export function createFeeds(url: SeriesUrl): Feeds {
     seriesChoice,
     setSeriesChoice,
     seriesAvailable,
+    seriesPreview,
   };
 }
 

@@ -282,6 +282,39 @@ describe("writes", () => {
   });
 });
 
+describe("the site block", () => {
+  test("a preview series is written, read back, rendered after policy, and deleted; the supervisor's parse never sees it", () => {
+    const { store } = tempStore();
+    store.seed(fixtureConfig());
+    const before = parseFleet(store.render());
+    store.put("site", { previewSeries: "1.0" });
+    expect(store.get("site")).toEqual({ previewSeries: "1.0" });
+    const doc = store.render();
+    expect(Object.keys(doc)).toEqual(["_notes", "accounts", "roster", "site", "queue"]);
+    // Display only: the fleet's parsed config is what it was.
+    expect(parseFleet(doc)).toEqual(before);
+    // A shallow patch to null clears the key, as delete clears the row.
+    store.patch("site", { previewSeries: null });
+    expect(store.get("site")).toEqual({ previewSeries: null });
+    store.put("site", undefined);
+    expect(store.get("site")).toBeUndefined();
+    store.close();
+  });
+
+  test("a site block that does not read is refused at write, by name, and nothing is written", () => {
+    const { store } = tempStore();
+    store.seed(fixtureConfig());
+    expect(() => store.put("site", { previewSeries: "1" })).toThrow(/site.previewSeries must be a harness series like "1.0"/);
+    expect(() => store.put("site", { previewSeries: 1.0 })).toThrow(ConfigRejected);
+    expect(() => store.put("site", { previewSeries: "1.0", banner: "hi" })).toThrow(/site: banner is not a key/);
+    expect(() => store.put("site", "1.0")).toThrow(/site must be an object/);
+    expect(store.get("site")).toBeUndefined();
+    // A seed is held to it too.
+    expect(() => store.seed(fixtureConfig({ site: { preview: "1.0" } }), { force: true })).toThrow(/site: preview is not a key/);
+    store.close();
+  });
+});
+
 describe("seeding", () => {
   test("seed is a no-op on a store that already has rows, unless forced", () => {
     const { store } = tempStore();

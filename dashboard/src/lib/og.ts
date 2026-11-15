@@ -143,6 +143,8 @@ export interface OgOptions {
   identity?: boolean;
   /** One name above each frontier entry, on by default. */
   labels?: boolean;
+  /** The operator's preview series (`info.json`'s `previewSeries`), which the homepage's ladder leaves out and so does the card. */
+  preview?: string | null;
 }
 
 /* ------------------------------------------------------------- label rule */
@@ -270,7 +272,7 @@ function puck(cx: number, cy: number, onFront: boolean, href: string | null): st
  */
 export function ogSvgOf(runs: readonly ResultRun[], opts: OgOptions = {}): string {
   const href = opts.logoHref ?? ((): null => null);
-  const points = ladderPoints(homeLadderRuns(runs, true), COST, XP).points;
+  const points = ladderPoints(homeLadderRuns(runs, true, opts.preview), COST, XP).points;
   const layout = ladderChartLayout(points, BOX, COST, XP);
   const front = new Set(paretoFront(points, { x: COST.better, y: XP.better }).map((p) => p.key));
   const placed = layout.placed.map((p) => ({ cx: p.cx, cy: p.cy, point: p.point }));

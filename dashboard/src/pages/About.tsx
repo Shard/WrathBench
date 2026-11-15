@@ -31,7 +31,7 @@ import { For, Show } from "solid-js";
 import { api, type EpisodesResponse } from "../api/client";
 import { displayError } from "../lib/errors";
 import { useFeeds } from "../lib/feeds";
-import { latestSeries } from "../lib/harness";
+import { defaultSeries } from "../lib/harness";
 import { poll } from "../lib/poll";
 import { REPO_URL, bibtex } from "../lib/repo";
 import { runsHref } from "../lib/runs";
@@ -93,7 +93,8 @@ export default function About() {
   // Hardcoding it here meant the status line went stale one bump after anyone
   // last read this file; `—` while the info feed is still in flight.
   const feeds = useFeeds();
-  const series = (): string => latestSeries(feeds.seriesAvailable()) ?? "—";
+  // The default view's series: a preview series is not the status line's.
+  const series = (): string => defaultSeries(feeds.seriesAvailable(), feeds.seriesPreview()) ?? "—";
 
   return (
     <div class="page prose">

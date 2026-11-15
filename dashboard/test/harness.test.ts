@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   compareSeriesDesc,
+  defaultSeries,
   displayedChoice,
   filterBySeries,
   latestSeries,
@@ -137,6 +138,65 @@ describe("seriesOptions", () => {
       { value: "0.4", label: "0.4" },
     ]);
     expect(seriesOptions(["0.5"], "all").map((o) => o.value)).toEqual(["all", "latest", "0.5"]);
+  });
+});
+
+describe("a preview series (the store's site.previewSeries, operator 2026-11-15)", () => {
+  const available = ["1.0", "0.5", "0.4"];
+
+  test("unset is exactly today: latest is the newest", () => {
+    expect(defaultSeries(available)).toBe("1.0");
+    expect(defaultSeries(available, null)).toBe("1.0");
+    expect(resolveSeries("latest", available, null)).toBe("1.0");
+    expect(seriesOptions(available, "latest", null)).toEqual(seriesOptions(available, "latest"));
+  });
+
+  test("set, latest is the newest series other than the preview", () => {
+    expect(defaultSeries(available, "1.0")).toBe("0.5");
+    expect(resolveSeries("latest", available, "1.0")).toBe("0.5");
+    expect(pageSeries("latest", available, [], "1.0")).toBe("0.5");
+    // A preview that is not the newest is still not latest.
+    expect(defaultSeries(available, "0.5")).toBe("1.0");
+  });
+
+  test("the preview is selected by its own number, so ?series=1.0 means 1.0 before and after the flip", () => {
+    expect(seriesParam("1.0")).toBe("1.0");
+    expect(resolveSeries("1.0", available, "1.0")).toBe("1.0");
+    expect(resolveSeries("1.0", available, null)).toBe("1.0");
+    expect(displayedChoice("1.0", available)).toBe("1.0");
+    // all is unchanged.
+    expect(resolveSeries("all", available, "1.0")).toBeNull();
+  });
+
+  test("a series that is not there degrades to the default, not to the preview", () => {
+    expect(resolveSeries("9.9", available, "1.0")).toBe("0.5");
+  });
+
+  test("when the preview is all there is, it is latest too, never an empty page", () => {
+    expect(defaultSeries(["1.0"], "1.0")).toBe("1.0");
+    expect(resolveSeries("latest", ["1.0"], "1.0")).toBe("1.0");
+    expect(defaultSeries([], "1.0")).toBeNull();
+  });
+
+  test("options: all, latest (0.5), preview (1.0), then the other series; the preview's own number is not listed twice", () => {
+    expect(seriesOptions(available, "latest", "1.0")).toEqual([
+      { value: "all", label: "all" },
+      { value: "latest", label: "latest (0.5)" },
+      { value: "1.0", label: "preview (1.0)" },
+      { value: "0.5", label: "0.5" },
+      { value: "0.4", label: "0.4" },
+    ]);
+  });
+
+  test("a preview with no runs yet is not offered: choosing it would show latest", () => {
+    expect(seriesOptions(["0.5", "0.4"], "latest", "1.0")).toEqual([
+      { value: "all", label: "all" },
+      { value: "latest", label: "latest (0.5)" },
+      { value: "0.5", label: "0.5" },
+      { value: "0.4", label: "0.4" },
+    ]);
+    // A link to it before the list arrives still renders it, as the preview.
+    expect(seriesOptions([], "1.0", "1.0").map((o) => o.label)).toEqual(["all", "latest (1.0)", "preview (1.0)"]);
   });
 });
 

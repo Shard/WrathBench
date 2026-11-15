@@ -4,7 +4,8 @@
  * present in the served runs, and — by default — no free run.
  *
  * Both rules are the ladder page's own, reused rather than restated: "latest"
- * is `latestSeries` over the series the runs carry (the shell's selector
+ * is `defaultSeries` over the series the runs carry, so a preview series the
+ * operator has named is not the homepage's either (the shell's selector
  * resolves the same token the same way), and "free" is `ResultRun.billing ===
  * "free"` through `filterRuns` — the runner's own billing verdict
  * (`runner/src/billing.ts`: a `:free` endpoint, local hardware or an openai run
@@ -17,13 +18,13 @@
  */
 
 import type { ResultRun } from "../api/client";
-import { filterBySeries, latestSeries, seriesPresent } from "./harness";
+import { defaultSeries, filterBySeries, seriesPresent } from "./harness";
 import { filterRuns } from "./ladder";
 import { defaultLadderRuns } from "./ladderfilter";
 
 export const HOME_EPISODE = "e90" as const;
 
-export function homeLadderRuns(runs: readonly ResultRun[], excludeFree: boolean): ResultRun[] {
-  const latest = latestSeries(seriesPresent(runs));
+export function homeLadderRuns(runs: readonly ResultRun[], excludeFree: boolean, preview?: string | null): ResultRun[] {
+  const latest = defaultSeries(seriesPresent(runs), preview);
   return defaultLadderRuns(filterRuns(filterBySeries(runs, latest), { excludeFree }));
 }

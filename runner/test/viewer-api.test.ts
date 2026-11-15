@@ -661,6 +661,23 @@ describe("routes", () => {
     expect(b.harnessSeries).toEqual([]);
   });
 
+  test("/api/info names the store's preview series only while site.previewSeries is set", async () => {
+    const runs = fixture();
+    const db = join(runs, "site-config.sqlite");
+    const store = new ConfigStore(db);
+    store.seed({ roster: {}, queue: [] }, { actor: "fixture" });
+    const info = async (): Promise<Record<string, unknown>> =>
+      (await (await createApi({ runsDir: runs, tilesDir: join(runs, "..", "minimap"), moduleUrl: "http://127.0.0.1:1", configDbPath: db })(new Request("http://x/api/info"))).json()) as Record<string, unknown>;
+    // Unset: the body has no such key at all, so a snapshot stays byte-identical.
+    expect("previewSeries" in (await info())).toBe(false);
+    store.put("site", { previewSeries: "1.0" }, { actor: "fixture" });
+    expect((await info()).previewSeries).toBe("1.0");
+    // The flip: deleting the row clears it.
+    store.put("site", undefined, { actor: "fixture" });
+    expect("previewSeries" in (await info())).toBe(false);
+    store.close();
+  });
+
   test("the series census counts per series and orders numerically", () => {
     expect(
       harnessSeriesCensus([
