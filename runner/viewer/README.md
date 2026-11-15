@@ -642,20 +642,26 @@ run").
 
 A camera may follow a run (`docs/DATA-AND-LEGAL.md`; the director that runs
 it writes `camera/` in the run's directory). The viewer reads one file to find
-the clips, `camera/clips.json`, and serves three routes off it (`camera.ts`):
+the run's video, `camera/clips.json` (version 2), and serves three routes off
+it (`camera.ts`):
 
-- `/api/run/<id>/clips`: the clips, timelapse first, each with its moment, its
-  caption, and its `video` and `poster` named by the routes below. A run with
-  no camera, or a list that does not read (a director mid-write, another run's
-  id, not version 1), is a 404 and never a fault, so a publisher pass loses
-  that run's replay and nothing else. An entry that does not read is dropped.
-- `/api/run/<id>/clip/<name>.mp4` and `.jpg`: a clip's video and poster.
+- `/api/run/<id>/clips`: the video's parts in order, each with its moment,
+  length, and `video` and `poster` named by the routes below; the chapters
+  and caption cues on the whole timeline; and the time map between video time
+  and run time (`video-time.ts`, which the pages convert with too). A run
+  with no camera, or a list that does not read (a director mid-write, another
+  run's id, not version 2), is a 404 and never a fault, so a publisher pass
+  loses that run's video and nothing else. The parts end at the first that
+  does not read or whose file is missing, so the timeline has no gaps, and a
+  chapter, cue or time-map point past its end goes with them.
+- `/api/run/<id>/clip/<name>.mp4` and `.jpg`: a part's video and poster.
   Single byte ranges are honoured (206, `Content-Range`, 416 past the end;
   several ranges get the whole file), because a video seeks with them and
   Safari plays nothing without them. Validators are size and mtime, revalidated
-  every time, since a director may re-render a clip under its name.
-- `/api/highlight`: the home page's one clip, the newest event clip of any
-  listed run (the newest timelapse when there is none), on a 15 s window.
+  every time, since the open part is re-encoded under its name.
+- `/api/highlight`: the home page's excerpt, a few seconds into one part
+  around the newest chapter of any listed run (by the run time the time map
+  gives it; a run's last seconds when no run has a chapter), on a 15 s window.
 
 What is served is only what the list names, and only `clips/<file>` with a
 plain file name: no clip route reaches the frames under `camera/frames/`, by
@@ -665,12 +671,13 @@ anywhere on the way (the run, `camera/`, `clips/`, the list, the file) is a
 when its meta.json does: a label, read off the file, and no part of the
 listing or the condition.
 
-In public mode the list crosses `projectClips`: the clip and its moment pass,
-the caption and an event's detail get the strikes model text gets (credential
-shapes masked, the container prefix made relative, the session token struck
-by value at the route), clipped to one line. The media routes serve in public
-mode too, since the snapshot publishes the same files, and a run that is never
-published is a 404 on all three like on every other per-run route.
+In public mode the list crosses `projectClips`: the parts and their moments
+pass, and every caption and chapter detail gets the strikes model text gets
+(credential shapes masked, the container prefix made relative, the session
+token struck by value at the route), clipped to one line. The media routes
+serve in public mode too, since the snapshot publishes the same files, and a
+run that is never published is a 404 on all three like on every other per-run
+route.
 
 ### The live still
 

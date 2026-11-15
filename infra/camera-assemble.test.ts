@@ -93,7 +93,7 @@ describe("the video's plan", () => {
     expect(chapters[0]!.chapter).toEqual({ event: { type: "level", detail: "reached level 6" }, moment: levelAt });
     const held = shots.filter((s) => s.ticks > 1);
     expect(held.map((s) => [at(s), s.ticks])).toEqual([[levelAt, 1 + HOLD_TICKS]]);
-    // Outside the window, the burst's frames are thinned like the timelapse: about one per interval.
+    // Outside the window, the burst's frames are thinned like interval frames: about one per interval.
     const lead = shots.filter((s) => at(s) >= levelAt - 30_000 && at(s) < levelAt - 8_000);
     expect(lead.length).toBeLessThanOrEqual(3);
   });

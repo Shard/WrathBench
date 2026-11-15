@@ -141,7 +141,7 @@ export interface SnapshotArtifact {
 /**
  * A camera clip's video or poster: a file the publisher streams to the bucket
  * as it is, at a key addressed by its own hash (`clipMediaKey`). Never a body
- * this process holds: a timelapse is megabytes.
+ * this process holds: a video part is megabytes.
  */
 export interface MediaArtifact {
   path: string;
@@ -512,7 +512,7 @@ export function createRenderer(
   >();
   /**
    * Each clip file's hash by path, at the size, mtime and inode it was read
-   * at: a timelapse is hashed once per process, not once per pass.
+   * at: a video part is hashed once per process, not once per pass.
    */
   const fileHashes = new Map<string, { size: number; mtimeMs: number; ino: number; hash: string }>();
   const hashFile = async (file: string, st: { size: number; mtimeMs: number; ino: number }): Promise<string> => {
