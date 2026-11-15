@@ -52,3 +52,17 @@ export function bibtex(url: string | null): string {
   if (url !== null) fields.push(`  url    = {${url}}`);
   return `@misc{beukers2026wrathbench,\n${fields.join(",\n")}\n}`;
 }
+
+/**
+ * The agent stack's repository (module, SDK, MCP server), which the homepage's
+ * agent loop links to: `wrath-mcp`, the sibling of the configured repository
+ * under the same owner. Null whenever REPO_URL is, so it appears exactly when
+ * the footer link does and no source spells a host.
+ */
+export function stackUrlFrom(repo: string | null): string | null {
+  if (repo === null) return null;
+  const cut = repo.lastIndexOf("/");
+  return cut > repo.indexOf("//") + 1 ? `${repo.slice(0, cut)}/wrath-mcp` : null;
+}
+
+export const STACK_URL: string | null = stackUrlFrom(REPO_URL);
