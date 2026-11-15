@@ -99,8 +99,13 @@ function handRuns(now: number): string {
 /** Noon UTC, so every instant above is the same UTC day. */
 const NOW = Date.parse("2030-03-14T12:00:00Z");
 
+/**
+ * A parsed fleet on the fixtures' series (their `harnessVersion` is 0.5), not
+ * the checkout's: the series otherwise follows `git describe`, so a tagged
+ * checkout would stop counting the fixture runs.
+ */
 function fleet(over: Record<string, unknown> = {}): FleetConfig {
-  return parseFleet(
+  const cfg = parseFleet(
     {
       accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4"] },
       credentials: { [CRED]: { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, billing: "free", enabled: true } },
@@ -110,6 +115,7 @@ function fleet(over: Record<string, unknown> = {}): FleetConfig {
     },
     { env: {} },
   );
+  return { ...cfg, policy: { ...cfg.policy, series: "0.5" } };
 }
 
 describe("a hand launch with no episode", () => {
