@@ -189,14 +189,4 @@ describe("invisibility", () => {
     expect(r.client.gmSent()).toEqual([]);
     expect(r.director.refusedForGood).toBe(true);
   });
-
-  test("one visible reading while the auras arrive is read again, not a refusal", async () => {
-    const r = rig({ untilMs: 60_000 });
-    r.client.invisible = [false, true];
-    await r.director.live();
-    expect(r.director.refusedForGood).toBe(false);
-    expect(r.client.count("Logout()")).toBe(0);
-    expect(r.client.gmSent()).toEqual([".morph target 11686"]);
-    appearsOnlyWhileInvisible(r.client);
-  });
 });

@@ -55,9 +55,6 @@ export const IDLE_LOG_MS = 30 * 60_000;
 export const STUCK_MS = 5 * 60_000;
 /** Between a left `run()` and the next login attempt. */
 export const RETRY_MS = 15_000;
-/** A visibility read of "visible" is read again this many times, this far apart, before the camera refuses. */
-const VISIBLE_READS = 3;
-const VISIBLE_REREAD_MS = 2_000;
 /**
  * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
@@ -207,22 +204,12 @@ export class Director {
     return true;
   }
 
-  /**
-   * Whether the camera carries GM invisibility; `unknown` when the client
-   * cannot say (not in the world, no answer). A `visible` reading is taken
-   * again before it stands, so an aura list not filled in yet (the first
-   * moments after a reconnect) is not a refusal; nothing is sent meanwhile.
-   */
+  /** Whether the camera carries GM invisibility; `unknown` when the client cannot say (not in the world, no answer). */
   async visibility(): Promise<"invisible" | "visible" | "unknown"> {
-    for (let i = 0; ; i++) {
-      const st = await this.o.client.status();
-      if (st?.in_world !== true) return "unknown";
-      const v = await this.o.client.value(INVISIBLE_LUA);
-      if (v === true) return "invisible";
-      if (v !== false) return "unknown";
-      if (i + 1 >= VISIBLE_READS) return "visible";
-      await this.sleep(VISIBLE_REREAD_MS);
-    }
+    const st = await this.o.client.status();
+    if (st?.in_world !== true) return "unknown";
+    const v = await this.o.client.value(INVISIBLE_LUA);
+    return v === true ? "invisible" : v === false ? "visible" : "unknown";
   }
 
   /** True once the camera has refused to act: it stays logged out for the life of the process. */
