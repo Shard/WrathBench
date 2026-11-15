@@ -62,6 +62,15 @@ describe("the camera sweep", () => {
     expect(again).toEqual([]);
   });
 
+  test("old frames of a run assembled an hour ago stay a day longer: the window runs from the assembly", () => {
+    const runs = tmp("camera-sweep-recent-assembly-");
+    const dir = run(runs, "r-late", { ended: true, framesAgeMs: 4 * DAY });
+    writeFileSync(join(dir, "camera", "clips.json"), "{}");
+    utimesSync(join(dir, "camera", "clips.json"), (NOW - 3_600_000) / 1000, (NOW - 3_600_000) / 1000);
+    expect(sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: () => null }).prunedFrames).toBe(0);
+    expect(sweepCameraRuns(runs, NOW + DAY, { intervalMs: 10_000, assemble: () => null }).prunedFrames).toBe(2);
+  });
+
   test("a paused run is assembled but never labelled: it may be resumed at any moment", () => {
     const runs = tmp("camera-sweep-paused-");
     const dir = run(runs, "r-paused", {});
@@ -85,7 +94,7 @@ describe("the camera sweep", () => {
     expect(JSON.parse(readFileSync(join(live, "meta.json"), "utf8")).camera).toBeUndefined();
   });
 
-  test("prunes frames past three days once the clips are up to date, and never assembles a pruned run again", () => {
+  test("an ended run's frames go a day after the assembly that covers them; never assembled again", () => {
     const runs = tmp("camera-sweep-prune-");
     const old = run(runs, "r-old", { ended: true, framesAgeMs: 4 * DAY, clipsAfterIndex: true });
     run(runs, "r-recent", { ended: true, framesAgeMs: DAY, clipsAfterIndex: true });

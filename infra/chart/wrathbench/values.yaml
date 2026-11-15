@@ -534,6 +534,10 @@ camera:
   maxConcurrent: 2
   # Seconds between the timelapse's frames. Events keep a burst whatever this is.
   intervalSeconds: 10
+  # Hours still frames are kept after the assembly that covers them; the clips
+  # are kept. The shared world's director prunes them (infra/camera/sweep.ts),
+  # so its camera must be on for any frame to be pruned.
+  frameKeepHours: 24
   # gpu: Vulkan on the node's /dev/dri, through the device plugin. software:
   # Mesa's lavapipe on the CPU, no claim, several cores per camera.
   renderer: gpu

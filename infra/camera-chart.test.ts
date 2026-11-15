@@ -82,6 +82,7 @@ describe.skipIf(helm === null)("the chart's camera block", () => {
         expect(dir.image).toBe("harbor.example/wrathbench/wrathbench-runner:harness-0.5-1-gabcdef0");
         expect(dir.command).toEqual(["/usr/bin/tini", "--", "bun", "infra/camera/director.ts"]);
         expect(envOf(dir)["CAMERA_INTERVAL_SECONDS"]?.value).toBe("10");
+        expect(envOf(dir)["CAMERA_FRAME_KEEP_HOURS"]?.value).toBe("24");
         expect(dir.volumeMounts?.find((m) => m.mountPath === "/wrathbench/data/runs")?.subPath).toBe("runs");
       }
       // The shared world's realm and world are its own; a world's are the launcher's to stamp.

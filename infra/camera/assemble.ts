@@ -10,7 +10,7 @@
  * when a run's frames are newer than its clips. It is idempotent: every clip
  * whose frames are still on disk is rebuilt, and an event clip whose frames
  * have been pruned is kept as it was. The timelapse covers the frames on
- * disk, so for a run longer than the frames' window, its last three days.
+ * disk, so for a long live run, about its last day.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";

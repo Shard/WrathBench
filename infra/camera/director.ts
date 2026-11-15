@@ -16,7 +16,7 @@
  *   bun infra/camera/director.ts [--run <id>] [--create-only] [--forward-world host:port [--forward-only]]
  *
  * Environment: CAMERA_WORLD (a world id, or `shared`), CAMERA_INTERVAL_SECONDS
- * (10), CAMERA_PORT (17980), CAMERA_RUN_DIR (/run/camera: the client's token),
+ * (10), CAMERA_FRAME_KEEP_HOURS (24), CAMERA_PORT (17980), CAMERA_RUN_DIR (/run/camera: the client's token),
  * CAMERA_RUNS_DIR (data/runs), CAMERA_RACE (1, Human).
  */
 
@@ -371,7 +371,7 @@ if (import.meta.main) {
     const sweep = () => {
       if (sweeping) return;
       sweeping = true;
-      const p = Bun.spawn(["bun", join(import.meta.dir, "sweep.ts"), runsDir, "--interval-seconds", String(intervalS)], { stdout: "inherit", stderr: "inherit" });
+      const p = Bun.spawn(["bun", join(import.meta.dir, "sweep.ts"), runsDir, "--interval-seconds", String(intervalS), "--keep-hours", env["CAMERA_FRAME_KEEP_HOURS"] ?? "24"], { stdout: "inherit", stderr: "inherit" });
       void p.exited.finally(() => (sweeping = false));
     };
     setTimeout(sweep, 60_000);

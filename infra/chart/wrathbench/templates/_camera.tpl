@@ -83,6 +83,8 @@ Called with (dict "ctx" . "world" <bool>).
       value: {{ if $world }}""{{ else }}"shared"{{ end }}
     - name: CAMERA_INTERVAL_SECONDS
       value: {{ $c.intervalSeconds | quote }}
+    - name: CAMERA_FRAME_KEEP_HOURS
+      value: {{ $c.frameKeepHours | quote }}
     - name: CAMERA_RUN_DIR
       value: /run/camera
     - name: CAMERA_PORT
