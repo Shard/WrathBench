@@ -130,8 +130,10 @@ never runs beside the fleet pod's Secret and config store.
 
 With `worlds` on, the same ConfigMap carries `world.json`, the pod template a
 world per eval is created from (templates/worlds.yaml), and the launcher's
-settings `maxWorlds`. The Role already covers those pods, which are pods like
-any run pod.
+settings `maxWorlds`. With `camera` on, it carries `camera.json`, the camera's
+own pod template (templates/_camera.tpl), which the fleet (the shared world's
+camera) and the world launcher (a world's) create from. The Role already
+covers those pods, which are pods like any run pod.
 */}}
 apiVersion: v1
 kind: ServiceAccount
@@ -186,6 +188,11 @@ data:
   {{- if include "wrathbench.on.worlds" $ }}
   world.json: |
     {{- include "wrathbench.worldPodTemplate" . | fromYaml | toPrettyJson | nindent 4 }}
+  {{- end }}
+  {{- if .Values.camera.enabled }}
+  {{- /* The camera's pod (templates/_camera.tpl), which the fleet and the world launcher create. */}}
+  camera.json: |
+    {{- include "wrathbench.cameraPodTemplate" . | fromYaml | toPrettyJson | nindent 4 }}
   {{- end }}
   {{- $launcher := dict "allowedImages" (default (list (printf "%s/%s" (include "wrathbench.registry" .) .Values.image.names.runner)) .Values.runPods.allowedImages) "imagePullSecrets" (default (list) .Values.runPods.imagePullSecrets) }}
   {{- with .Values.runPods.maxPods }}{{ $_ := set $launcher "maxPods" (int .) }}{{ end }}

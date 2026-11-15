@@ -2959,9 +2959,12 @@ the allowlist are read when the worldserver starts:
 
 The camera follows a run's character and keeps frames and clips under the
 run's `camera/` (`docs/ARCHITECTURE.md`, "Camera"). It ships dark behind the
-chart's `camera` block. Turning it on or off changes the shared worldserver's
-pod (two sidecars, and the GM settings below), so it is a deploy window like
-any worldserver change ("Updating the live fleet").
+chart's `camera` block. A camera is a pod of its own per filmed world
+(`<release>-camera-<world>`), never a container in a world's pod: it can never
+hold the shared worldserver or an eval world short of Ready, delay a world's
+deletion, or stall a release's rollout. Turning the block on or off changes
+the worldservers' env (the two GM settings below), so it is a deploy window
+like any worldserver change ("Updating the live fleet").
 
 **Enable.** Four things first, then the block:
 
@@ -2992,27 +2995,36 @@ camera:
   image: <registry>/wrathbench-camera:<tag>
   renderer: gpu
   maxConcurrent: 2
+  frameKeepHours: 24
   clientData:
     claimName: <the PVC>
 ```
 
-With the block on, every worldserver gets `GM.LoginState = 1` and
-`GM.Visible = 0`: a GM enters the world in GM mode and invisible. The harness
-accounts are not GMs and are untouched; the operator's `SPECTATOR` now enters
-invisible too (`.gm visible on` shows it). The shared world's camera follows
-the newest live freeplay character; a world per eval gets a camera when it
-boots and a slot is free (the shared world's counts as one), and keeps it to
-its verdict. The runner labels each filmed run `camera: true` in meta.json
-on its next rewrite (a pause or the verdict). A world per eval's pod is gone
-at the verdict with no grace, so the shared world's director sweeps the runs
-tree every ten minutes (`infra/camera/sweep.ts`): it assembles the clips of
-any filmed run with no live owner whose frames are newer than its clips, and
-a live run's twice a day; and it deletes still frames `camera.frameKeepHours`
-(24) after the assembly that covers them, live run or not (a live run's frames
-that long after they were taken). Clips are kept, and an event clip outlives
-its frames; a run's timelapse covers the frames still on disk, so a long live
-run's covers about its last day. The shared world's camera must be on for
-eval worlds' clips to be made, and for any frame to be pruned.
+**What runs.** With the block on:
+
+- every worldserver gets `GM.LoginState = 1` and `GM.Visible = 0`: a GM
+  enters the world in GM mode and invisible. The harness accounts are not GMs
+  and are untouched; the operator's `SPECTATOR` now enters invisible too
+  (`.gm visible on` shows it);
+- the fleet keeps the shared world's camera, `<release>-camera-shared`, owned
+  by the fleet pod, and puts it back within a minute if it goes. It follows
+  the newest live freeplay character;
+- the world launcher starts a world per eval's camera, `<release>-camera-<id>`,
+  once the world answers ready and a slot is free: `maxConcurrent` cameras in
+  all, one slot always held for the shared world's, so `maxConcurrent: 1` is
+  the shared camera alone. It is owned by the world's pod and goes after it;
+  its director keeps the frames its ring holds in its 30 s grace. A camera
+  the quota or the node refuses is skipped and the world is unaffected;
+- the runner labels each filmed run `camera: true` in meta.json on its next
+  rewrite (a pause or the verdict); a camera never writes a live run's
+  meta.json;
+- a CronJob, `<release>-camera-sweep`, runs `infra/camera/sweep.ts` every ten
+  minutes whatever camera is up: it assembles the clips of any filmed run with
+  no live owner whose frames are newer than its clips, and a live run's twice
+  a day; and it deletes still frames `camera.frameKeepHours` (24) after the
+  assembly that covers them (a live run's that long after they were taken).
+  Clips are kept, and an event clip outlives its frames; a long live run's
+  timelapse covers about its last day.
 
 **Disk.** Frames go on the data PVC beside the runs. A camera takes about
 1.3 GB a day of interval frames, and up to about 2.5 GB in a day full of
@@ -3021,20 +3033,22 @@ live run's clips rebuilt every twelve hours, that is at most about 2.5 to
 4.5 GB a camera on disk at once, plus its clips (a few MB an hour). Size
 `maxConcurrent` against the PVC's free space.
 
-**Quota.** On, the shared worldserver's pod requests about 3.25 GiB more
-memory and 0.3 more CPU (`gpu`), and a world with a camera the same; the
-worldserver's Deployment is `Recreate`, so if eval worlds hold the rest of the
-namespace's requests at release time its new pod waits.
+**Quota.** Each camera pod requests about 3.25 GiB of memory and 0.3 CPU
+(`gpu`); the sweep's pod 256 MiB while it runs. A camera that does not fit is
+not started, and the shared one is retried every minute.
 
-**Disable.** `camera.enabled: false` and a release. Frames and clips already
-written stay with their runs; the frames age out with the logs.
+**Disable.** `camera.enabled: false` and a release. The fleet then starts no
+camera; delete any left with `kubectl -n <ns> delete pod -l
+app.kubernetes.io/component=camera`. Frames and clips already written stay
+with their runs.
 
-**Troubleshoot.** The two containers are `camera` (the client; its log is also
-its stdout) and `camera-director`:
+**Troubleshoot.** A camera pod's two containers are `camera` (the client) and
+`camera-director`:
 
 ```
-kubectl -n <ns> logs deploy/<release>-worldserver -c camera-director --tail=50
-kubectl -n <ns> logs <world pod> -c camera --tail=50
+kubectl -n <ns> get pods -l app.kubernetes.io/component=camera
+kubectl -n <ns> logs <release>-camera-shared -c camera-director --tail=50
+kubectl -n <ns> logs <release>-camera-<id> -c camera --tail=50
 ```
 
 - `REFUSED: the camera entered the world without GM invisibility`: the world
@@ -3043,22 +3057,19 @@ kubectl -n <ns> logs <world pod> -c camera --tail=50
   restarts; nothing else was sent. Fix the world first.
 - `skip: <name> not in view`: the subject is not streamed to the camera,
   usually a loading screen after a map change; it rejoins on its own.
-- The `camera` container stuck in `Pending`: no free `devic.es/dri` claim, or
-  the quota. A world per eval never waits on it: without a slot the launcher
-  leaves the sidecars out, and a camera container's state never decides a
-  world's boot.
+- A camera pod `Pending`: no free `devic.es/dri` claim. No world waits on it.
 - No adapter: the client's log names the Vulkan device it picked; `llvmpipe`
   on a `gpu` camera means the device was not visible in the container.
 - `skip: a blank frame`: the client answered with a flat image (seen once
   on the Intel GPU, in a client's first minutes in the world). Blank frames
   are never kept; if it persists, switch `renderer` to `software`.
-- A world per eval's realm row must exist with `flag` 0, or the client is
-  handed another realm and the world refuses it (`login: refused (World(39),
-  0x27)` in the client's log).
-- No clips: assembly runs when the camera leaves its subject, and in the
-  sweep. By hand, in the runner pod:
-  `bun infra/camera/assemble.ts data/runs/<run-id>` (idempotent), or the
-  whole sweep: `bun infra/camera/sweep.ts data/runs`.
+- `login: refused (World(39), 0x27)` in the client's log: the world's realm
+  row is missing or flagged offline, so the client was handed another realm.
+  A world's row is the launcher's; a release no longer prunes it.
+- No clips: the sweep makes them within ten minutes of a run's end
+  (`kubectl -n <ns> logs job/…` of the newest `<release>-camera-sweep` job).
+  By hand, in the runner pod: `bun infra/camera/assemble.ts
+  data/runs/<run-id>` (idempotent), or `bun infra/camera/sweep.ts data/runs`.
 - Is the camera ever in an agent's record? Search the run's trajectory and the
   module audit log of its session for the camera character's name and guid
   (counts only); expect zero. The session record is not a test: its writer

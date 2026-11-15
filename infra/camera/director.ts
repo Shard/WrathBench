@@ -16,7 +16,7 @@
  *   bun infra/camera/director.ts [--run <id>] [--create-only] [--forward-world host:port [--forward-only]]
  *
  * Environment: CAMERA_WORLD (a world id, or `shared`), CAMERA_INTERVAL_SECONDS
- * (10), CAMERA_FRAME_KEEP_HOURS (24), CAMERA_PORT (17980), CAMERA_RUN_DIR (/run/camera: the client's token),
+ * (10), CAMERA_PORT (17980), CAMERA_RUN_DIR (/run/camera: the client's token),
  * CAMERA_RUNS_DIR (data/runs), CAMERA_RACE (1, Human).
  */
 
@@ -41,7 +41,6 @@ const APPEAR_COOLDOWN_MS = 3_000;
 /** A cross-map `.appear` sent during the loading screen is lost: wait it out before trying again. */
 const LOADING_WAIT_MS = 12_000;
 const SUBJECT_CHECK_MS = 10_000;
-const SWEEP_EVERY_MS = 10 * 60_000;
 /**
  * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
@@ -362,21 +361,6 @@ if (import.meta.main) {
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => (stopping = true));
   const world = env["CAMERA_WORLD"] ?? "shared";
   const runsDir = env["CAMERA_RUNS_DIR"] ?? join("data", "runs");
-  // The shared world's director also sweeps the runs no camera follows any
-  // more (sweep.ts): a world per eval's pod is gone at the verdict, with no
-  // grace, before its own director can assemble. A child process, so the
-  // follow loop never waits on an encode.
-  if (world === "shared" && fwd === undefined) {
-    let sweeping = false;
-    const sweep = () => {
-      if (sweeping) return;
-      sweeping = true;
-      const p = Bun.spawn(["bun", join(import.meta.dir, "sweep.ts"), runsDir, "--interval-seconds", String(intervalS), "--keep-hours", env["CAMERA_FRAME_KEEP_HOURS"] ?? "24"], { stdout: "inherit", stderr: "inherit" });
-      void p.exited.finally(() => (sweeping = false));
-    };
-    setTimeout(sweep, 60_000);
-    setInterval(sweep, SWEEP_EVERY_MS);
-  }
   const director = new Director({
     client: new CameraClient(`http://127.0.0.1:${env["CAMERA_PORT"] ?? "17980"}`, token),
     runsDir,
@@ -388,7 +372,7 @@ if (import.meta.main) {
     stopping: () => stopping,
     log,
   });
-  // A world pod never restarts a container: the director outlives its own failures.
+  // The director outlives its own failures rather than restart the client's pod.
   for (;;) {
     try {
       await director.run();
@@ -400,7 +384,7 @@ if (import.meta.main) {
     if (director.refusedForGood) await new Promise(() => {});
     await Bun.sleep(30_000);
   }
-  if (fwd === undefined) process.exit(0);
+  if (stopping || fwd === undefined) process.exit(0);
   // The forwarder keeps a hand-run camera's world connection; stop with the pod.
   await new Promise(() => {});
 }

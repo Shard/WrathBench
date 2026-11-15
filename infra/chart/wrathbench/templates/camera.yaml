@@ -1,0 +1,70 @@
+{{- /*
+The camera's sweep (infra/camera/sweep.ts; docs/RUNBOOK.md, "Camera"): every
+ten minutes, over the runs tree, it assembles the clips of filmed runs no
+camera follows any more (a world's camera goes with its world at the
+verdict), rebuilds a live run's twice a day, and prunes still frames
+`camera.frameKeepHours` after the assembly that covers them. A CronJob of its
+own, so no camera has to be up for clips to be made or frames pruned. The
+runner image, which carries ffmpeg; the runs subPath only.
+
+The camera pods themselves are not here: the fleet creates them from the
+`camera.json` template (templates/_camera.tpl).
+*/ -}}
+{{- if .Values.camera.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-camera-sweep
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: camera-sweep
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3000
+      template:
+        metadata:
+          labels:
+            {{- include "wrathbench.podLabels" . | nindent 12 }}
+            app.kubernetes.io/component: camera-sweep
+        spec:
+          restartPolicy: Never
+          {{- with .Values.priorityClassName }}
+          priorityClassName: {{ . }}
+          {{- end }}
+          nodeSelector: {{ toYaml .Values.nodeSelector | nindent 12 }}
+          securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 12 }}
+          {{- include "wrathbench.imagePullSecrets" . | nindent 10 }}
+          automountServiceAccountToken: false
+          containers:
+            - name: camera-sweep
+              image: {{ include "wrathbench.image.runner" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 16 }}
+              workingDir: /wrathbench
+              command:
+                - nice
+                - "-n"
+                - "19"
+                - bun
+                - infra/camera/sweep.ts
+                - /wrathbench/data/runs
+                - --interval-seconds
+                - {{ .Values.camera.intervalSeconds | quote }}
+                - --keep-hours
+                - {{ .Values.camera.frameKeepHours | quote }}
+              resources: {{ toYaml .Values.camera.sweep.resources | nindent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: /wrathbench/data/runs
+                  subPath: runs
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "wrathbench.fullname" . }}-data
+{{- end }}
