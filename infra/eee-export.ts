@@ -23,10 +23,11 @@
  * already crossed the public projection, so nothing the site withholds can
  * reach a record. Freeplay and probing have no scored rows and are not read.
  *
- * **The derivation is the ladder page's own.** `scored`, `ladderRows` and the
- * rung rules come from `dashboard/src/lib/ladder.ts`, called once per cell, so
- * a record's highest rung, `(level, xp)` pair and money are the numbers the
- * site prints. A cell is one model under one condition (series, episode,
+ * **The derivation is the ladder page's own.** `scored` and `ladderRows` come
+ * from `dashboard/src/lib/ladder.ts`, called once per cell, so a record's
+ * `(level, xp)` pair and money are the numbers the site prints. The milestone
+ * rungs are freeplay achievements and on no scored ladder (operator,
+ * 2026-11-15), so no record carries one. A cell is one model under one condition (series, episode,
  * harness, effort, compaction window, loop, `yield`, pinned or unpinned
  * routing, wiki; `runner/viewer/condition.ts`), so a cell never mixes what the
  * methodology keeps apart. The ladder page shows each model's newest condition
@@ -42,8 +43,8 @@
  * **What a record carries.** The series and every exact harness version in
  * the cell, the harness label, model and effort, whether the model's weights
  * are published (`model_availability`, from the model catalogue's `weightsOf`), `n`,
- * the levels each counted run reached, and per-rung counts. Never game text: rung numbers, not rung
- * titles; no character, race, class, zone or map. Every record is scanned
+ * the levels each counted run reached. Never game text: no character, race,
+ * class, zone or map. Every record is scanned
  * before anything is written, with the publisher's own scans, and a finding
  * writes nothing.
  */
@@ -54,7 +55,7 @@ import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
 import { EPISODES, EPISODE_IDS, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
-import { BOARD_RUNG, conditionOfRun, ladderRows, RUNGS, scored, type LadderRow } from "../dashboard/src/lib/ladder";
+import { conditionOfRun, ladderRows, scored, type LadderRow } from "../dashboard/src/lib/ladder";
 import { seriesOf } from "../dashboard/src/lib/harness";
 import { familyOf, weightsOf, type Weights } from "./model-catalogue";
 import { httpSource, scanBody, type AcceptSource } from "./publish-accept";
@@ -67,8 +68,6 @@ export const EEE_SCHEMA_VERSION = "0.3.0";
 export const COLLECTION = "wrathbench";
 const SITE_URL = "https://wrathbench.shard.page";
 const REPO_URL = "https://github.com/Shard/WrathBench";
-/** The milestone ladder's top rung; `highest_rung` lies in [0, this]. */
-const TOP_RUNG = Math.max(...RUNGS.map((r) => r.n));
 /** The game's level cap in 3.3.5a; `best_level` lies in [1, this]. */
 const LEVEL_CAP = 80;
 
@@ -77,8 +76,8 @@ export const SCORED_EPISODES: readonly EpisodeId[] = EPISODE_IDS.filter((id) => 
 
 /** How the ladder orders rows, stated on every record because EEE has no field for a non-scalar order. */
 export const LADDER_ORDER =
-  "highest_rung desc, then the (best_level, xp within that level) pair lexicographically desc, then best_money desc; " +
-  "three separate numbers and no aggregate score";
+  "the (best_level, xp within that level) pair lexicographically desc, then best_money desc; " +
+  "separate numbers and no aggregate score";
 
 /* ------------------------------------------------------------- the records --- */
 
@@ -345,29 +344,6 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
   });
 
   const results: EvaluationResult[] = [];
-  const rungDetails: Details = { ladder_position: "1 of 3 (primary key)" };
-  for (const c of row.cells) {
-    rungDetails[`rung_${c.n}`] = c.status === "not-instrumented" ? "not instrumented" : `${c.reached} of ${c.askable} askable runs`;
-  }
-  results.push(
-    result(
-      "highest_rung",
-      {
-        evaluation_description:
-          `Highest milestone rung (0-${TOP_RUNG}) any counted run reached; 0 is none. Rung ${BOARD_RUNG} ` +
-          "is read from the dungeon board and never counts here, so a rung above it does not claim it. A maximum over the cell's runs. Ladder order: " +
-          LADDER_ORDER,
-        metric_name: "Highest rung reached",
-        metric_kind: "ordinal",
-        metric_unit: "rung",
-        min_score: 0,
-        max_score: TOP_RUNG,
-      },
-      row.highest,
-      row.runs,
-      rungDetails,
-    ),
-  );
   if (row.bestLevel !== null && row.levelRange !== null) {
     results.push(
       result(
@@ -375,8 +351,9 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
         {
           evaluation_description:
             "Highest character level any counted run reached; ties within a level are broken by the xp within it " +
-            "(details.xp_within_level, same run), which is the ladder's second key. Levels are integers the game " +
-            "awarded: the median is an observed level (the lower middle), never a mean.",
+            "(details.xp_within_level, same run). Together the ladder's first key. Levels are integers the game " +
+            "awarded: the median is an observed level (the lower middle), never a mean. Ladder order: " +
+            LADDER_ORDER,
           metric_name: "Best level reached",
           metric_kind: "level",
           metric_unit: "level",
@@ -386,7 +363,7 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
         row.bestLevel,
         row.levelRange.n,
         {
-          ladder_position: "2 of 3",
+          ladder_position: "1 of 2 (primary key)",
           ...(row.bestXp !== null ? { xp_within_level: String(row.bestXp) } : {}),
           level_min: String(row.levelRange.min),
           level_median: String(row.levelRange.median),
@@ -403,7 +380,7 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
         {
           evaluation_description:
             "The most copper any counted run ended holding (100 copper = 1 silver, 10000 = 1 gold), maxed " +
-            "independently of best_level, so usually another run. The ladder's third key.",
+            "independently of best_level, so usually another run. The ladder's second key.",
           metric_name: "Best money held",
           metric_kind: "currency",
           metric_unit: "copper",
@@ -412,7 +389,7 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
         },
         row.bestMoney,
         runs.filter((r) => r.money !== null).length,
-        { ladder_position: "3 of 3" },
+        { ladder_position: "2 of 2" },
       ),
     );
   }
@@ -532,6 +509,11 @@ export function eeeFromLadder(episode: EpisodeId, body: Pick<ResultsResponse, "r
       continue;
     }
     const record = cellRecord(key, runs, row, model, body.now);
+    // A cell whose runs recorded neither a level nor money has no number to state.
+    if (record.evaluation_results.length === 0) {
+      skip("no level or money recorded", runs.length);
+      continue;
+    }
     const path = datastorePath(model.id, uuidOf(record.evaluation_id));
     if (path === null) {
       skip(`the model id ${model.id} is not a portable datastore path`, runs.length);

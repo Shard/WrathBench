@@ -1187,11 +1187,13 @@ export interface AreaMark {
   kind: "zone" | "area";
   to: number;
   from: number | null;
+  /** When the record was written; absent on a mark built without one. */
+  ts?: number;
 }
 
 /**
  * Zone and area ids for 3.3.5a capitals — the two factions' five each, plus the
- * two neutral hubs. Zone ids, so a `kind: "zone"` milestone answers rung 4.
+ * two neutral hubs. Zone ids, so a `kind: "zone"` milestone answers freeplay milestone 4.
  */
 export const CAPITAL_ZONES = new Set([
   1519, // Stormwind
@@ -1259,17 +1261,8 @@ export function areaFactsFrom(marks: readonly AreaMark[]): AreaFacts | null {
   const startArea = areas.length > 0 ? areas[0]!.to : null;
   const distinct = new Set(areas.map((m) => m.to));
   const capital = zones.find((m) => CAPITAL_ZONES.has(m.to));
-  let leftStartArea: boolean | null = null;
-  if (startArea !== null) {
-    const region = tutorialRegionOf(startArea);
-    leftStartArea = false;
-    for (let i = 1; i < areas.length; i++) {
-      if (!region.has(areas[i - 1]!.to) && !region.has(areas[i]!.to)) {
-        leftStartArea = true;
-        break;
-      }
-    }
-  }
+  const exit = sustainedExitOf(areas);
+  const leftStartArea: boolean | null = startArea === null ? null : exit !== null;
   return {
     startArea,
     distinctAreas: distinct.size,
@@ -1280,6 +1273,41 @@ export function areaFactsFrom(marks: readonly AreaMark[]): AreaFacts | null {
   };
 }
 
+/**
+ * The area mark that completes the first sustained exit from the start
+ * area's tutorial region (`areaFactsFrom`'s rule): the second of the first
+ * pair of consecutive area marks both outside it. Null when there is none.
+ */
+function sustainedExitOf(areas: readonly AreaMark[]): AreaMark | null {
+  if (areas.length === 0) return null;
+  const region = tutorialRegionOf(areas[0]!.to);
+  for (let i = 1; i < areas.length; i++) {
+    if (!region.has(areas[i - 1]!.to) && !region.has(areas[i]!.to)) return areas[i]!;
+  }
+  return null;
+}
+
+/**
+ * When a run first showed what the freeplay milestones read beyond its level
+ * (`dashboard/src/lib/ladder.ts`, `RUNGS`), as record instants: the mark that
+ * completes the first sustained exit from the start region, the first entry
+ * into a capital zone, and the first takeoff. Null in a field when no record
+ * shows it, or the record carried no instant. First observation, the same
+ * lower bound `AreaFacts` and `TaxiFacts` are.
+ */
+export interface MilestoneInstants {
+  leftStartArea: number | null;
+  capitalZone: number | null;
+  flight: number | null;
+}
+
+/** The area half of `MilestoneInstants`, from the same marks `areaFactsFrom` reads. */
+export function areaInstantsFrom(marks: readonly AreaMark[]): Pick<MilestoneInstants, "leftStartArea" | "capitalZone"> {
+  const exit = sustainedExitOf(marks.filter((m) => m.kind === "area"));
+  const capital = marks.find((m) => m.kind === "zone" && CAPITAL_ZONES.has(m.to));
+  return { leftStartArea: exit?.ts ?? null, capitalZone: capital?.ts ?? null };
+}
+
 /** Read one trajectory record as an `AreaMark`, or null when it is not one. */
 export function areaMarkOf(rec: Record<string, unknown>): AreaMark | null {
   const kind = rec["kind"];
@@ -1287,7 +1315,8 @@ export function areaMarkOf(rec: Record<string, unknown>): AreaMark | null {
   const to = (rec["to"] as { id?: unknown } | undefined)?.id;
   if (typeof to !== "number") return null;
   const from = (rec["from"] as { id?: unknown } | undefined)?.id;
-  return { kind, to, from: typeof from === "number" ? from : null };
+  const ts = rec["ts"];
+  return { kind, to, from: typeof from === "number" ? from : null, ...(typeof ts === "number" ? { ts } : {}) };
 }
 
 /* ------------------------------------------- achievement and taxi milestones */
@@ -1870,8 +1899,10 @@ export function reflectionWindowsFrom(marks: readonly ReflectMark[]): Reflection
  *    rides on the same revision.
  * 3: a v1 run's milestones are its session record's `events` rows, each with
  *    the turn in flight joined by time, and its trajectory's are not read.
+ * 4: the instants the freeplay milestones are placed at (`milestones`): the
+ *    sustained exit from the start region, the first capital, the first takeoff.
  */
-export const RUN_TOTALS_DERIVATION = 3;
+export const RUN_TOTALS_DERIVATION = 4;
 
 export interface RunTotals {
   tokens: TokenTotals;
@@ -1917,6 +1948,12 @@ export interface RunTotals {
    */
   achievements: AchievementFacts | null;
   taxi: TaxiFacts | null;
+  /**
+   * When the freeplay milestones' area and flight halves were first shown, as
+   * record instants (`MilestoneInstants`). Optional: a total the collector
+   * stored before derivation 4 has none, and reads as unplaced.
+   */
+  milestones?: MilestoneInstants;
   /**
    * The level timeline and the deaths from the same pass; null when the run
    * wrote no such record — "not recorded", never zero. See `LevelUpFacts` /
@@ -2007,6 +2044,8 @@ export class RunTotalsScanner {
   private readonly deathMarks: DeathMark[] = [];
   private readonly achievementMarks: AchievementMark[] = [];
   private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
+  /** The first takeoff's instant, for `MilestoneInstants.flight`. */
+  private firstFlightTs: number | null = null;
   private readonly spellMarks: SpellMark[] = [];
   private readonly talentMarks: TalentSpendMark[] = [];
   private readonly tradeMarks: TradeMarkView[] = [];
@@ -2149,6 +2188,7 @@ export class RunTotalsScanner {
     if (ach !== null) this.achievementMarks.push(ach);
     const taxi = taxiMarkOf(rec);
     if (taxi !== null) this.taxiMarks.push(taxi);
+    if (taxi === "taxi" && this.firstFlightTs === null && typeof rec["ts"] === "number") this.firstFlightTs = rec["ts"];
     const lvl = levelUpMarkOf(rec);
     if (lvl !== null) this.levelUpMarks.push(lvl);
     const death = deathMarkOf(rec);
@@ -2271,6 +2311,7 @@ export class RunTotalsScanner {
       areas: areaFactsFrom(this.areaMarks),
       achievements: achievementFactsFrom(this.achievementMarks),
       taxi: taxiFactsFrom(this.taxiMarks, this.achievementMarks.length > 0),
+      milestones: { ...areaInstantsFrom(this.areaMarks), flight: this.firstFlightTs },
       leveling: levelUpFactsFrom(this.levelUpMarks),
       deaths: deathFactsFrom(this.deathMarks, this.levelUpMarks.length > 0),
       spells: spellFactsFrom(this.spellMarks),

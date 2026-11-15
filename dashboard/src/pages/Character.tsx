@@ -34,7 +34,7 @@ import { characterIsLive, characterSessionSeries, sessionCount } from "../lib/ch
 import { displayError } from "../lib/errors";
 import { useFeeds } from "../lib/feeds";
 import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
-import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
+import { RUNGS, characterMilestones, characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { linkable } from "../lib/nav";
 import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
@@ -139,6 +139,16 @@ export default function Character() {
     })),
   );
 
+  /**
+   * The milestone rungs this character has reached and when, for a freeplay
+   * character only: they are freeplay's achievements (operator, 2026-11-15),
+   * and a scored run is read on its ladder instead.
+   */
+  const milestones = createMemo(() => {
+    const st = view();
+    return st === undefined || st.episode !== "freeplay" ? null : characterMilestones(st.runs, st.truncated);
+  });
+
   /** Every session the character has played, across its attempts. */
   const sessions = (): number => sessionCount(view()?.runs ?? []);
 
@@ -242,6 +252,51 @@ export default function Character() {
                 and no "this attempt" footnote is printed. */}
             <h2 class="section">the character, across {st().attempts} {st().attempts === 1 ? "attempt" : "attempts"}</h2>
             <CharacterTotalsCard character={st()} />
+
+            <Show when={milestones()}>
+              {(ms) => (
+                <>
+                  <h2 class="section">milestones</h2>
+                  <div class="scroller">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th class="right">#</th>
+                          <th>milestone</th>
+                          <th class="right" title="cumulative active playtime across the character's attempts">reached at</th>
+                          <th>run</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <For each={ms()}>
+                          {(m) => {
+                            const rung = RUNGS.find((r) => r.n === m.n)!;
+                            return (
+                              <tr>
+                                <td class="right mono">{m.n}</td>
+                                <td title={rung.rule}>{rung.title}</td>
+                                <td class={m.status === "reached" ? "right mono ok" : "right dim"}>
+                                  {m.status === "reached" ? (m.playtimeMs === null ? "yes" : fmtDuration(m.playtimeMs)) : m.status.replace("-", " ")}
+                                </td>
+                                <td class="mono">
+                                  <Show when={m.runId} fallback={<span class="dim">—</span>}>
+                                    {(id) => (
+                                      <A href={`/run/${encodeURIComponent(id())}`} title={id()}>
+                                        {shortRunId(id())}
+                                      </A>
+                                    )}
+                                  </Show>
+                                </td>
+                              </tr>
+                            );
+                          }}
+                        </For>
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </Show>
 
             {/* The climb, coarse then fine. */}
             <Show when={plot()}>

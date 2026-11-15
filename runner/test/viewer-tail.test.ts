@@ -9,6 +9,7 @@ import {
   TrajectoryTail,
   claudeModelTurns,
   areaFactsFrom,
+  areaInstantsFrom,
   achievementFactsFrom,
   deathFactsFrom,
   estimateTokens,
@@ -1513,6 +1514,19 @@ describe("achievement and flight milestones (issue #8)", () => {
   test("flights count takeoffs; a landing only witnesses that the taps were live", async () => {
     const { taxi } = await scanRunTotals(fileWith([meta, takeoff, landed, takeoff]));
     expect(taxi).toEqual({ flights: 2 });
+  });
+
+  test("the freeplay milestones' instants: the exit pair's second mark, the first capital, the first takeoff", async () => {
+    const area = (ts: number, to: number) => JSON.stringify({ t: "milestone", ts, kind: "area", to: { id: to } });
+    const zone = (ts: number, to: number) => JSON.stringify({ t: "milestone", ts, kind: "zone", to: { id: to } });
+    // 132 → 800 is inside Coldridge; 1 then 1 is the sustained exit, completed at 1500.
+    const lines = [meta, area(1100, 132), area(1200, 800), area(1300, 1), zone(1350, 1), area(1500, 1), zone(1600, 1537), takeoff, takeoff.replace('"ts":1300', '"ts":1700')];
+    const { milestones } = await scanRunTotals(fileWith(lines));
+    expect(milestones).toEqual({ leftStartArea: 1500, capitalZone: 1600, flight: 1300 });
+    // None shown: nulls, not zeros.
+    expect((await scanRunTotals(fileWith([meta, area(1100, 9), area(1200, 24)]))).milestones).toEqual({ leftStartArea: null, capitalZone: null, flight: null });
+    // A mark built without an instant places nothing.
+    expect(areaInstantsFrom([{ kind: "area", to: 501, from: null }, { kind: "area", to: 502, from: 501 }, { kind: "area", to: 503, from: 502 }, { kind: "zone", to: 1519, from: null }])).toEqual({ leftStartArea: null, capitalZone: null });
   });
 
   test("landings alone still read as a recording, at zero takeoffs", () => {

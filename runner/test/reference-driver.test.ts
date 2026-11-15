@@ -374,12 +374,12 @@ describe("never counted, never a member, never a row", () => {
   test("targets: a colliding reference run is no attempt, no count, no witness and no best level", () => {
     const refRun = fact({ runId: "ref", driver: "reference" });
     const s = projectModel(entry, [refRun], policy, { now: 10 });
-    expect(s.perEpisode.e90).toMatchObject({ counted: 0, attempts: 0, bestLevel: null, reachedL5: false });
+    expect(s.perEpisode.e90).toMatchObject({ counted: 0, attempts: 0, bestLevel: null, countedLevel: null });
     expect(s.tier).toBe("t1");
-    expect(s.earnedRung1).toBe(false);
+    expect(s.earnedPromotion).toBe(false);
     // The same entry's own run counts, beside it.
     const both = projectModel(entry, [refRun, fact({ runId: "own", bestLevel: 4 })], policy, { now: 10 });
-    expect(both.perEpisode.e90).toMatchObject({ counted: 1, attempts: 1, bestLevel: 4, reachedL5: false });
+    expect(both.perEpisode.e90).toMatchObject({ counted: 1, attempts: 1, bestLevel: 4, countedLevel: 4 });
   });
 
   test("on disk: the scheduler's facts, /api/episodes and /api/results all keep it out of the group", async () => {

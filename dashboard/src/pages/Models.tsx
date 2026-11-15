@@ -80,8 +80,11 @@ export default function Models() {
             .join("; ")}.`;
     const lines = [
       "The roster of models available and what the scheduler currently makes of it.",
-      "A model is eligible for e90 from the moment it is listed, and a t1 model earns e360 by reaching level 5 in an un-overridden e90 run. Counts are counted runs — launches that produced at least one model response; a launch that produced none is archived as it ends, and consecutive ones are what the defer ladder backs off from.",
+      `A model is eligible for e90 from the moment it is listed, and a t1 model earns e360 by reaching level ${b.policy.promoteAtLevel} in a counted e90 run. Counts are counted runs — launches that produced at least one model response; a launch that produced none is archived as it ends, and consecutive ones are what the defer ladder backs off from.`,
       `${tiers} A tier that buys no e360 is not eligible for one, and t0 never promotes itself out — an operator moves it, and the promotion it earned still counts when they do.`,
+      ...(b.policy.deadminesAtLevel !== undefined
+        ? [`The Deadmines evals a tier buys open only once a counted e360 reaches level ${b.policy.deadminesAtLevel}.`]
+        : []),
       "Rows are ordered by tier, highest first; an episode cell links to that model's runs on the runs page, and the row itself opens its runs below.",
       `Cooling is the defer ladder — the scheduler backs off over ${b.ladderMs.length} steps, ending at ${fmtDuration(b.ladderMs[b.ladderMs.length - 1] ?? null)}; one more no-progress attempt at the ceiling retires the model until an operator clears it.`,
     ];

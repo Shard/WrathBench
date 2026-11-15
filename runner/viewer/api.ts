@@ -1248,6 +1248,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
           totals === null
             ? undefined
             : { spells: totals.spells, talents: totals.talents, trades: totals.trades },
+          totals?.milestones,
         ),
       );
     }
@@ -1352,7 +1353,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * and `EPISODE_IDS` is untouched.
    */
   // Nor are the task episodes (operator, 2026-11-14): a staged level-20
-  // dungeon run would claim the level rungs, and their runs are read on the
+  // dungeon run would top a level ladder, and their runs are read on the
   // dungeon board instead.
   const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing" && !isTaskEpisode(id));
 
@@ -1713,8 +1714,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (path === "/api/dungeons") return await dungeonsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
-     * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its rung
-     * rules and their tests already live); the route exists so the episode
+     * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its row
+     * order, the milestone rules and their tests already live); the route exists so the episode
      * filter has one spelling per page rather than the ladder page having to
      * know it is really asking the results endpoint. It differs in one thing:
      * `probing` has no ladder (see `LADDER_EPISODES`) and answers 400 here,

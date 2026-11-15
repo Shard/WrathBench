@@ -509,7 +509,8 @@ export function rowOf(
     ladder: state.ladder,
     declaredTier: state.declaredTier,
     tier: state.tier,
-    earnedRung1: state.earnedRung1,
+    earnedPromotion: state.earnedPromotion,
+    earnedDeadmines: state.earnedDeadmines,
     idle: state.idle,
     schedulable: schedulableView(verdictForGroups(schedulability(state, running, policy), evals), state),
     runs: mine.map(runView),
@@ -578,6 +579,7 @@ export function modelsResponse(opts: {
     },
     policy: {
       promoteAtLevel: opts.roster.policy.promoteAtLevel,
+      deadminesAtLevel: opts.roster.policy.deadminesAtLevel,
       series: opts.roster.policy.series,
       tiers: TIER_TABLE,
       maxSessions: { ...opts.roster.policy.maxSessions },

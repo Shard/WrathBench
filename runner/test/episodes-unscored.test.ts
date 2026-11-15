@@ -17,6 +17,7 @@
 import { describe, expect, test } from "bun:test";
 import { EPISODE_IDS, EPISODES, matchesTier, type EpisodeId } from "../src/episodes";
 import { POLICY_EPISODES, TIER_TABLE, TIERS, projectModel, DEFAULT_POLICY, type RosterModel } from "../src/models";
+import { countedFact } from "./fixtures/counted-fact";
 
 const unscored: readonly EpisodeId[] = EPISODE_IDS.filter((id) => !EPISODES[id].scored);
 const NOW = 1_800_000_000_000;
@@ -48,11 +49,13 @@ describe("an unscored episode is never evidence", () => {
   test("every scored episode a tier can buy does have a target", () => {
     const scored = EPISODE_IDS.filter((id) => EPISODES[id].scored);
     expect(scored).toEqual(POLICY_EPISODES as EpisodeId[]);
-    // The five-agent Deadmines id is bought only where the entry opts in.
+    // The five-agent Deadmines id is bought only where the entry opts in, and
+    // either Deadmines id only once a counted e360 reached level 8.
     const m: RosterModel = { name: "m", model: "m", tier: "t2", deadmines: true };
-    const s = projectModel(m, [], DEFAULT_POLICY, { now: NOW });
+    const witness = [countedFact(m, "e360", 8, { now: NOW })];
+    const s = projectModel(m, witness, DEFAULT_POLICY, { now: NOW });
     for (const id of scored) expect(s.perEpisode[id]?.target).toBeGreaterThan(0);
-    const plain = projectModel({ name: "m", model: "m", tier: "t2" }, [], DEFAULT_POLICY, { now: NOW });
+    const plain = projectModel({ name: "m", model: "m", tier: "t2" }, witness, DEFAULT_POLICY, { now: NOW });
     expect(plain.perEpisode.deadmines?.target).toBe(0);
     expect(plain.perEpisode["deadmines-solo"]?.target).toBe(3);
   });

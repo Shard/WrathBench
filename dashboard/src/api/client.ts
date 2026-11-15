@@ -286,9 +286,9 @@ export function createClient(opts: ClientOptions = {}) {
     ): Promise<ResultsResponse> =>
       get<ResultsResponse>(`/api/results${resultsQuery(episode, includeOverrides, harness)}`),
     /**
-     * The same projection the ladder reads; the rung rules stay client-side.
+     * The same projection the ladder reads; its order and the milestone rules stay client-side.
      * One tier's members only: the ladder offers neither `all` nor overridden
-     * runs, because a rung is a claim about one comparability group.
+     * runs, because a row is a claim about one comparability group.
      */
     ladder: (episode: EpisodeIdView): Promise<ResultsResponse> =>
       get<ResultsResponse>(`/api/ladder${resultsQuery(episode, false)}`),

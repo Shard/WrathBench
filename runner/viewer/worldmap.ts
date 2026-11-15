@@ -177,6 +177,9 @@ export function visibleTiles(
   };
 }
 
+/** Outland and Northrend: the continents past the first two, which freeplay milestone 7 reads. */
+export const EXPANSION_MAPS: readonly number[] = [530, 571];
+
 /**
  * Every map that has tiles, by id, with the name the map page shows for it.
  *

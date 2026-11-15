@@ -67,6 +67,7 @@ import {
   rosterWindowKey,
   type SchedulingPolicy,
   staleForMs,
+  ineligibleWhy,
   TIER_TABLE,
 } from "../runner/src/models";
 
@@ -307,7 +308,7 @@ export function planQueue(opts: {
         reason:
           gated.length === 0
             ? `ref ${job.ref} is not in roster`
-            : `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)`,
+            : `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode)})`,
       });
       continue;
     }
@@ -364,13 +365,15 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
     // An unscored episode needs no promotion: no tier buys one, so there is no
-    // rung to have climbed. Otherwise the entry's own DECLARED tier is the
+    // level to have reached. Otherwise the entry's own DECLARED tier is the
     // static floor — every tier buys e90, and a `t2` entry buys an e360 without
     // any run history, which is what the retired `tiers` force used to spell.
     // The projection is asked only for what a model has EARNED on top of that,
-    // so a climb opens e360 for a `t1` entry.
+    // so a climb opens e360 for a `t1` entry. The Deadmines evals have no
+    // floor: they open only on a counted e360 at `deadminesAtLevel`, which only
+    // the projection knows (operator, 2026-11-15).
     if (!isScoredEpisode(job.episode)) return true;
-    if (e.tier !== undefined && TIER_TABLE[e.tier].runsPerEpisode[job.episode] > 0) return true;
+    if (!isTaskEpisode(job.episode) && e.tier !== undefined && TIER_TABLE[e.tier].runsPerEpisode[job.episode] > 0) return true;
     return eligible !== undefined && eligible(r, job.episode);
   });
 }

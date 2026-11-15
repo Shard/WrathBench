@@ -366,7 +366,8 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             (docs/METHODOLOGY.md, "The tier is the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
-              one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code
+              one counted level-5 e90), t2 long (e90 x3 + e360 x1, and the Deadmines attempts once
+              a counted e360 reaches level 8 — no tier opens those without it). The table is code
               (`TIER_TABLE`, runner/src/models.ts) — a bespoke volume is a NAMED tier added there,
               not a number edited into one entry. On EVERY entry.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
@@ -456,7 +457,8 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               by name, so copies of one model never pool.
             `deadmines` — `true` or absent: opts the entry into the five-agent Deadmines
               episode, which its tier then buys as it buys the one-agent one (`t2`: three
-              attempts each; docs/EPISODES.md). Refused with `campaignOnly`. Still held until
+              attempts each, opened by a counted level-8 e360; docs/EPISODES.md). Refused with
+              `campaignOnly`. Still held until
               `policy.rehearsed` names `deadmines`, and behind the scored-episode hold.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
@@ -3151,11 +3153,13 @@ out either way. Each record carries:
 - `model_availability` (`open_weights`, `closed_weights` or `unknown`), from
   the model's `weights` in `infra/model-catalogue.json`, looked up at export
   time;
-- three results that are the ladder's three keys — `highest_rung`,
-  `best_level` (with the xp within it, and the min, median and max level of
-  the cell's runs) and `best_money` — plus the order between them.
+- the ladder's keys as results — `best_level` (with the xp within it, and the
+  min, median and max level of the cell's runs) and `best_money` — plus the
+  order between them. No milestone rung: the rungs are freeplay achievements
+  and on no scored ladder (operator, 2026-11-15). A cell that recorded neither
+  a level nor money is left out and counted.
 
-No game text: rung numbers, never titles, and no character, zone or map. Every
+No game text: no character, zone or map. Every
 record is scanned as the publisher scans a body, and a finding writes nothing.
 A run left out is counted on stdout with its reason: a flat model id the
 catalogue cannot place has no developer EEE could file it under.
