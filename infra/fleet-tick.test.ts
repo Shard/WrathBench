@@ -15,6 +15,8 @@ import type { CampaignFile } from "../runner/src/campaign-file";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { countedFact } from "../runner/test/fixtures/counted-fact";
 import { emptyModelLists } from "../runner/src/model-lists";
+import { planOf } from "./fixtures/tick";
+import { formatHeld, formatModels, plannedVerdicts } from "./run-fleet-status";
 import { checkedIn, defsBlock, definition, partyDefinition } from "../runner/test/fixtures/campaigns";
 
 const NOW = Date.UTC(2026, 10, 15, 12);
@@ -605,3 +607,19 @@ describe("the supervisor's tick over fixture states", () => {
 });
 
 
+
+describe("the reports say the tick's own decision", () => {
+  test("a model the projection would schedule but the tick holds reads held, with the tick's reason; one it launches says where", () => {
+    const config = fleet();
+    const usage = ["claude-1", "claude-2"].map((credential) => ({ credential, observedAt: NOW - 60_000, windows: [{ usedPercent: 90, windowMinutes: 300, resetsAt: NOW + 2 * H }] }));
+    const plan = planOf(config, { now: NOW, stamp: STAMP, usage });
+    const lines = formatModels(plan.states, new Set(), NOW, new Map(), config.policy, true, plannedVerdicts(plan));
+    const line = (name: string): string => lines.find((l) => l.trimStart().startsWith(`${name} `))!;
+    // Without the plan the projection's word is "yes" for both claude models.
+    expect(formatModels(plan.states, new Set(), NOW, new Map(), config.policy).find((l) => l.trimStart().startsWith("son "))).toMatch(/ yes: schedulable on e90/);
+    expect(line("son")).toMatch(/ held: schedulable on e90 — e90 held — no credential has room \(credential claude-1: at or over its scored usage threshold/);
+    expect(line("opus")).toMatch(/ held: /);
+    expect(line("glm")).toMatch(/ yes: schedulable on e90 — next tick: e90 on RUNNER$/);
+    expect(formatHeld(plan.holds).join("\n")).toContain("son: HELD — e90 wanted, no credential has room");
+  });
+});

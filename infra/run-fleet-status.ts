@@ -611,7 +611,7 @@ export function formatModels(
   /** The evals group (`runner/viewer/groups.ts`): off, a model that owes a counted run reads as free, as the policy treats it. */
   evals = true,
   /** What the tick does with each model this time (`plannedVerdicts`), said after its verdict. */
-  planned: ReadonlyMap<string, string> = new Map(),
+  planned: ReadonlyMap<string, PlannedVerdict> = new Map(),
 ): string[] {
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
@@ -649,8 +649,8 @@ export function formatModels(
     const verdict = verdictForGroups(schedulability(s, running, policy), evals);
     const decided = planned.get(s.name);
     // The tick's own decision wins the word: a model the projection would schedule but the tick holds is held.
-    const word = decided?.startsWith("held:") === true && verdict.verdict !== "blocked" ? "held" : verdictWord[verdict.verdict];
-    const sched = ex !== undefined ? `no: ${ex}` : `${word}: ${verdict.why}${decided !== undefined ? ` — ${decided.replace(/^held: /, "")}` : ""}`;
+    const word = decided?.held === true && verdict.verdict !== "blocked" ? "held" : verdictWord[verdict.verdict];
+    const sched = ex !== undefined ? `no: ${ex}` : `${word}: ${verdict.why}${decided !== undefined ? ` — ${decided.text}` : ""}`;
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
@@ -681,18 +681,24 @@ export function formatHeld(held: readonly Pick<TickHold, "name" | "episode" | "w
  * The models table says this in place of the projection's verdict, so a model
  * the projection calls schedulable but the tick holds reads as held. Pure.
  */
-export function plannedVerdicts(plan: TickPlan): Map<string, string> {
-  const out = new Map<string, string>();
+export function plannedVerdicts(plan: TickPlan): Map<string, PlannedVerdict> {
+  const out = new Map<string, PlannedVerdict>();
   const launches = new Set(plan.spawns.filter((sp) => sp.enabled).map((sp) => sp.name));
-  const say = (refs: readonly string[], text: string): void => {
-    for (const r of refs) if (!out.has(r)) out.set(r, text);
+  const say = (refs: readonly string[], text: string, held = false): void => {
+    for (const r of refs) if (!out.has(r)) out.set(r, { held, text });
   };
   for (const r of plan.resumed) if (launches.has(r.job.name)) say(r.job.refs, `next tick: resumes ${r.plan.runId} on ${r.plan.account}`);
   for (const p of plan.pinned) if (launches.has(p.job.name)) say(p.job.refs, `next tick: ${p.job.name} on ${p.job.account}`);
   for (const a of plan.queue.assign) if (launches.has(a.job.name)) say(a.job.refs, `next tick: ${a.job.name} on ${a.account}`);
   for (const p of plan.picks) if (launches.has(p.job.name)) say(p.job.refs, `next tick: ${p.job.episode} on ${p.account}`);
-  for (const h of plan.holds) say(h.refs, `held: ${h.episode ?? "a launch"} — ${h.why}`);
+  for (const h of plan.holds) say(h.refs, `${h.episode ?? "a launch"} held — ${h.why}`, true);
   return out;
+}
+
+/** What the tick does with one model (`plannedVerdicts`): held, or the words for what it launches. */
+export interface PlannedVerdict {
+  held: boolean;
+  text: string;
 }
 
 /**
