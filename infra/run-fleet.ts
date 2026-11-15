@@ -162,7 +162,7 @@ import { effectiveJobs as effectiveTick, type TickIO, type TickMemory } from "./
 import { accountHolders, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { readModelListsSidecar } from "../runner/src/model-lists";
 import { K8sClient } from "./k8s-client";
-import { ensureSharedCamera, readCameraTemplate } from "./camera-pods";
+import { ensureSharedCamera, readCameraTemplate, reapCameras } from "./camera-pods";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
 import type { FleetWorldView } from "../runner/viewer/api-types";
 import { fleetWorldViews, mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, WorldStore, WORLDS_DIR } from "./world";
@@ -1629,16 +1629,21 @@ async function main(): Promise<void> {
     }
     // The shared world's camera (infra/camera-pods.ts), when the chart's
     // camera block is on: put back within a minute whenever it is missing.
-    // Its own pod, owned by this one; nothing here waits on it.
+    // Its own pod, owned by this one; nothing here waits on it. With the
+    // block off, every camera pod left up is removed, the worlds' too.
     if (!stopping && !cameraEnsuring && parseOpts.onCluster && Date.now() - cameraEnsuredAt >= CAMERA_ENSURE_EVERY_MS) {
       cameraEnsuredAt = Date.now();
       const template = readCameraTemplate();
-      const client = template !== undefined ? K8sClient.inCluster() : null;
-      if (template !== undefined && client !== null) {
+      const client = K8sClient.inCluster();
+      if (client !== null) {
         cameraEnsuring = true;
         const podName = process.env["POD_NAME"];
         const podUid = process.env["POD_UID"];
-        void ensureSharedCamera({ client, template, target: SHARED_CAMERA_TARGET, log: say, ...(podName && podUid ? { owner: { name: podName, uid: podUid } } : {}) }).finally(() => {
+        const pass =
+          template !== undefined
+            ? ensureSharedCamera({ client, template, target: SHARED_CAMERA_TARGET, log: say, ...(podName && podUid ? { owner: { name: podName, uid: podUid } } : {}) })
+            : reapCameras({ client, log: say });
+        void pass.finally(() => {
           cameraEnsuring = false;
         });
       }

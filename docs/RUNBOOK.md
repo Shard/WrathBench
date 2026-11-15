@@ -3084,9 +3084,10 @@ hour of play). Size `maxConcurrent` against the PVC's free space.
 not started, and the shared one is retried every minute.
 
 **Disable.** `camera.enabled: false` and a release. The fleet then starts no
-camera; delete any left with `kubectl -n <ns> delete pod -l
-app.kubernetes.io/component=camera`. Frames and video already written stay
-with their runs.
+camera and, within a minute of reading the template without one, deletes
+every camera pod left up, the shared one and the worlds' (`camera ... removed:
+the camera is off` in its log), each with its 30 s grace to keep its frames.
+Frames and video already written stay with their runs.
 
 **Troubleshoot.** A camera pod's two containers are `camera` (the client) and
 `camera-director`:
@@ -3101,6 +3102,20 @@ kubectl -n <ns> logs <release>-camera-<id> -c camera --tail=50
   did not apply `GM.Visible = 0` (a worldserver from before the block, or a
   conf without the key). The camera logged out and stays out until its pod
   restarts; nothing else was sent. Fix the world first.
+- `the client left the world while idle (…)` or `the client is not in the
+  world; logging in again`: the client lost its session (its process fell
+  over and came back, a worldserver restart). The director takes it back in
+  on its own, through the same invisibility check, and logs `in the world,
+  invisible, after N s out`. A crash shows in the client's log as a panic and
+  `camera: client exited; starting again in 20 s`.
+- `STUCK: the client has been out of the world for N min (<state>)`, every
+  five minutes: it cannot get back in. The state says where it sits (`Login`
+  is the account screen: check the authserver and the `CAMERA` password;
+  `no answer from the client` is a client that is not up). Deleting the pod
+  is safe: the fleet makes the shared one again within a minute, and a
+  world's goes with its world.
+- A quiet director log is idle: with nothing to follow it says `no live run
+  on <world> to follow` once and `idle N min` every half hour.
 - `skip: <name> not in view`: the subject is not streamed to the camera,
   usually a loading screen after a map change; it rejoins on its own.
 - A camera pod `Pending`: no free `devic.es/dri` claim. No world waits on it.

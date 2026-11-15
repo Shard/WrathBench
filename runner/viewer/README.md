@@ -650,8 +650,11 @@ it (`camera.ts`):
   and caption cues on the whole timeline; and the time map between video time
   and run time (`video-time.ts`, which the pages convert with too). A run
   with no camera, or a list that does not read (a director mid-write, another
-  run's id, not version 2), is a 404 and never a fault, so a publisher pass
-  loses that run's video and nothing else. The parts end at the first that
+  run's id, not version 2), is a 404 in public mode and never a fault, so a
+  publisher pass loses that run's video and nothing else; a private handle
+  answers `null` instead, since the private pages ask on every run (a live
+  run is labelled `camera` only after it is filmed) and a 404 is a console
+  error on each. The parts end at the first that
   does not read or whose file is missing, so the timeline has no gaps, and a
   chapter, cue or time-map point past its end goes with them.
 - `/api/run/<id>/clip/<name>.mp4` and `.jpg`: a part's video and poster.
@@ -681,21 +684,24 @@ route.
 
 ### The live still
 
-While a run plays, the camera writes stills to `camera/frames/<seq>.jpg` and a
-line each to `camera/frames.jsonl`. A private handle serves the newest one, for
+While a run plays, the camera writes stills to `camera/frames/<seq>.jpg`, the
+seq zero-padded to six digits (`frames/000042.jpg`, `infra/camera/layout.ts`),
+and a line each to `camera/frames.jsonl`. A private handle serves the newest one, for
 the run page's live block and the map sidebar (`camera-live.ts`):
 
-- `/api/run/<id>/camera/latest`: `{runId, seq, t}`.
+- `/api/run/<id>/camera/latest`: `{runId, seq, t}`, or `null` when the run
+  has no frame (asked on every live run's page, filmed or not).
 - `/api/run/<id>/camera/latest.jpg`: that frame, with `x-camera-seq` and
   `x-camera-time`. Any query string is ignored; the page adds `?seq=` so the
   browser sees a new picture, which may be a frame newer than the `t` it read.
 
-Both answer `Cache-Control: no-store`, and both are a 404 when there is no
+Both answer `Cache-Control: no-store`; the picture is a 404 when there is no
 frame. Only the last 16 KiB of the index is read, since it grows by a line
 every few seconds for the whole run. The newest line that reads (one cut short
-mid-write does not) names the frame, by `seq` alone; a line's `file` must be
-that frame's own or the line is skipped. When that line's frame is not on disk,
-the line before it is used.
+mid-write does not) names the frame, by `seq` alone, and the file's name is
+made from it the way the camera makes it; a line's `file` must be that frame's
+own or the line is skipped. When that line's frame is not on disk, the line
+before it is used.
 The checks are the clips' (`lstat` at each step, and opening without following
 a link), and no other frame is reachable.
 

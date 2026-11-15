@@ -94,17 +94,26 @@ describe("the clips route", () => {
     expect(JSON.stringify(body)).not.toContain("frames");
   });
 
-  test("a run without a camera, an unreadable list, an older layout or one naming another run is a 404, never a fault", async () => {
+  test("a run without a camera, an unreadable list, an older layout or one naming another run has no clips: null privately, a 404 publicly, never a fault", async () => {
     const l = layout();
-    const h = handle(l);
+    const priv = handle(l);
+    const pubH = handle(l, true);
+    const none = async (): Promise<void> => {
+      const res = await get(priv, `/api/run/${RUN}/clips`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toBeNull();
+      expect((await get(pubH, `/api/run/${RUN}/clips`)).status).toBe(404);
+    };
     writeFileSync(join(l.dir, "camera", "clips.json"), '{"version":2,"runId":"cam-run","parts":[');
-    expect((await get(h, `/api/run/${RUN}/clips`)).status).toBe(404);
+    await none();
     writeFileSync(join(l.dir, "camera", "clips.json"), JSON.stringify({ version: 1, runId: RUN, clips: [{ name: "timelapse", kind: "timelapse", file: "clips/part-000.mp4" }] }));
-    expect((await get(h, `/api/run/${RUN}/clips`)).status).toBe(404);
+    await none();
     writeClips(l.dir, [part("part-000")], "another-run");
-    expect((await get(h, `/api/run/${RUN}/clips`)).status).toBe(404);
+    await none();
     rmSync(join(l.dir, "camera"), { recursive: true });
-    expect((await get(h, `/api/run/${RUN}/clips`)).status).toBe(404);
+    await none();
+    // A run that is not there is a 404 to either.
+    expect((await get(priv, `/api/run/no-such-run/clips`)).status).toBe(404);
   });
 
   test("the parts stop at the first that names a frame, a path or a taken name; what falls past the end goes with them", async () => {

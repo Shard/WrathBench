@@ -13,6 +13,12 @@
  * `.appear` is preceded by the invisibility check, and a camera found
  * visible logs out and stays out.
  *
+ * It keeps the client in the world on its own: a client that leaves it (its
+ * process restarted after a crash, a worldserver restart, a lost session) is
+ * found at its next tick, idle or following, and taken back in through the
+ * same login and the same invisibility check. A client that cannot get back
+ * in says so: `STUCK:` every few minutes while it is out, with where it is.
+ *
  *   bun infra/camera/director.ts [--run <id>] [--create-only] [--forward-world host:port [--forward-only]]
  *
  * Environment: CAMERA_WORLD (a world id, or `shared`), CAMERA_INTERVAL_SECONDS
@@ -25,7 +31,7 @@ import { join } from "node:path";
 import { StoredSessionHandle } from "@wrathbench/inspector";
 import { DEADMINES_BOSSES } from "../../runner/viewer/dungeons";
 import { assembleRun } from "./assemble";
-import { CameraClient, INVISIBLE_LUA, luaString, subjectDistanceLua, WORLD_ONLY_LUA } from "./client";
+import { CameraClient, INVISIBLE_LUA, luaString, subjectDistanceLua, WORLD_ONLY_LUA, type ClientStatus } from "./client";
 import { forwardLoopback } from "./forward";
 import { cameraDir, FRAMES_DIR, FRAMES_INDEX, frameFile, JPEG_QUALITY, parseFrames, type FrameLine } from "./layout";
 import { cameraEventOf, Shutter, type Kept, type SessionEventRow } from "./shutter";
@@ -41,6 +47,14 @@ const APPEAR_COOLDOWN_MS = 3_000;
 /** A cross-map `.appear` sent during the loading screen is lost: wait it out before trying again. */
 const LOADING_WAIT_MS = 12_000;
 const SUBJECT_CHECK_MS = 10_000;
+/** With no subject, how often the client is checked to be still in the world. */
+export const IDLE_CHECK_MS = 15_000;
+/** With no subject, how often the director says it is idle, so a quiet log reads as idle and not as hung. */
+export const IDLE_LOG_MS = 30 * 60_000;
+/** Out of the world this long and still not back in: `STUCK:`, and again each time this long passes. */
+export const STUCK_MS = 5 * 60_000;
+/** Between a left `run()` and the next login attempt. */
+export const RETRY_MS = 15_000;
 /**
  * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
@@ -79,6 +93,9 @@ export class Director {
   private refused = false;
   /** The client left the world under the director (a disconnect, a world restart). */
   private lost = false;
+  /** Since when the client has been out of the world while the director wanted it in; null while it is in. */
+  private outSince: number | null = null;
+  private lastStuckLog = 0;
 
   constructor(o: DirectorOptions) {
     this.o = o;
@@ -90,12 +107,54 @@ export class Director {
     this.o.log(line);
   }
 
-  /** Logged in and in the world, or never (a refusal leaves the client logged out). */
+  /** Where the client is, for a log line: its state, or `no answer` when its port does not answer. */
+  private static where(st: ClientStatus | null): string {
+    if (st === null) return "no answer from the client";
+    return `${st.state ?? "unknown state"}${st.ui_ready === true ? "" : ", UI not ready"}`;
+  }
+
+  /** The client is out of the world under the director: `run()` returns, and the clock for `STUCK:` starts. */
+  private markLost(): void {
+    this.lost = true;
+    if (this.outSince === null) {
+      this.outSince = this.now();
+      this.lastStuckLog = this.outSince;
+    }
+  }
+
+  /** `STUCK:` once the client has been out of the world for `STUCK_MS`, and every `STUCK_MS` after. */
+  private stuckCheck(where: string): void {
+    const now = this.now();
+    if (this.outSince === null) {
+      this.outSince = now;
+      this.lastStuckLog = now;
+      return;
+    }
+    if (now - this.lastStuckLog >= STUCK_MS) {
+      this.lastStuckLog = now;
+      this.log(`STUCK: the client has been out of the world for ${Math.round((now - this.outSince) / 60_000)} min (${where}); still trying`);
+    }
+  }
+
+  /**
+   * Logged in and in the world, true; false when it did not get there: refused
+   * (the client is left logged out), asked to stop, `--create-only`, or the
+   * client dropped out again before the check (`lost`; the caller tries again).
+   */
   async enterWorld(): Promise<boolean> {
     const c = this.o.client;
+    let last = "";
+    let entering = false;
     for (;;) {
+      if (this.o.stopping?.() === true) return false;
       const st = await c.status();
       if (st?.in_world === true) break;
+      const where = Director.where(st);
+      if (where !== last) {
+        this.log(`the client is not in the world (${where}); waiting for character select`);
+        last = where;
+      }
+      this.stuckCheck(where);
       if (st?.ui_ready === true && st.state === "CharSelect") {
         const n = Number(await c.value("return GetNumCharacters()"));
         if (!(n > 0)) {
@@ -111,6 +170,9 @@ export class Director {
           this.log(`a camera character exists (${String(await c.value("return GetCharacterInfo(1)"))}); --create-only: not entering the world`);
           return false;
         }
+        // Said once; a client that stays at character select is `STUCK:` in time.
+        if (!entering) this.log("entering the world");
+        entering = true;
         await c.lua("SelectCharacter(1) EnterWorld() return true");
         await this.sleep(5_000);
         continue;
@@ -121,7 +183,14 @@ export class Director {
     // on the map (GM.LoginState = 1, GM.Visible = 0); check, never assume.
     for (let i = 0; i < 30 && String((await c.value("return GetZoneText()")) ?? "") === ""; i++) await this.sleep(1_000);
     await c.lua("pcall(StopCinematic) return true");
-    if ((await this.visibility()) !== "invisible") {
+    const v = await this.visibility();
+    if (v === "unknown") {
+      // Out again before it could be checked (a crash, a disconnect): nothing was sent; try again.
+      this.log("the client left the world before its invisibility could be checked; logging in again");
+      this.markLost();
+      return false;
+    }
+    if (v === "visible") {
       this.log("REFUSED: the camera entered the world without GM invisibility; the world's GM.Visible is not 0. Logging out; nothing else is sent");
       await c.lua("Logout() return true");
       this.refused = true;
@@ -129,6 +198,9 @@ export class Director {
     }
     await c.lua(WORLD_ONLY_LUA);
     await this.hideBody();
+    if (this.outSince !== null) this.log(`in the world, invisible, after ${Math.round((this.now() - this.outSince) / 1000)} s out`);
+    else this.log("in the world, invisible");
+    this.outSince = null;
     return true;
   }
 
@@ -165,7 +237,7 @@ export class Director {
     }
     if (v === "unknown") {
       this.log("the client is not in the world; logging in again");
-      this.lost = true;
+      this.markLost();
       return false;
     }
     return this.o.client.gm(`.appear ${subject.character}`);
@@ -242,14 +314,16 @@ export class Director {
       if (tick >= loadingUntil) {
         const d = await this.distance(subject);
         if ((d < 0 || d > REJOIN_YARDS || crossMap) && tick - lastAppear >= APPEAR_COOLDOWN_MS) {
-          if (!(await this.appear(subject))) continue;
-          const changing = crossMap || appearMap === null;
-          lastAppear = tick;
-          appearMap = map;
-          if (changing) {
-            // A new map is a loading screen, after which the morph and the view are gone.
-            loadingUntil = tick + LOADING_WAIT_MS;
-            needSetup = true;
+          // Not sent (refused, lost, or the command failed): the tick still waits out its second below.
+          if (await this.appear(subject)) {
+            const changing = crossMap || appearMap === null;
+            lastAppear = tick;
+            appearMap = map;
+            if (changing) {
+              // A new map is a loading screen, after which the morph and the view are gone.
+              loadingUntil = tick + LOADING_WAIT_MS;
+              needSetup = true;
+            }
           }
         } else if (d >= 0 && d <= REJOIN_YARDS) {
           if (needSetup) {
@@ -275,6 +349,8 @@ export class Director {
       // Still live?
       if (tick - lastCheck >= SUBJECT_CHECK_MS) {
         lastCheck = tick;
+        // A client that came back in the world on its own (a silent reconnect) has a new interface: shown again, the morph gone.
+        if (!needSetup && (await c.value("return UIParent:IsShown() and true or false")) === true) needSetup = true;
         let meta: Parameters<typeof notLive>[1] = null;
         try {
           meta = JSON.parse(readFileSync(join(subject.runDir, "meta.json"), "utf8"));
@@ -305,20 +381,38 @@ export class Director {
     }
   }
 
-  /** The director's life: in, then subject after subject. Never returns while the camera may act. */
+  /** The director's life: in, then subject after subject. Returns when the client leaves the world, or for good. */
   async run(): Promise<void> {
     this.lost = false;
     if (!(await this.enterWorld())) {
       if (this.refused) this.log("the camera stays logged out");
       return;
     }
+    let idleSince: number | null = null;
+    let lastIdleLog = 0;
     for (;;) {
       if (this.refused || this.lost || this.o.stopping?.() === true) return;
       const subject = this.pick();
       if (subject === null) {
-        await this.sleep(15_000);
+        const now = this.now();
+        if (idleSince === null || now - lastIdleLog >= IDLE_LOG_MS) {
+          this.log(idleSince === null ? `no live run on ${this.o.world} to follow; waiting` : `idle ${Math.round((now - idleSince) / 60_000)} min: no live run on ${this.o.world}; the client is in the world`);
+          idleSince ??= now;
+          lastIdleLog = now;
+        }
+        await this.sleep(IDLE_CHECK_MS);
+        // Nothing else looks at the client while there is no subject: a client
+        // that left the world (a crash and restart, a world restart) would sit
+        // at character select until a subject came.
+        const st = await this.o.client.status();
+        if (st?.in_world !== true) {
+          this.log(`the client left the world while idle (${Director.where(st)}); logging in again`);
+          this.markLost();
+          return;
+        }
         continue;
       }
+      idleSince = null;
       try {
         await this.follow(subject);
       } catch (e) {
@@ -326,6 +420,28 @@ export class Director {
         await this.sleep(5_000);
       }
       if (this.o.pinnedRun !== undefined) return;
+    }
+  }
+
+  /**
+   * `run()` again and again, for the life of the process: after the client
+   * left the world, after a failure of the director's own, never after a
+   * refusal (the camera stays logged out; this waits for the stop).
+   */
+  async live(): Promise<void> {
+    const stopping = (): boolean => this.o.stopping?.() === true;
+    for (;;) {
+      try {
+        await this.run();
+      } catch (e) {
+        this.log(`director: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (stopping()) return;
+      if (this.refused) {
+        while (!stopping()) await this.sleep(60_000);
+        return;
+      }
+      await this.sleep(RETRY_MS);
     }
   }
 }
@@ -372,17 +488,15 @@ if (import.meta.main) {
     stopping: () => stopping,
     log,
   });
-  // The director outlives its own failures rather than restart the client's pod.
-  for (;;) {
+  // The director outlives its own failures and the client's rather than restart the client's pod.
+  if (args.includes("--create-only") || flag(args, "--run") !== undefined) {
     try {
       await director.run();
     } catch (e) {
       log(`director: ${e instanceof Error ? e.message : String(e)}`);
     }
-    if (stopping || args.includes("--create-only") || flag(args, "--run") !== undefined) break;
-    // Refused once (found visible), the camera never logs in again in this process.
-    if (director.refusedForGood) await new Promise(() => {});
-    await Bun.sleep(30_000);
+  } else {
+    await director.live();
   }
   if (stopping || fwd === undefined) process.exit(0);
   // The forwarder keeps a hand-run camera's world connection; stop with the pod.

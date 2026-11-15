@@ -350,10 +350,11 @@ export function createClient(opts: ClientOptions = {}) {
       text: await get(`/api/run/${encodeURIComponent(id)}/scratchpad`, getText),
     }),
     /**
-     * The run's camera video. A run with none is a 404. Each part's `video`
-     * and `poster` are refs for `mediaUrl`.
+     * The run's camera video, or null for a run with none (the private viewer
+     * answers `null`; the public build's missing artifact is a 404). Each
+     * part's `video` and `poster` are refs for `mediaUrl`.
      */
-    clips: (id: string): Promise<ClipsResponse> => get<ClipsResponse>(`/api/run/${encodeURIComponent(id)}/clips`),
+    clips: (id: string): Promise<ClipsResponse | null> => get<ClipsResponse | null>(`/api/run/${encodeURIComponent(id)}/clips`),
     /** The home page's excerpt of a recent run's video, or none. */
     highlight: (): Promise<HighlightResponse> => get<HighlightResponse>("/api/highlight"),
     /** A part's video or poster ref as a URL: the viewer's own route, same-origin. */
@@ -365,7 +366,7 @@ export function createClient(opts: ClientOptions = {}) {
      */
     cameraLatest: async (id: string): Promise<LatestFrameResponse | null> => {
       try {
-        return await getJson<LatestFrameResponse>(`${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/camera/latest`, f);
+        return await getJson<LatestFrameResponse | null>(`${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/camera/latest`, f);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
