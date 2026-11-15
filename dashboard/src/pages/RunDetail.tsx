@@ -58,10 +58,10 @@ import { ChartCard } from "../components/ChartCard";
 import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
 import { Coins, QuestCount } from "../components/CharacterFacts";
-import { EventFeed, InventoryPanel, XpBar, createInspectorClient, type SessionSummary } from "@wrathbench/inspector/views";
+import { InventoryPanel, XpBar, createInspectorClient } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
-import { LiveFrame, ReplayBlock } from "../components/Replay";
+import { LiveFrame, RunVideo } from "../components/Replay";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
@@ -207,29 +207,20 @@ export default function RunDetail() {
    */
   const [pad, setPad] = createSignal<string | null>(null);
   /*
-   * The camera's clips, or null for a run that has none: read with the pad
-   * and on the same changes, since a director may add them after the run.
-   * Compared by the clip list, so a re-read that brings the same clips back
-   * leaves the player alone.
+   * The camera's video, or null for a run that has none: read with the pad
+   * and on the same changes, since the sweep assembles it after the fact.
+   * Compared by content, so a re-read that brings the same body back leaves
+   * the player alone.
    */
   const [clips, setClips] = createSignal<ClipsResponse | null>(null, {
     equals: (a, b) => JSON.stringify(a) === JSON.stringify(b),
   });
 
   /*
-   * The run's session record as the inspector reads it (`/api/inspector`, the
-   * viewer's private mount): a v1 run's events feed, embedded from the
-   * inspector's views. The public build has no such mount and draws none, and
-   * a 0.5 run, which has no `session.json`, draws none either.
+   * The inspector's API (`/api/inspector`, the viewer's private mount), for a
+   * fan-out run's characters. The public build has no such mount and draws none.
    */
   const inspector = SNAPSHOT_MODE ? null : createInspectorClient("/api/inspector");
-  const [session, setSession] = createSignal<SessionSummary["session"]>(null);
-  if (inspector !== null) {
-    void inspector
-      .session(params.id)
-      .then((s) => setSession(s.session))
-      .catch(() => setSession(null));
-  }
   const loadClips = (): void => {
     void api
       .clips(params.id)
@@ -825,13 +816,13 @@ export default function RunDetail() {
                   */}
                   {/*
                     The camera's newest still while the run plays, private
-                    only; when it ends the poll goes with it and the clips the
-                    director makes take its place.
+                    only; when it ends the poll goes with it and the run's
+                    video takes its place.
                   */}
                   <Show when={!SNAPSHOT_MODE && live()}>
                     <LiveFrame runId={params.id} now={now()} />
                   </Show>
-                  <Show when={clips()}>{(c) => <ReplayBlock clips={c()} />}</Show>
+                  <Show when={clips()}>{(c) => <RunVideo clips={c()} />}</Show>
 
                   <Show when={d().character}>
                     {(st) => (
@@ -1071,14 +1062,6 @@ export default function RunDetail() {
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
 
-                  <Show when={inspector !== null && session()}>
-                    {(sess) => (
-                      <>
-                        <h2 class="section">session events</h2>
-                        <EventFeed client={inspector!} id={params.id} live={run().live} end={sess().ended} />
-                      </>
-                    )}
-                  </Show>
                   {/* A fan-out run has no session of its own: a record per character, picked here. */}
                   <Show when={inspector !== null && detail()?.fanout}>
                     {(f) => <FanoutCharacters client={inspector!} runId={params.id} sessions={f()} live={run().live} now={now()} />}

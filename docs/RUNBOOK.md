@@ -2970,8 +2970,8 @@ the allowlist are read when the worldserver starts:
 
 ### Camera
 
-The camera follows a run's character and keeps frames and clips under the
-run's `camera/` (`docs/ARCHITECTURE.md`, "Camera"). It ships dark behind the
+The camera follows a run's character and keeps frames and the run's one
+video under the run's `camera/` (`docs/ARCHITECTURE.md`, "Camera"). It ships dark behind the
 chart's `camera` block. A camera is a pod of its own per filmed world
 (`<release>-camera-<world>`), never a container in a world's pod: it can never
 hold the shared worldserver or an eval world short of Ready, delay a world's
@@ -3032,19 +3032,24 @@ camera:
   rewrite (a pause or the verdict); a camera never writes a live run's
   meta.json;
 - a CronJob, `<release>-camera-sweep`, runs `infra/camera/sweep.ts` every ten
-  minutes whatever camera is up: it assembles the clips of any filmed run with
-  no live owner whose frames are newer than its clips, and a live run's twice
-  a day; and it deletes still frames `camera.frameKeepHours` (24) after the
-  assembly that covers them (a live run's that long after they were taken).
-  Clips are kept, and an event clip outlives its frames; a long live run's
-  timelapse covers about its last day.
+  minutes whatever camera is up: it assembles the video of any filmed run with
+  no live owner whose frames are newer than its video, a live run's at most
+  hourly, and any run whose `clips.json` is of an older layout; and it deletes
+  still frames `camera.frameKeepHours` (24) after the assembly that covers
+  them (a live run's that long after they were taken), never a frame of the
+  open part before the run has ended. The video is one per run, in parts of at
+  most six hours of play: a closed part is kept as it is and never encoded
+  again, and each assembly re-encodes only the open part, so a freeplay
+  character filmed for days costs one part's encode and upload an hour. An
+  older layout's `timelapse` and `event-*` clips are removed by the first
+  assembly in the new one.
 
 **Disk.** Frames go on the data PVC beside the runs. A camera takes about
 1.3 GB a day of interval frames, and up to about 2.5 GB in a day full of
-events (the live proof: 30 MB in 17 minutes). With `frameKeepHours: 24` and a
-live run's clips rebuilt every twelve hours, that is at most about 2.5 to
-4.5 GB a camera on disk at once, plus its clips (a few MB an hour). Size
-`maxConcurrent` against the PVC's free space.
+events (the live proof: 30 MB in 17 minutes). With `frameKeepHours: 24` and
+the open part's frames (up to six hours) held until it closes, that is at
+most about 2 to 3.5 GB a camera on disk at once, plus its video (a few MB an
+hour of play). Size `maxConcurrent` against the PVC's free space.
 
 **Quota.** Each camera pod requests about 3.25 GiB of memory and 0.3 CPU
 (`gpu`); the sweep's pod 256 MiB while it runs. A camera that does not fit is
@@ -3052,7 +3057,7 @@ not started, and the shared one is retried every minute.
 
 **Disable.** `camera.enabled: false` and a release. The fleet then starts no
 camera; delete any left with `kubectl -n <ns> delete pod -l
-app.kubernetes.io/component=camera`. Frames and clips already written stay
+app.kubernetes.io/component=camera`. Frames and video already written stay
 with their runs.
 
 **Troubleshoot.** A camera pod's two containers are `camera` (the client) and

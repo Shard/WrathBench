@@ -2,33 +2,34 @@
  * The camera's housekeeping over the runs tree, for runs no camera is
  * following any more (docs/RUNBOOK.md, "Camera"). A world per eval's pod is
  * removed at the verdict with no grace, so its director rarely gets to
- * assemble; the shared world's director, which lives as long as the release,
- * runs this every ten minutes instead. For each run with a camera:
+ * assemble; a CronJob runs this every ten minutes instead. For each run with
+ * a camera:
  *
  * - **label** an ended run `camera: true` in meta.json if the runner has not
  *   (`label.ts`; a paused or ownerless run may be resumed, and its meta.json
  *   rewritten, at any moment, so it is left to its runner);
- * - **assemble** its clips when its frame index is newer than its clips.json
- *   (`assemble.ts`; idempotent), and a live run's every twelve hours;
+ * - **assemble** its video when its frame index is newer than its clips.json
+ *   (`assemble.ts`), a live run's at most hourly, and any run whose
+ *   clips.json is not version 2. Only the open part is ever encoded again;
  * - **prune** still frames `--keep-hours` (24) after the assembly that covers
- *   them, live run or not (a live run's, that long after they were taken).
- *   The clips are kept, an event clip whose frames are gone stays listed, and
- *   a run whose frames are all pruned is not assembled again.
+ *   them, live run or not (a live run's, that long after they were taken),
+ *   but never a frame of the open part, which the next assembly encodes
+ *   again, until the run has ended. The video is kept.
  *
  *   bun infra/camera/sweep.ts [<runs-dir>] [--interval-seconds 10] [--keep-hours 24]
  */
 
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { assembleRun } from "./assemble";
+import { assembleRun, previousDoc } from "./assemble";
 import { hasCameraLabel, writeCameraLabel } from "./label";
 import { CLIPS_FILE, FRAMES_DIR, FRAMES_INDEX, cameraDir, type ClipsFile } from "./layout";
 import { notLive } from "./subjects";
 
 /** How long still frames outlive the assembly that covers them (values.yaml `camera.frameKeepHours`). */
 export const KEEP_FRAMES_HOURS = 24;
-/** A live run's clips are rebuilt this often, so its frames are always in one before they go. */
-export const REFRESH_LIVE_MS = 12 * 3_600_000;
+/** A live run's open part is encoded again at most this often: one part's encode and upload an hour. */
+export const REFRESH_LIVE_MS = 3_600_000;
 
 export interface SweepOptions {
   intervalMs: number;
@@ -83,17 +84,23 @@ export function sweepCameraRuns(runsDir: string, now: number, o: SweepOptions): 
     if (meta?.termination != null && !hasCameraLabel(runDir) && writeCameraLabel(runDir)) out.labelled.push(runId);
     const clips = join(cam, CLIPS_FILE);
     const clipsAt = mtime(clips);
-    // A run no camera follows, once its frames are newer than its clips; a
-    // live one twice a day, so every frame is in an assembly before it is pruned.
-    const due = mtime(index) > clipsAt && (!live || now - clipsAt > refreshLive);
+    const doc = clipsAt > 0 ? previousDoc(cam) : null;
+    // A run no camera follows, once its frames are newer than its video; a
+    // live one at most hourly; any run whose clips.json is not version 2.
+    const due = (mtime(index) > clipsAt && (!live || now - clipsAt > refreshLive)) || (clipsAt > 0 && doc === null);
+    let after = doc;
     if (due) {
       try {
-        if (assemble(runDir) !== null) out.assembled.push(runId);
+        after = assemble(runDir);
+        if (after !== null) out.assembled.push(runId);
       } catch (e) {
         log(`${runId}: assembly failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     const covered = mtime(clips);
+    const ended = meta?.termination != null;
+    // The open part's frames are encoded again by the next assembly: kept until the run has ended.
+    const openFrom = ended ? Number.POSITIVE_INFINITY : after === null ? Number.NEGATIVE_INFINITY : Date.parse(after.parts.at(-1)?.from ?? "") || Number.NEGATIVE_INFINITY;
     const frames = join(cam, FRAMES_DIR);
     let entries: string[] = [];
     try {
@@ -105,10 +112,10 @@ export function sweepCameraRuns(runsDir: string, now: number, o: SweepOptions): 
       if (!f.endsWith(".jpg")) continue;
       const p = join(frames, f);
       const at = mtime(p);
-      // In an assembly made after it was taken, and `keep` past it: for a
-      // run no camera follows, past its clips' assembly; for a live one,
-      // past its own taking (its clips are rebuilt every twelve hours).
-      if (at < covered && (now - covered > keep || (live && now - at > keep))) {
+      // In an assembly made after it was taken, before the open part (its
+      // mtime is at or after its taking), and `keep` past it: for a run no
+      // camera follows, past the assembly; for a live one, past its taking.
+      if (at < covered && at < openFrom && (now - covered > keep || (live && now - at > keep))) {
         rmSync(p, { force: true });
         out.prunedFrames++;
       }

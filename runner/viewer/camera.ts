@@ -1,13 +1,15 @@
 /**
- * A run's camera replay, as the viewer and the publisher read it.
+ * A run's camera video, as the viewer and the publisher read it.
  *
  * A camera that followed a run leaves `camera/` in the run's directory
- * (`docs/PUBLIC-DASHBOARD.md`, "Camera replays"): still frames, the clips made
- * from them, and `camera/clips.json`, which lists the clips and is the only
- * file read here to find them. The frames are never published: no function in
- * this file names a path under `frames/`, and a clip or poster is served only
- * when `clips.json` names it as `clips/<file>` with a plain file name. The one
- * frame a private handle serves, the newest, is read by `camera-live.ts`.
+ * (`docs/PUBLIC-DASHBOARD.md`, "Camera replays"): still frames, the run's one
+ * video made from them in parts, and `camera/clips.json` (version 2), which
+ * lists the parts, the chapters, the model's words and the time map, and is
+ * the only file read here to find them. The frames are never published: no
+ * function in this file names a path under `frames/`, and a part's video or
+ * poster is served only when `clips.json` names it as `clips/<file>` with a
+ * plain file name. The one frame a private handle serves, the newest, is read
+ * by `camera-live.ts`.
  *
  * Every path is checked component by component with `lstat`: the run
  * directory, `camera/`, `clips/` and the file itself must each be what they
@@ -17,36 +19,40 @@
 
 import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
-import type { ClipEventType, ClipView, ClipsResponse } from "./api-types";
+import type { CaptionCueView, ChapterView, ClipsResponse, HighlightResponse, VideoPartView } from "./api-types";
 import { isValidRunId } from "./runs";
+import { excerptAround, fitTimeline, totalSeconds, videoToRun } from "./video-time";
 
 /** Under the run's directory. */
 export const CAMERA_DIR = "camera";
 export const CLIPS_FILE = "clips.json";
 
-/** A clip's name: `timelapse` or `event-<seq>-<type>` today, and nothing that could be a path. */
+/** A part's name: `part-007` today, and nothing that could be a path. */
 export const CLIP_NAME = /^[A-Za-z0-9_-]{1,80}$/;
-/** A clip's video and poster as `clips.json` names them: one plain file name under `clips/`. */
-const CLIP_FILE = /^clips\/[A-Za-z0-9_-][A-Za-z0-9._-]{0,120}\.mp4$/;
-const POSTER_FILE = /^clips\/[A-Za-z0-9_-][A-Za-z0-9._-]{0,120}\.jpg$/;
+/** A part's video and poster as `clips.json` names them: one plain file name under `clips/`. */
+const CLIP_FILE = /^clips\/([A-Za-z0-9_-]{1,80})\.mp4$/;
+const POSTER_FILE = /^clips\/[A-Za-z0-9_-]{1,80}\.jpg$/;
 
-export const CLIP_EVENT_TYPES: readonly ClipEventType[] = ["level", "quest", "death", "zone", "boss", "start", "end"];
-
-/** The two kinds of media a clip has. */
+/** The two kinds of media a part has. */
 export type ClipMediaKind = "mp4" | "jpg";
 export const CLIP_CONTENT_TYPE: Record<ClipMediaKind, string> = { mp4: "video/mp4", jpg: "image/jpeg" };
 
-/** One clip as `clips.json` lists it, checked. `file` and `poster` are relative to `camera/`. */
-export interface CameraClip {
+/** One part as `clips.json` lists it, checked. `file` and `poster` are relative to `camera/`. */
+export interface CameraPart {
   name: string;
-  kind: "timelapse" | "event";
   file: string;
   poster: string | null;
-  event?: { type: ClipEventType; detail: string };
   from: string;
   to: string;
   seconds: number;
-  caption: string;
+}
+
+/** The run's video as `clips.json` lists it, checked. */
+export interface CameraVideo {
+  parts: CameraPart[];
+  chapters: ChapterView[];
+  captions: CaptionCueView[];
+  timemap: [number, number][];
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
@@ -57,6 +63,7 @@ export function isoOrNull(v: unknown): string | null {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+const finiteAtLeast0 = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
 /**
  * Stat a path without following a link, and only when it is the kind asked
@@ -82,37 +89,29 @@ export function cameraDir(runsDir: string, runId: string): string | null {
   return plain(dir, "dir") === null ? null : dir;
 }
 
-/** One clip entry, checked field by field; null drops it. */
-function readClip(v: unknown): CameraClip | null {
+/** One part entry, checked field by field; null ends the list there. */
+function readPart(v: unknown): CameraPart | null {
   if (!isRecord(v)) return null;
-  const name = v["name"];
-  const kind = v["kind"];
   const file = v["file"];
-  if (typeof name !== "string" || !CLIP_NAME.test(name)) return null;
-  if (kind !== "timelapse" && kind !== "event") return null;
-  if (typeof file !== "string" || !CLIP_FILE.test(file)) return null;
+  const m = typeof file === "string" ? CLIP_FILE.exec(file) : null;
+  if (m === null) return null;
   const from = isoOrNull(v["from"]);
   const to = isoOrNull(v["to"]);
   const seconds = v["seconds"];
-  if (from === null || to === null || typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return null;
+  if (from === null || to === null || !finiteAtLeast0(seconds)) return null;
   const poster = typeof v["poster"] === "string" && POSTER_FILE.test(v["poster"]) ? v["poster"] : null;
-  const ev = v["event"];
-  const event =
-    isRecord(ev) && CLIP_EVENT_TYPES.includes(ev["type"] as ClipEventType)
-      ? { type: ev["type"] as ClipEventType, detail: typeof ev["detail"] === "string" ? ev["detail"] : "" }
-      : undefined;
-  const caption = typeof v["caption"] === "string" ? v["caption"] : "";
-  return { name, kind, file, poster, ...(event !== undefined ? { event } : {}), from, to, seconds, caption };
+  return { name: m[1]!, file: file as string, poster, from, to, seconds };
 }
 
 /**
- * The run's clips, or null when it has none: no camera, no `clips.json`, a
- * file that is not version 1, names another run or does not parse (a director
- * mid-write). An entry that does not read is dropped, and so is a second entry
- * under a name already taken. Never throws: one bad file must cost its run's
- * replay and nothing else, in the viewer and in a publisher pass alike.
+ * The run's video, or null when it has none: no camera, no `clips.json`, a
+ * file that is not version 2, names another run or does not parse (a
+ * director mid-write). The parts are read in order up to the first that does
+ * not read or repeats a name, so the timeline has no gaps. Never throws: one
+ * bad file must cost its run's video and nothing else, in the viewer and in a
+ * publisher pass alike.
  */
-export function readClips(runsDir: string, runId: string): CameraClip[] | null {
+export function readClips(runsDir: string, runId: string): CameraVideo | null {
   const dir = cameraDir(runsDir, runId);
   if (dir === null) return null;
   const path = join(dir, CLIPS_FILE);
@@ -123,21 +122,22 @@ export function readClips(runsDir: string, runId: string): CameraClip[] | null {
   } catch {
     return null;
   }
-  if (!isRecord(raw) || raw["version"] !== 1 || raw["runId"] !== runId || !Array.isArray(raw["clips"])) return null;
-  const out: CameraClip[] = [];
+  if (!isRecord(raw) || raw["version"] !== 2 || raw["runId"] !== runId || !Array.isArray(raw["parts"])) return null;
+  const parts: CameraPart[] = [];
   const names = new Set<string>();
-  for (const c of raw["clips"]) {
-    const clip = readClip(c);
-    if (clip === null || names.has(clip.name)) continue;
-    names.add(clip.name);
-    out.push(clip);
+  for (const p of raw["parts"]) {
+    const part = readPart(p);
+    if (part === null || names.has(part.name)) break;
+    names.add(part.name);
+    parts.push(part);
   }
-  return out;
+  if (parts.length === 0) return null;
+  return { parts, ...fitTimeline(parts, { chapters: raw["chapters"], captions: raw["captions"], timemap: raw["timemap"] }) };
 }
 
 /**
- * The file behind one clip's video or poster, with its stat, or null. Only a
- * clip `clips.json` names, only its own `clips/<file>`, and only a plain file
+ * The file behind one part's video or poster, with its stat, or null. Only a
+ * part `clips.json` names, only its own `clips/<file>`, and only a plain file
  * under plain directories.
  */
 export function clipMedia(
@@ -146,12 +146,12 @@ export function clipMedia(
   name: string,
   kind: ClipMediaKind,
   /** The run's `readClips`, when the caller has just read it. */
-  listed?: readonly CameraClip[],
+  listed?: CameraVideo | null,
 ): { file: string; stat: Stats } | null {
   if (!CLIP_NAME.test(name)) return null;
-  const clip = (listed ?? readClips(runsDir, runId) ?? []).find((c) => c.name === name);
-  if (clip === undefined) return null;
-  const rel = kind === "mp4" ? clip.file : clip.poster;
+  const part = (listed === undefined ? readClips(runsDir, runId) : listed)?.parts.find((c) => c.name === name);
+  if (part === undefined) return null;
+  const rel = kind === "mp4" ? part.file : part.poster;
   if (rel === null) return null;
   const dir = cameraDir(runsDir, runId);
   if (dir === null || plain(join(dir, "clips"), "dir") === null) return null;
@@ -160,7 +160,7 @@ export function clipMedia(
   return stat === null ? null : { file, stat };
 }
 
-/** Where the viewer serves a clip's media. */
+/** Where the viewer serves a part's media. */
 export function clipMediaRoute(runId: string, name: string, kind: ClipMediaKind): string {
   return `/api/run/${encodeURIComponent(runId)}/clip/${name}.${kind}`;
 }
@@ -169,30 +169,28 @@ export function clipMediaRoute(runId: string, name: string, kind: ClipMediaKind)
 export const CLIP_MEDIA_ROUTE = /^\/clip\/([A-Za-z0-9_-]{1,80})\.(mp4|jpg)$/;
 
 /**
- * The clips route's body: each clip with its media named by the viewer's own
- * routes. A clip whose video file is missing is left out; a missing poster is
- * null. The caption is as written; the public projection is what cuts it.
+ * The clips route's body: each part with its media named by the viewer's own
+ * routes, up to the first whose video file is missing; a missing poster is
+ * null. The captions are as written; the public projection is what cuts them.
  */
 export function clipsView(runsDir: string, runId: string): ClipsResponse | null {
-  const clips = readClips(runsDir, runId);
-  if (clips === null) return null;
-  const out: ClipView[] = [];
-  for (const c of clips) {
-    if (clipMedia(runsDir, runId, c.name, "mp4", clips) === null) continue;
-    const poster = c.poster !== null && clipMedia(runsDir, runId, c.name, "jpg", clips) !== null;
-    out.push({
-      name: c.name,
-      kind: c.kind,
-      ...(c.event !== undefined ? { event: c.event } : {}),
-      from: c.from,
-      to: c.to,
-      seconds: c.seconds,
-      caption: c.caption,
-      video: clipMediaRoute(runId, c.name, "mp4"),
-      poster: poster ? clipMediaRoute(runId, c.name, "jpg") : null,
+  const video = readClips(runsDir, runId);
+  if (video === null) return null;
+  const parts: VideoPartView[] = [];
+  for (const p of video.parts) {
+    if (clipMedia(runsDir, runId, p.name, "mp4", video) === null) break;
+    const poster = p.poster !== null && clipMedia(runsDir, runId, p.name, "jpg", video) !== null;
+    parts.push({
+      name: p.name,
+      from: p.from,
+      to: p.to,
+      seconds: p.seconds,
+      video: clipMediaRoute(runId, p.name, "mp4"),
+      poster: poster ? clipMediaRoute(runId, p.name, "jpg") : null,
     });
   }
-  return out.length === 0 ? null : { runId, clips: out };
+  if (parts.length === 0) return null;
+  return { runId, parts, ...fitTimeline(parts, video) };
 }
 
 /** Whether `meta.json` says a camera followed the run (`"camera": true`). */
@@ -209,29 +207,26 @@ export function hadCamera(runsDir: string, runId: string): boolean {
 }
 
 /**
- * The home page's one clip: the newest event clip across `runs`, or the newest
- * timelapse when no run has an event clip. Newest by the clip's end; ties go to
- * the run listed first. Null when there is no clip at all.
+ * The home page's excerpt: around the newest chapter across `runs`, newest by
+ * the run time the time map gives it; ties go to the run listed first. A run
+ * with a video and no chapter is a candidate only when no run has one, and
+ * then its video's last seconds are shown. Null when no run has a video.
  */
-export function pickHighlight(runs: readonly { runId: string; model: string | null; clips: ClipsResponse }[]): {
-  runId: string;
-  model: string | null;
-  clip: ClipView;
-} | null {
-  let best: { runId: string; model: string | null; clip: ClipView } | null = null;
-  const rank = (c: ClipView): [number, number] => [c.kind === "event" ? 1 : 0, Date.parse(c.to)];
+export function pickHighlight(runs: readonly { runId: string; model: string | null; clips: ClipsResponse }[]): HighlightResponse["highlight"] {
+  let best: { at: number; chaptered: boolean; pick: NonNullable<HighlightResponse["highlight"]> } | null = null;
   for (const r of runs) {
-    for (const clip of r.clips.clips) {
-      if (best === null) {
-        best = { runId: r.runId, model: r.model, clip };
-        continue;
-      }
-      const [k, t] = rank(clip);
-      const [bk, bt] = rank(best.clip);
-      if (k > bk || (k === bk && t > bt)) best = { runId: r.runId, model: r.model, clip };
-    }
+    const { parts, chapters, timemap } = r.clips;
+    if (parts.length === 0) continue;
+    const chapter = chapters.at(-1) ?? null;
+    const t = chapter?.t ?? Math.max(0, totalSeconds(parts) - 1);
+    const win = excerptAround(parts, t);
+    if (win === null) continue;
+    const at = videoToRun(timemap, t) ?? Date.parse(parts.at(-1)!.to);
+    const chaptered = chapter !== null;
+    if (best !== null && ((best.chaptered && !chaptered) || (best.chaptered === chaptered && at <= best.at))) continue;
+    best = { at, chaptered, pick: { runId: r.runId, model: r.model, part: parts[win.index]!, from: win.from, to: win.to, chapter } };
   }
-  return best;
+  return best?.pick ?? null;
 }
 
 /**

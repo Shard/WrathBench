@@ -994,7 +994,7 @@ export interface RunListRow extends RunRow {
      */
     entries?: string;
     scratchpad?: string;
-    /** The run's camera clips (`ClipsResponse`), on a run that has any. */
+    /** The run's camera video (`ClipsResponse`), on a run that has one. */
     clips?: string;
   };
 }
@@ -1004,32 +1004,55 @@ export interface ScratchpadResponse {
   text: string;
 }
 
-/** What a camera clip shows a moment of (`runner/viewer/camera.ts`). */
-export type ClipEventType = "level" | "quest" | "death" | "zone" | "boss" | "start" | "end";
+/** What a chapter of a run's video marks (`runner/viewer/camera.ts`). */
+export type ChapterType = "level" | "quest" | "death" | "zone" | "boss";
 
 /**
- * One camera clip as the pages read it. `video` and `poster` name where the
- * media is: a viewer route (`/api/run/<id>/clip/<name>.mp4`) on the live API,
- * a bucket key (`v1/run/<id>/clip/<name>-<hash>.mp4`) in a snapshot; the
- * client turns either into a URL.
+ * One part of a run's video as the pages read it. `video` and `poster` name
+ * where the media is: a viewer route (`/api/run/<id>/clip/<name>.mp4`) on the
+ * live API, a bucket key (`v1/run/<id>/clip/<name>-<hash>.mp4`) in a
+ * snapshot; the client turns either into a URL.
  */
-export interface ClipView {
+export interface VideoPartView {
   name: string;
-  kind: "timelapse" | "event";
-  event?: { type: ClipEventType; detail: string };
+  /** Run time of its first and last frame, ISO. */
   from: string;
   to: string;
+  /** Its length as video. */
   seconds: number;
-  /** The caption line, shown under the video; empty when there is none. */
-  caption: string;
   video: string;
   poster: string | null;
 }
 
-/** `/api/run/<id>/clips`: a run's camera clips, the timelapse first when there is one. */
+/** A marker on the video: `t` in seconds on the whole timeline, across parts. */
+export interface ChapterView {
+  t: number;
+  /** The index in `parts` it falls in. */
+  part: number;
+  type: ChapterType;
+  /** Our own short text: ids and numbers, never game prose. */
+  detail: string;
+  /** The model's own words at that moment, or "". */
+  caption: string;
+}
+
+/** The model's words from `t` (seconds, whole timeline) until the next cue. */
+export interface CaptionCueView {
+  t: number;
+  text: string;
+}
+
+/**
+ * `/api/run/<id>/clips`: a run's one video, its parts back to back, with its
+ * chapters, the model's words, and the time map between the timeline and run
+ * time (`[videoSeconds, runTimeMs]` keypoints; `runner/viewer/video-time.ts`).
+ */
 export interface ClipsResponse {
   runId: string;
-  clips: ClipView[];
+  parts: VideoPartView[];
+  chapters: ChapterView[];
+  captions: CaptionCueView[];
+  timemap: [number, number][];
 }
 
 /**
@@ -1043,9 +1066,13 @@ export interface LatestFrameResponse {
   t: string;
 }
 
-/** `/api/highlight`: the home page's one clip, or none. */
+/**
+ * `/api/highlight`: the home page's excerpt of a recent run's video around its
+ * newest chapter, or none. `from` and `to` are seconds into `part`'s file;
+ * `chapter` is null for a video with no chapter, whose last seconds it shows.
+ */
 export interface HighlightResponse {
-  highlight: { runId: string; model: string | null; clip: ClipView } | null;
+  highlight: { runId: string; model: string | null; part: VideoPartView; from: number; to: number; chapter: ChapterView | null } | null;
 }
 
 /**

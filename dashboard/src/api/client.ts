@@ -40,8 +40,9 @@ import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 export type {
   AgentPosition,
   ApiInfoResponse,
-  ClipView,
+  ChapterView,
   ClipsResponse,
+  VideoPartView,
   HighlightResponse,
   LatestFrameResponse,
   ComparabilityView,
@@ -349,13 +350,13 @@ export function createClient(opts: ClientOptions = {}) {
       text: await get(`/api/run/${encodeURIComponent(id)}/scratchpad`, getText),
     }),
     /**
-     * The run's camera clips. A run with none is a 404. Each clip's `video`
+     * The run's camera video. A run with none is a 404. Each part's `video`
      * and `poster` are refs for `mediaUrl`.
      */
     clips: (id: string): Promise<ClipsResponse> => get<ClipsResponse>(`/api/run/${encodeURIComponent(id)}/clips`),
-    /** The home page's one clip, newest first, or none. */
+    /** The home page's excerpt of a recent run's video, or none. */
     highlight: (): Promise<HighlightResponse> => get<HighlightResponse>("/api/highlight"),
-    /** A clip's video or poster ref as a URL: the viewer's own route, same-origin. */
+    /** A part's video or poster ref as a URL: the viewer's own route, same-origin. */
     mediaUrl: (ref: string): string => `${opts.base ?? ""}${ref}`,
     /**
      * The run's newest camera frame, `{seq, t}`, or null when it has none: the

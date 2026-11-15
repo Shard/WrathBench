@@ -17,7 +17,7 @@ import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 import { displayError } from "../lib/errors";
 import { modelDisplay } from "../lib/format";
 import { InfoHint } from "../components/InfoHint";
-import { HighlightClip } from "../components/Replay";
+import { VideoExcerpt } from "../components/Replay";
 import { STACK_URL } from "../lib/repo";
 import type { HighlightResponse } from "../api/client";
 import { useFeeds } from "../lib/feeds";
@@ -62,7 +62,7 @@ export default function Home() {
   };
   const [picked, setPicked] = createSignal<string | undefined>(undefined);
   const current = () => selectedTool(tools.latest ?? [], picked());
-  // One recent clip from a camera, when any run has one; read once per visit.
+  // A few seconds of a recent run's video, when any run has one; read once per visit.
   const [highlight, setHighlight] = createSignal<HighlightResponse["highlight"]>(null);
   void api
     .highlight()
@@ -120,7 +120,7 @@ export default function Home() {
         {(h) => (
           <>
             <h2 class="section">a recent clip</h2>
-            <HighlightClip runId={h().runId} model={h().model} clip={h().clip} />
+            <VideoExcerpt runId={h().runId} model={h().model} part={h().part} from={h().from} to={h().to} chapter={h().chapter} />
           </>
         )}
       </Show>

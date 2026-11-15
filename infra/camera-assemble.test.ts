@@ -1,17 +1,20 @@
 /**
- * Clip assembly (infra/camera/assemble.ts), captions (camera/captions.ts) and
- * the run label (camera/label.ts). The frames are ffmpeg `testsrc` images made
- * in a temp directory: no game image is ever in git. The encode needs ffmpeg
- * and ffprobe on PATH; CI installs them (.github/workflows/ci.yml).
+ * The run's video (infra/camera/assemble.ts), captions (camera/captions.ts)
+ * and the run label (camera/label.ts). The planner is tested on fake
+ * timestamps alone; the part bookkeeping with a stub ffmpeg that writes a
+ * byte and logs what it was asked for; and one real encode with ffmpeg
+ * `testsrc` images made in a temp directory: no game image is ever in git.
+ * The real encode needs ffmpeg and ffprobe on PATH; CI installs them
+ * (.github/workflows/ci.yml).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./temp-dirs";
-import { assembleRun, concatListOf, planClips, subtitlesOf } from "./camera/assemble";
-import { captionLine, clipCaption, saidAt, saidOf } from "./camera/captions";
+import { assembleRun, compactTimemap, concatListOf, HOLD_TICKS, planShots, splitParts, subtitlesOf, timelineOf, VIDEO_FPS, type Shot } from "./camera/assemble";
+import { captionLine, saidAt, saidOf } from "./camera/captions";
 import { hasCameraLabel, labelRun, writeCameraLabel } from "./camera/label";
-import { CLIPS_FILE, frameFile, parseFrames, type ClipsFile, type FrameLine } from "./camera/layout";
+import { CLIPS_FILE, frameFile, parseFrames, PART_MS, type ClipsFile, type FrameLine } from "./camera/layout";
 
 const tmp = tempDirs();
 const ffmpeg = Bun.which("ffmpeg");
@@ -61,35 +64,196 @@ describe("captions", () => {
     const line = captionLine(long);
     expect(line.length).toBeLessThanOrEqual(120);
     expect(line.endsWith("…")).toBe(true);
-    expect(clipCaption("Onward.", "DeepSeek V4")).toBe("“Onward.” — DeepSeek V4 · WrathBench");
-    expect(clipCaption("", "DeepSeek V4")).toBe("DeepSeek V4 · WrathBench");
   });
 });
 
-describe("clip planning", () => {
-  test("a timelapse of one frame per interval, and one clip for the burst", () => {
+const HOUR = 3_600_000;
+
+/** Interval frames every `everyMs` from `from` to `to` (inclusive), numbered on from `seq`. */
+function intervals(from: number, to: number, everyMs: number, seq = 0): FrameLine[] {
+  const out: FrameLine[] = [];
+  for (let t = from; t <= to; t += everyMs) out.push({ seq, t: iso(t), file: frameFile(seq++), kind: "interval" });
+  return out;
+}
+
+describe("the video's plan", () => {
+  test("every frame in time order: intervals one video frame each, a burst thinned to its moment, the moment held", () => {
     const levelAt = T0 + 60_000;
-    const plans = planClips(frameLines(levelAt), { intervalMs: 10_000 });
-    expect(plans.map((p) => [p.name, p.kind, p.frames.length])).toEqual([
-      ["timelapse", "timelapse", 14],
-      ["event-3-level", "event", 41],
-    ]);
-    const ev = plans[1]!;
-    expect(ev.fps).toBe(4);
-    expect(Date.parse(ev.poster.t)).toBe(levelAt);
-    const said = saidOf(trajectory());
-    const ass = subtitlesOf(ev, said, "DeepSeek V4");
-    expect(ass).toContain("Hud,,0,0,0,,WrathBench · DeepSeek V4 · reached level 6");
-    expect(ass).toContain("Level 6 is next; then the bandits by the mill.");
-    expect(ass).not.toContain("wolf pelts");
-    const list = concatListOf(ev, "/runs/x/camera");
-    expect(list.split("\n").filter((l) => l.startsWith("file ")).length).toBe(42);
+    const shots = planShots(frameLines(levelAt), { intervalMs: 10_000 });
+    const at = (s: Shot) => Date.parse(s.frame.t);
+    // In order, and nothing taken twice.
+    expect(shots.map(at)).toEqual([...shots.map(at)].sort((a, b) => a - b));
+    // The burst's twelve seconds around the moment whole: 8 s before to 4 s after, at the capture's 1 fps.
+    const dense = shots.filter((s) => at(s) >= levelAt - 8_000 && at(s) <= levelAt + 4_000);
+    expect(dense.length).toBe(13);
+    // One chapter, opening the window; the moment held a second.
+    const chapters = shots.filter((s) => s.chapter !== undefined);
+    expect(chapters.length).toBe(1);
+    expect(at(chapters[0]!)).toBe(levelAt - 8_000);
+    expect(chapters[0]!.chapter).toEqual({ event: { type: "level", detail: "reached level 6" }, moment: levelAt });
+    const held = shots.filter((s) => s.ticks > 1);
+    expect(held.map((s) => [at(s), s.ticks])).toEqual([[levelAt, 1 + HOLD_TICKS]]);
+    // Outside the window, the burst's frames are thinned like interval frames: about one per interval.
+    const lead = shots.filter((s) => at(s) >= levelAt - 30_000 && at(s) < levelAt - 8_000);
+    expect(lead.length).toBeLessThanOrEqual(3);
   });
 
-  test("start and end marks and short bursts make no clip", () => {
-    const f = (seq: number, t: number, type?: "start" | "death"): FrameLine => ({ seq, t: iso(t), file: frameFile(seq), kind: type === undefined ? "interval" : "event", ...(type !== undefined ? { event: { type, detail: type } } : {}) });
-    const plans = planClips([f(0, T0, "start"), f(1, T0 + 1000, "death"), f(2, T0 + 2000, "death"), f(3, T0 + 12_000)], { intervalMs: 10_000 });
-    expect(plans.map((p) => p.name)).toEqual(["timelapse"]);
+  test("start and end marks make no chapter", () => {
+    const f = (seq: number, t: number, type?: "start" | "end"): FrameLine => ({ seq, t: iso(t), file: frameFile(seq), kind: type === undefined ? "interval" : "event", ...(type !== undefined ? { event: { type, detail: type } } : {}) });
+    const shots = planShots([f(0, T0, "start"), f(1, T0 + 10_000), f(2, T0 + 20_000, "end")], { intervalMs: 10_000 });
+    expect(shots.length).toBe(3);
+    expect(shots.some((s) => s.chapter !== undefined || s.ticks > 1)).toBe(false);
+  });
+
+  test("parts of at most six hours of run time; a pause longer than that starts a new one", () => {
+    // Fifteen hours of play, a frame every ten minutes.
+    const long = splitParts(planShots(intervals(T0, T0 + 15 * HOUR, 600_000), { intervalMs: 600_000 }));
+    expect(long.map((p) => [p[0]!.frame.t, p.at(-1)!.frame.t])).toEqual([
+      [iso(T0), iso(T0 + 6 * HOUR)],
+      [iso(T0 + 6 * HOUR + 600_000), iso(T0 + 12 * HOUR + 600_000)],
+      [iso(T0 + 12 * HOUR + 1_200_000), iso(T0 + 15 * HOUR)],
+    ]);
+    for (const p of long) expect(Date.parse(p.at(-1)!.frame.t) - Date.parse(p[0]!.frame.t)).toBeLessThanOrEqual(PART_MS);
+    // Two hours, two days paused, an hour more: two parts, and no empty one between.
+    const frames = [...intervals(T0, T0 + 2 * HOUR, 600_000), ...intervals(T0 + 50 * HOUR, T0 + 51 * HOUR, 600_000, 100)];
+    const paused = splitParts(planShots(frames, { intervalMs: 600_000 }));
+    expect(paused.map((p) => p.length)).toEqual([13, 7]);
+  });
+
+  test("chapters, captions and the time map on the whole timeline, across parts", () => {
+    const said = saidOf(trajectory());
+    const levelAt = T0 + 60_000;
+    const shots = planShots(frameLines(levelAt), { intervalMs: 10_000 });
+    const seconds = shots.reduce((n, s) => n + s.ticks, 0) / VIDEO_FPS;
+    // As the second part, 100 s into the video.
+    const line = timelineOf(shots, 1, 100, said, null);
+    expect(line.chapters.length).toBe(1);
+    const ch = line.chapters[0]!;
+    expect(ch.part).toBe(1);
+    expect(ch.type).toBe("level");
+    expect(ch.caption).toBe("Level 6 is next; then the bandits by the mill.");
+    // The chapter's time is the part's offset plus the video before its first frame.
+    const before = shots.slice(0, shots.findIndex((s) => s.chapter !== undefined)).reduce((n, s) => n + s.ticks, 0) / VIDEO_FPS;
+    expect(ch.t).toBe(100 + before);
+    // The time map: a point per frame shown, one more at the end of the hold, inside the part's span.
+    expect(line.points.length).toBe(shots.length + 1);
+    expect(line.points[0]).toEqual([100, T0]);
+    expect(line.points.at(-1)![0]).toBeLessThan(100 + seconds);
+    // The model's words, each when it changes, never game text; at least CAPTION_MIN_S apart, so
+    // the last line, said with under a second of video left, is not shown.
+    expect(line.captions.map((c) => c.text)).toEqual(["Plan Head to the wolves east of the abbey and clear them for the quest.", "Level 6 is next; then the bandits by the mill."]);
+    for (let i = 1; i < line.captions.length; i++) expect(line.captions[i]!.t - line.captions[i - 1]!.t).toBeGreaterThanOrEqual(3);
+    // A cue that carries over from the part before is not said again.
+    expect(timelineOf(shots, 1, 100, said, { t: 99, text: "Plan Head to the wolves east of the abbey and clear them for the quest." }).captions[0]!.text).toBe("Level 6 is next; then the bandits by the mill.");
+    // Our own line: the detail while the event shows, never the model's words.
+    const ass = subtitlesOf(seconds, line.details, "DeepSeek V4");
+    expect(ass).toContain("Hud,,0,0,0,,WrathBench · DeepSeek V4");
+    expect(ass).toContain(",Ev,,0,0,0,,reached level 6");
+    expect(ass).not.toContain("bandits");
+    expect(ass).not.toContain("wolf pelts");
+    const list = concatListOf(shots, "/runs/x/camera");
+    expect(list.split("\n").filter((l) => l.startsWith("file ")).length).toBe(shots.length + 1);
+    expect(list).toContain(`duration ${((1 + HOLD_TICKS) / VIDEO_FPS).toFixed(4)}`);
+  });
+
+  test("the time map compacts a steady stretch to its ends and keeps a hold and a pause", () => {
+    const steady: [number, number][] = Array.from({ length: 100 }, (_, i) => [i / 8, T0 + i * 10_000 + (i % 2) * 500]);
+    expect(compactTimemap(steady)).toEqual([steady[0]!, steady[99]!]);
+    // A hold (run time stands while video runs), then a two-day pause.
+    const shaped: [number, number][] = [[0, T0], [1, T0 + 10_000], [2, T0 + 20_000], [3, T0 + 20_000], [3.125, T0 + 30_000], [3.25, T0 + 2 * 86_400_000], [3.375, T0 + 2 * 86_400_000 + 10_000]];
+    const c = compactTimemap(shaped);
+    expect(c).toContainEqual([2, T0 + 20_000]);
+    expect(c).toContainEqual([3, T0 + 20_000]);
+    expect(c).toContainEqual([3.125, T0 + 30_000]);
+    expect(c).toContainEqual([3.25, T0 + 2 * 86_400_000]);
+    // Every point dropped is within the tolerance of the line kept.
+    expect(c.length).toBeLessThan(shaped.length);
+  });
+});
+
+/** A run whose frames are tiny stand-in files: the stub ffmpeg never reads them. */
+function stubRun(dir: string, frames: FrameLine[]): void {
+  const cam = join(dir, "camera");
+  mkdirSync(join(cam, "frames"), { recursive: true });
+  if (!existsSync(join(dir, "meta.json"))) writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ runId: "cam-run", config: { model: "deepseek/deepseek-v4" } })}\n`);
+  for (const f of frames) writeFileSync(join(cam, f.file), "x");
+  appendFileSync(join(cam, "frames.jsonl"), frames.map((f) => `${JSON.stringify(f)}\n`).join(""));
+}
+
+/** An ffmpeg that writes one byte to its output and logs the part it was asked for. */
+function stubFfmpeg(root: string): { bin: string; calls: () => string[]; reset: () => void } {
+  const bin = join(root, "ffmpeg-stub");
+  const log = join(root, "ffmpeg.log");
+  writeFileSync(bin, `#!/bin/sh\nfor a; do last="$a"; done\nprintf x > "$last"\nbasename "$last" >> '${log}'\n`);
+  chmodSync(bin, 0o755);
+  writeFileSync(log, "");
+  return { bin, calls: () => readFileSync(log, "utf8").split("\n").filter((l) => l !== ""), reset: () => writeFileSync(log, "") };
+}
+
+describe("parts", () => {
+  test("a closed part is never encoded again: its file, poster, chapters, captions and time map stand as they were", () => {
+    const root = tmp("camera-parts-");
+    const dir = join(root, "cam-run");
+    const ff = stubFfmpeg(root);
+    const cam = join(dir, "camera");
+    // Thirteen hours of play, a frame a minute, a level at 3 h.
+    const first = intervals(T0, T0 + 13 * HOUR, 60_000);
+    const lv = first.findIndex((f) => Date.parse(f.t) === T0 + 3 * HOUR);
+    Object.assign(first[lv]!, { kind: "event", event: { type: "level", detail: "reached level 9" } });
+    stubRun(dir, first);
+    // An older layout's clips go with the first assembly.
+    mkdirSync(join(cam, "clips"), { recursive: true });
+    writeFileSync(join(cam, "clips", "timelapse.mp4"), "old");
+    writeFileSync(join(cam, "clips.json"), JSON.stringify({ version: 1, runId: "cam-run", clips: [] }));
+    const a = assembleRun(dir, { intervalMs: 60_000, ffmpeg: ff.bin })!;
+    expect(a.version).toBe(2);
+    expect(a.parts.map((p) => p.file)).toEqual(["clips/part-000.mp4", "clips/part-001.mp4", "clips/part-002.mp4"]);
+    expect(ff.calls()).toEqual(["0.mp4", "1.mp4", "2.mp4"]);
+    expect(readdirSync(join(cam, "clips")).sort()).toEqual(["part-000.jpg", "part-000.mp4", "part-001.jpg", "part-001.mp4", "part-002.jpg", "part-002.mp4"]);
+    expect(a.chapters).toEqual([expect.objectContaining({ part: 0, type: "level", detail: "reached level 9" })]);
+    const stamp = (f: string) => {
+      const st = statSync(join(cam, f));
+      return [st.ino, st.mtimeMs];
+    };
+    const closed = a.parts.slice(0, 2).flatMap((p) => [p.file, p.poster]);
+    const before = closed.map(stamp);
+
+    // An hour more, and the closed parts' frames pruned: only the open part is encoded again.
+    ff.reset();
+    stubRun(dir, intervals(T0 + 13 * HOUR + 60_000, T0 + 14 * HOUR, 60_000, first.length));
+    for (const f of first.filter((f) => Date.parse(f.t) < Date.parse(a.parts[2]!.from))) rmSync(join(cam, f.file));
+    const b = assembleRun(dir, { intervalMs: 60_000, ffmpeg: ff.bin })!;
+    expect(ff.calls()).toEqual(["2.mp4"]);
+    expect(closed.map(stamp)).toEqual(before);
+    expect(b.parts.slice(0, 2)).toEqual(a.parts.slice(0, 2));
+    expect(b.chapters).toEqual(a.chapters);
+    expect(b.parts[2]!.from).toBe(a.parts[2]!.from);
+    expect(b.parts[2]!.to).toBe(iso(T0 + 14 * HOUR));
+    expect(b.timemap.filter((p) => p[0] < a.parts[0]!.seconds + a.parts[1]!.seconds)).toEqual(a.timemap.filter((p) => p[0] < a.parts[0]!.seconds + a.parts[1]!.seconds));
+    expect(b.captions).toEqual(a.captions);
+
+    // Past six hours of the open part: it is encoded a last time, closed, and a new one opens.
+    ff.reset();
+    const more = intervals(T0 + 14 * HOUR + 60_000, T0 + 19 * HOUR, 60_000, first.length + 60);
+    stubRun(dir, more);
+    const c = assembleRun(dir, { intervalMs: 60_000, ffmpeg: ff.bin })!;
+    expect(ff.calls()).toEqual(["2.mp4", "3.mp4"]);
+    expect(c.parts.length).toBe(4);
+    ff.reset();
+    stubRun(dir, intervals(T0 + 19 * HOUR + 60_000, T0 + 19 * HOUR + 60_000, 60_000, first.length + 60 + more.length));
+    assembleRun(dir, { intervalMs: 60_000, ffmpeg: ff.bin });
+    expect(ff.calls()).toEqual(["3.mp4"]);
+  });
+
+  test("a part that will not encode ends the video there, and the list names only what is on disk", () => {
+    const root = tmp("camera-parts-fail-");
+    const dir = join(root, "cam-run");
+    const bin = join(root, "ffmpeg-fail");
+    writeFileSync(bin, "#!/bin/sh\nexit 1\n");
+    chmodSync(bin, 0o755);
+    stubRun(dir, intervals(T0, T0 + HOUR, 60_000));
+    expect(assembleRun(dir, { intervalMs: 60_000, ffmpeg: bin })).toBeNull();
+    expect(existsSync(join(dir, "camera", CLIPS_FILE))).toBe(false);
   });
 });
 
@@ -109,16 +273,16 @@ function makeRun(dir: string, frames: FrameLine[]): void {
   writeFileSync(join(cam, "frames.jsonl"), frames.map((f) => `${JSON.stringify(f)}\n`).join(""));
 }
 
-function probe(path: string): { codec: string; pix: string; w: number; h: number; streams: number } {
-  const r = Bun.spawnSync([ffprobe!, "-v", "error", "-show_entries", "stream=codec_type,codec_name,pix_fmt,width,height", "-of", "json", path], { stdout: "pipe" });
-  const j = JSON.parse(r.stdout.toString()) as { streams: { codec_name: string; pix_fmt: string; width: number; height: number }[] };
+function probe(path: string): { codec: string; pix: string; w: number; h: number; streams: number; frames: number; seconds: number } {
+  const r = Bun.spawnSync([ffprobe!, "-v", "error", "-count_frames", "-show_entries", "stream=codec_type,codec_name,pix_fmt,width,height,nb_read_frames:format=duration", "-of", "json", path], { stdout: "pipe" });
+  const j = JSON.parse(r.stdout.toString()) as { streams: { codec_name: string; pix_fmt: string; width: number; height: number; nb_read_frames: string }[]; format: { duration: string } };
   const v = j.streams[0]!;
-  return { codec: v.codec_name, pix: v.pix_fmt, w: v.width, h: v.height, streams: j.streams.length };
+  return { codec: v.codec_name, pix: v.pix_fmt, w: v.width, h: v.height, streams: j.streams.length, frames: Number(v.nb_read_frames), seconds: Number(j.format.duration) };
 }
 
 describe.skipIf(ffmpeg === null || ffprobe === null)("assembly with ffmpeg", () => {
   test(
-    "clips per the layout: H.264, yuv420p, 1280×720, silent, faststart, a poster each, clips.json last",
+    "the video per the layout: H.264, yuv420p, 1280×720, silent, faststart, exactly as long as its time map says",
     () => {
       const dir = join(tmp("camera-assemble-"), "cam-run");
       const levelAt = T0 + 60_000;
@@ -128,38 +292,31 @@ describe.skipIf(ffmpeg === null || ffprobe === null)("assembly with ffmpeg", () 
       const doc = assembleRun(dir, { intervalMs: 10_000 })!;
       const onDisk = JSON.parse(readFileSync(join(dir, "camera", CLIPS_FILE), "utf8")) as ClipsFile;
       expect(onDisk).toEqual(doc);
-      expect(doc.version).toBe(1);
+      expect(doc.version).toBe(2);
       expect(doc.runId).toBe("cam-run");
-      expect(doc.clips.map((c) => [c.name, c.kind, c.file, c.poster])).toEqual([
-        ["timelapse", "timelapse", "clips/timelapse.mp4", "clips/timelapse.jpg"],
-        ["event-3-level", "event", "clips/event-3-level.mp4", "clips/event-3-level.jpg"],
-      ]);
-      const ev = doc.clips[1]!;
-      expect(ev.event).toEqual({ type: "level", detail: "reached level 6" });
-      expect(ev.from).toBe(iso(levelAt - 30_000));
-      expect(ev.to).toBe(iso(levelAt + 10_000));
-      expect(ev.seconds).toBe(11.8);
-      expect(ev.caption.startsWith("“Level 6 is next; then the bandits by the mill.” — ")).toBe(true);
-      expect(ev.caption.endsWith(" · WrathBench")).toBe(true);
-      expect(doc.clips[0]!.caption.startsWith("“Level six. Turning in at the abbey now.” — ")).toBe(true);
-      for (const c of doc.clips) {
-        const path = join(dir, "camera", c.file);
-        expect(probe(path)).toEqual({ codec: "h264", pix: "yuv420p", w: 1280, h: 720, streams: 1 });
-        // faststart: the index (moov) precedes the media (mdat).
-        const head = readFileSync(path).subarray(0, 4096).toString("latin1");
-        expect(head.indexOf("moov")).toBeGreaterThan(-1);
-        expect(head.indexOf("moov")).toBeLessThan(head.indexOf("mdat") === -1 ? Infinity : head.indexOf("mdat"));
-        expect(existsSync(join(dir, "camera", c.poster))).toBe(true);
-      }
+      expect(doc.parts.length).toBe(1);
+      const part = doc.parts[0]!;
+      expect([part.file, part.poster]).toEqual(["clips/part-000.mp4", "clips/part-000.jpg"]);
+      expect(part.from).toBe(iso(T0));
+      expect(part.to).toBe(frames.at(-1)!.t);
+      const shots = planShots(frames, { intervalMs: 10_000 });
+      const ticks = shots.reduce((n, s) => n + s.ticks, 0);
+      expect(part.seconds).toBe(ticks / VIDEO_FPS);
+      const p = probe(join(dir, "camera", part.file));
+      expect([p.codec, p.pix, p.w, p.h, p.streams]).toEqual(["h264", "yuv420p", 1280, 720, 1]);
+      // Every frame on screen for whole video frames: the encode is exactly the plan.
+      expect(p.frames).toBe(ticks);
+      expect(Math.abs(p.seconds - part.seconds)).toBeLessThan(0.05);
+      // faststart: the index (moov) precedes the media (mdat).
+      const head = readFileSync(join(dir, "camera", part.file)).subarray(0, 4096).toString("latin1");
+      expect(head.indexOf("moov")).toBeGreaterThan(-1);
+      expect(head.indexOf("moov")).toBeLessThan(head.indexOf("mdat") === -1 ? Infinity : head.indexOf("mdat"));
+      expect(existsSync(join(dir, "camera", part.poster))).toBe(true);
+      expect(doc.chapters).toEqual([expect.objectContaining({ part: 0, type: "level", detail: "reached level 6", caption: "Level 6 is next; then the bandits by the mill." })]);
+      expect(doc.timemap[0]).toEqual([0, T0]);
       expect(existsSync(join(dir, "camera", ".work"))).toBe(false);
-      // Idempotent: a second pass rebuilds the same list.
-      expect(assembleRun(dir, { intervalMs: 10_000 })!.clips.map((c) => c.name)).toEqual(doc.clips.map((c) => c.name));
-      // The burst's frames pruned (sweep.ts): its clip stays listed as it was; the timelapse covers what is left.
-      for (const f of frames.filter((f) => Date.parse(f.t) <= levelAt + 10_000)) rmSync(join(dir, "camera", f.file));
-      const after = assembleRun(dir, { intervalMs: 10_000 })!;
-      expect(after.clips.find((c) => c.name === "event-3-level")).toEqual(ev);
-      expect(after.clips.map((c) => c.kind)).toEqual(["timelapse", "event"]);
-      expect(Date.parse(after.clips[0]!.from)).toBeGreaterThan(levelAt + 10_000);
+      // Idempotent: a second pass makes the same list.
+      expect(assembleRun(dir, { intervalMs: 10_000 })).toEqual(doc);
     },
     ENCODE_MS,
   );

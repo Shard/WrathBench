@@ -11,7 +11,7 @@
  *
  *  - the runs: the synthetic fixture (`infra/shots/fixture.ts`: four live runs
  *    and a live fan-out run kept live while the rig runs, one ended run to
- *    replay, with camera clips made of a synthetic test pattern, and live
+ *    replay, with a two-part camera video of a synthetic test pattern, and live
  *    camera stills of the same pattern on the live run), or copies of the
  *    run directories `--run` names, which are never served or written in place;
  *  - the private viewer: the viewer's own `createApi` over those runs, with an

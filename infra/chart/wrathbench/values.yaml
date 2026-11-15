@@ -506,7 +506,7 @@ worlds:
 
 # The camera (docs/RUNBOOK.md, "Camera"; templates/_camera.tpl): an
 # unattended, invisible GM client that follows a run's character and keeps
-# still frames and clips under the run's `camera/` (docs/ARCHITECTURE.md,
+# still frames and the run's video under its `camera/` (docs/ARCHITECTURE.md,
 # "Camera"). OFF by default, and off renders exactly what the chart rendered
 # before it existed. On:
 #
@@ -516,7 +516,7 @@ worlds:
 #     while a slot is free (`maxConcurrent`, one always held for the shared
 #     world's). A camera can never hold a world short of Ready, delay its
 #     deletion, or stall a release;
-#   - a CronJob sweeps the runs tree every ten minutes: clips assembled,
+#   - a CronJob sweeps the runs tree every ten minutes: videos assembled,
 #     frames pruned (templates/camera.yaml);
 #   - every worldserver makes a GM invisible before it is on the map
 #     (GM.LoginState = 1, GM.Visible = 0). The harness accounts never carry
@@ -536,10 +536,10 @@ camera:
   # Cameras at once, the shared world's included. With `renderer: gpu` each
   # holds one `devic.es/dri` claim, so this is at most the free claims.
   maxConcurrent: 2
-  # Seconds between the timelapse's frames. Events keep a burst whatever this is.
+  # Seconds between the video's interval frames. Events keep a burst whatever this is.
   intervalSeconds: 10
-  # Hours still frames are kept after the assembly that covers them; the clips
-  # are kept. The camera sweep CronJob prunes them (infra/camera/sweep.ts).
+  # Hours still frames are kept after the assembly that covers them; the video
+  # is kept. The camera sweep CronJob prunes them (infra/camera/sweep.ts).
   frameKeepHours: 24
   # gpu: Vulkan on the node's /dev/dri, through the device plugin. software:
   # Mesa's lavapipe on the CPU, no claim, several cores per camera.

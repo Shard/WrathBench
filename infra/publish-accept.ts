@@ -339,7 +339,8 @@ const WITHHELD_KEYS: ReadonlySet<string> = new Set([
  *   string that IS the `args` is the loop's own parse error, and is checked;
  * - an action note's `say` text and raw payload;
  * - the scratchpad, and each live position's episodic status;
- * - a camera clip's caption, the model's own words as the director quoted them.
+ * - the camera video's captions and each chapter's caption, the model's own
+ *   words as the director quoted them, and the home page excerpt's chapter's.
  */
 const MODEL_AUTHORED: readonly RegExp[] = [
   /^entries\.json:(?:response|claude_result|episodic|snippet_result|tool_result)\.text$/,
@@ -347,8 +348,9 @@ const MODEL_AUTHORED: readonly RegExp[] = [
   /^entries\.json:tool_call\.args[.[]/,
   /^entries\.json:actions\.actions\[\d+\]\.args\.(?:text|payload)(?:\[\d+\])*$/,
   /^scratchpad\.json:text$/,
-  /^clips\.json:clips\[\d+\]\.caption$/,
-  /^highlight\.json:highlight\.clip\.caption$/,
+  /^clips\.json:chapters\[\d+\]\.caption$/,
+  /^clips\.json:captions\[\d+\]\.text$/,
+  /^highlight\.json:highlight\.chapter\.caption$/,
   /^live\.json:positions\.positions\[\d+\]\.status\.text$/,
 ];
 
@@ -606,11 +608,11 @@ export function canonical(value: unknown): unknown {
   return out;
 }
 
-/** The clip files a `clips.json`-shaped body names: each clip's `video` and `poster`, when they are clip keys. */
+/** The files a `clips.json`-shaped body names: each part's `video` and `poster`, when they are clip keys. */
 function clipMediaKeys(body: Record<string, unknown>): string[] {
-  const clips = body["clips"];
+  const parts = body["parts"];
   const out: string[] = [];
-  for (const c of Array.isArray(clips) ? clips : []) {
+  for (const c of Array.isArray(parts) ? parts : []) {
     for (const k of ["video", "poster"] as const) {
       const v = (c as Record<string, unknown> | null)?.[k];
       if (typeof v === "string" && classifyPath(v).kind === "clip") out.push(v);
@@ -898,14 +900,14 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
   log(`manifest gen ${report.gen}, ${Object.keys(report.artifacts).length} aggregates`);
 
   let runsBody: Record<string, unknown> | null = null;
-  /** Every camera clip file a published `clips.json` or the home page's clip names. */
+  /** Every camera video file a published `clips.json` or the home page's excerpt names. */
   const mediaKeys: string[] = [];
   for (const [name, key] of Object.entries(report.artifacts)) {
     const body = await inspect(key);
     if (name === "runs.json") runsBody = body;
     if (name === "highlight.json" && body !== null) {
-      const clip = (body["highlight"] as { clip?: unknown } | null | undefined)?.clip;
-      if (clip !== undefined) mediaKeys.push(...clipMediaKeys({ clips: [clip] }));
+      const part = (body["highlight"] as { part?: unknown } | null | undefined)?.part;
+      if (part !== undefined) mediaKeys.push(...clipMediaKeys({ parts: [part] }));
     }
   }
   const liveBody = await inspect(LIVE_PATH);
@@ -961,7 +963,7 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
   await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 8, Math.max(1, rows.length)) }, worker));
   for (const key of [...segmentKeys].sort()) await inspect(key);
   /*
-   * A clip's video and poster are binary, so they are looked up, not read:
+   * A part's video and poster are binary, so they are looked up, not read:
    * named and absent is a missing object like any other. A key that is not a
    * clip key, or names another run, is drift the re-projection has already
    * reported.

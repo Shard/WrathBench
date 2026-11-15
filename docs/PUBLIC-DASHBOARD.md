@@ -155,7 +155,7 @@ its own, is `dashboard/README.md`'s.
 /v1/snap/<ver>/runs.json …           immutable max-age=1y   one aggregate, at its own content version
 /v1/run/<id>/<ver>/detail.json …     immutable max-age=1y   per-run detail and track
 /v1/run/<id>/trace/<t0>.json         immutable max-age=1y   one closed five-minute trace window
-/v1/run/<id>/clip/<name>-<h>.mp4|jpg immutable max-age=1y   a camera clip's video or poster, <h> its own hash
+/v1/run/<id>/clip/<name>-<h>.mp4|jpg immutable max-age=1y   a camera video part or its poster, <h> its own hash
 ```
 
 Everything except the three mutable files is immutable and addressed by its own
@@ -350,45 +350,61 @@ holds its window.
 
 ### Camera replays
 
-A run a camera followed (`docs/DATA-AND-LEGAL.md`) carries clips: an H.264
-timelapse and a short clip per event, each with a poster frame. The site shows
-them as a replay block on the run page and one recent clip on the home page,
-from objects in the same bucket as everything else.
+A run a camera followed (`docs/DATA-AND-LEGAL.md`) carries one video: H.264
+in parts of at most six hours of play, each with a poster, plus its chapters,
+the model's words and a time map in `clips.json` (version 2). The site shows
+it as one player on the run page, beside the replay on the map, and a few
+seconds of a recent run's video on the home page, from objects in the same
+bucket as everything else.
 
-- **Their own objects, not inlined.** A clip's video and poster each go up as
-  the file itself at `v1/run/<id>/clip/<name>-<h>.mp4` (or `.jpg`), where `<h>`
-  is the first twelve hex of the file's SHA-256 (`clipMediaKey`). The run's
-  `clips.json` names them, sits with its other objects under the run's content
-  version (`snapshot.clips` on its row), and joins the version's hash only on
-  a run that has clips, so no other run's key moved when this shipped.
-- **Idempotent by key.** A key the engine's state holds is never written again,
-  so a re-publish of unchanged files uploads nothing, and a clip re-rendered
-  under its name (a timelapse that grew) gets a new key. The engine keeps a
-  clip slot's last two files while it is changing and only the current one
-  once a second flip names it (`clipVersions`, the `settleRun` rule), then
-  prunes the rest. A withdrawn run takes its clips with it.
+- **One player over the parts.** The run page plays the parts back to back
+  with one bar, one clock and one total over the whole run; a seek lands in
+  the right part, the chapters are marks on the bar and a list beside it, and
+  the caption under it follows the playhead. On the map's replay of one run
+  the same player sits in the sidebar on the map's clock, both ways: while the
+  video plays it moves the map's playhead, otherwise the playhead seeks the
+  video to the frame at or before it, and starting either stops the other
+  (`dashboard/src/lib/video-sync.ts`). A party's or a fan-out's replay has no
+  video.
+- **Their own objects, not inlined.** A part's video and poster each go up as
+  the file itself at `v1/run/<id>/clip/<name>-<h>.mp4` (or `.jpg`), where
+  `<name>` is `part-<n>` and `<h>` the first twelve hex of the file's SHA-256
+  (`clipMediaKey`). The run's `clips.json` names them, sits with its other
+  objects under the run's content version (`snapshot.clips` on its row), and
+  joins the version's hash only on a run that has a video.
+- **Closed parts keep their keys.** A part closes when the next frame would
+  take it past six hours of play, and is never encoded again, so its bytes,
+  hash and key never move; only the open, newest part is re-encoded, at most
+  hourly while the run plays, and goes up at a new key. A key the engine's
+  state holds is never written again, so a re-publish uploads nothing new but
+  the open part. The engine keeps a slot's last two files while it is
+  changing and only the current one once a second flip names it
+  (`clipVersions`, the `settleRun` rule), then prunes the rest. A withdrawn
+  run takes its video with it.
 - **Streamed, hashed once.** The renderer hashes each file once per process
   (by size, mtime and inode) and hands the engine its path, never its bytes;
   the upload streams it, and refuses a file whose size or mtime moved since it
-  was hashed, so no key ever holds other bytes than its name says. A clip is
+  was hashed, so no key ever holds other bytes than its name says. A part is
   not run through the secret scan: it is video or JPEG, and the text that goes
   with it is in `clips.json`, which is scanned.
 - **Under `/v1/run/`, so the zone's rules cover it.** Bun cannot send
-  `Cache-Control`; the `/v1/run/*` cache rule is what makes a clip an edge
+  `Cache-Control`; the `/v1/run/*` cache rule is what makes a part an edge
   hit, and its rate limit (60 requests per 10 s per IP) counts each range
   request a video makes. The player loads metadata only until it is played,
-  and the clip row draws posters for the timelapse and the newest twelve
-  event clips only, lazily; older clips are listed by name.
+  asks for the current part's poster only, and fetches the next part's head
+  ahead of a boundary and its whole file only in the last seconds before it.
 - **Cold runs.** `camera/clips.json` is one of a run's watched files, so a
-  clip a director adds after the run went cold publishes on the next pass,
-  not six hours later.
-- **The home page's clip** is `highlight.json`, an aggregate in the manifest
-  only while some published run has a clip: the newest event clip, or the
-  newest timelapse, with its run and model. A tree without a camera publishes
-  the set it always did.
-- **Either deploy order is safe.** A site from before ignores
-  `snapshot.clips`, `highlight.json` and `camera`; this site reads their
-  absence as a run without clips.
+  video the sweep assembles after the run went cold publishes on the next
+  pass, not six hours later.
+- **The home page's excerpt** is `highlight.json`, an aggregate in the
+  manifest only while some published run has a video: the part and the
+  seconds into it around the newest chapter of any published run (by the run
+  time the time map gives it), with its run, model and chapter. It names the
+  part's own key, so it is no separate file. A tree without a camera
+  publishes the set it always did.
+- **Either deploy order is safe.** A site from before reads a version-2 list
+  as a run without clips, and this site reads the absence of `snapshot.clips`
+  and `highlight.json` the same way.
 
 ### Data plane: R2 behind a custom domain with a cache rule
 
@@ -649,24 +665,26 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   links each quest id, and the reader's browser asks Wowhead for its name
   ("Third-party origins").
 
-- **Camera clips ship; frames never do.** A frame shows the game world
+- **Camera video ships; frames never do.** A frame shows the game world
   only, with no interface, chat, game text or sound (`docs/DATA-AND-LEGAL.md`).
   The still frames under a run's `camera/frames/` are never published, and a
-  public handle serves none of them. Only the clips `camera/clips.json` names
+  public handle serves none of them. Only the parts `camera/clips.json` names
   are published, and only their `clips/` files. Live viewing is a private
   viewer's alone (operator, 2026-11-15): it shows a live run's newest frame on
   the run page and in the map's sidebar, and nothing on the public site acts as
-  a live view of the world (`runner/viewer/README.md`, "The live still"). `projectClips` rebuilds each clip field by field: name,
-  kind, event type and detail, moment, length, caption, and the video and
-  poster as this clip's bucket key and nothing else. The caption is the
-  model's own words as the director quoted them, with the benchmark's and the
-  model's names, and is published like the rest of the model's text (the
-  residual above): credential shapes masked, the container prefix made
-  relative, the session token struck, one line. A run that is never published
-  publishes no clip and no list, and `highlight.json` picks only among the
-  published runs. No run today has its model text withheld while its run is
-  published, so there is no case in which a published clip loses only its
-  caption.
+  a live view of the world (`runner/viewer/README.md`, "The live still").
+  `projectClips` rebuilds the list field by field: each part's moment and
+  length, and its video and poster as this part's bucket key and nothing
+  else, up to the first part that does not read; each chapter's time, part,
+  kind, detail and caption, and each caption cue, that fall on those parts;
+  and the time map's points. The captions are the model's own words as the
+  director quoted them, never burned into the picture, and are published like
+  the rest of the model's text (the residual above): credential shapes
+  masked, the container prefix made relative, the session token struck, one
+  line. A run that is never published publishes no part and no list, and
+  `highlight.json` picks only among the published runs. No run today has its
+  model text withheld while its run is published, so there is no case in
+  which a published video loses only its captions.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
