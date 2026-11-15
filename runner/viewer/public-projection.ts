@@ -86,6 +86,8 @@ import type {
   FleetResponse,
   FleetServerView,
   LevelMark,
+  MilestoneMark,
+  MilestoneTimes,
   ModelEpisodeView,
   ModelRowView,
   ModelRunView,
@@ -436,6 +438,23 @@ function projectTrades(f: TradeFacts): TradeFacts {
   };
 }
 
+/**
+ * Where on a run's clock the freeplay milestones were first shown: two
+ * instants and two active times per mark, the clock every row already
+ * carries, and whether the run recorded what each reads. No id, no name.
+ */
+function projectMilestoneTimes(m: MilestoneTimes): MilestoneTimes {
+  const mark = (x: MilestoneMark | null): MilestoneMark | null => (x === null ? null : { ts: x.ts, playtimeMs: x.playtimeMs });
+  return {
+    areas: m.areas,
+    flights: m.flights,
+    leftStartArea: mark(m.leftStartArea),
+    capitalZone: mark(m.capitalZone),
+    flight: mark(m.flight),
+    expansion: mark(m.expansion),
+  };
+}
+
 function projectAreas(a: AreaFacts): AreaFacts {
   return {
     startArea: a.startArea,
@@ -736,6 +755,7 @@ function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string
     money: r.money,
     questsCompleted: r.questsCompleted,
     maps: [...r.maps],
+    ...(r.milestoneAt !== undefined ? { milestoneAt: projectMilestoneTimes(r.milestoneAt) } : {}),
     character: r.character,
     playtimeMs: r.playtimeMs,
     ...(r.sessions !== undefined ? { sessions: projectSessions(r.sessions) } : {}),
@@ -1400,6 +1420,7 @@ function projectCharacterAttempt(a: CharacterAttempt): CharacterAttempt {
     flights: a.flights,
     levels: a.levels.map(projectLevelMark),
     ...(a.sessions !== undefined ? { sessions: projectSessions(a.sessions) } : {}),
+    ...(a.milestoneAt !== undefined ? { milestoneAt: projectMilestoneTimes(a.milestoneAt) } : {}),
   };
 }
 
@@ -1449,6 +1470,7 @@ function projectCharacter(s: CharacterView): CharacterView {
     harnessVersion: s.harnessVersion,
     name: s.name,
     characterLabel: s.characterLabel,
+    ...(s.episode !== undefined ? { episode: s.episode } : {}),
     attempt: s.attempt,
     attempts: s.attempts,
     previous: s.previous,

@@ -1248,6 +1248,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
           totals === null
             ? undefined
             : { spells: totals.spells, talents: totals.talents, trades: totals.trades },
+          totals?.milestones,
         ),
       );
     }

@@ -34,6 +34,8 @@ import type {
   CostFigure,
   EpisodeIdView,
   LevelMark,
+  MilestoneMark,
+  MilestoneTimes,
   ResultRun,
   RunRow,
   SpellFacts,
@@ -51,6 +53,8 @@ import { conditionOf } from "./condition";
 import { itemSamplesOf } from "./runs";
 import { encodeInventory } from "@wrathbench/inspector/codec/inventory";
 import { activeMsUntil, type ActiveSegment } from "./sessions";
+import type { MilestoneInstants } from "./tail";
+import { EXPANSION_MAPS } from "./worldmap";
 
 /**
  * Whether a run's recorded turn indices can be read as one series.
@@ -102,7 +106,36 @@ export function levelMarks(
   return out;
 }
 
-/** Every map the run was observed on, ascending. Ladder rungs 7–8 read these. */
+/**
+ * Where on a run's clock the freeplay milestones beyond its level were first
+ * shown (`MilestoneTimes`): the area and flight instants the totals scanner
+ * found (`MilestoneInstants`), and the first state sample on Outland or
+ * Northrend, each with its active time from the run's start.
+ */
+export function milestoneTimesOf(
+  states: readonly StatePoint[],
+  segments: readonly ActiveSegment[],
+  areas: AreaFacts | null,
+  taxi: TaxiFacts | null,
+  instants: MilestoneInstants | undefined,
+): MilestoneTimes {
+  const mark = (ts: number | null | undefined): MilestoneMark | null =>
+    ts === null || ts === undefined ? null : { ts, playtimeMs: activeMsUntil(segments, ts) };
+  const out = states.find((s) => s.map !== null && EXPANSION_MAPS.includes(s.map));
+  // A total stored before the instants were derived can say a fact held but
+  // not when: such a run reads as not recorded, never as not reached.
+  const placed = instants !== undefined;
+  return {
+    areas: placed && areas !== null,
+    flights: placed && taxi !== null,
+    leftStartArea: areas?.leftStartArea === true ? mark(instants?.leftStartArea) : null,
+    capitalZone: areas?.capitalZone != null ? mark(instants?.capitalZone) : null,
+    flight: (taxi?.flights ?? 0) > 0 ? mark(instants?.flight) : null,
+    expansion: mark(out?.ts),
+  };
+}
+
+/** Every map the run was observed on, ascending. Freeplay milestone 7 reads these. */
 export function mapsOf(states: readonly StatePoint[]): number[] {
   const seen = new Set<number>();
   for (const s of states) if (s.map !== null) seen.add(s.map);
@@ -422,6 +455,8 @@ export function resultRunOf(
    * which is not the same claim as `null`, "the run recorded none".
    */
   learning?: { spells: SpellFacts | null; talents: TalentFacts | null; trades: TradeFacts | null },
+  /** The area and flight instants from the same pass (`RunTotals.milestones`); absent from a stored total that predates them. */
+  instants?: MilestoneInstants,
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -501,6 +536,7 @@ export function resultRunOf(
     // (a store row older than the column) keeps the row's.
     questsCompleted: questsAcrossRestarts(states) ?? run.questsCompleted,
     maps: mapsOf(states),
+    milestoneAt: milestoneTimesOf(states, segments, areas, taxi, instants),
     driver: run.driver,
     character: run.character,
     playtimeMs: listing?.playtimeMs ?? null,

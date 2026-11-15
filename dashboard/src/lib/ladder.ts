@@ -11,8 +11,9 @@
  * went with it.
  */
 
-import type { DungeonBoardView, LevelMark, ResultRun, RunCondition } from "@viewer/api-types";
+import type { LevelMark, MilestoneMark, MilestoneTimes, ResultRun, RunCondition } from "@viewer/api-types";
 import { conditionOf } from "@viewer/condition";
+export { EXPANSION_MAPS } from "@viewer/worldmap";
 import {
   type AxisSpec,
   type Better,
@@ -110,159 +111,6 @@ function charactersOf(runs: readonly ResultRun[]): string[] {
 
 /* ------------------------------------------------------------------ ladder */
 
-export type RungStatus = "reached" | "not-reached" | "not-instrumented";
-
-export interface Rung {
-  n: number;
-  title: string;
-  /**
-   * The rule, printed on the page. A derived rung shows exactly what was
-   * tested, so a reader can disagree with the derivation rather than having to
-   * trust it; an underived rung says what is missing instead.
-   */
-  rule: string;
-  /** Null when nothing recorded today can answer the rung. */
-  test: ((run: ResultRun) => boolean) | null;
-  /**
-   * Whether *this run's* records can answer the rung at all — the denominator
-   * of the cell's "2 of 3", and the one thing that keeps that fraction honest.
-   *
-   * A run that predates the producer of a signal carries no reading for it and
-   * must be treated as not recorded rather than as zero (METHODOLOGY,
-   * "Scoring"). `test` already folds both cases into "not reached", which is
-   * right for a cell that only says reached-or-not; a *count* cannot, because
-   * "1 of 3" over a row whose other two runs could never be asked reports two
-   * failures that nobody observed. So the count is out of the runs that could
-   * be asked, and the cell says so when that is fewer than the row's runs.
-   */
-  askable: (run: ResultRun) => boolean;
-}
-
-/** A level rung can be asked of any run that recorded a level. */
-const hasLevel = (r: ResultRun): boolean => r.maxLevel !== null;
-
-/** Outland and Northrend map ids — the only continents past the first two. */
-export const EXPANSION_MAPS = [530, 571];
-
-/**
- * The eight rungs of the milestone ladder (docs/VISION.md), with the derivation each one gets from the
- * data that actually exists.
- *
- * Rungs 2 and 4 became derivable when the viewer was wired to the zone/area
- * milestone records the loop writes: `run.areas` carries the first area
- * observed, whether the run ever left it, and the first capital zone it
- * entered. Rung 4 stopped being partial soon after (issue #8): the module now
- * taps
- * `SMSG_ACTIVATETAXIREPLY` and the taxi flag on self, the loop records a `taxi`
- * milestone per flight, and `run.taxi.flights` answers the flight-master half,
- * so the rung tests both clauses of its own title.
- *
- * A run that predates a producer carries no `areas` / `taxi` at all and reads
- * as not-reached, the same way a run with no level reading does; nothing
- * invents a result from a level threshold, and a rung's cell is "reached" as
- * soon as *any* of the model's runs passes, so an old run cannot make a
- * derivation look false — it simply says nothing.
- *
- * Deaths and the level timeline joined the milestone records later
- * (`run.deaths`, `run.leveling`), but neither bears on a rung: no rung asks how
- * often a character died, and the level rungs already read `maxLevel`.
- *
- * Rung 6 is no test over the row's own runs: it is a cell filled from the
- * dungeon board (`/api/dungeons`, `rungSixCell`) for the same model and
- * condition, passed by a cleared attempt on either Deadmines episode, and it
- * never counts toward the row's highest rung or its order (operator,
- * 2026-11-14; docs/METHODOLOGY.md, "The dungeon board, and rung 6"). A staged
- * level-20 dungeon is a different measurement from the climb.
- */
-export const RUNGS: Rung[] = [
-  {
-    n: 1,
-    title: "Quest chain in the starting subzone",
-    rule: "level 5 observed — the starting chain ends around L5–6",
-    test: (r) => (r.maxLevel ?? 0) >= 5,
-    askable: hasLevel,
-  },
-  {
-    n: 2,
-    title: "Leave the starting subzone on its own initiative",
-    rule: "left the first-observed area; older runs have no record of this",
-    test: (r) => r.areas?.leftStartArea === true,
-    askable: (r) => r.areas !== null && r.areas !== undefined,
-  },
-  {
-    n: 3,
-    title: "L10: class quest, first talent, spells trained",
-    rule: "level 10 observed — the talent and class-quest half is not recorded",
-    test: (r) => (r.maxLevel ?? 0) >= 10,
-    askable: hasLevel,
-  },
-  {
-    n: 4,
-    title: "Reach a capital city; use a flight master",
-    rule:
-      "entered a capital zone AND took at least one flight (milestone records); " +
-      "runs before the achievement/flight taps have no flight record and cannot pass",
-    test: (r) => (r.areas?.capitalZone ?? null) !== null && (r.taxi?.flights ?? 0) >= 1,
-    askable: (r) => r.areas !== null && r.areas !== undefined && r.taxi !== null && r.taxi !== undefined,
-  },
-  {
-    n: 5,
-    title: "L20 with riding skill and a mount",
-    rule: "level 20 observed — riding skill and mount purchase are not recorded",
-    test: (r) => (r.maxLevel ?? 0) >= 20,
-    askable: hasLevel,
-  },
-  {
-    n: 6,
-    title: "A 5-man dungeon cleared by agents of one model",
-    rule:
-      "a cleared Deadmines attempt on the dungeon board, one agent driving five or five agents, " +
-      "for the same model and condition; not counted in the row's highest rung or its order",
-    test: null,
-    askable: () => false,
-  },
-  {
-    n: 7,
-    title: "L40, L60, Outland, Northrend",
-    rule: "level 40 observed, or a state sample on map 530 (Outland) or 571 (Northrend)",
-    test: (r) => (r.maxLevel ?? 0) >= 40 || r.maps.some((m) => EXPANSION_MAPS.includes(m)),
-    askable: (r) => hasLevel(r) || r.maps.length > 0,
-  },
-  {
-    n: 8,
-    title: "L80, heroics, Icecrown Citadel",
-    rule: "level 80 observed — heroics and raid progress are not recorded",
-    test: (r) => (r.maxLevel ?? 0) >= 80,
-    askable: hasLevel,
-  },
-];
-
-export interface LadderCell {
-  n: number;
-  status: RungStatus;
-  /**
-   * The run that got there, for a reached rung: the first of the row's runs
-   * that passes the test, which is not necessarily the furthest one. It stays
-   * the cell's link — the count below is what tells a model that cleared the
-   * rung once from one that cleared it every time.
-   */
-  runId: string | null;
-  /** How many of the row's runs passed the rung's test. */
-  reached: number;
-  /**
-   * Rung 6 only: which Deadmines arm filled the cell (`1 agent × 5`, `5 agents`),
-   * and the board's own counts behind it, cleared attempts of counted ones.
-   */
-  arm?: string;
-  /**
-   * How many of the row's runs could be asked (`Rung.askable`) — the
-   * denominator. Below `LadderRow.runs` when some of the row's runs predate
-   * the record the rung reads; the page says so rather than counting a run
-   * that was never asked as a failure.
-   */
-  askable: number;
-}
-
 export interface LadderRow {
   /** The entry (`entryKeyOf`): one model under one condition. */
   key: string;
@@ -271,9 +119,6 @@ export interface LadderRow {
   effort: string | null;
   compactWindow: string | null;
   condition: RunCondition;
-  /** The highest *derivable* rung reached; 0 when none was. */
-  highest: number;
-  cells: LadderCell[];
   runs: number;
   /**
    * The furthest the model's best run got, as the pair `(bestLevel, bestXp)`:
@@ -347,77 +192,29 @@ export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
 }
 
 /**
- * Highest rung reached per entry (one model under one condition, `entryKeyOf`),
- * over scored runs only.
+ * One row per entry (one model under one condition, `entryKeyOf`), over
+ * scored runs only.
  *
- * "Highest derivable": rung 6 can never be reached here, so a model sitting at
- * rung 7 is not claimed to have passed it — the page shows the whole row and
- * lets the gaps speak. Since rungs 2 and 4 became derivable a gap at either is
- * an observation rather than a blank: a model at rung 3 whose runs never left
- * their starting area now shows "not reached" at 2, which is a finding about
- * the model and not about the instrumentation. Achievement points are not in
- * this ordering and are not added to anything (highest rung, then XP, then
- * gold); they are a signal a run page displays. `highest` stays the maximum
- * reached rung, so it is unaffected by the holes below it.
+ * The row order is a stated derivation, versioned with this file: **level,
+ * then XP within it, then gold** (operator, 2026-11-15; docs/METHODOLOGY.md,
+ * "Scoring"). The milestone rungs are not on these ladders and order nothing
+ * here: they are freeplay achievements (`RUNGS`, `characterMilestones`).
+ * The `(level, xp)` pair compared lexicographically is the total-XP ordering
+ * — xp resets at every ding and level never falls — and no `level * K + xp`
+ * integer is synthesised because no XP-per-level table exists in what the
+ * harness records. Both are maxima over the model's counted runs; `runs` and
+ * the model name break what is left, so the order is total and stable. A
+ * missing reading sorts last rather than as zero: 0 copper and 0 xp are real
+ * readings, null is "never recorded". No number here is added to another —
+ * there is still no aggregate score.
  *
- * The row order is a stated derivation, versioned with this file
- * (as amended): **highest rung reached, then total XP, then gold.**
- * Total XP is the `(level, xp)` pair compared lexicographically — xp resets at
- * every ding and level never falls, so the pair *is* the total-XP ordering, and
- * no `level * K + xp` integer is synthesised because no XP-per-level table
- * exists in what the harness records. Both are maxima over the model's counted
- * runs; `runs` and the model name break what is left, so the order is total and
- * stable. A missing reading sorts last rather than as zero: 0 copper and 0 xp
- * are real readings, null is "never recorded". No number here is added to
- * another — there is still no aggregate score.
- *
- * The row also carries its own dispersion: every cell
- * counts how many of the row's askable runs passed the rung, and `levelRange`
- * is the min/median/max of the levels the counted runs reached. The maxima
- * stay exactly what they were — they are honest about being maxima — and the
- * spread sits beside them rather than replacing them, so a model that reached
- * a rung once in three no longer renders identically to one that reached it
- * three times. It is pure derivation over the same list: no new recording, no
- * re-runs, and nothing here enters the ordering.
+ * The row also carries its own dispersion, `levelRange`, the min/median/max
+ * of the levels the counted runs reached. The maxima stay exactly what they
+ * are — honest about being maxima — and the spread sits beside them rather
+ * than replacing them. It is pure derivation over the same list: no new
+ * recording, no re-runs, and nothing here enters the ordering.
  */
-/** The rung filled from the dungeon board, not from the row's own runs. */
-export const BOARD_RUNG = 6;
-
-/** The fields rung 6 joins a ladder row and a board row on: the model and the condition's public dimensions. */
-export function rungSixKey(r: {
-  model: string | null;
-  effort: string | null;
-  compactWindow?: string | null;
-  harness: string | null;
-  series: string | null;
-  condition: Pick<RunCondition, "loop" | "yield" | "pinned" | "wiki">;
-}): string {
-  const c = r.condition;
-  return JSON.stringify([r.model ?? "", r.effort ?? "", r.compactWindow ?? "", r.harness ?? "", r.series ?? "", c.loop, c.yield, c.pinned, c.wiki]);
-}
-
-/**
- * Rung 6 for a row, from the dungeon board: reached when a board row of the
- * same model and condition has a cleared attempt on either id (the one-agent
- * id first), its count the board's; not reached when the board has counted
- * attempts for it and none cleared; not instrumented when it has none.
- */
-export function rungSixCell(key: string, boards: readonly DungeonBoardView[]): LadderCell {
-  const hits = boards.flatMap((b) => b.rows.filter((r) => rungSixKey(r) === key).map((r) => ({ board: b, row: r })));
-  const cleared = hits.find((h) => h.row.cleared > 0);
-  const shown = cleared ?? hits[0];
-  if (shown === undefined) return { n: BOARD_RUNG, status: "not-instrumented", runId: null, reached: 0, askable: 0 };
-  return {
-    n: BOARD_RUNG,
-    status: cleared !== undefined ? "reached" : "not-reached",
-    runId: shown.row.best.runIds[0] ?? null,
-    reached: shown.row.cleared,
-    askable: shown.row.n,
-    arm: shown.board.episode === "deadmines-solo" ? "1 agent × 5" : "5 agents",
-  };
-}
-
-export function ladderRows(runs: readonly ResultRun[], boards: readonly DungeonBoardView[] = []): LadderRow[] {
+export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
   const byEntry = new Map<string, ResultRun[]>();
   for (const r of scored(runs)) {
     const key = entryKeyOf(r);
@@ -429,22 +226,6 @@ export function ladderRows(runs: readonly ResultRun[], boards: readonly DungeonB
   for (const [key, list] of byEntry) {
     const first = list[0]!;
     const model = first.model ?? "(unnamed)";
-    const sixKey = rungSixKey({ model: first.model, effort: first.effort, compactWindow: first.compactWindow ?? null, harness: first.harness, series: first.harnessSeries, condition: conditionOfRun(first) });
-    const cells = RUNGS.map((rung): LadderCell => {
-      if (rung.n === BOARD_RUNG) return rungSixCell(sixKey, boards);
-      if (rung.test === null)
-        return { n: rung.n, status: "not-instrumented", runId: null, reached: 0, askable: 0 };
-      const hit = list.find((r) => rung.test!(r));
-      return {
-        n: rung.n,
-        status: hit === undefined ? "not-reached" : "reached",
-        runId: hit?.runId ?? null,
-        reached: list.filter((r) => rung.test!(r)).length,
-        askable: list.filter((r) => rung.askable(r)).length,
-      };
-    });
-    // Rung 6 is the board's, and never counts toward the row's highest rung or its order.
-    const reached = cells.filter((c) => c.status === "reached" && c.n !== BOARD_RUNG).map((c) => c.n);
     const furthest = furthestOf(list);
     const richest = richestOf(list);
     rows.push({
@@ -453,8 +234,6 @@ export function ladderRows(runs: readonly ResultRun[], boards: readonly DungeonB
       effort: first.effort,
       compactWindow: first.compactWindow ?? null,
       condition: conditionOfRun(first),
-      highest: reached.length > 0 ? Math.max(...reached) : 0,
-      cells,
       runs: list.length,
       bestLevel: furthest?.level ?? null,
       bestXp: furthest?.xp ?? null,
@@ -475,7 +254,6 @@ export function ladderRows(runs: readonly ResultRun[], boards: readonly DungeonB
   }
   rows.sort(
     (a, b) =>
-      b.highest - a.highest ||
       desc(b.bestLevel, a.bestLevel) ||
       desc(b.bestXp, a.bestXp) ||
       desc(b.bestMoney, a.bestMoney) ||
@@ -1297,6 +1075,215 @@ export function ladderChartLayout(
   return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed: placedAt, cue, py };
 }
 
+/* ------------------------------------------------------- freeplay milestones */
+
+/**
+ * The milestone rungs: WrathBench's own achievements, measured on freeplay
+ * characters (operator, 2026-11-15; docs/METHODOLOGY.md, "Scoring"). Each
+ * freeplay character shows which it has reached and the cumulative active
+ * playtime it reached each at. They are never told to the model, and no
+ * ladder orders on them: the `e90` and `e360` ladders rank on level, xp and
+ * gold, and the Deadmines evals on their own board.
+ *
+ * Each rung prints the rule it applies, so a reader can disagree with the
+ * derivation rather than having to trust it, and a rung nothing recorded can
+ * answer says "not instrumented" and is never approximated by another reading.
+ */
+export type MilestoneStatus = "reached" | "not-reached" | "not-recorded" | "not-instrumented";
+
+/** What a milestone reads of an attempt: its runs' level marks and active time, and the other marks (`MilestoneTimes`). */
+export interface MilestoneAttempt extends CharacterAttemptLike {
+  milestoneAt?: MilestoneTimes;
+}
+
+/**
+ * One thing a milestone needs, read off one attempt: the mark it was first
+ * shown at on that attempt's clock, or null, and whether the attempt recorded
+ * what the part reads at all — the line between "not reached" and "not
+ * recorded".
+ */
+export type MilestonePart = (a: MilestoneAttempt) => { mark: MilestoneMark | null; asked: boolean };
+
+export interface Rung {
+  n: number;
+  title: string;
+  /** The rule applied, for the column's hover and the rules table. */
+  rule: string;
+  /**
+   * What the rung needs; reached once every part was shown on some attempt,
+   * at the latest of their first showings. Null when nothing recorded can
+   * answer it: "not instrumented".
+   */
+  parts: MilestonePart[] | null;
+  /**
+   * Read only from the character's own start: an attempt's start area is
+   * wherever it resumed, so an attempt after one that could not be asked, or
+   * a chain that begins mid-history, says nothing about leaving the start.
+   */
+  fromStart?: true;
+}
+
+/** The first level mark at or above `level`. */
+const atLevel =
+  (level: number): MilestonePart =>
+  (a) => {
+    const m = a.levels.find((l) => l.level >= level);
+    return { mark: m === undefined ? null : { ts: m.ts, playtimeMs: m.playtimeMs }, asked: a.levels.length > 0 };
+  };
+
+/** The earlier of two marks; either may be missing. */
+function earlier(x: MilestoneMark | null, y: MilestoneMark | null): MilestoneMark | null {
+  if (x === null) return y;
+  if (y === null) return x;
+  return y.ts < x.ts ? y : x;
+}
+
+/**
+ * The eight rungs (docs/VISION.md, "Milestone ladder"), with the derivation
+ * each one gets from what is recorded. Levels are the state samples' level
+ * marks; the start area, the capital and the flight are the zone, area and
+ * taxi milestone records; Outland and Northrend are the state samples' map.
+ * Every one is a first observation, so a playtime is a lower bound in the
+ * sense the whole milestone surface means it.
+ *
+ * Rung 6 is a 5-man dungeon done with others in freeplay, a group of agents
+ * in a dungeon (operator, 2026-11-15), no longer filled from the staged
+ * Deadmines board. The recording has a party of agents (a session record's
+ * `group` rows keep only the deployment's own members) and the instance
+ * (`instance` rows), but not which kill is a dungeon's final boss: a `kill`
+ * row's rank does not single one out, and the only final boss this
+ * repository names is the Deadmines'. So it is not instrumented, and reads
+ * so.
+ */
+export const RUNGS: Rung[] = [
+  {
+    n: 1,
+    title: "Quest chain in the starting subzone",
+    rule: "level 5 observed — the starting chain ends around L5–6",
+    parts: [atLevel(5)],
+  },
+  {
+    n: 2,
+    title: "Leave the starting subzone on its own initiative",
+    rule: "two consecutive area records outside the first-observed area's starting region; read from the character's first attempt on",
+    parts: [(a) => ({ mark: a.milestoneAt?.leftStartArea ?? null, asked: a.milestoneAt?.areas === true })],
+    fromStart: true,
+  },
+  {
+    n: 3,
+    title: "L10: class quest, first talent, spells trained",
+    rule: "level 10 observed — the talent and class-quest half is not recorded",
+    parts: [atLevel(10)],
+  },
+  {
+    n: 4,
+    title: "Reach a capital city; use a flight master",
+    rule: "entered a capital zone AND took a flight (milestone records), on any attempts; reached at the later of the two",
+    parts: [
+      (a) => ({ mark: a.milestoneAt?.capitalZone ?? null, asked: a.milestoneAt?.areas === true }),
+      (a) => ({ mark: a.milestoneAt?.flight ?? null, asked: a.milestoneAt?.flights === true }),
+    ],
+  },
+  {
+    n: 5,
+    title: "L20 with riding skill and a mount",
+    rule: "level 20 observed — riding skill and mount purchase are not recorded",
+    parts: [atLevel(20)],
+  },
+  {
+    n: 6,
+    title: "A 5-man dungeon done with a group of agents",
+    rule: "not instrumented: the recording has the party of agents and the instance, but not which kill is a dungeon's final boss",
+    parts: null,
+  },
+  {
+    n: 7,
+    title: "L40, L60, Outland, Northrend",
+    rule: "level 40 observed, or a state sample on map 530 (Outland) or 571 (Northrend)",
+    parts: [
+      (a) => {
+        const level = atLevel(40)(a);
+        const out = a.milestoneAt?.expansion ?? null;
+        return { mark: earlier(level.mark, out), asked: level.asked || a.milestoneAt !== undefined };
+      },
+    ],
+  },
+  {
+    n: 8,
+    title: "L80, heroics, Icecrown Citadel",
+    rule: "level 80 observed — heroics and raid progress are not recorded",
+    parts: [atLevel(80)],
+  },
+];
+
+/** One rung for one character. */
+export interface MilestoneReach {
+  n: number;
+  status: MilestoneStatus;
+  /**
+   * The character's cumulative active playtime when it was reached, on the
+   * axis `stitchCharacter` draws: null when an attempt before it recorded no
+   * active time, or the mark itself carries none — never a zero.
+   */
+  playtimeMs: number | null;
+  /** The attempt that completed it; null unless reached. */
+  runId: string | null;
+}
+
+/**
+ * Which rungs a character has reached across its attempts, oldest first, and
+ * when, in cumulative active playtime.
+ *
+ * Each part is the first attempt that shows it, placed at that attempt's
+ * offset (the active time of the attempts before it, `stitchCharacter`'s
+ * offsets) plus the mark's own active time; a multi-part rung is reached at
+ * the latest of its parts, on whichever attempts showed them. An attempt with
+ * no active-time reading leaves every later offset unknown, so a rung reached
+ * after it has no playtime rather than a short one. A rung not reached is
+ * "not reached" when some attempt could have shown a missing part and none
+ * did, and "not recorded" when no attempt could.
+ *
+ * `truncated`: the chain's root still names a predecessor the set does not
+ * hold, so the character's start is not among the attempts.
+ */
+export function characterMilestones(attempts: readonly MilestoneAttempt[], truncated = false): MilestoneReach[] {
+  const offsets: (number | null)[] = [];
+  let offset: number | null = 0;
+  for (const a of attempts) {
+    offsets.push(offset);
+    const span = attemptSpan(a);
+    offset = offset === null || span === null ? null : offset + span;
+  }
+  return RUNGS.map((rung): MilestoneReach => {
+    const none = (status: MilestoneStatus): MilestoneReach => ({ n: rung.n, status, playtimeMs: null, runId: null });
+    if (rung.parts === null) return none("not-instrumented");
+    const found: { i: number; at: number | null; ts: number }[] = [];
+    let missingAsked = false;
+    for (const part of rung.parts) {
+      let hit: { i: number; at: number | null; ts: number } | null = null;
+      let asked = false;
+      for (let i = 0; i < attempts.length; i++) {
+        if (rung.fromStart === true && truncated) break;
+        const r = part(attempts[i]!);
+        if (r.asked) asked = true;
+        if (r.mark !== null) {
+          const o = offsets[i]!;
+          hit = { i, at: o === null || r.mark.playtimeMs === null ? null : o + r.mark.playtimeMs, ts: r.mark.ts };
+          break;
+        }
+        // Past an attempt that could not be asked, a start-relative reading is no longer the start's.
+        if (rung.fromStart === true && !r.asked) break;
+      }
+      if (hit !== null) found.push(hit);
+      else if (asked) missingAsked = true;
+    }
+    if (found.length < rung.parts.length) return none(missingAsked ? "not-reached" : "not-recorded");
+    const last = found.reduce((x, y) => (y.i > x.i || (y.i === x.i && y.ts > x.ts) ? y : x));
+    const at = found.some((f) => f.at === null) ? null : Math.max(...found.map((f) => f.at!));
+    return { n: rung.n, status: "reached", playtimeMs: at, runId: attempts[last.i]!.runId };
+  });
+}
+
 /* ------------------------------------------------------- freeplay characters */
 
 /**
@@ -1369,6 +1356,8 @@ export interface CharacterRow {
    */
   questsCompleted: number | null;
   startedAt: number | null;
+  /** The milestone rungs, across the chain (`characterMilestones`). */
+  milestones: MilestoneReach[];
 }
 
 
@@ -1430,6 +1419,8 @@ export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
   const rows: CharacterRow[] = [];
   for (const [characterId, { chain, run }] of best) {
     const { status, detail } = statusOf(run);
+    const attempts = chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
+    const truncated = attempts[0]?.continuedFrom != null;
     rows.push({
       characterId,
       model: run.model ?? "(unnamed)",
@@ -1448,6 +1439,7 @@ export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
       money: run.money,
       questsCompleted: overChain(chain, (r) => r.questsCompleted),
       startedAt: run.startedAt,
+      milestones: characterMilestones(attempts, truncated),
     });
   }
   rows.sort(
