@@ -89,6 +89,8 @@ describe("a publisher pass over the fixture", () => {
   test("publishes the solo runs and the board, withdraws the probe fan-out runs, and site verify finds nothing", async () => {
     const res = await renderSnapshot({ runsDir });
     const objects = new Map(res.artifacts.map((a) => [a.path, a.body]));
+    // A clip's video and poster are streamed beside the bodies; site verify only looks them up.
+    const media = new Set((res.media ?? []).map((m) => m.path));
     for (const id of SOLO) expect({ id, published: [...objects.keys()].some((k) => k.startsWith(`v1/run/${id}/`)) }).toEqual({ id, published: true });
     for (const id of PROBES) {
       expect(res.withdrawn).toContain(id);
@@ -99,7 +101,7 @@ describe("a publisher pass over the fixture", () => {
     expect(dungeons.boards.map((b) => b.episode)).toEqual(["deadmines-solo"]);
     const episodes = JSON.parse(objects.get(res.snap["episodes.json"]!)!) as EpisodesResponse;
     expect(episodes.episodes.map((e) => e.id).filter((id) => id.startsWith("deadmines"))).toEqual(["deadmines-solo"]);
-    const report = await verifyPublication({ get: async (key) => objects.get(key) ?? null });
+    const report = await verifyPublication({ get: async (key) => objects.get(key) ?? (media.has(key) ? "" : null) });
     expect(report.findings).toEqual([]);
     expect(report.missing).toEqual([]);
     expect(report.objects).toBeGreaterThan(50);
@@ -107,7 +109,7 @@ describe("a publisher pass over the fixture", () => {
     const key = res.snap["dungeons.json"]!;
     const smuggled = JSON.parse(objects.get(key)!) as { boards: Record<string, unknown>[] };
     smuggled.boards[0]!["accounts"] = ["FIXTURE1"];
-    const drifted = await verifyPublication({ get: async (k) => (k === key ? JSON.stringify(smuggled) : (objects.get(k) ?? null)) });
+    const drifted = await verifyPublication({ get: async (k) => (k === key ? JSON.stringify(smuggled) : (objects.get(k) ?? (media.has(k) ? "" : null))) });
     expect(drifted.findings.some((f) => f.kind === "projection-drift" && f.key === key)).toBe(true);
   }, 120_000);
 });
