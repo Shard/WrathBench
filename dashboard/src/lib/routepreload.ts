@@ -39,7 +39,7 @@ export type Preload = (args: PreloadArgs) => void;
 type Api = Pick<Client, "tools" | "positions" | "ladder" | "results" | "models" | "episodes" | "campaigns" | "dungeons" | "runs" | "character">;
 
 /** The preloads, by route, over a client. */
-export function routePreloads(api: Api): Record<"home" | "ladder" | "dungeons" | "map" | "runs" | "models" | "about" | "campaigns" | "fleet" | "character", Preload> {
+export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "runs" | "models" | "about" | "campaigns" | "fleet" | "character", Preload> {
   const on =
     (start: (args: PreloadArgs) => Promise<unknown>[]): Preload =>
     (args) => {
@@ -48,7 +48,8 @@ export function routePreloads(api: Api): Record<"home" | "ladder" | "dungeons" |
     };
   return {
     home: on(() => [api.tools(), api.positions(), api.ladder(HOME_PRELOAD_EPISODE)]),
-    ladder: on(({ location }) => [api.ladder(episodeParam(location.query["episode"]))]),
+    // The tier's ladder (a Deadmines tab's falls back to the default tier's) and the dungeon board, which fills rung 6 and the Deadmines tabs.
+    ladder: on(({ location }) => [api.ladder(episodeParam(location.query["episode"])), api.dungeons()]),
     // The live map only: a replay's first request depends on the run or party
     // the page resolves, which is the map's own business.
     map: on(({ location }) =>
@@ -58,7 +59,6 @@ export function routePreloads(api: Api): Record<"home" | "ladder" | "dungeons" |
     models: on(() => [api.models(), api.ladder("freeplay")]),
     about: on(() => [api.episodes()]),
     campaigns: on(() => [api.campaigns()]),
-    dungeons: on(() => [api.dungeons()]),
     // The fleet table reads `/api/fleet`, which the shell's shared feed already
     // polls on every page; there is nothing route-specific to start.
     fleet: on(() => []),

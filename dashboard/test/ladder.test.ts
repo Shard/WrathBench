@@ -73,7 +73,7 @@ import { OPAQUE_PAUSE_REASON, STALL_PAUSE_REASON } from "../src/lib/runs";
 import { familyOf } from "../../infra/model-catalogue";
 import { monogramOf } from "../src/lib/modelmark";
 import { resolvedSummary } from "../src/lib/models";
-import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
+import { DUNGEON_CHOICES, EPISODE_CHOICES, dungeonChoices, dungeonParam, episodeParam } from "../src/lib/episodes";
 
 /** An entry key (`entryKeyOf`) as a reader names it: the model, with its effort and window. */
 function spelt(key: string): string {
@@ -507,6 +507,21 @@ describe("the shared episode param", () => {
     expect(EPISODE_CHOICES).not.toContain("probing");
     expect(EPISODE_CHOICES).toEqual(["e90", "e360", "freeplay"]);
     expect(episodeParam("probing")).toBe("e90");
+  });
+
+  test("the Deadmines ids are tabs, never ladder choices: the five-agent id always, the one-agent id where it is served", () => {
+    // `/api/ladder` refuses them, so the ladder's own request never names one.
+    for (const id of DUNGEON_CHOICES) {
+      expect(EPISODE_CHOICES).not.toContain(id);
+      expect(episodeParam(id)).toBe("e90");
+      expect(dungeonParam(id)).toBe(id);
+    }
+    expect(dungeonParam("e90")).toBeNull();
+    expect(dungeonParam(undefined)).toBeNull();
+    // A public handle serves no one-agent table, so its tab is not offered.
+    expect(dungeonChoices(undefined)).toEqual(["deadmines"]);
+    expect(dungeonChoices(["deadmines"])).toEqual(["deadmines"]);
+    expect(dungeonChoices(["deadmines-solo", "deadmines"])).toEqual(["deadmines", "deadmines-solo"]);
   });
 });
 

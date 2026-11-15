@@ -138,8 +138,8 @@ other.
   has run on the program loop yet. Both wait behind the scored-episode hold
   like every scored id. Run on the program loop, any harness that has one.
 - **Scoring.** Scored, each id its own group, on the dungeon board rather than
-  a ladder; rung 6 of the solo ladder reads it (METHODOLOGY, "The dungeon
-  board, and rung 6").
+  on rungs: a table per id, each its own tab on the ladder page; rung 6 of the
+  solo ladder reads it (METHODOLOGY, "The dungeon board, and rung 6").
 - **Pins in the tuple.** The episode, its budget, `objective: false`,
   `agents` and `characters` (1 and 5, or 5 and 1) as keys, and `task`: the
   pinned definition's content hash and the hash of the staging fixtures, the
