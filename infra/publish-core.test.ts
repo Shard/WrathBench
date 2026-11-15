@@ -63,7 +63,9 @@ class FakeStore implements ObjectStore {
   /** Keys whose DELETE rejects. */
   failDeletes = new Set<string>();
 
-  async put(path: string, body: string, opts: { contentType: string; cacheControl: string }): Promise<void> {
+  async put(path: string, blob: string | Blob, opts: { contentType: string; cacheControl: string }): Promise<void> {
+    // A clip arrives as the file; held as its bytes' text so a test can compare it.
+    const body = typeof blob === "string" ? blob : await blob.text();
     this.calls.push({ op: "put", path, body, contentType: opts.contentType, cacheControl: opts.cacheControl });
     if (this.failPuts.has(path)) throw new Error(`fake S3: PUT ${path} refused`);
     this.objects.set(path, body);

@@ -994,12 +994,47 @@ export interface RunListRow extends RunRow {
      */
     entries?: string;
     scratchpad?: string;
+    /** The run's camera clips (`ClipsResponse`), on a run that has any. */
+    clips?: string;
   };
 }
 
 /** The scratchpad route as a snapshot artifact: the file's text, whole. */
 export interface ScratchpadResponse {
   text: string;
+}
+
+/** What a camera clip shows a moment of (`runner/viewer/camera.ts`). */
+export type ClipEventType = "level" | "quest" | "death" | "zone" | "boss" | "start" | "end";
+
+/**
+ * One camera clip as the pages read it. `video` and `poster` name where the
+ * media is: a viewer route (`/api/run/<id>/clip/<name>.mp4`) on the live API,
+ * a bucket key (`v1/run/<id>/clip/<name>-<hash>.mp4`) in a snapshot; the
+ * client turns either into a URL.
+ */
+export interface ClipView {
+  name: string;
+  kind: "timelapse" | "event";
+  event?: { type: ClipEventType; detail: string };
+  from: string;
+  to: string;
+  seconds: number;
+  /** The caption line, shown under the video; empty when there is none. */
+  caption: string;
+  video: string;
+  poster: string | null;
+}
+
+/** `/api/run/<id>/clips`: a run's camera clips, the timelapse first when there is one. */
+export interface ClipsResponse {
+  runId: string;
+  clips: ClipView[];
+}
+
+/** `/api/highlight`: the home page's one clip, or none. */
+export interface HighlightResponse {
+  highlight: { runId: string; model: string | null; clip: ClipView } | null;
 }
 
 /**
@@ -1209,6 +1244,11 @@ export interface RunDetailResponse extends SnapshotEnvelope {
   cost: CostView;
   /** Cumulative active time; see `RunListRow.playtimeMs`. */
   playtimeMs: number | null;
+  /**
+   * A camera followed the run (`meta.json`'s `"camera": true`). A label only:
+   * it never affects a run and is no part of its condition. Absent otherwise.
+   */
+  camera?: true;
   /**
    * The run's sessions, oldest first — the segments `playtimeMs` sums, read
    * off the same marks. The run page lays its samples on them so a pause is
