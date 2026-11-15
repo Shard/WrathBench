@@ -40,7 +40,7 @@ export const SDK_FAMILIES: readonly SdkFamily[] = [
   {
     name: "movement",
     members: "moveTo, moveToAsync, face, repop, reclaimCorpse",
-    note: "walk to a point, a unit or a name; long walks go async and are polled.",
+    note: "walk to a point, a unit or a name; a long walk belongs in a routine.",
   },
   {
     name: "combat",

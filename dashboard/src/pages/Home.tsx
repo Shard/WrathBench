@@ -20,9 +20,9 @@ import { InfoHint } from "../components/InfoHint";
 import { useFeeds } from "../lib/feeds";
 import { groupsOf } from "../lib/nav";
 
-/** What the loop diagram is showing, one hover off its heading. */
+/** What the loop diagram is showing, one hover off its heading; per-harness detail lives here, not in the drawing. */
 const LOOP_NOTE =
-  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for when older conversation is trimmed or compacted, which the model can page through while reflecting at an inn or on a flight.";
+  "The model does not play move by move. It writes a small TypeScript program against the SDK, starts its routines and sleeps while they play in the live world. It is woken when a routine ends or fails, an action is refused for the first time, the character dies, the program asks for attention, or five minutes pass; it reads what changed, revises the code and sleeps again. Its scratchpad and a short status log carry it across a trimmed or compacted conversation, and the log can be read back at an inn or on a flight. The fixed loop and Claude Code sleep through a yield tool; Codex sleeps at the end of its turn and gives GPT-6 models its own code mode.";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -126,7 +126,7 @@ export default function Home() {
           <ul class="dim">
             <li>See what a game client sees: units in range, its quests, bags, spells, chat, position.</li>
             <li>Act through the handlers a client hits: move, fight, talk, loot, trade, train, fly, mail.</li>
-            <li>Keep its own notes: a scratchpad it rewrites, and an episodic log it can read.</li>
+            <li>Keep its own notes and code: a scratchpad it rewrites, a status log it can read back, and program files that survive a restart.</li>
             <li>Reflection mode, allowing agents at an inn, in a city or on a flight to consider their next steps.</li>
             <li>Search a frozen 3.3.5a reference wiki; on scored episodes it gets names, never actual coordinates.</li>
           </ul>
@@ -137,7 +137,7 @@ export default function Home() {
             <li>See what the server knows and a player cannot: loot tables, spawns, respawn timers.</li>
             <li>Teleport, run a GM command, or read the database. Only valid client opcodes are allowed.</li>
             <li>Be told a strategy. A failed call says what was expected and how to fix the call, never what to play next.</li>
-            <li>Pause the world. The game is real time and ninety minutes is ninety realtime minutes.</li>
+            <li>Pause the world. The game is real time, and the clock runs while the model thinks and while it sleeps.</li>
             <li>Use another character, another account, or any kind of networking outside the game.</li>
           </ul>
         </div>
@@ -145,8 +145,7 @@ export default function Home() {
 
       <h2 class="section">the tools</h2>
       <p class="dim">
-        Nine tools, identical for every model. Pick one to see the description the model is given, as served
-        by the harness right now.
+        The same tools for every model on a harness. Pick one to see the description the model is given.
       </p>
       <Show when={tools.error !== undefined}>
         <div class="banner bad">{displayError(tools.error)}</div>
@@ -218,8 +217,9 @@ export default function Home() {
 
       <h2 class="section">the sdk</h2>
       <p class="dim">
-        Inside a snippet the model has <code>sdk</code>, <code>state</code> and <code>events</code>. Helpers
-        cover what trajectories showed models needing; everything else goes through the raw actions and
+        Inside its program the model has <code>sdk</code>, <code>state</code> and <code>events</code>, a{" "}
+        <code>memory</code> object that survives restarts, and <code>wake()</code> to ask for its own attention.
+        Helpers cover what trajectories showed models needing; everything else goes through the raw actions and
         packets a game client would use. In families:
       </p>
       <dl class="sdk-families">
@@ -241,10 +241,14 @@ export default function Home() {
 }
 
 /**
- * The execution loop, as inline SVG so it follows the theme through the same
- * custom properties as everything else. Boxes are the loop; the scratchpad
- * and the log sit under it as the two memories, each edge a tool the model
- * calls (or, for the scratchpad, the context injection).
+ * The program loop, as inline SVG so it follows the theme through the same
+ * custom properties as everything else. Drawn for a newcomer, not as a
+ * schematic: the model writes and starts a program, the program plays against
+ * the server while the model sleeps, and something happening wakes the model
+ * (`runner/src/wake.ts`, docs/METHODOLOGY.md "The model sleeps until woken").
+ * The two memories sit under the model, dashed: the scratchpad it rewrites and
+ * the status log it writes before a trim or compaction and reads back at rest.
+ * Which harness sleeps how is the hover note's, never a second drawing.
  */
 function LoopDiagram() {
   const box = (x: number, y: number, w: number, label: string, sub?: string) => (
@@ -260,54 +264,36 @@ function LoopDiagram() {
       </Show>
     </g>
   );
-  const arrow = (x1: number, y1: number, x2: number, y2: number, dashed = false) => (
-    <line x1={x1} y1={y1} x2={x2} y2={y2} class={dashed ? "loop-edge dashed" : "loop-edge"} marker-end="url(#loop-head)" />
+  const arrow = (x1: number, y1: number, x2: number, y2: number) => (
+    <line x1={x1} y1={y1} x2={x2} y2={y2} class="loop-edge" marker-end="url(#loop-head)" />
   );
   return (
-    <svg class="loop" viewBox="-28 0 788 222" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
+    <svg class="loop" viewBox="0 0 660 214" role="img" aria-label="The program loop: the model writes and starts a program; the program acts in the game world and hears back while the model sleeps; when something happens the model wakes, reads what changed and revises. Its notes and a status log sit beside it.">
       <defs>
         <marker id="loop-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" class="loop-head" />
         </marker>
       </defs>
-      {/* The loop, left to right; the feedback edge runs above the row so it never crosses the memories below. */}
-      {box(10, 46, 120, "context", "state, events, notes")}
-      {box(170, 46, 120, "model turn")}
-      {box(330, 46, 120, "run_snippet", "TypeScript")}
-      {box(490, 46, 120, "game server", "AzerothCore")}
-      {box(650, 46, 100, "events", "packets")}
-      {arrow(130, 68, 168, 68)}
-      {arrow(290, 68, 328, 68)}
-      {arrow(450, 68, 488, 68)}
-      {arrow(610, 68, 648, 68)}
-      {/* Events fold back into the next turn's context. */}
-      <path d="M700,44 L700,24 L70,24 L70,44" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
-      <text x="385" y="19" text-anchor="middle" class="loop-sub">next turn: the packets fold into cached state</text>
-      {/*
-        The two memories, as the harness actually uses them (runner/src/context.ts,
-        tools.ts, reflect.ts): the model writes the scratchpad and the harness reads
-        it back by injecting it into every turn's context; the log is appended by the
-        model before a trim and paged back by the model while reflecting. No edge
-        joins the two.
-
-        The scratchpad edge is one-directional on purpose. There is no read
-        tool — the notes are read by being injected into every turn's context,
-        which is the edge already drawn along the left. (`read_scratchpad` was
-        removed for exactly that reason: it re-served text the
-        turn already carried.)
-      */}
-      {box(100, 166, 120, "scratchpad", "notes, markdown")}
-      {box(240, 166, 120, "episodic log", "append-only")}
-      {/* Two parallel verticals off the model turn, one per memory — the scratchpad's is a write only; the read is the context edge hugging the left. */}
-      <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-end="url(#loop-head)" />
-      <text x="194" y="126" text-anchor="end" class="loop-sub">write_scratchpad</text>
-      <text x="194" y="137" text-anchor="end" class="loop-sub">edit_scratchpad</text>
-      <line x1="270" y1="92" x2="270" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
-      <text x="278" y="126" class="loop-sub">log_status before a trim</text>
-      <text x="278" y="137" class="loop-sub">read_log while reflecting, inn or flight</text>
-      <path d="M98,188 L70,188 L70,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="66" y="200" text-anchor="end" class="loop-sub">read into every</text>
-      <text x="66" y="211" text-anchor="end" class="loop-sub">turn's context</text>
+      {/* The loop, left to right; the wake runs above the row so it never crosses the memories below. */}
+      {box(10, 46, 140, "model", "reads, decides")}
+      {box(260, 46, 140, "its program", "TypeScript routines")}
+      {box(510, 46, 140, "game server", "the live world")}
+      {arrow(150, 68, 258, 68)}
+      <text x="204" y="62" text-anchor="middle" class="loop-sub">writes, starts</text>
+      {/* The program and the world talk continuously, with or without the model awake. */}
+      {arrow(400, 60, 508, 60)}
+      <text x="454" y="55" text-anchor="middle" class="loop-sub">acts</text>
+      {arrow(508, 78, 402, 78)}
+      <text x="454" y="90" text-anchor="middle" class="loop-sub">events</text>
+      <text x="330" y="106" text-anchor="middle" class="loop-sub">keeps playing while the model sleeps</text>
+      {/* The wake: back to the model, over the program. */}
+      <path d="M580,44 L580,24 L80,24 L80,44" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
+      <text x="330" y="19" text-anchor="middle" class="loop-sub">something happens: the model wakes and reads what changed</text>
+      {/* The memories, under the model: both written and read by it. */}
+      {box(10, 162, 140, "notes", "a scratchpad")}
+      {box(170, 162, 140, "status log", "read back at rest")}
+      <line x1="80" y1="92" x2="80" y2="160" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
+      <path d="M130,92 L130,132 L240,132 L240,160" class="loop-edge dashed" fill="none" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
     </svg>
   );
 }
