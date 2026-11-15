@@ -72,7 +72,7 @@
 #  - the drain race the supervisor documents: an episode spawned in the instant
 #    between the idle check and the SIGTERM is terminated gracefully. Worst
 #    case one just-started episode, never one mid-flight.
-#  - a run already PAUSED by its provider (rate-limited, quota-exhausted) is not
+#  - a run already PAUSED by its provider (rate-limited, provider-unresponsive, quota-exhausted) is not
 #    resumed while the switch is set. If the window outlasts that run's own
 #    episode budget it is ended stale — and a provider pause that goes stale is
 #    a COUNTED failed attempt against the model (runner/src/lapse.ts). The

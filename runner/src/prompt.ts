@@ -523,13 +523,15 @@ export function buildSystemPrompt(
  * attempt as `stale-character` — hence they are named, not left to be
  * discovered.
  */
-export function freshCharacterNote(o: { race: number; class: number; taken?: readonly string[] }): string {
+export function freshCharacterNote(o: { race: number; class: number; taken?: readonly string[]; raceName?: string | null; className?: string | null }): string {
   const taken = o.taken ?? [];
+  // The names when known (a Human Paladin), so what the character is never rests on an example.
+  const named = o.raceName != null && o.className != null ? `numeric ids: a ${o.raceName} ${o.className}` : "numeric ids; e.g. race 1 = Human, class 2 = Paladin";
   return (
     `name your character: 2-12 letters, no spaces, no three identical letters in a row — ` +
     `pick something you like and be creative, it is yours for the episode. ` +
     `Your race and class are not yours to choose: ` +
-    `race ${o.race}, class ${o.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin) are ` +
+    `race ${o.race}, class ${o.class} (${named}) are ` +
     `this episode's fixed dimensions and every run is compared on them. Create the character with ` +
     `\`await sdk.createSession({ character: "<your name>", race: ${o.race}, class: ${o.class} })\` ` +
     `after \`await connect()\` — the name is required, so supply one. If the server answers ` +
@@ -634,7 +636,7 @@ export const PROGRAM_CONTINUE_EMPTY = "Conversation history was not preserved; y
  * for the operator's review (the approved prompt left it to the runner).
  */
 export const PROGRAM_RESUME_KEPT =
-  "Conversation history was not preserved; your scratchpad, your files and memory were, and the routines that were running are started again from the top.";
+  "Conversation history was not preserved; your scratchpad, your files and memory were, and the routines that were running start again from the top once your character is in the world.";
 
 export function resumeSessionNote(o: {
   character: string | undefined;
@@ -653,7 +655,7 @@ export function resumeSessionNote(o: {
     `the runner process was restarted and this run resumed after a pause, ${o.clock}. ` +
     (o.program === true ? `${PROGRAM_RESUME_KEPT} ` : `Conversation history was not preserved; your scratchpad was. `);
   if (o.character === undefined) {
-    return head + freshCharacterNote({ race: o.race, class: o.class });
+    return head + freshCharacterNote({ race: o.race, class: o.class, raceName: o.raceName ?? null, className: o.className ?? null });
   }
   const race = o.raceName ?? null;
   const klass = o.className ?? null;
