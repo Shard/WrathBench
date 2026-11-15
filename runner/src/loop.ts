@@ -543,7 +543,9 @@ export class ContextBuilder {
         folded,
         scratchpad,
         notices: pendingNotices.splice(0, pendingNotices.length),
-        turn,
+        // The run's turn, as the record counts it: a resume continues it, so
+        // a turn number the model wrote into its pad still means what it did.
+        turn: this.turn,
         ...(wake !== undefined ? { wake } : {}),
         ...(padUnchanged ? { scratchpadUnchanged: true } : {}),
       }),

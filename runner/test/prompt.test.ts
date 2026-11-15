@@ -370,6 +370,13 @@ describe("the fresh-launch session note (the model names its character)", () => 
     expect(note()).toContain("be creative");
   });
 
+  test("the note names the race and class when they are known, in place of an example", () => {
+    const named = freshCharacterNote({ race: 1, class: 2, raceName: "Human", className: "Paladin" });
+    expect(named).toContain("race 1, class 2 (numeric ids: a Human Paladin) are this episode's fixed dimensions");
+    expect(named).not.toContain("e.g.");
+    expect(freshCharacterNote({ race: 3, class: 3, raceName: "Dwarf", className: "Hunter" })).toContain("race 3, class 3 (numeric ids: a Dwarf Hunter)");
+  });
+
   test("race and class stay fixed — they are the episode's comparability dimensions", () => {
     expect(note()).toContain("race and class are not yours to choose");
     expect(note()).toContain("race 1, class 2");

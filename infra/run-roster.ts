@@ -1990,7 +1990,7 @@ function launchStamp(spec: Resolved): string {
   return "error" in parsed ? image : harnessStampOf(parsed);
 }
 
-const RATE_PAUSES = new Set(["rate-limited", "quota-exhausted", "window-exhausted"]);
+const RATE_PAUSES = new Set(["rate-limited", "provider-unresponsive", "quota-exhausted", "window-exhausted"]);
 
 // ------------------------------------------------------------------ main
 

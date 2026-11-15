@@ -273,6 +273,18 @@ describe("formatStateSummary: the auras line", () => {
 });
 
 describe("formatStateSummary", () => {
+  test("the character line names the race and class the character's own fields carry", () => {
+    const line = (fields?: Record<string, { value: number }>): string =>
+      formatStateSummary({ self: { name: "Benchy", guid: "42", level: { value: 4 }, ...(fields !== undefined ? { fields } : {}) }, lastSeq: 1, eventCount: 1 }, { sessionLive: true })
+        .split("\n")
+        .find((l) => l.startsWith("character: "))!;
+    expect(line({ race: { value: 1 }, class: { value: 2 } })).toBe("character: Benchy (guid 42) level 4 Human Paladin");
+    expect(line({ race: { value: 10 }, class: { value: 6 } })).toBe("character: Benchy (guid 42) level 4 Blood Elf Death Knight");
+    // Not observed yet, or an id the client has no name for: nothing is guessed.
+    expect(line()).toBe("character: Benchy (guid 42) level 4");
+    expect(line({ race: { value: 9 }, class: { value: 2 } })).toBe("character: Benchy (guid 42) level 4 Paladin");
+  });
+
   test("position names the zone and subzone first, ids and coordinates kept", () => {
     const text = formatStateSummary(
       {

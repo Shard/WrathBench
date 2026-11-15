@@ -805,7 +805,7 @@ same fixed prompt, the scratchpad, the resume notice every driver gets) and
 is stamped `resumedFresh: true` in meta.json.
 
 Only once every resume has its account does the pool fill. The same planner
-runs every tick, so a run paused by its provider (`rate-limited`,
+runs every tick, so a run paused by its provider (`rate-limited`, `provider-unresponsive`,
 `quota-exhausted`) is resumed once its cooling is over ("Lapsed runs: paused,
 and stale"). A supervisor that boots with the pause switch set does none of
 this until the switch is cleared.
