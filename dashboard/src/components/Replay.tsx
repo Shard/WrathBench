@@ -50,6 +50,9 @@ export function chapterLabel(c: ChapterView): string {
 /** The bar's drawing width; the SVG scales it to the width it is given. */
 const BAR_W = 1000;
 
+/** Up to this many chapters are all listed beside the player; past it, the current part's. */
+const CHAPTERS_LISTED = 40;
+
 /** How close to a part's end the next part's whole file is asked for. */
 const PRELOAD_AHEAD_S = 15;
 
@@ -214,7 +217,10 @@ export function RunVideo(props: RunVideoProps) {
   });
 
   const caption = (): string => captionAt(props.clips.captions, v());
-  const shownChapters = createMemo(() => (props.compact === true ? [] : props.clips.chapters.filter((c) => c.part === part())));
+  // Every chapter while there are few; for a long freeplay run's many, the part being watched's.
+  const shownChapters = createMemo(() =>
+    props.compact === true ? [] : props.clips.chapters.length <= CHAPTERS_LISTED ? props.clips.chapters : props.clips.chapters.filter((c) => c.part === part()),
+  );
   const current = (): number => lastAtOrBefore(props.clips.chapters, v());
   const barX = (t: number): number => (total() > 0 ? (t / total()) * BAR_W : 0);
   const onBar = (e: PointerEvent): void => {

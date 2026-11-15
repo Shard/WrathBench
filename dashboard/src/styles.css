@@ -564,7 +564,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 /* The transport row: step, play, step, clock, scrubber, clock, speed. */
 .transport { gap: 6px; }
 .tbtn {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 26px; height: 26px; padding: 0; border-radius: 50%;
   background: transparent; border: 1px solid transparent; color: var(--fg);
 }
