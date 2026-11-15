@@ -41,7 +41,7 @@ import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { SecretRedactor } from "@wrathbench/mcp/redact";
 import type { SubscriptionUsage } from "./subscription-usage";
-import { latestReading, runRowOfMeta, turnIndexOf } from "./run-reader";
+import { latestReading, RUN_TURNS, runRowOfMeta, turnIndexOf, wakeCountOf } from "./run-reader";
 
 /**
  * One item on a state sample: a client-cache name, its stack count, worn or
@@ -662,11 +662,32 @@ export class Trajectory {
   /**
    * The highest turn this run has already recorded, or 0: where a resumed
    * run's numbering continues from, so its turns-to-level is the run's cost
-   * and not this episode's. Read off the trajectory's own `request` records
-   * (`TurnIndex`), each `resume` moving the offset as this one will.
+   * and not this episode's. Read off the trajectory's own `request` and
+   * `resume` records (`TurnIndex`).
    */
   maxTurn(_runId: string): number {
     return turnIndexOf(this.dir).max;
+  }
+
+  /** The wakes this run has already had, or 0: where a resumed run's wake count continues from (`wakeCountOf`). */
+  wakeCount(): number {
+    return wakeCountOf(this.dir);
+  }
+
+  /**
+   * Open a resumed segment: read where the run's turns and wakes stand, before
+   * the record that would move them, and write the `resume` record. It states
+   * the offset, so the join of the session record's rows to turns needs
+   * nothing else (`TurnIndex`), and `turns: "run"`: the segment's records
+   * carry the run's turn as they are, where a resume written before them had
+   * each record restart at 1. The caller's driver counts from `turnOffset`
+   * and its wake from `wakesBefore`.
+   */
+  appendResume(runId: string, fields: Record<string, unknown>): { turnOffset: number; wakesBefore: number } {
+    const turnOffset = this.maxTurn(runId);
+    const wakesBefore = this.wakeCount();
+    this.append({ t: "resume", turnOffset, turns: RUN_TURNS, ...fields });
+    return { turnOffset, wakesBefore };
   }
 
   /**

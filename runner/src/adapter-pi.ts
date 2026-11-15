@@ -668,7 +668,6 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
     scratchpad: o.scratchpad,
     trajectory,
     watchdogs,
-    ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
     onObservationStalled: o.onObservationStalled,
   });
@@ -692,7 +691,9 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
     snippetDelta: entryOf(config.driver).snippetDelta,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
   };
-  let turn = 0;
+  /** The run's turn: this episode's count from the offset, so every record continues the run's numbering (`LoopOptions.turnOffset`). */
+  const turnOffset = o.turnOffset ?? 0;
+  let turn = turnOffset;
   let restartsBefore = 0;
   let toolCalls = 0;
 
@@ -1158,7 +1159,8 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
         failedTurns = 0;
       }
       if (!sawOutput) trajectory.append({ t: "harness", kind: "session_note", text: `turn ${turn} produced no assistant output` });
-      if (config.maxTurns !== undefined && turn >= config.maxTurns) return terminate("turn-limit", `${turn} turns`);
+      // `maxTurns` bounds this episode: its own turns, not the run's.
+      if (config.maxTurns !== undefined && turn - turnOffset >= config.maxTurns) return terminate("turn-limit", `${turn - turnOffset} turns`);
 
       const ask = compactionAsk.noteTurn({
         context: lastContext,

@@ -22,9 +22,10 @@
  * appended since its first request, in order. A resumed run starts a new
  * segment with an empty history (`to === 0`), so `to === 0` is what opens one,
  * read off the writer's own state rather than inferred from `meta` or `resume`
- * records. `fromTurn` is the loop turn whose response opens the window (each
- * turn appends exactly one assistant message, and the cut always lands on
- * one), which lets a reader walking backwards stop at a known record. `cap` is
+ * records. `fromTurn` is the turn whose response opens the window, as the
+ * records count it (each turn appends exactly one assistant message, and the
+ * cut always lands on one), which lets a reader walking backwards stop at a
+ * known record. `cap` is
  * the per-message cap the window was cut with, so a later build with another
  * cap still rebuilds this one. `fold` is how many of the window's messages,
  * from its start, lie in its folded part (`messageWindowFold`): counted from
@@ -211,16 +212,19 @@ export function assembleRequest(
   return [{ role: "system", content: systemText }, ...renderWindow(window, fold, cap), { role: "user", content: user }];
 }
 
-/** The loop turn whose assistant message sits at `from`: one assistant per turn, turns from 1. */
-function turnAt(history: readonly ChatMessage[], from: number): number | null {
+/** The run turn whose assistant message sits at `from`: one assistant per turn, the segment's from `offset + 1`. */
+function turnAt(history: readonly ChatMessage[], from: number, offset: number): number | null {
   if (from >= history.length) return null;
-  let turns = 0;
+  let turns = offset;
   for (let k = 0; k < from; k++) if (history[k]!.role === "assistant") turns++;
   return turns + 1;
 }
 
 export interface FixedLoopRequest {
+  /** The run's turn, as every record of it counts it. */
   turn: number;
+  /** The run's turns before this segment: the history is the segment's, the window's opening turn the run's. */
+  turnOffset?: number;
   adapter: string;
   /** Exactly what is handed to the adapter. Never mutated. */
   messages: readonly ChatMessage[];
@@ -251,7 +255,7 @@ export function fixedLoopRequestRecord(o: FixedLoopRequest): {
   const hash = `sha256:${new Bun.CryptoHasher("sha256").update(sent).digest("hex")}`;
   const cap = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
   const fold = o.foldTo - o.from;
-  const window: RequestWindow = { from: o.from, to: o.history.length, fromTurn: turnAt(o.history, o.from), cap, fold };
+  const window: RequestWindow = { from: o.from, to: o.history.length, fromTurn: turnAt(o.history, o.from, o.turnOffset ?? 0), cap, fold };
   const stats = requestStats(o.messages);
   let mismatch: string | null = null;
   if (first?.role !== "system" || typeof first.content !== "string" || last?.role !== "user" || typeof last.content !== "string" || o.messages.length < 2) {

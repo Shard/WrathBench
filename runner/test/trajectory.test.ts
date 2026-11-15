@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
+import { RUN_TURNS, TurnIndex } from "../src/run-reader";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -121,11 +122,54 @@ describe("Trajectory", () => {
     traj.append({ t: "response", turn: 1 });
     traj.append({ t: "request", turn: 4 });
     expect(traj.maxTurn("run-t2")).toBe(4);
-    // A resume states the offset it continues from, and its driver counts from 1 again.
+    // A resume written before `turns`: it states the offset, and its records counted from 1 again.
     traj.append({ t: "resume", turnOffset: 4 });
     traj.append({ t: "request", turn: 1 });
     traj.append({ t: "request", turn: 2 });
     expect(traj.maxTurn("run-t2")).toBe(6);
+    // A resume that says its records carry the run's turn: read as they are, never offset twice.
+    traj.append({ t: "resume", turnOffset: 6, turns: RUN_TURNS });
+    traj.append({ t: "request", turn: 7 });
+    traj.append({ t: "request", turn: 8 });
+    expect(traj.maxTurn("run-t2")).toBe(8);
+    // Each resume after it as well, however many there are.
+    traj.append({ t: "resume", turnOffset: 8, turns: RUN_TURNS });
+    traj.append({ t: "request", turn: 9 });
+    expect(traj.maxTurn("run-t2")).toBe(9);
+    traj.close();
+  });
+
+  test("the turn index joins an instant to the run's turn across old and new resumes alike", () => {
+    const index = new TurnIndex();
+    const feed: Record<string, unknown>[] = [
+      { t: "request", turn: 1, ts: 100 },
+      { t: "request", turn: 2, ts: 200 },
+      // An old build's resume: the records restart at 1.
+      { t: "resume", turnOffset: 2, ts: 250 },
+      { t: "request", turn: 1, ts: 300 },
+      // A new build's resume: the records carry the run's turn.
+      { t: "resume", turnOffset: 3, turns: RUN_TURNS, ts: 350 },
+      { t: "request", turn: 4, ts: 400 },
+      { t: "request", turn: 5, ts: 500 },
+    ];
+    for (const rec of feed) index.note(rec);
+    expect([150, 250, 300, 450, 600].map((ts) => index.at(ts))).toEqual([1, 2, 3, 4, 5]);
+    expect(index.max).toBe(5);
+  });
+
+  test("wakeCount counts the run's wake records, whatever their n says", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    expect(traj.wakeCount()).toBe(0);
+    traj.append({ t: "wake", n: 1, block: "[wake 1]" });
+    traj.append({ t: "wake", n: 2, block: "[wake 2]" });
+    // A resume written before the count continued: its wakes restarted at 1.
+    traj.append({ t: "resume", turnOffset: 3 });
+    traj.append({ t: "wake", n: 1, block: "[wake 1]" });
+    // Not wakes: a routine's wake fact, and a block's text quoted elsewhere.
+    traj.append({ t: "routine", event: "wake", reason: "x" });
+    traj.append({ t: "tool_result", name: "yield", text: '{"t":"wake"}' });
+    expect(traj.wakeCount()).toBe(3);
     traj.close();
   });
 

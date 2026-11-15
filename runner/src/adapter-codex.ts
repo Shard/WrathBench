@@ -761,7 +761,6 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     scratchpad: o.scratchpad,
     trajectory,
     watchdogs,
-    ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
     onObservationStalled: o.onObservationStalled,
     ...(o.programWake !== undefined ? { onSample: (snap) => o.programWake!.onSample(snap) } : {}),
@@ -843,7 +842,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         }
       : {}),
   };
-  let turn = 0;
+  /** The run's turn: this episode's count from the offset, so every record continues the run's numbering (`LoopOptions.turnOffset`). */
+  const turnOffset = o.turnOffset ?? 0;
+  let turn = turnOffset;
   let restartsBefore = 0;
   let toolCalls = 0;
 
@@ -1628,8 +1629,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         const capped = codexWindowCapRefusal(config.compactWindow, reportedWindow);
         if (capped !== null) return terminate("harness-error", capped);
       }
-      if (config.maxTurns !== undefined && turn >= config.maxTurns) {
-        return terminate("turn-limit", `${turn} turns`);
+      // `maxTurns` bounds this episode: its own turns, not the run's.
+      if (config.maxTurns !== undefined && turn - turnOffset >= config.maxTurns) {
+        return terminate("turn-limit", `${turn - turnOffset} turns`);
       }
       // The freeplay budget, at the turn boundary: a credential at or over its
       // freeplay threshold stops the run until the window resets. Never a
