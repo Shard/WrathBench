@@ -1915,7 +1915,7 @@ and the launcher's settings. Two values matter at deploy time:
 
 **An arm image from an unmerged branch.** `bun wb release build --probe <name>
 --only runner --push` builds one whose wrath-mcp pin is on any pushed branch of
-wrath-mcp, not only master or v1, so it still rebuilds from the public stack.
+wrath-mcp, not only master, so it still rebuilds from the public stack.
 It refuses a dirty tree, pushes only to the operator's own registry, tags it
 `probe-<name>-<12-hex commit>` and prints the digest to pin the arms to. A
 build without `--probe`, `release run` and `release deploy` all refuse a
