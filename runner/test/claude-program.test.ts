@@ -65,6 +65,8 @@ interface ProgramRun {
   yield?: boolean;
   /** The fake's own settings (`WB_FAKE_COMPACT_TURN`, `WB_FAKE_SESSION_TURN`). */
   fake?: Record<string, string>;
+  /** Fields laid over every state sample after login: the character as the HUD and the wake read it. */
+  sample?: Record<string, unknown>;
 }
 
 /** A program-loop claude-code run over a real sandbox, its CLI the fake playing `calls`. */
@@ -106,6 +108,11 @@ async function claudeProgramRun(o: ProgramRun) {
   });
   hosts.push(sandbox);
   expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
+  if (o.sample !== undefined) {
+    const real = sandbox.stateSnapshot.bind(sandbox);
+    const over = o.sample;
+    (sandbox as unknown as { stateSnapshot: () => Promise<unknown> }).stateSnapshot = async () => ({ ...((await real()) as object), ...over });
+  }
   const record = join(runDir, "fake-record.json");
   const started = Date.now();
   const outcome = await runClaudeEpisode({
@@ -165,6 +172,31 @@ describe("the program loop on the claude-code driver, through the fake CLI", () 
       ["turn-end", "routine_ended"],
       ["yield", "cap"],
     ]);
+  }, 60_000);
+
+  test("a ghost with broken gear: a yield's block says so, since no HUD follows it; the turn message's block, beside the HUD, does not", async () => {
+    const r = await claudeProgramRun({
+      calls: [
+        [
+          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
+          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
+        ],
+        [{ name: "yield", arguments: { seconds: 1 } }],
+      ],
+      maxTurns: 2,
+      sample: {
+        self: { name: "Thalvorn", level: { value: 3 }, health: { value: { current: 1, max: 90 } }, fields: { playerFlags: { value: 0x10 } } },
+        inventory: [{ slot: 15, name: "Rusted Cleaver", durability: { current: 0, max: 40 } }],
+      },
+    });
+    const durability = "durability: broken main hand Rusted Cleaver (0/40) — a broken item gives no stats";
+    const yielded = String(r.records.find((x) => x.t === "tool_result" && x["name"] === "yield")?.["text"]);
+    expect(yielded).toContain(`\ncharacter: ghost\n${durability}`);
+    // The second turn's message: its wake block leaves it out, its HUD says it.
+    expect(r.messages[1]).toContain("[wake 1 ·");
+    expect(r.messages[1]).not.toContain("character: ghost");
+    expect(r.messages[1]).toContain("ui: ghost");
+    expect(r.messages[1]!.split(durability)).toHaveLength(2);
   }, 60_000);
 
   test("without --yield the turn-end sleep is the only one: yield is neither served nor granted", async () => {

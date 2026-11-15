@@ -90,6 +90,10 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
    */
   const snippetDelta = new SnippetDeltaRecorder({
     selfGuid: () => client.state.self.guid,
+    health: () => {
+      const v = client.state.self.fields.get("health")?.value;
+      return typeof v === "number" ? v : undefined;
+    },
     level: () => {
       const v = client.state.self.level?.value;
       return typeof v === "number" ? v : undefined;
@@ -248,6 +252,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
     rpc: {
       context_events: (params) => contextEvents(params.limit ?? CONTEXT_EVENT_CAP),
       snippet_delta: () => snippetDelta.drain(),
+      death_cause: () => snippetDelta.takeDeath(),
     },
     summarize: (e: StreamEvent): Partial<Pick<EventSummary, "note" | "bystander">> | undefined => {
       const mark = spellLogMarks.get(e);

@@ -826,6 +826,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       stopped: () => done() || watchdogs.check() !== null,
       queuedNotices: () => pendingNotices.length,
       idle: watchdogs,
+      // A turn's message carries the HUD; a yield's result is the block alone.
+      hud: via === "turn-end",
       // A yield result and a turn's message alike stay in the session.
       kept: true,
     });

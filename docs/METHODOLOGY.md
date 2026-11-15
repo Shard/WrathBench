@@ -276,7 +276,13 @@ minutes at the latest; gaining a level or completing a quest does not wake it,
 and a program that wants either calls `wake()`. What it was already shown in
 a tool result wakes no later sleep. The wake block is facts in fixed wording:
 every routine as it stands, new errors and refusals with their hints, what
-changed for the character, and the routines' last console lines, capped. On
+changed for the character, and the routines' last console lines, capped. Two
+more lines ride the failure path only, so a model whose character never
+falls sees neither (operator delegated, 2026-11-15): a wake that carries a
+death names the last hitter and the damage taken in the ten seconds before
+it, in the snippet delta's words, and a `yield` block that no HUD follows
+says when the character is dead or a ghost, and for how long, and repeats
+the HUD's durability line when worn gear is broken or low. On
 codex, whose conversation holds what it was sent, the turn's message carries
 the scratchpad only when the thread does not already hold it as it stands; the
 event window goes every time.

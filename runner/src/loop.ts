@@ -714,6 +714,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
                     stopped: sleepStopped,
                     queuedNotices: () => pendingNotices.length,
                     idle: watchdogs,
+                    // The next request's context, a fresh HUD, follows the result at once.
+                    hud: true,
                     // A tool result: in the history until a trim.
                     kept: true,
                   });
@@ -1085,6 +1087,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           stopped: sleepStopped,
           queuedNotices: () => pendingNotices.length,
           idle: watchdogs,
+          // It opens the request's context, beside the HUD.
+          hud: true,
           // The fresh message is never kept: what it shows is not in the history after the next sleep.
           kept: false,
         });
