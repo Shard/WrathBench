@@ -96,7 +96,7 @@ import { scrubPathsText } from "./scrub-paths";
 import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
-import { fanoutSession, fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
+import { fanoutSession, fanoutSessions, isFanoutRun, isWithheldFanoutRun, runSession, runsSource } from "./runs-source";
 import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
@@ -779,7 +779,7 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
   /**
    * The runs a public handle withholds, sorted: every run whose driver is not a
    * model (`isNotAModelRun`, by driver or by stamp), and every fan-out run
-   * (`isFanoutRun`). The publisher hands them
+   * but a `deadmines-solo` one (`isWithheldFanoutRun`). The publisher hands them
    * to its engine to delete what an earlier pass published for them
    * (`runner/viewer/snapshot.ts`, `withdrawn`). Not a route: it is answered
    * in-process only, so no public reader learns the ids.
@@ -1010,14 +1010,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
   /**
    * Whether a public handle withholds this row: its driver is not a model, or
-   * it is a fan-out run, one agent driving several characters, which is an
-   * unscored probe and has no public form (its run detail would present no
-   * character and its game side is per character). Fan-out is read off the
-   * run's directory (`isFanoutRun`), from meta.json's launch config, so a
-   * run is withheld from its first pass rather than published and withdrawn.
+   * it is a fan-out run, one agent driving several characters, other than a
+   * scored `deadmines-solo` attempt (`isWithheldFanoutRun`). Any other fan-out
+   * run is an unscored probe and has no public form (its run detail presents
+   * no character and its game side is per character); the one-agent
+   * Deadmines id's runs are published with its table (operator delegated,
+   * 2026-11-15). Read off the run's directory, from meta.json's launch
+   * config, so a run is withheld from its first pass rather than published
+   * and withdrawn.
    */
   function withheldRow(r: Pick<RunRow, "runId" | "driver" | "shakeout">): boolean {
-    return isWithheldRow(r) || isFanoutRun(runsDir, r.runId);
+    return isWithheldRow(r) || isWithheldFanoutRun(runsDir, r.runId);
   }
 
   /** The ids a public handle withholds (`ApiHandle.unpublishedRuns`). */
@@ -1291,7 +1294,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   async function resultRuns(): Promise<ResultRun[]> {
     const rows = await allResultRuns();
-    return publicMode ? rows.filter((r) => !isNotAModelRun(r) && !isFanoutRun(runsDir, r.runId)) : rows;
+    return publicMode ? rows.filter((r) => !isNotAModelRun(r) && !isWithheldFanoutRun(runsDir, r.runId)) : rows;
   }
   /** Every run, withheld or not: what the scripted reference line is read from. */
   function allResultRuns(): Promise<ResultRun[]> {
@@ -1471,10 +1474,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const runs = await Promise.all(
       all.map(async (run) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character }) })),
     );
-    // A public handle withholds every fan-out run (`resultRuns`), and every
-    // run of the one-agent id is one, so it serves that id's table not at
-    // all rather than as an empty one: publishing it is the operator's call.
-    const boards = boardsOf(runs).filter((b) => !publicMode || !isTaskEpisode(b.episode) || EPISODES[b.episode].task.agents > 1);
+    // Both tables on either handle: the one-agent id's runs are the only
+    // fan-out runs a public handle lists (`resultRuns`).
+    const boards = boardsOf(runs);
     const body: DungeonsResponse = { version: DUNGEON_BOARD_VERSION, boards, now: Date.now() };
     return pub(body, projectDungeons);
   }
@@ -1636,13 +1638,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * `/trace/<t0>`, read as a run's are, off the character's own record and
    * the store's rows under that id (the collector keys them so). Its run's
    * row answers the rest: the model, the harness, whether the track can still
-   * change, and whether a public handle withholds it, which it always does,
-   * since no fan-out run is published. No travel marks: those are the
+   * change. A public handle answers none: a fan-out run it publishes (a
+   * `deadmines-solo` attempt) is published without its characters, so no
+   * character's id is public. No travel marks: those are the
    * trajectory's, and the run's one trajectory is no one character's.
    */
   async function fanoutCharacterRoute(id: string, parent: string, character: string, rest: string): Promise<Response> {
     const session = runDir(runsDir, parent) === null ? null : fanoutSession(runsDir, id);
-    if (session === null || (await withheldRun(parent))) return notFound(`no such run: ${id}`);
+    if (session === null || publicMode) return notFound(`no such run: ${id}`);
     if (rest === "/trace") return pub(await traceIndex(session, Date.now()), projectTraceIndex, [parent]);
     const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
     if (traceMatch !== null) {

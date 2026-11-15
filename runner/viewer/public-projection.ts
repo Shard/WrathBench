@@ -140,7 +140,7 @@ import type {
   NearbyStateView,
   NearbyWindow,
 } from "./api-types";
-import { EPISODE_IDS, isTaskEpisode } from "../src/episodes";
+import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
@@ -943,10 +943,9 @@ export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
 
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
   return scrubPathsValue<EpisodesResponse>({
-    // The Deadmines task episodes stay off the public episode list, pending
-    // the operator's call on publishing them; the dungeon board is where
-    // their runs are read.
-    episodes: e.episodes.filter((t) => !isTaskEpisode(t.id)).map((t) => ({
+    // Every id, the Deadmines task episodes included (operator delegated,
+    // 2026-11-15); the dungeon board is where their runs are read.
+    episodes: e.episodes.map((t) => ({
       id: t.id,
       minutes: t.minutes,
       idleMinutes: t.idleMinutes,
@@ -1148,27 +1147,11 @@ function projectModelRun(r: ModelRunView): ModelRunView {
   });
 }
 
-/**
- * A scheduler's "schedulable on …" or "targets met on …" with the task
- * episodes left out of its list, as the rest of the row leaves them out
- * (`projectEpisodes`), and without what the Deadmines evals still wait on
- * (`; not yet on deadmines-solo: …`), for the same reason. A list of nothing
- * else is kept whole: dropping every item would say something false.
- */
-export function withoutTaskEpisodes(why: string): string {
-  const m = /^(schedulable on|targets met on) (.+?)(?:; not yet on [a-z-]+: [^—]*?)?( — .*)?$/.exec(why);
-  if (m === null) return why;
-  const kept = m[2]!.split(", ").filter((x) => !isTaskEpisode(x));
-  return kept.length === 0 ? why : `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
-}
-
 function projectModelRow(row: ModelRowView): ModelRowView {
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
-  // Keyed off the known tier ids, not the object's own keys: an input parsed
-  // from JSON could carry any key, and only the four tiers are speakable.
+  // Keyed off the known episode ids, not the object's own keys: an input
+  // parsed from JSON could carry any key, and only those ids are speakable.
   for (const id of EPISODE_IDS) {
-    // Not the task episodes, as on the public episode list (`projectEpisodes`).
-    if (isTaskEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;
     // Not emitted: `otherSeries`, `countedLevel`, `lastEnded`, `lastReason` and
@@ -1194,17 +1177,17 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     declaredTier: row.declaredTier,
     tier: row.tier,
     earnedPromotion: row.earnedPromotion,
-    // Not emitted: `earnedDeadmines`, for the reason the task episodes are not.
+    // Not emitted: `earnedDeadmines`, which no page reads.
     idle: row.idle,
     status: row.status,
-    eligible: row.eligible.filter((id) => !isTaskEpisode(id)),
+    eligible: [...row.eligible],
     perEpisode,
     ...(row.cooling !== undefined
       ? { cooling: { until: row.cooling.until, rung: row.cooling.rung, reason: row.cooling.reason } }
       : {}),
     ...(row.retired !== undefined ? { retired: { at: row.retired.at, reason: row.retired.reason } } : {}),
     ladder: row.ladder,
-    schedulable: { ok: row.schedulable.ok, why: withoutTaskEpisodes(row.schedulable.why), extras: row.schedulable.extras },
+    schedulable: { ok: row.schedulable.ok, why: row.schedulable.why, extras: row.schedulable.extras },
     ...(row.resolvedModels !== undefined ? { resolvedModels: [...row.resolvedModels] } : {}),
     runs: row.runs.map(projectModelRun),
     newestRunId: row.newestRunId,

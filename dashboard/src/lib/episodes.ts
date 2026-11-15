@@ -58,8 +58,9 @@ export function dungeonParam(raw: string | string[] | undefined): DungeonChoice 
 
 /**
  * The dungeon tabs to offer: the five-agent id always, the one-agent id only
- * where the viewer serves its table. A public handle serves none, so a public
- * page never names it; `served` is undefined until `/api/dungeons` answers.
+ * where the viewer serves its table, as a public handle does too since the
+ * one-agent table was published (operator delegated, 2026-11-15); `served`
+ * is undefined until `/api/dungeons` answers.
  */
 export function dungeonChoices(served: readonly EpisodeIdView[] | undefined): DungeonChoice[] {
   return DUNGEON_CHOICES.filter((id) => id === "deadmines" || (served ?? []).includes(id));

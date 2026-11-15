@@ -150,7 +150,8 @@ export interface SnapshotResult {
   artifacts: SnapshotArtifact[];
   /**
    * Runs the listing holds that are never published, because their driver is
-   * not a model (`isNotAModelRun`) or they are fan-out runs (`isFanoutRun`).
+   * not a model (`isNotAModelRun`) or they are fan-out runs other than a
+   * `deadmines-solo` attempt (`isWithheldFanoutRun`).
    * The publisher deletes what it remembers
    * publishing for them; sorted, so a pass's result is deterministic.
    */

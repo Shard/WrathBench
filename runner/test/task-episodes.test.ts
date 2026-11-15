@@ -209,18 +209,27 @@ test("a refused task launch is a CampaignLaunchError", () => {
   }
 });
 
-describe("the public projection, until the board is published", () => {
-  test("leaves the task episodes out of the scheduler's words, keeping a list of nothing else whole", async () => {
-    const { withoutTaskEpisodes } = await import("../viewer/public-projection");
-    expect(withoutTaskEpisodes("schedulable on e90, e360, deadmines-solo")).toBe("schedulable on e90, e360");
-    expect(withoutTaskEpisodes("targets met on e90, e360, deadmines-solo, deadmines — unlimited sessions while its account is idle")).toBe(
-      "targets met on e90, e360 — unlimited sessions while its account is idle",
-    );
-    expect(withoutTaskEpisodes("schedulable on deadmines-solo")).toBe("schedulable on deadmines-solo");
-    // What a t2 model's Deadmines evals wait on is no more public than the evals (operator, 2026-11-15).
-    const wait = "; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
-    expect(withoutTaskEpisodes(`schedulable on e90, e360${wait}`)).toBe("schedulable on e90, e360");
-    expect(withoutTaskEpisodes(`targets met on e90, e360${wait} — unlimited sessions while its account is idle`)).toBe("targets met on e90, e360 — unlimited sessions while its account is idle");
-    expect(withoutTaskEpisodes("cooling until 12:00")).toBe("cooling until 12:00");
+describe("the public projection, since the board was published", () => {
+  test("keeps the task episodes in the episode list and a model row, the scheduler's words included", async () => {
+    const { projectEpisodes, projectModels } = await import("../viewer/public-projection");
+    const tier = (id: string) => ({ id, minutes: 240, idleMinutes: 20, noXpMinutes: null, toolCalls: 8000, objectiveAllowed: true, scored: true, summary: id, members: 1, overrides: 0, lapsed: 0, derived: 0 });
+    const episodes = projectEpisodes({ episodes: ["e90", "deadmines-solo", "deadmines"].map(tier), untiered: 0, now: 1 } as unknown as Parameters<typeof projectEpisodes>[0]);
+    expect(episodes.episodes.map((e) => e.id)).toEqual(["e90", "deadmines-solo", "deadmines"]);
+    // What a t2 model's Deadmines evals wait on is as public as the evals (operator, 2026-11-15).
+    const why = "schedulable on e90, e360; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
+    const stats = { counted: 1, attempts: 1, extras: 0, target: 3, bestLevel: null };
+    const row = {
+      name: "m", model: "m", effort: null, platform: null, harness: "wrathbench", billing: "metered", declaredTier: "t2", tier: "t2",
+      earnedPromotion: true, earnedDeadmines: true, idle: "none", status: "ok", eligible: ["e90", "e360", "deadmines-solo"],
+      perEpisode: { e90: stats, "deadmines-solo": stats }, ladder: null, schedulable: { ok: true, why, extras: false }, runs: [], newestRunId: null, lastError: null,
+    };
+    const tiers = Object.fromEntries(["t0", "t1", "t2"].map((t) => [t, { runsPerEpisode: { e90: 1, e360: 1 }, promotesTo: null, label: t }]));
+    const models = { models: [row], roster: { path: null, shape: "roster", count: 1, excluded: [] }, policy: { promoteAtLevel: 5, series: "1.0", tiers, maxSessions: {} }, ladderMs: [], harness: "all", now: 1 };
+    const projected = projectModels(models as unknown as Parameters<typeof projectModels>[0]).models[0]!;
+    expect(projected.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
+    expect(Object.keys(projected.perEpisode)).toEqual(["e90", "deadmines-solo"]);
+    expect(projected.schedulable.why).toBe(why);
+    // No page reads it, so it is not published.
+    expect("earnedDeadmines" in projected).toBe(false);
   });
 });

@@ -8,7 +8,9 @@
  * replay feed under its session id, while its routes that read "the run's
  * session" answer empty rather than one character or a crash; and a public
  * pass never publishes it while every other run's artifacts stay the bytes
- * they were. The roster's token is in no body anywhere.
+ * they were, unless it is a `deadmines-solo` attempt, whose own artifacts are
+ * published without its characters. The roster's token is in no body
+ * anywhere.
  */
 
 import { describe, expect, setSystemTime, test } from "bun:test";
@@ -232,6 +234,64 @@ describe("a public pass beside a fan-out run", () => {
       expect({ route, named: (await (await get(pub, route)).text()).includes(FANOUT_RUN) }).toEqual({ route, named: false });
     }
     expect(await pub.unpublishedRuns()).toContain(FANOUT_RUN);
+  });
+
+  test("so does a fan-out run stamped with any episode but deadmines-solo", async () => {
+    for (const episode of ["probing", "freeplay", "e90", "deadmines"]) {
+      const runs = poisonedRunsDir();
+      await writeFanoutRun(runs, { episode, driver: "openai" });
+      const pub = handleFor(runs, true);
+      expect({ episode, status: (await get(pub, `/api/run/${FANOUT_RUN}`)).status }).toEqual({ episode, status: 404 });
+      expect({ episode, named: (await (await get(pub, "/api/results?episode=all&includeOverrides=1")).text()).includes(FANOUT_RUN) }).toEqual({ episode, named: false });
+      expect({ episode, withheld: (await pub.unpublishedRuns()).includes(FANOUT_RUN) }).toEqual({ episode, withheld: true });
+    }
+  });
+});
+
+describe("a public pass beside a deadmines-solo run", () => {
+  const ACCOUNTS = ["FANA", "FANB"];
+
+  test("publishes the run's own artifacts and none of its characters' ids, accounts or token", async () => {
+    const runs = poisonedRunsDir();
+    await writeFanoutRun(runs, { episode: "deadmines-solo", driver: "openai", closed: true });
+    const now = Date.now();
+    setSystemTime(now);
+    let after: SnapshotResult;
+    try {
+      after = await createRenderer({ runsDir: runs })(now);
+    } finally {
+      setSystemTime();
+    }
+    expect(after.withdrawn).not.toContain(FANOUT_RUN);
+    expect(after.artifacts.map((a) => a.path).filter((p) => p.startsWith(`v1/run/${FANOUT_RUN}/`)).map((p) => p.split("/").at(-1)).sort()).toEqual(["detail.json", "entries.json", "track.json"]);
+    for (const a of after.artifacts) {
+      expect({ path: a.path, session: a.body.includes(`${FANOUT_RUN}~`) }).toEqual({ path: a.path, session: false });
+      expect(a.body).not.toContain(FANOUT_ROSTER_TOKEN);
+      for (const account of ACCOUNTS) expect({ path: a.path, account, named: a.body.includes(`"${account}"`) }).toEqual({ path: a.path, account, named: false });
+    }
+    const detail = JSON.parse(after.artifacts.find((a) => a.path.startsWith(`v1/run/${FANOUT_RUN}/`) && a.path.endsWith("/detail.json"))!.body) as Record<string, unknown>;
+    expect("fanout" in detail).toBe(false);
+    expect("fanoutLead" in detail).toBe(false);
+    const track = JSON.parse(after.artifacts.find((a) => a.path.startsWith(`v1/run/${FANOUT_RUN}/`) && a.path.endsWith("/track.json"))!.body) as TrackResponse;
+    expect(track.points).toEqual([]);
+    expect("fanout" in track).toBe(false);
+  });
+
+  test("the public handle serves the run and still answers none of its characters", async () => {
+    const runs = poisonedRunsDir();
+    await writeFanoutRun(runs, { episode: "deadmines-solo", driver: "openai" });
+    const pub = handleFor(runs, true);
+    for (const route of ["", "/track", "/entries?limit=10"]) {
+      expect({ route, status: (await get(pub, `/api/run/${FANOUT_RUN}${route}`)).status }).toEqual({ route, status: 200 });
+    }
+    for (const route of ["/track", "/trace"]) {
+      expect({ route, status: (await get(pub, `/api/run/${FANOUT_RUN}~Alfa${route}`)).status }).toEqual({ route, status: 404 });
+      // The private handle still serves each character's feed.
+      expect({ route, status: (await get(handleFor(runs, false), `/api/run/${FANOUT_RUN}~Alfa${route}`)).status }).toEqual({ route, status: 200 });
+    }
+    expect((await (await get(pub, "/api/results?episode=all&includeOverrides=1")).text()).includes(FANOUT_RUN)).toBe(true);
+    expect(await (await get(pub, "/api/positions")).text()).not.toContain(`${FANOUT_RUN}~`);
+    expect(await pub.unpublishedRuns()).not.toContain(FANOUT_RUN);
   });
 });
 

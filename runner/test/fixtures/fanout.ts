@@ -29,9 +29,11 @@ export const FANOUT_CHARACTERS: FanoutCharacter[] = [
 
 /**
  * Write a fan-out run under `runsDir/<runId>/`. `closed` closes every
- * character's session, as a finished run's are.
+ * character's session, as a finished run's are; `episode` stamps its launch
+ * config with an episode id, which it has none of by default, and `driver`
+ * replaces the frozen run's `stub`, which a public handle withholds anyway.
  */
-export async function writeFanoutRun(runsDir: string, o: { runId?: string; characters?: FanoutCharacter[]; closed?: boolean } = {}): Promise<string> {
+export async function writeFanoutRun(runsDir: string, o: { runId?: string; characters?: FanoutCharacter[]; closed?: boolean; episode?: string; driver?: string } = {}): Promise<string> {
   const runId = o.runId ?? FANOUT_RUN;
   const characters = o.characters ?? FANOUT_CHARACTERS;
   const dir = join(runsDir, runId);
@@ -44,6 +46,8 @@ export async function writeFanoutRun(runsDir: string, o: { runId?: string; chara
     character: characters[0]?.name,
     account: "FANA",
     fanout: { characters: characters.length, accounts: characters.map((_, i) => `FAN${String.fromCharCode(65 + i)}`) },
+    ...(o.episode === undefined ? {} : { episode: o.episode }),
+    ...(o.driver === undefined ? {} : { driver: o.driver }),
   };
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   writeFileSync(join(dir, "trajectory.jsonl"), readFileSync(join(V1P1_SRC, "trajectory.jsonl"), "utf8").replaceAll(V1P1_RUN, runId));
