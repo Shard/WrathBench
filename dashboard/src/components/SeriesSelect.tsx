@@ -66,16 +66,14 @@ export interface SeriesFilterResult<T> {
 
 /**
  * The shell's series filter, applied to one page's rows: `pageSeries` then
- * `filterBySeries` as one hook. `active` lets a page keep the shell's series
- * available without applying it — the ladder's freeplay view, where a
- * character is durable across series.
+ * `filterBySeries` as one hook.
  */
 export function useSeriesFilter<
   T extends { harnessSeries?: string | null; harnessVersion?: string | null },
->(rows: () => readonly T[], active: () => boolean = () => true): SeriesFilterResult<T> {
+>(rows: () => readonly T[]): SeriesFilterResult<T> {
   const feeds = useFeeds();
   const series = (): string | null =>
-    active() ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), rows(), feeds.seriesPreview()) : null;
+    pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), rows(), feeds.seriesPreview());
   const kept = (): T[] => filterBySeries(rows(), series());
   return { series, kept };
 }

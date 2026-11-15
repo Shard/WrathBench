@@ -25,6 +25,7 @@ import {
   xpLevelTicks,
 } from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
+import { filterBySeries } from "../src/lib/harness";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
 import { modelEntries } from "../src/lib/ladderfilter";
 import { fmtPlaytimeTick } from "../src/lib/format";
@@ -2001,5 +2002,37 @@ describe("freeplay milestones", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.milestones.map((m) => m.status)).toEqual(["reached", "reached", "not-reached", "not-reached", "not-reached", "not-instrumented", "not-reached", "not-reached"]);
     expect(rows[0]!.milestones[1]).toEqual({ n: 2, status: "reached", playtimeMs: H + H / 4, runId: "c2" });
+  });
+
+  /*
+   * The freeplay tab applies the shell's series like every tab (operator,
+   * 2026-11-15), and cuts the runs before the walk, as every other filter here
+   * does. A character no longer carries across a series; one begun before that
+   * rule may span two, and under each it is that series' attempts only.
+   */
+  test("the series cuts the runs before the walk: a two-series chain re-roots, and rungs counted from the start are not credited", () => {
+    const fp = (over: Partial<ResultRun>): ResultRun => run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
+    const runs = [
+      fp({ runId: "old1", harnessSeries: "0.4", playtimeMs: H, maxLevel: 5, levels: [lv(1, 0), lv(5, H / 2)], milestoneAt: times({ leftStartArea: at(1, H / 4) }) }),
+      fp({ runId: "old2", continuedFrom: "old1", harnessSeries: "0.5", startedAt: 200, playtimeMs: H, maxLevel: 7, levels: [lv(5, 0), lv(7, H / 2)], milestoneAt: times() }),
+      fp({ runId: "old3", continuedFrom: "old2", harnessSeries: "0.5", startedAt: 300, playtimeMs: H, maxLevel: 9, levels: [lv(7, 0), lv(9, H / 2)], milestoneAt: times() }),
+      fp({ runId: "new1", harnessSeries: "1.0", startedAt: 400, playtimeMs: H, maxLevel: 4, levels: [lv(1, 0), lv(4, H / 2)], milestoneAt: times() }),
+      fp({ runId: "unstamped", harnessSeries: null, harnessVersion: null, startedAt: 500, maxLevel: 2 }),
+    ];
+    const tab = (series: string | null) => characterRows(filterBySeries(runs, series)).map((r) => ({ id: r.characterId, n: r.attempts, latest: r.latest.runId }));
+    expect(tab("1.0")).toEqual([{ id: "new1", n: 1, latest: "new1" }]);
+    expect(tab("0.5")).toEqual([{ id: "old2", n: 2, latest: "old3" }]);
+    expect(tab("0.4")).toEqual([{ id: "old1", n: 1, latest: "old1" }]);
+    // "all" is the whole field, the unstamped run included and the chain whole.
+    expect(tab(null)).toEqual([
+      { id: "old1", n: 3, latest: "old3" },
+      { id: "new1", n: 1, latest: "new1" },
+      { id: "unstamped", n: 1, latest: "unstamped" },
+    ]);
+    // Under 0.5 the character's start is not among its attempts, so leaving the
+    // start area — reached on 0.4 — is neither credited nor claimed missed.
+    const cut = characterRows(filterBySeries(runs, "0.5"))[0]!;
+    expect(cut.milestones[1]!.status).toBe("not-recorded");
+    expect(characterRows(runs)[0]!.milestones[1]!.status).toBe("reached");
   });
 });

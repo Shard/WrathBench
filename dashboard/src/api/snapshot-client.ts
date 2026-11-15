@@ -613,9 +613,10 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * transports — which is the rule this whole file is written to.
      *
      * The walk runs against the UNFILTERED results, never a tier or series
-     * view: a character is durable across both (the ladder says so where it
-     * refuses to cut a chain by series), and resolving it against a filtered
-     * set would silently shorten the history rather than say it is short.
+     * view: a character is durable across tiers, one begun before characters
+     * stopped carrying across series may span two, and resolving it against a
+     * filtered set would silently shorten the history rather than say it is
+     * short. The ladder's freeplay tab cuts by series; this page does not.
      */
     character: async (id: string): Promise<CharacterResponse> => {
       const source = await snap<ResultsResponse>("results.json");

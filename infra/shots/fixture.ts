@@ -385,12 +385,18 @@ function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unkn
  * and its character page: it climbs to L12, leaves its starting area, enters a
  * capital on the first attempt and takes a flight on the second, so the
  * milestone columns show reached, not reached and not instrumented together.
+ * And a second character of one attempt, Fernhollow, which the rig's preview
+ * stamps with the preview series, so the freeplay tab has a character on each
+ * side of the selector.
  */
 export const FREEPLAY_RUN = "fixture-freeplay-1";
 export const FREEPLAY_RUN_2 = "fixture-freeplay-2";
+export const FREEPLAY_FRESH = "fixture-freeplay-fresh";
 
 interface FreeplayAttempt {
   runId: string;
+  /** Its character's name; Wanderly when absent. */
+  character?: string;
   continuedFrom?: string;
   startedAt: number;
   minutes: number;
@@ -406,15 +412,16 @@ function writeFreeplayAttempt(runsDir: string, a: FreeplayAttempt): Promise<void
   let clock = a.startedAt;
   const traj = new Trajectory(dir, { now: () => clock });
   const token = `${a.runId}-fixture-token-000000000000`;
+  const name = a.character ?? "Wanderly";
   const config = {
-    ...loadRunConfig({ episode: "freeplay", account: "FIXTURE", driver: "openai", model: "fixture/freeplay-model", character: "Wanderly" }),
+    ...loadRunConfig({ episode: "freeplay", account: "FIXTURE", driver: "openai", model: "fixture/freeplay-model", character: name }),
     runId: a.runId,
     token,
     runsDir,
     ...(a.continuedFrom !== undefined ? { continuedFrom: a.continuedFrom } : {}),
   };
   traj.writeMeta({ runId: a.runId, harnessVersion: "harness-fixture", startedAt: a.startedAt, config, comparability: comparabilityOf(config, "harness-fixture") });
-  traj.setCharacter(a.runId, "Wanderly");
+  traj.setCharacter(a.runId, name);
   const id = createHash("sha256").update(token).digest("hex").slice(0, 16);
   const writer = new SessionWriter({ dir: sessionDirOf(dir), id, stack: { version: "fixture" }, now: () => clock, log: () => {} });
   writer.open();
@@ -432,7 +439,7 @@ function writeFreeplayAttempt(runsDir: string, a: FreeplayAttempt): Promise<void
     const ts = a.startedAt + e.at * 60_000;
     return e.kind === "taxi" ? { ts, seq: i + 1, kind: "taxi" as const } : { ts, seq: i + 1, kind: e.kind, to: e.to! };
   });
-  writer.ingest({ trace: { rows, dropped: 0, dict: DICT }, events: { rows: events, dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: SELF_GUID, name: "Wanderly", race: 1, class: 1 }, stream: { connected: true, events: 0, seq: 0 } });
+  writer.ingest({ trace: { rows, dropped: 0, dict: DICT }, events: { rows: events, dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: SELF_GUID, name, race: 1, class: 1 }, stream: { connected: true, events: 0, seq: 0 } });
   clock = a.startedAt + a.minutes * 60_000;
   const closed = writer.close();
   traj.setTermination(a.runId, "idle", "idle watchdog");
@@ -830,6 +837,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   const freeplay = [
     writeFreeplayAttempt(runsDir, { runId: FREEPLAY_RUN, startedAt: freeplayAt, minutes: 180, levels: [1, 8], events: [{ at: 1, kind: "area", to: 9 }, { at: 30, kind: "area", to: 24 }, { at: 70, kind: "area", to: 87 }, { at: 75, kind: "area", to: 87 }, { at: 150, kind: "zone", to: 1519 }] }),
     writeFreeplayAttempt(runsDir, { runId: FREEPLAY_RUN_2, continuedFrom: FREEPLAY_RUN, startedAt: freeplayAt + 4 * 3_600_000, minutes: 120, levels: [8, 12], events: [{ at: 1, kind: "zone", to: 1519 }, { at: 40, kind: "taxi" }] }),
+    writeFreeplayAttempt(runsDir, { runId: FREEPLAY_FRESH, character: "Fernhollow", startedAt: freeplayAt + 7 * 3_600_000, minutes: 90, levels: [1, 6], events: [{ at: 1, kind: "area", to: 9 }, { at: 50, kind: "area", to: 24 }, { at: 55, kind: "area", to: 24 }] }),
   ];
   const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now)), ...freeplay]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));

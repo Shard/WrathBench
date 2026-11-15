@@ -497,9 +497,7 @@ moves with its evidence and two conditions never pool; no chart holds
 conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a
 leaderboard (2026-08-29): the whole active field, paused and in-progress
 characters included, one row per character across attempts with its
-milestones, with the reader's filters applied — except the series, because a character begun before
-characters stopped carrying across series (below) may span two, and cutting its older attempts would
-misreport its age.
+milestones, with the reader's filters applied, the series included (operator, 2026-11-15).
 
 **The Deadmines evals, and rung 6** (operator, 2026-11-14). The Deadmines
 eval, `deadmines-solo`, is shown like the other evals, on a ladder tab of its

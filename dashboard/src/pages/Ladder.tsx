@@ -152,20 +152,21 @@ export default function Ladder() {
   /*
    * Freeplay is a different page under the same address: an overview of the
    * top characters on freeplay right now, one row per durable character, with
-   * its milestones. It shows no scatter. The shell's series filter does not apply, and
-   * that is not a convenience: a character is durable *across* series, so cutting
-   * its older attempts would make the newest survivor the chain root and
-   * report a thirteen-attempt character as attempt 1, which is the one number
-   * this page exists to show. `useSeriesFilter` has the `active` hatch for
-   * exactly this.
+   * its milestones. It shows no scatter. The shell's series applies here as on
+   * every tab (operator, 2026-11-15): a character no longer carries across a
+   * series, so a series' characters are its own. The runs are cut before the
+   * lineage walk like every other filter below, so a chain begun before that
+   * rule and spanning two series shows, under each, that series' attempts,
+   * re-rooted on its first one there, with the from-start rungs left
+   * uncredited (`characterRows`' `truncated`).
    *
-   * "exclude free" *does* apply, and did not at first (an early exemption,
+   * "exclude free" applies too, and did not at first (an early exemption,
    * since reversed): it is the same control, the same
    * default, and the same predicate the episode ladders use, over both the
-   * table and the chart. Only the series exemption survives.
+   * table and the chart.
    */
   const freeplay = (): boolean => episode() === "freeplay";
-  const seriesFilter = useSeriesFilter(served, () => !freeplay());
+  const seriesFilter = useSeriesFilter(served);
   const all = seriesFilter.kept;
   /*
    * Three multi-selects and two toggles narrow the set, and all of them are

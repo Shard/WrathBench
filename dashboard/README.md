@@ -134,9 +134,12 @@ carries the character's current level and state and the lineage rides with
 it, so the same character never appears twice. The reader's own filters apply
 as on the scored tiers, "exclude free" included (operator, 2026-08-29,
 reversing an exemption made the same day): same control, same default-on, same
-predicate, over both the table and the graph. The one exemption that stands is
-the harness series, because a character is durable across series and cutting
-its older attempts would report a long-lived character as attempt 1.
+predicate, over both the table and the graph. The harness series applies as on
+every tab (operator, 2026-11-15): a character no longer carries across a
+series. The runs are cut before the lineage walk, so a chain begun before that
+rule and spanning two series shows, under each, that series' attempts only,
+re-rooted on its first one there and without the rungs counted from a
+character's start.
 
 The Deadmines eval is a tab of the ladder page, labelled "deadmines"
 (`?episode=deadmines-solo`), not a tier: its runs are read on the dungeon
