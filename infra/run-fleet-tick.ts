@@ -150,7 +150,7 @@ export function effectiveJobs(mem: TickMemory, io: TickIO, read: FleetConfig): J
   // Both are re-derived below if this tick's sweep ends anything: a failed
   // attempt written halfway down a tick has to be in the projection the queue and
   // the policy read at the bottom of it.
-  let states = modelStates({ runsDir: io.runsDir, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
+  let states = modelStates({ runsDir: io.runsDir, roster: rosterModels(cfg.roster), policy: cfg.policy, runs, now: io.now() });
   let eligible = eligibleFrom(states);
   // The credentials over the same facts: each one's budget (its newest usage
   // reading, its runs and spend today) and every live session on its slots

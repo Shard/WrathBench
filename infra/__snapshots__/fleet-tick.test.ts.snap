@@ -12303,7 +12303,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
   "memory": {
     "campaignJobs": [],
     "credentialsBooked": {
-      "claude-1": 1,
+      "claude-1": 2,
       "claude-2": 0,
       "or-free": 2,
       "or-paid": 0,
@@ -12386,6 +12386,31 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           "source": "policy",
         },
       ],
+      [
+        "son-e90",
+        {
+          "attempt": 2,
+          "enabled": true,
+          "episode": "e90",
+          "name": "son-e90",
+          "placed": {
+            "son": {
+              "env": "CLAUDE_CODE_OAUTH_TOKEN",
+              "id": "claude-1",
+              "usageMaxPct": {
+                "freeplay": 80,
+                "scored": 80,
+              },
+            },
+          },
+          "ref": "son",
+          "refs": [
+            "son",
+          ],
+          "repeat": 1,
+          "source": "policy",
+        },
+      ],
     ],
     "pinnedDone": [],
     "placedMemo": {
@@ -12411,8 +12436,18 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           },
         },
       },
+      "son-e90": {
+        "son": {
+          "env": "CLAUDE_CODE_OAUTH_TOKEN",
+          "id": "claude-1",
+          "usageMaxPct": {
+            "freeplay": 80,
+            "scored": 80,
+          },
+        },
+      },
     },
-    "policyIdle": "1 free account(s), nothing schedulable: son=cooling opus=new glm=new fp=new fp2=new",
+    "policyIdle": null,
   },
   "memoryAfterFirst": {
     "drainReasons": {},
@@ -12421,6 +12456,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
       "fp-e90",
       "glm-e90",
       "opus-e90",
+      "son-e90",
     ],
     "placedMemo": {
       "fp-e90": {
@@ -12445,9 +12481,24 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           },
         },
       },
+      "son-e90": {
+        "son": {
+          "env": "CLAUDE_CODE_OAUTH_TOKEN",
+          "id": "claude-1",
+          "usageMaxPct": {
+            "freeplay": 80,
+            "scored": 80,
+          },
+        },
+      },
     },
   },
   "record": [
+    {
+      "detail": "son e90 attempt 2 on RUNNER3: no counted runs yet",
+      "event": "policy-pick",
+      "job": "son-e90",
+    },
     {
       "detail": "opus e90 attempt 1 on RUNNER: no counted runs yet",
       "event": "policy-pick",
@@ -12459,19 +12510,48 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
       "job": "glm-e90",
     },
     {
-      "detail": "fp e90 attempt 1 on RUNNER3: no counted runs yet",
+      "detail": "fp e90 attempt 1 on RUNNER4: no counted runs yet",
       "event": "policy-pick",
       "job": "fp-e90",
     },
   ],
   "say": [
+    "policy son-e90: son e90 attempt 2 on RUNNER3 — no counted runs yet",
     "policy opus-e90: opus e90 attempt 1 on RUNNER — no counted runs yet",
     "policy glm-e90: glm e90 attempt 1 on RUNNER2 — no counted runs yet",
-    "policy fp-e90: fp e90 attempt 1 on RUNNER3 — no counted runs yet",
-    "policy: 1 free account(s), nothing schedulable: son=cooling opus=new glm=new fp=new fp2=new",
+    "policy fp-e90: fp e90 attempt 1 on RUNNER4 — no counted runs yet",
   ],
   "secondCall": "same",
   "spawns": [
+    {
+      "account": "RUNNER3",
+      "enabled": true,
+      "entries": [
+        {
+          "driver": "claude-code",
+          "episode": "e90",
+          "maxToolCalls": 3000,
+          "model": "sonnet",
+          "placedOn": {
+            "env": "CLAUDE_CODE_OAUTH_TOKEN",
+            "id": "claude-1",
+            "usageMaxPct": {
+              "freeplay": 80,
+              "scored": 80,
+            },
+          },
+          "resumeOnPause": false,
+          "runId": "fleet-son-e90-sonnet-20261115-a2",
+          "watchdogs": {
+            "episodeMs": 5400000,
+            "idleMs": 1200000,
+            "noXpMs": 1200000,
+          },
+        },
+      ],
+      "loop": false,
+      "name": "son-e90",
+    },
     {
       "account": "RUNNER",
       "enabled": true,
@@ -12524,7 +12604,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
       "name": "glm-e90",
     },
     {
-      "account": "RUNNER3",
+      "account": "RUNNER4",
       "enabled": true,
       "entries": [
         {
