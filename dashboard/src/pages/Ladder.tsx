@@ -30,11 +30,21 @@
  * there is no aggregate score. The rungs order nothing on these ladders; they
  * are freeplay achievements, and the freeplay view prints the rule each
  * applies, with "not instrumented" where nothing recorded can answer one.
+ *
+ * The two Deadmines ids are tabs of this page too, and read something else
+ * again: the dungeon board (`/api/dungeons`, derived in
+ * `runner/viewer/dungeons.ts`), one table per id, a row per model condition
+ * on its best attempt, never pooled or ranked against the other id. Above the
+ * table, the scatter's idiom for an attempt: time from launch against bosses
+ * killed (`components/DungeonChart`). None of the tier's controls apply to a
+ * board, so none is shown; the shell's series still is. The one-agent id's tab
+ * is offered only where its table is served (`dungeonChoices`).
  */
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
-import { api, type ResultsResponse, type ResultRun } from "../api/client";
+import { api, type DungeonBoardView, type DungeonRowView, type ResultsResponse, type ResultRun } from "../api/client";
+import { DungeonChart } from "../components/DungeonChart";
 import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
 import { CharacterChart } from "../components/CharacterChart";
@@ -45,7 +55,8 @@ import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { useSeriesFilter } from "../components/SeriesSelect";
 import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
-import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
+import { type DungeonChoice, EPISODE_CHOICES, dungeonChoices, dungeonParam, episodeParam } from "../lib/episodes";
+import { attemptHref, attemptTitle, boardHint, boardRowKey, bossesText, bossesTitle, clearTimeText, clearedText } from "../lib/dungeons";
 import {
   RUNGS,
   billingKnown,
@@ -113,7 +124,23 @@ export default function Ladder() {
   // `/api/ladder` is the same projection as `/api/results`; the row order and
   // the milestone rules stay client-side, in `lib/ladder.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode()), POLL_MS);
+  // The Deadmines tabs read the dungeon board.
+  const dungeons = poll(() => api.dungeons(), POLL_MS);
   createEffect(on(episode, () => feed.refresh(), { defer: true }));
+  /** The ids whose tables the viewer serves, once it has answered. */
+  const servedBoards = () => dungeons.latest?.boards.map((b) => b.episode);
+  /*
+   * The dungeon tab in view, or null on a ladder tier. An id whose table is
+   * not served — the one-agent id on a public handle — falls back to the
+   * tier, as any other unknown id does; until the board answers, a named
+   * id is taken at its word.
+   */
+  const dungeon = (): DungeonChoice | null => {
+    const d = dungeonParam(params.episode);
+    const served = servedBoards();
+    return d !== null && (served === undefined || served.includes(d)) ? d : null;
+  };
+  const board = (): DungeonBoardView | undefined => dungeons.latest?.boards.find((b) => b.episode === dungeon());
   const body = (): ResultsResponse | undefined => feed.latest;
   // The shell's harness series, applied before anything else reads
   // the rows: a level reached on 0.4 is not evidence about 0.5.
@@ -339,12 +366,34 @@ export default function Ladder() {
       <div class="chips episodes">
         <For each={EPISODE_CHOICES}>
           {(id) => (
-            <button class={id === episode() ? "on" : ""} onClick={() => setParams({ episode: id }, { replace: true })}>
+            <button class={dungeon() === null && id === episode() ? "on" : ""} onClick={() => setParams({ episode: id }, { replace: true })}>
+              {id}
+            </button>
+          )}
+        </For>
+        <For each={dungeonChoices(servedBoards())}>
+          {(id) => (
+            <button class={id === dungeon() ? "on" : ""} title={boardHint(id)} onClick={() => setParams({ episode: id }, { replace: true })}>
               {id}
             </button>
           )}
         </For>
       </div>
+
+      <Show when={dungeon()}>
+        {(id) => (
+          <>
+            <Show when={dungeons.error !== undefined}>
+              <div class="banner bad">{displayError(dungeons.error)}</div>
+            </Show>
+            <Show when={board()} fallback={<p class="dim loading-chart">loading…</p>}>
+              {(b) => <DungeonBoard board={b()} episode={id()} />}
+            </Show>
+          </>
+        )}
+      </Show>
+
+      <Show when={dungeon() === null}>
 
       {/* One row of controls, immediately above the chart they narrow — the
           chart and the table read the same filtered set, so the two can never
@@ -603,7 +652,90 @@ export default function Ladder() {
         <Show when={reference()}>{(ref) => <ReferenceStrip scale={ref()} />}</Show>
         </Show>
       </Show>
+      </Show>
     </div>
+  );
+}
+
+const BOARD_NOTE =
+  "The fixed Deadmines episode from a staged level-20 party, a table per arm, never pooled or ranked against each other. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the eight, then time to the last. Deaths and wipes are shown and never order a row.";
+
+/**
+ * One dungeon tab: the board's table for its id, as the viewer derived and
+ * ordered it, under the shell's series, with its chart above it. The chart
+ * and the table share one hover, keyed on the row (`boardRowKey`).
+ */
+function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice }) {
+  // The shell's harness series, as every evals page applies it.
+  const series = useSeriesFilter(() => props.board.rows.map((r) => ({ ...r, harnessSeries: r.series })));
+  const [hovered, setHovered] = createSignal<string | null>(null);
+  return (
+    <>
+      <div class="wide-scroll">
+        <DungeonChart rows={series.kept()} episode={props.episode} hovered={hovered()} onHover={setHovered} boardNote={BOARD_NOTE} />
+      </div>
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th>model</th>
+              <th>harness</th>
+              <th class="right" title="counted attempts that cleared, of the counted attempts">cleared</th>
+              <th class="right" title="the best attempt's time from launch to Edwin VanCleef's death">time</th>
+              <th class="right" title="the best attempt's bosses killed, of the eight">bosses</th>
+              <th class="right" title="the best attempt's deaths, over every character">deaths</th>
+              <th class="right" title="the best attempt's wipes: every character dead at once">wipes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <Show when={series.kept().length === 0}>
+              <tr>
+                <td colSpan={7} class="dim">
+                  no counted attempts
+                </td>
+              </tr>
+            </Show>
+            <For each={series.kept()}>{(row) => <DungeonRow row={row} hovered={hovered()} onHover={setHovered} />}</For>
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function DungeonRow(props: { row: DungeonRowView; hovered: string | null; onHover: (key: string | null) => void }) {
+  const r = (): DungeonRowView => props.row;
+  const key = (): string => boardRowKey(props.row);
+  const effort = (): string | null => effortLabel(r().effort, r().compactWindow ?? null);
+  return (
+    <tr
+      classList={{ hovered: props.hovered === key() }}
+      tabindex="0"
+      onMouseEnter={() => props.onHover(key())}
+      onMouseLeave={() => props.onHover(null)}
+      onFocus={() => props.onHover(key())}
+      onBlur={() => props.onHover(null)}
+    >
+      <td>
+        <ModelIcon model={r().model} />
+        {modelDisplay(r().model ?? "(unnamed)")}
+        <Show when={effort()}>{(e) => <span class="dim"> · {e()}</span>}</Show>
+      </td>
+      <td>
+        <HarnessTag harness={r().harness} />
+      </td>
+      <td class="right mono" title="the row's best attempt">
+        <A href={attemptHref(r())}>{clearedText(r())}</A>
+      </td>
+      <td class="right mono" title={attemptTitle(r().best)}>
+        {clearTimeText(r().best)}
+      </td>
+      <td class="right mono" title={bossesTitle(r().best)}>
+        {bossesText(r().best)}
+      </td>
+      <td class="right mono">{r().best.deaths}</td>
+      <td class="right mono">{r().best.wipes}</td>
+    </tr>
   );
 }
 
@@ -708,7 +840,7 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
  *
  * The rail the withdrawn reference lines used, carrying one mark now: the
  * scripted reference run of this tier and series (`lib/reference.ts`). It sits
- * below the table rather than inside it, because the rung table scrolls
+ * below the table rather than inside it, because the ladder table scrolls
  * sideways on a phone and a reference behind a scroll is not one. The rail is
  * percentage-positioned HTML so it needs no measuring, and the legend carries
  * the number, linked to the run, so nothing has to be read off the rail. What

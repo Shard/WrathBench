@@ -509,8 +509,11 @@ export interface Rect {
   b: number;
 }
 
-export interface PlacedPoint {
-  point: LadderPoint;
+/** What the label placement reads of a point: its key, its label and its two readings. `LadderPoint` is one. */
+export type ChartPoint = Pick<LadderPoint, "key" | "label" | "x" | "y">;
+
+export interface PlacedPoint<P extends ChartPoint = LadderPoint> {
+  point: P;
   cx: number;
   cy: number;
   /** The label's anchor point and baseline, in viewBox units. */
@@ -540,7 +543,7 @@ export interface PlacedPoint {
   labelled: boolean;
 }
 
-export interface LadderChartLayout {
+export interface LadderChartLayout<P extends ChartPoint = LadderPoint> {
   /** The x axis's scale, as its spec chose: the rest of the x fields read differently under each. */
   xScale: AxisSpec["scale"];
   /** Decade ticks on a log axis (0.01, 0.1, 1, … up to the ceiling); `niceTicks` from zero on a linear one. */
@@ -559,7 +562,7 @@ export interface LadderChartLayout {
   dividerX: number;
   /** Whether any entry cost nothing, and so whether the gutter is there at all. Never on a linear axis. */
   hasFree: boolean;
-  placed: PlacedPoint[];
+  placed: PlacedPoint<P>[];
   /** The reading-direction cue in the better corner, placed before any label and kept clear of every mark. */
   cue: ChartCue;
   /** The same value→pixel maps the points were placed with, for the chart's own tick gridlines. */
@@ -962,13 +965,13 @@ function leaderTo(cx: number, cy: number, rect: Rect): Leader {
  * against it, so a hover shows a label without moving one. Omitted, every
  * label stands.
  */
-export function ladderChartLayout(
-  points: readonly LadderPoint[],
+export function ladderChartLayout<P extends ChartPoint = LadderPoint>(
+  points: readonly P[],
   box: ChartBox,
-  xSpec: AxisSpec = COST,
-  ySpec: AxisSpec = XP,
+  xSpec: Pick<AxisSpec, "scale" | "ticks" | "better"> = COST,
+  ySpec: Pick<AxisSpec, "ticks" | "better"> = XP,
   labelled?: ReadonlySet<string>,
-): LadderChartLayout {
+): LadderChartLayout<P> {
   const xs = points.map((p) => p.x);
   let xAxis: Pick<LadderChartLayout, "xTicks" | "xMinorTicks" | "xMax" | "axisX0" | "freeX" | "dividerX" | "hasFree" | "px">;
   if (xSpec.scale === "log-cost") {
@@ -1023,11 +1026,11 @@ export function ladderChartLayout(
   const inside = (a: Rect): boolean =>
     a.l >= box.x0 - 2 && a.r <= box.x1 + 2 && a.t >= box.y1 - LABEL_H && a.b <= box.y0;
 
-  const stands = (p: LadderPoint): boolean => labelled === undefined || labelled.has(p.key);
+  const stands = (p: P): boolean => labelled === undefined || labelled.has(p.key);
   // The standing labels first, then the hover-only ones against them; the
   // result keeps the importance order either way.
   const order = [...marks.keys()].sort((a, b) => Number(stands(marks[b]!.p)) - Number(stands(marks[a]!.p)) || a - b);
-  const placedAt: PlacedPoint[] = [];
+  const placedAt: PlacedPoint<P>[] = [];
   for (const i of order) {
     const { p, cx, cy } = marks[i]!;
     const standing = stands(p);
