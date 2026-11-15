@@ -10,7 +10,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { calculateVerifier, main, parseArgs } from "./bootstrap";
+import { calculateVerifier, isWorldRealm, main, parseArgs } from "./bootstrap";
+import { newWorldId, REALM_MAX, REALM_MIN } from "../world";
 
 type Row = { id: number; salt: string; verifier: string };
 
@@ -19,8 +20,9 @@ type Row = { id: number; salt: string; verifier: string };
  * whitespace collapsed, and keeps just enough of the account table for the
  * reads that follow a write to see it.
  */
-function fakeDb(seed: Record<string, Row> = {}) {
+function fakeDb(seed: Record<string, Row> = {}, realmSeed: { id: number; name: string; flag: number }[] = []) {
   const accounts = new Map(Object.entries(seed));
+  const realms = new Map(realmSeed.map((r) => [r.id, { ...r }]));
   const statements: { text: string; values: unknown[] }[] = [];
   let nextId = 100;
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
@@ -30,6 +32,10 @@ function fakeDb(seed: Record<string, Row> = {}) {
       const row = accounts.get(values[0] as string);
       return row === undefined ? [] : [row];
     }
+    if (text.startsWith("SELECT id, name FROM realmlist WHERE id <> ?")) {
+      return [...realms.values()].filter((r) => r.id !== values[0]).map(({ id, name }) => ({ id, name }));
+    }
+    if (text.startsWith("DELETE FROM realmlist WHERE id = ?")) realms.delete(values[0] as number);
     if (text.startsWith("INSERT INTO account ")) {
       const [username, salt, verifier] = values as [string, string, string];
       accounts.set(username, { id: nextId++, salt: salt.toUpperCase(), verifier: verifier.toUpperCase() });
@@ -38,7 +44,7 @@ function fakeDb(seed: Record<string, Row> = {}) {
   };
   let closed = false;
   Object.assign(sql, { close: async () => void (closed = true) });
-  return { sql: sql as unknown as SQL, statements, accounts, isClosed: () => closed };
+  return { sql: sql as unknown as SQL, statements, accounts, realms, isClosed: () => closed };
 }
 
 const REALM_WRITE = /^(INSERT INTO|UPDATE|DELETE FROM|REPLACE INTO) realmlist\b/i;
@@ -92,12 +98,43 @@ describe("--accounts-only", () => {
   });
 });
 
+describe("a release while worlds are live", () => {
+  test("a world per eval's realm row is left exactly as it is; a stray row is still pruned", async () => {
+    const world = { id: 4, name: "WrathBench wpf2fo5c4ac", flag: 0 };
+    const db = fakeDb({}, [
+      { id: 1, name: "WrathBench", flag: 0 },
+      world,
+      { id: 5, name: "Some Old Realm", flag: 2 },
+      // A world's name outside the world slots, or a slot with another name, is no world's.
+      { id: 255, name: "WrathBench wabcdefghij", flag: 0 },
+    ]);
+    expect(await run([], db)).toBe(0);
+    expect([...db.realms.keys()].sort((a, b) => a - b)).toEqual([1, 4]);
+    expect(db.realms.get(4)).toEqual(world);
+    // Never written: not renamed, not re-flagged offline.
+    expect(db.statements.some((s) => REALM_WRITE.test(s.text) && s.values.includes(4))).toBe(false);
+  });
+
+  test("the rule is world.ts's: its slots and its ids", () => {
+    for (let n = 0; n < 50; n++) {
+      const id = newWorldId();
+      expect(isWorldRealm({ id: REALM_MIN, name: `WrathBench ${id}` })).toBe(true);
+      expect(isWorldRealm({ id: REALM_MAX, name: `WrathBench ${id}` })).toBe(true);
+    }
+    expect(isWorldRealm({ id: REALM_MIN - 1, name: "WrathBench wabcdefghij" })).toBe(false);
+    expect(isWorldRealm({ id: REALM_MAX + 1, name: "WrathBench wabcdefghij" })).toBe(false);
+    expect(isWorldRealm({ id: 3, name: "WrathBench" })).toBe(false);
+    expect(isWorldRealm({ id: 3, name: "WrathBench wABCDEFGHIJ" })).toBe(false);
+  });
+});
+
 describe("no arguments: the chart's Job, unchanged", () => {
   test("still writes realm 1 and prunes the other realm rows, then converges the runner account", async () => {
-    const db = fakeDb();
+    const db = fakeDb({}, [{ id: 1, name: "WrathBench", flag: 0 }, { id: 2, name: "Old Realm", flag: 2 }]);
     expect(await run([], db)).toBe(0);
     const realm = db.statements.filter((s) => REALM_WRITE.test(s.text)).map((s) => s.text.split(" (")[0]!.split(" WHERE")[0]);
     expect(realm).toEqual(["INSERT INTO realmlist", "DELETE FROM realmlist"]);
+    expect([...db.realms.keys()]).toEqual([1]);
     expect(db.accounts.size).toBe(1);
     // The Job's realmcharacters repair covers every account, as AccountMgr's does.
     const rc = db.statements.find((s) => s.text.startsWith("INSERT INTO realmcharacters"))!;

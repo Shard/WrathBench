@@ -6,7 +6,7 @@
  * service, after db-import and before the servers. With no arguments it
  * converges the auth database on three things: realm 1's realmlist row at the
  * configured address (loopback in both: a spectator's client connects through
- * a forwarded port), a runner account whose password is the configured one,
+ * a forwarded port; any other row goes, but a world per eval's), a runner account whose password is the configured one,
  * and the fleet's generated account pool, `POOL01`… to WRATHBENCH_POOL_SIZE
  * (runner/src/account-pool.ts), each missing one created the way
  * `--accounts-only` creates it, its password its name. Safe to re-run; every
@@ -206,6 +206,20 @@ async function connect(): Promise<SQL> {
 
 // ---------------------------------------------------------------- the work
 
+/**
+ * A world per eval's realm row (infra/world.ts `putRealm`): a slot from 2 to
+ * 254, named `WrathBench <world id>`. The world launcher writes it when the
+ * world is made and deletes it at the world's end, and the reconcile lists
+ * any left without a record. It is never this Job's: a release runs this Job
+ * while worlds are live, and a world whose row is gone takes no client login
+ * (a camera's, a spectator's) until it ends. Kept as it is, flag and all.
+ * The same rule as world.ts's REALM_MIN, REALM_MAX and WORLD_ID_RE, inlined
+ * because this Job imports nothing of the fleet's; a test holds them equal.
+ */
+export function isWorldRealm(row: { id: number; name: string }): boolean {
+  return Number.isInteger(row.id) && row.id >= 2 && row.id <= 254 && /^WrathBench w[a-z2-7]{10}$/.test(row.name);
+}
+
 async function ensureRealm(sql: SQL): Promise<void> {
   // Keyed on id, not name: idx_name is UNIQUE, and the worldserver selects its
   // row by RealmID. Renaming the stock row in place avoids a duplicate.
@@ -221,8 +235,12 @@ async function ensureRealm(sql: SQL): Promise<void> {
       gamebuild = VALUES(gamebuild)
   `;
   // Anything left over from a previous realm layout would confuse the client's
-  // realm list; there is exactly one realm in this harness.
-  await sql`DELETE FROM realmlist WHERE id <> ${cfg.realmId}`;
+  // realm list, so it goes; a world per eval's row stays (`isWorldRealm`).
+  const others = (await sql`SELECT id, name FROM realmlist WHERE id <> ${cfg.realmId}`) as { id: unknown; name: unknown }[];
+  for (const r of others) {
+    const row = { id: Number(r.id), name: String(r.name) };
+    if (!isWorldRealm(row)) await sql`DELETE FROM realmlist WHERE id = ${row.id}`;
+  }
   log(`realm ${cfg.realmId} '${cfg.realmName}' -> ${cfg.realmAddress}:${cfg.realmPort} (build ${GAMEBUILD})`);
 }
 
