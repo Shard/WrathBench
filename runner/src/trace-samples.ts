@@ -302,15 +302,23 @@ export class TraceSampler {
 }
 
 /**
+ * A `resume` record's `turns`: every record of the segment it opens carries
+ * the run's turn, not its process's count. Absent on a resume written before.
+ */
+export const RUN_TURNS = "run";
+
+/**
  * The turn in flight at an instant, joined by timestamp against the
  * trajectory: the stack's rows carry no turn (SESSION-FORMAT.md, "calls"), so
  * a sample, a milestone or a feed line takes the turn of the newest `request`
  * record at or before it (decision 9 of wrath-mcp#29).
  *
- * A record's `turn` is the driver's count for its own process, which starts
- * again at 1 after a `--resume`. The run's turn is cumulative (what 0.5 stamped
- * on its samples), so each `resume` record moves the offset: to its own
- * `turnOffset` when it states one, else to the highest turn seen before it.
+ * The run's turn is cumulative (what 0.5 stamped on its samples). A segment
+ * whose `resume` record says `turns: "run"` stamps it on every record already,
+ * so its turns are read as they are. Before that, a record's `turn` was the
+ * driver's count for its own process, which started again at 1 after a
+ * `--resume`; such a `resume` record moves the offset, to its own `turnOffset`
+ * when it states one, else to the highest turn seen before it.
  */
 export class TurnIndex {
   private readonly ts: number[] = [];
@@ -321,6 +329,10 @@ export class TurnIndex {
   /** Feed one trajectory record, in file order. */
   note(rec: Record<string, unknown>): void {
     if (rec["t"] === "resume") {
+      if (rec["turns"] === RUN_TURNS) {
+        this.offset = 0;
+        return;
+      }
       const stated = rec["turnOffset"];
       this.offset = typeof stated === "number" && Number.isInteger(stated) && stated >= 0 ? stated : this.highest;
       return;

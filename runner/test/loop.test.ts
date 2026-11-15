@@ -161,8 +161,27 @@ describe("runLoop", () => {
     const { dir, options } = setup(adapter);
     await runLoop({ ...options, turnOffset: 40 });
     expect(seen.map((t) => t.split("\n")[0])).toEqual(["[turn 41]", "[turn 42]", "[turn 43]"]);
-    // The request records keep this process's own count, which their windows are rebuilt by.
-    expect(readTrajectory(dir).filter((r) => r.t === "request").map((r) => r["turn"])).toEqual([1, 2, 3]);
+    // Every record carries the run's turn too, the request window's opening turn with it.
+    const records = readTrajectory(dir);
+    const turnsOf = (t: string): unknown[] => records.filter((r) => r.t === t).map((r) => r["turn"]);
+    expect(turnsOf("request")).toEqual([41, 42, 43]);
+    expect(turnsOf("response")).toEqual([41, 42]);
+    expect(turnsOf("tool_call")).toEqual([41, 42]);
+    expect(turnsOf("tool_result")).toEqual([41, 42]);
+    expect(records.filter((r) => r.t === "request").map((r) => (r["window"] as { fromTurn: unknown }).fromTurn)).toEqual([null, 41, 41]);
+    options.trajectory.close();
+  });
+
+  test("a resumed run's maxTurns still bounds this episode, not the run", async () => {
+    const adapter = new StubAdapter([
+      { content: "a", toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] },
+      { content: "b", toolCalls: [{ name: "run_snippet", arguments: { code: "2" } }] },
+      { content: "c", toolCalls: [{ name: "run_snippet", arguments: { code: "3" } }] },
+    ]);
+    const { dir, options } = setup(adapter, { maxTurns: 2 });
+    const outcome = await runLoop({ ...options, turnOffset: 40 });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    expect(readTrajectory(dir).filter((r) => r.t === "request").map((r) => r["turn"])).toEqual([41, 42]);
     options.trajectory.close();
   });
 

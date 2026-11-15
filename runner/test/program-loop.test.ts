@@ -1156,6 +1156,54 @@ describe("the fixed loop on the program loop", () => {
     ]);
   });
 
+  test("a resumed run continues the run's turns and wakes, in every record and in what the model reads", async () => {
+    const script = (): ConstructorParameters<typeof StubAdapter>[0] => [
+      { content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] },
+      { content: "waiting", toolCalls: [] },
+      { content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "2" } }] },
+      { content: "waiting again", toolCalls: [] },
+    ];
+    const s = programSetup(script());
+    await runLoop(s.options);
+    // The second segment, as run.ts opens it: the same trajectory, a fresh process's loop and wake.
+    const { trajectory } = s.options;
+    trajectory.setPause("run-program", "quota-exhausted", "429");
+    trajectory.clearPause("run-program");
+    const { turnOffset, wakesBefore } = trajectory.appendResume("run-program", { harnessVersion: "t" });
+    expect({ turnOffset, wakesBefore }).toEqual({ turnOffset: 5, wakesBefore: 2 });
+    const c = fakeClock(Date.now());
+    const wake = new ProgramWake({ trajectory, now: c.now, sleep: c.sleep, wakesBefore });
+    const requests: ChatRequest[] = [];
+    const adapter = new StubAdapter(script());
+    await runLoop({
+      ...s.options,
+      adapter: { label: adapter.label, complete: (req: ChatRequest) => (requests.push(req), adapter.complete(req)) },
+      watchdogs: new Watchdogs(s.options.config.watchdogs),
+      programWake: wake,
+      turnOffset,
+    });
+    // What the model reads: the turn and the wake go on from where the run left them.
+    expect(userOf(requests[0]!).startsWith("[turn 6]")).toBe(true);
+    expect(userOf(requests[2]!).startsWith("[turn 8]\n\n[wake 3 · ")).toBe(true);
+    expect(userOf(requests[4]!)).toContain("[wake 4 · ");
+    trajectory.close();
+    const records = readTrajectory(s.dir);
+    const turnsOf = (t: string): unknown[] => records.filter((r) => r.t === t).map((r) => r["turn"]);
+    // One numbering across the pause: no turn or wake is labelled twice.
+    expect(turnsOf("request")).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(turnsOf("response")).toEqual([1, 2, 3, 4, 6, 7, 8, 9]);
+    expect(turnsOf("snippet_result")).toEqual([1, 3, 6, 8]);
+    expect(records.filter((r) => r.t === "wake").map((r) => [r["n"], r["turn"]])).toEqual([
+      [1, 2],
+      [2, 4],
+      [3, 7],
+      [4, 9],
+    ]);
+    // And every reader that joins an instant to a turn reads them as they are, never offset twice.
+    expect(trajectory.maxTurn("run-program")).toBe(10);
+    expect(trajectory.wakeCount()).toBe(4);
+  });
+
   test("a routine result longer than the window keeps is not counted as shown; a turn-end wake, never kept, marks nothing", async () => {
     const s = programSetup([
       { content: null, toolCalls: [{ name: "stop_routine", arguments: { name: "grind" } }] },

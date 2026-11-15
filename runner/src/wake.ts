@@ -706,7 +706,8 @@ export interface WakeSleepOptions {
  */
 export class ProgramWake {
   readonly waker = new Waker();
-  private n = 0;
+  /** The run's wakes so far, this process's and those before a resume. */
+  private n: number;
   /** What the sleep-start drain took, carried into the next wake. */
   private held: ProgramFacts | null = null;
   private readonly signatures = new Map<string, SignatureLine>();
@@ -734,8 +735,11 @@ export class ProgramWake {
       sleep?: (ms: number) => Promise<void>;
       tickMs?: number;
       coalesceMs?: number;
+      /** The wakes the run had before this process (`Trajectory.wakeCount`): a resume's count continues from them. */
+      wakesBefore?: number;
     },
   ) {
+    this.n = o.wakesBefore ?? 0;
     this.now = o.now ?? Date.now;
     this.sleepFn = o.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   }

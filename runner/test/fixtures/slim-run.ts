@@ -143,9 +143,10 @@ export async function slimRun(dir: string): Promise<SlimRun> {
   let turnOffset = 0;
   for (const [s, turns] of SEGMENT_TURNS.entries()) {
     if (s > 0) {
-      // What run.ts writes on a resume; the loop's history starts empty again.
+      // What run.ts writes on a resume; the loop's history starts empty again,
+      // and its turns continue the run's.
       trajectory.clearPause(SLIM_RUN_ID);
-      trajectory.append({ t: "resume", harnessVersion: "t" });
+      turnOffset = trajectory.appendResume(SLIM_RUN_ID, { harnessVersion: "t" }).turnOffset;
     }
     await runLoop({
       config,
@@ -159,7 +160,6 @@ export async function slimRun(dir: string): Promise<SlimRun> {
       turnOffset,
       ...(s > 0 ? { initialNotices: [{ ts: 1, kind: "session_note" as const, text: "resumed after a pause" }] } : {}),
     });
-    turnOffset += turns + 1;
   }
   trajectory.close();
   return { dir, sent };

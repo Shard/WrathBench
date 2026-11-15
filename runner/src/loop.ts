@@ -70,7 +70,16 @@ export interface LoopOptions {
   watchdogs: Watchdogs;
   /** Shown to the model on the first turn (e.g. "runner restarted, resuming"). */
   initialNotices?: HarnessNotice[];
-  /** Turns this run recorded before this process; see `ContextBuilderOptions`. */
+  /**
+   * Turns this run already recorded before this process started.
+   *
+   * A resumed run's conversation is gone, and `maxTurns` bounds this episode,
+   * not the run's whole life; but every turn it records, on every record, and
+   * the `[turn N]` the model reads, continue the run's count from here. A
+   * restarted count would credit a resumed run with the handful of turns
+   * since its last pause, and label two turns of one run alike. `run.ts`
+   * reads the high-water mark off the run's own trajectory (`TurnIndex`).
+   */
   turnOffset?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -183,16 +192,6 @@ export interface ContextBuilderOptions {
   scratchpad: Scratchpad;
   trajectory: Trajectory;
   watchdogs: Watchdogs;
-  /**
-   * Turns this run already recorded before this process started.
-   *
-   * A resumed run's driver counts from 1 again — the conversation is gone, and
-   * `maxTurns` bounds this episode, not the run's whole life. The *recorded*
-   * turn must keep climbing, or turns-to-level would credit a resumed run with
-   * the handful of turns since its last pause. `run.ts` reads the high-water
-   * mark off the run's own state rows.
-   */
-  turnOffset?: number;
   now?: () => number;
   /**
    * Called once, the first time this process writes `observation_stalled`:
@@ -265,11 +264,11 @@ export class ContextBuilder {
 
   /**
    * Tell the builder which turn is in flight; every later sample carries it.
-   * The driver counts this episode's turns; the offset makes the record the
-   * run's, so a resume does not restart the series.
+   * The driver's count is already the run's (`LoopOptions.turnOffset`), so a
+   * resume does not restart the series.
    */
   noteTurn(turn: number): void {
-    this.turn = (this.o.turnOffset ?? 0) + turn;
+    this.turn = turn;
   }
 
   /** Whether the last snapshot showed a character in the world. */
@@ -675,7 +674,6 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     scratchpad: o.scratchpad,
     trajectory,
     watchdogs,
-    ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
     onObservationStalled: o.onObservationStalled,
     ...(o.programWake !== undefined ? { onSample: (snap: SnapshotLike) => o.programWake!.onSample(snap) } : {}),
@@ -701,7 +699,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   /** A sleep ends on a stop request or a watchdog verdict as well as a wake: neither waits out five minutes. */
   const sleepStopped = (): boolean => stopRequestOf(o.signal) !== null || watchdogs.check() !== null;
 
-  let turn = 0;
+  /** The run's turn: this episode's count from the offset, so every record continues the run's numbering. */
+  const turnOffset = o.turnOffset ?? 0;
+  let turn = turnOffset;
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
     // The session record's side of every tool call; absent on a sandbox that keeps none.
@@ -907,6 +907,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // sent changes: `messages` is built above exactly as before and is only read here.
       const { record, mismatch } = fixedLoopRequestRecord({
         turn,
+        turnOffset,
         adapter: o.adapter.label,
         messages,
         history,
@@ -1080,8 +1081,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       }
 
       // 6. bookkeeping and pacing
-      if (config.maxTurns !== undefined && turn >= config.maxTurns) {
-        return await terminate("turn-limit", `${turn} turns`);
+      // `maxTurns` bounds this episode: its own turns, not the run's.
+      if (config.maxTurns !== undefined && turn - turnOffset >= config.maxTurns) {
+        return await terminate("turn-limit", `${turn - turnOffset} turns`);
       }
       // The usage budget at the turn boundary (operator, 2026-10-16): a
       // freeplay run on a credential at or over its freeplay threshold stops until

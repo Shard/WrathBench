@@ -41,7 +41,7 @@ import { platformOf } from "./platform";
 import { openRunDb, RUN_DB_FILE } from "./rundb";
 import { TraceSampler, TurnIndex, type StateSample } from "./trace-samples";
 
-export { TurnIndex, type StateSample } from "./trace-samples";
+export { RUN_TURNS, TurnIndex, type StateSample } from "./trace-samples";
 
 /** The session record's directory inside a run directory (`session-record.ts`). */
 const SESSION_DIR = "session";
@@ -308,6 +308,44 @@ export function noteTurnLine(index: TurnIndex, line: string): void {
   } catch {
     /* a torn line */
   }
+}
+
+/**
+ * How many wakes the run has had: its `wake` records, one per wake block the
+ * model was handed. Where a resumed run's wake count continues from — the
+ * count, not the highest `n`, which a resume before this restarted at 1.
+ */
+export function wakeCountOf(dir: string): number {
+  const path = join(dir, "trajectory.jsonl");
+  const st = statSync(path, { throwIfNoEntry: false });
+  if (st === undefined) return 0;
+  let count = 0;
+  let pending = "";
+  const note = (line: string): void => {
+    if (!line.includes('"t":"wake"')) return;
+    try {
+      if ((JSON.parse(line) as Record<string, unknown>)["t"] === "wake") count++;
+    } catch {
+      /* a torn line */
+    }
+  };
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(CHUNK);
+    const decoder = new TextDecoder();
+    for (let at = 0; at < st.size; ) {
+      const n = readSync(fd, buf, 0, Math.min(CHUNK, st.size - at), at);
+      if (n <= 0) break;
+      at += n;
+      const lines = (pending + decoder.decode(buf.subarray(0, n), { stream: true })).split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) note(line);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  note(pending);
+  return count;
 }
 
 // ------------------------------------------------------------- state samples

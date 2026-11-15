@@ -886,6 +886,8 @@ async function main(): Promise<void> {
   const serverBuild = await fetchServerBuild(config.moduleUrl);
   const comparability = comparabilityOf(config, version, serverBuild, wikiBundle);
   let resumeTurnOffset = 0;
+  /** The wakes this run had before this process: a resume's wake count continues from them. */
+  let resumeWakes = 0;
   if (!resumed) {
     await trajectory.writeMeta({
       runId: config.runId,
@@ -918,16 +920,11 @@ async function main(): Promise<void> {
     }
   } else {
     await trajectory.clearPause(config.runId);
-    // Read before the record that moves it: the run's turns so far, which this
-    // segment's numbering continues from, stated on the record so the join of
-    // the session record's rows to turns needs nothing else (`TurnIndex`).
-    resumeTurnOffset = trajectory.maxTurn(config.runId);
-    trajectory.append({
-      t: "resume",
-      turnOffset: resumeTurnOffset,
+    // The run's turns and wakes so far, which this segment's numbering continues from.
+    ({ turnOffset: resumeTurnOffset, wakesBefore: resumeWakes } = trajectory.appendResume(config.runId, {
       harnessVersion: version,
       ...(resumedPause !== undefined ? { after: resumedPause.reason, episodeElapsedMs: resumedPause.episodeElapsedMs } : {}),
-    });
+    }));
     /*
      * The pause mark is consumed: meta.json says "paused" only while the run
      * is. The claude-code driver cannot reattach the CLI's own conversation
@@ -997,8 +994,8 @@ async function main(): Promise<void> {
 
   /*
    * Where this episode's turn numbering continues from. `maxTurns` still counts
-   * this process's turns; only the recorded index is cumulative, so a resumed
-   * run's turns-to-level is the run's cost and not this episode's.
+   * this process's turns; every turn recorded is the run's, so a resumed run's
+   * turns-to-level is the run's cost and not this episode's.
    */
   const turnOffset = resumed ? resumeTurnOffset : 0;
 
@@ -1045,7 +1042,7 @@ async function main(): Promise<void> {
    */
   const programWake =
     config.loop === "program"
-      ? new ProgramWake({ trajectory, counts: () => (session?.signals ?? fanoutSignals)?.counts() ?? { deaths: 0, quests: 0 } })
+      ? new ProgramWake({ trajectory, counts: () => (session?.signals ?? fanoutSignals)?.counts() ?? { deaths: 0, quests: 0 }, wakesBefore: resumeWakes })
       : undefined;
   if (programWake !== undefined && session !== undefined) session.signals.onDeath = (ts) => programWake.onDeath(ts);
   // A fan-out run's characters share one drain, and any one's death wakes, by name.
