@@ -486,14 +486,18 @@ standing sandbox that never finishes. Duration separates neither pair.
   combination does — a hand-written freeplay job on the same ref does not. It is governed by the 20-minute
   idle watchdog; when the model remains active, its character and progress
   continue beyond six hours. When that session ends, the next tick starts
-  another **on the same character**: a character is durable across the
-  operator's disable/re-enable and across its own endings, so the
+  another **on the same character**: within a harness series a character is
+  durable across the operator's disable/re-enable and across its own endings, so the
   next attempt is launched `--continue-from` the last one — same account,
   same character, the scratchpad carried forward — and records the lineage as
   `continued_from` (docs/RUNBOOK.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
-  first (counting is series-keyed), and freeplay resumes once they are met.
+  first (counting is series-keyed), and freeplay starts again once they are met,
+  on a fresh character: a character does not carry across a series, and the
+  earlier series' characters stay in the realm untouched. A held (`campaignOnly`)
+  entry has no scored runs to re-arm, so with `idle: "unlimited"` it plays
+  freeplay at once.
 - **Pins in the tuple.** `episode: "freeplay"` and the unscored reason. The
   other fields are recorded but carry no comparability claim.
 

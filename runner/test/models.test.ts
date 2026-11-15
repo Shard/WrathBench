@@ -1000,6 +1000,27 @@ describe("probe campaigns in the schedule", () => {
     expect(planNextJobs(scored, ["R1", "R2", "R3"], new Set(), { campaigns: [probe] }).jobs.map((j) => j.episode)).toEqual(["e90", "e90", "e90"]);
   });
 
+  test("a campaignOnly entry with idle unlimited plays freeplay and nothing scored; a probe-only driver's still plays nothing", () => {
+    const held = projectModel({ name: "held", model: "deepseek/deepseek-v4.1-flash", tier: "t2", idle: "unlimited", campaignOnly: true }, [], DEFAULT_POLICY, { now: NOW2 });
+    expect(held).toMatchObject({ probeOnly: true, campaignOnly: true, eligible: [], idle: "unlimited" });
+    const v = schedulability(held);
+    // Free, with no scored hold reason: no "targets met", no Deadmines wait.
+    expect(v).toEqual({ verdict: "free", why: "campaignOnly: no scored runs — unlimited sessions while its account is idle" });
+    expect(wantsIdle(v, held)).toBe(true);
+    const plan = planNextJobs([held], ["R1", "R2"], new Set());
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.why])).toEqual([
+      ["held", "freeplay", "R1", "extra #1: unlimited session (campaignOnly: no targets; one continuous session, idle watchdog only)"],
+    ]);
+    expect(plan.held).toEqual([]);
+    // Unchanged: a probe-only driver's entry, campaignOnly or not, has no idle work.
+    for (const campaignOnly of [undefined, true] as const) {
+      const pi = projectModel({ name: "pi", model: "deepseek/deepseek-v4.1-flash", driver: "pi", tier: "t1", idle: "unlimited", ...(campaignOnly ? { campaignOnly } : {}) }, [], DEFAULT_POLICY, { now: NOW2 });
+      expect(pi.idle).toBe("none");
+      expect(wantsIdle(schedulability(pi), pi)).toBe(false);
+      expect(planNextJobs([pi], ["R1"], new Set()).jobs).toEqual([]);
+    }
+  });
+
   test("a pi entry and a wrathbench entry of one model and effort, no window on either, never take each other's runs", () => {
     const ds = { name: "ds", model: "deepseek-flash", effort: "high", tier: "t1" as const };
     const pi = { name: "ds-pi", model: "deepseek-flash", effort: "high", driver: "pi", tier: "t1" as const };

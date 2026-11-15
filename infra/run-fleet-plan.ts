@@ -385,8 +385,12 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     if (e.refused !== undefined) return false;
     // A probe-only driver's entry (`DriverEntry.probeOnly`), or a campaignOnly
     // one, runs as a probe campaign's square and under nothing else: a queue job naming it for a
-    // scored or freeplay episode is the scored lane it is kept out of.
-    if ((isProbeOnlyDriver(e.driver) || e.campaignOnly === true) && job.probe === undefined && job.campaignFile === undefined) return false;
+    // scored or freeplay episode is the scored lane it is kept out of. The one
+    // exception is a held entry's own `idle: "unlimited"` session, the policy's
+    // freeplay pick (operator, 2026-11-15); a hand-written freeplay job naming
+    // it stays gated.
+    const heldFreeplay = e.campaignOnly === true && !isProbeOnlyDriver(e.driver) && e.idle === "unlimited" && job.source === "policy" && job.episode === "freeplay";
+    if ((isProbeOnlyDriver(e.driver) || e.campaignOnly === true) && !heldFreeplay && job.probe === undefined && job.campaignFile === undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
     // An unscored episode needs no promotion: no tier buys one, so there is no
@@ -2232,7 +2236,7 @@ export function characterKey(account: string, character: string): string {
  * A PAUSED run is a head too. It used to be excluded on the argument that
  * `planResumes` owns it, and that is true while the supervisor can see it —
  * but the runs directory is the only thing that survives a supervisor, and a
- * paused head the resume planner declines (another series, a spent ladder, a
+ * paused head the resume planner declines (a spent ladder, a
  * job the operator disabled) then vanished from the chain entirely: on
  * 2026-09-08 the newest attempt of the nemotron-super character sat paused while
  * the policy started a fresh one `--continue-from` the ENDED attempt before
@@ -2248,9 +2252,59 @@ export function characterKey(account: string, character: string): string {
  * stale predecessor, launches on the account got no `--keep-characters` for
  * the character it was actually playing, and hygiene deleted it. The newest
  * attempt is the head whatever it managed to write on the way down.
+ *
+ * A character does not carry across a harness series (operator, 2026-11-15):
+ * only a run of `series` (`policy.series`; null takes every run, as
+ * `inSeries` does) is a head or a predecessor, so a series' first session of
+ * a model starts a fresh character. The earlier series' characters stay in
+ * the realm (`formerCharactersFrom`), and a paused one is neither resumed nor
+ * a hold on its model (`planResumes`, `projectModel`, both in-series too).
  */
-export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
-  return newestCharacterRuns(runs, roster, (f) => !f.live);
+export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>, series: string | null = null): Map<string, Character> {
+  return newestCharacterRuns(runs, roster, (f) => !f.live && (series === null || f.harnessSeries === series));
+}
+
+/**
+ * The freeplay characters an earlier harness series left standing, which no
+ * launch of this series may delete (operator, 2026-11-15): for every roster
+ * entry, whatever its `idle` now, the newest attempt of its character in each
+ * other series, picked as `charactersFrom` picks a head. Pure. They are kept
+ * by every fresh launch on their account, the entry's own included
+ * (`keepFor`), and the cross-account sweep skips them. Empty when `series` is
+ * null: then every run is the current series'.
+ */
+export function formerCharactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>, series: string | null): Character[] {
+  if (series === null) return [];
+  const out: Character[] = [];
+  const seen = new Set<string>();
+  for (const e of Object.values(roster)) {
+    const bySeries = new Map<string, RunFact[]>();
+    for (const f of runs) {
+      if (f.harnessSeries === series || f.live || !isCharacterRun(f) || !entryOwnsRun(e, f)) continue;
+      const k = f.harnessSeries ?? "";
+      bySeries.set(k, [...(bySeries.get(k) ?? []), f]);
+    }
+    for (const fs of bySeries.values()) {
+      const head = newestStarted(fs)!;
+      const key = characterKey(head.account!, head.character!);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ runId: head.runId, account: head.account!, character: head.character! });
+    }
+  }
+  return out;
+}
+
+/** A freeplay run that recorded where its character stands, and was not put away without a verdict. */
+function isCharacterRun(f: RunFact): boolean {
+  return (
+    f.episode === "freeplay" &&
+    f.account !== null &&
+    f.character !== null &&
+    // Put away without a verdict: not a run anything resumes or
+    // continues, so not one that may displace the head that is.
+    !(f.archived === true && f.terminationReason === null)
+  );
 }
 
 /**
@@ -2269,32 +2323,26 @@ function newestCharacterRuns(runs: readonly RunFact[], roster: Record<string, Fl
   const out = new Map<string, Character>();
   for (const [name, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
-    const head = newestStarted(
-      runs.filter(
-        (f) =>
-          f.episode === "freeplay" &&
-          f.account !== null &&
-          f.character !== null &&
-          keep(f) &&
-          // Put away without a verdict: not a run anything resumes or
-          // continues, so not one that may displace the head that is.
-          !(f.archived === true && f.terminationReason === null) &&
-          entryOwnsRun(e, f),
-      ),
-    );
+    const head = newestStarted(runs.filter((f) => isCharacterRun(f) && keep(f) && entryOwnsRun(e, f)));
     if (head !== undefined) out.set(name, { runId: head.runId, account: head.account!, character: head.character! });
   }
   return out;
 }
 
-/** The freeplay characters standing on `account` that a launch of `ref` must keep. */
-export function keepFor(account: string, characters: ReadonlyMap<string, Character>, ref?: string): string[] {
+/**
+ * The freeplay characters standing on `account` that a launch of `ref` must
+ * keep: the other refs' heads, and every earlier series' character
+ * (`formerCharactersFrom`), the ref's own included, since this series never
+ * continues one.
+ */
+export function keepFor(account: string, characters: ReadonlyMap<string, Character>, ref?: string, former: readonly Character[] = []): string[] {
   const out: string[] = [];
-  for (const [name, s] of characters) {
-    if (name === ref) continue;
-    if (s.account.toUpperCase() !== account.toUpperCase()) continue;
+  const add = (s: Character): void => {
+    if (s.account.toUpperCase() !== account.toUpperCase()) return;
     if (!out.some((c) => c.toLowerCase() === s.character.toLowerCase())) out.push(s.character);
-  }
+  };
+  for (const [name, s] of characters) if (name !== ref) add(s);
+  for (const s of former) add(s);
   return out;
 }
 
@@ -2381,19 +2429,20 @@ export interface CharacterDrop {
  * the head and the reason (`account_occupied_by <ref>`), so the new run's
  * trajectory says the lineage was dropped on purpose. Every pick (and every
  * queue assignment the caller passes) gets the other refs' freeplay characters on
- * its account to keep.
+ * its account to keep, and every earlier series' (`former`).
  */
 export function planContinuations(
   picks: readonly PolicyPick[],
   characters: ReadonlyMap<string, Character>,
   roster: Record<string, FleetRosterEntry>,
   occupants: ReadonlyMap<string, Occupant> = new Map(),
+  former: readonly Character[] = [],
 ): { picks: PolicyPick[]; waiting: CharacterWait[]; dropped: CharacterDrop[] } {
   const out: PolicyPick[] = [];
   const waiting: CharacterWait[] = [];
   const dropped: CharacterDrop[] = [];
   for (const p of picks) {
-    const keep = keepFor(p.account, characters, p.job.ref);
+    const keep = keepFor(p.account, characters, p.job.ref, former);
     const withKeep = (job: FleetJob): FleetJob => (keep.length > 0 ? { ...job, keepCharacters: keep } : job);
     const head = characters.get(p.job.ref);
     const owns = p.job.source === "policy" && p.job.episode === "freeplay" && roster[p.job.ref]?.idle === "unlimited";
@@ -3122,6 +3171,10 @@ export function planTick(snap: TickSnapshot): TickPlan {
     [...sup.assigned.values(), ...pinnedJobs(cfg).filter((j) => sup.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
   );
   const runs = implicitPauses({ runs: snap.facts, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts, now });
+  // The freeplay characters earlier harness series left standing: every fresh
+  // launch on the shared world keeps those on its account, pinned ones
+  // included (operator, 2026-11-15).
+  const former = formerCharactersFrom(runs, cfg.roster, cfg.policy.series);
   const project = (facts: readonly RunFact[]): ModelState[] =>
     modelStates({ runsDir: "", roster: rosterModels(cfg.roster), policy: cfg.policy, runs: facts, now, sidecar: snap.modelsSidecar, modelLists: snap.modelLists });
   // Both are re-derived below if this tick's sweep ends anything: a failed
@@ -3273,8 +3326,11 @@ export function planTick(snap: TickSnapshot): TickPlan {
       out.push({ ...spawnOf(owing, job.account!, eligible), enabled: false });
       continue;
     }
-    const spawn = spawnOf(placed.job, job.account!, eligible);
-    pinned.push({ job: placed.job, spawn });
+    // An earlier series' character on the pinned account stays standing too.
+    const keep = worldUsedBy(cfg.policy.worlds, job.episode) ? [] : keepFor(job.account!, new Map(), undefined, former);
+    const launching = keep.length > 0 ? { ...placed.job, keepCharacters: keep } : placed.job;
+    const spawn = spawnOf(launching, job.account!, eligible);
+    pinned.push({ job: launching, spawn });
     out.push(spawn);
     for (const r of job.refs) runningRefs.add(r);
   }
@@ -3451,9 +3507,10 @@ export function planTick(snap: TickSnapshot): TickPlan {
   // Where each model's last character is standing. Read once a tick from
   // the same run facts everything else here reads.
   const affinityMap = affinityFrom(runs, cfg.roster);
-  // Where each unlimited ref's freeplay character stands; a freeplay pick
-  // goes back to that account, every fresh launch keeps those characters.
-  const characters = charactersFrom(runs, cfg.roster);
+  // Where each unlimited ref's freeplay character of this series stands; a
+  // freeplay pick goes back to that account, every fresh launch keeps those
+  // characters and every earlier series' (operator, 2026-11-15).
+  const characters = charactersFrom(runs, cfg.roster, cfg.policy.series);
   const affinity = characterAffinity(characters, affinityOf(affinityMap));
   const queue = planQueue({
     queue: poolJobs(cfg),
@@ -3481,7 +3538,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
   for (const a of queue.assign) {
     const { account } = a;
     // The credential was settled by the plan (`place`), and is on the book.
-    const keep = keepFor(account, characters);
+    const keep = keepFor(account, characters, undefined, former);
     if (keep.length > 0) a.job = { ...a.job, keepCharacters: keep };
     pending.set(a.job.name, a.job);
     // A launch onto a world of its own meets no name of the shared world's.
@@ -3519,7 +3576,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
       ...(scoredGate !== undefined ? { scoredGate } : {}),
     });
     for (const h of policy.held) holds.push({ ...h, refs: [h.name], by: "policy" });
-    const continued = planContinuations(policy.picks, characters, cfg.roster, occupants);
+    const continued = planContinuations(policy.picks, characters, cfg.roster, occupants, former);
     ({ picks, waiting, dropped } = continued);
     for (const w of waiting) {
       const ref = policy.picks.find((p) => p.job.name === w.name)?.job.ref ?? w.name;
@@ -3594,10 +3651,11 @@ export function planTick(snap: TickSnapshot): TickPlan {
       assign: freshAssign,
       affinity: affinityMap,
       isFree: (a) => !busy.has(a.toUpperCase()) && held(a) === undefined,
-      // Every freeplay head, and the character of every run that has not
-      // ended — whatever its lane, a run without a verdict still owns it.
+      // Every freeplay head, an earlier series' included, and the character
+      // of every run that has not ended — whatever its lane, a run without a
+      // verdict still owns it.
       protect: new Set([
-        ...[...characters.values()].map((s) => characterKey(s.account, s.character)),
+        ...[...characters.values(), ...former].map((s) => characterKey(s.account, s.character)),
         ...runs.filter((f) => f.terminationReason === null && f.account !== null && f.character !== null).map((f) => characterKey(f.account!, f.character!)),
       ]),
     });

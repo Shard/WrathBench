@@ -186,12 +186,14 @@ export interface FleetRosterEntry extends RosterSpec {
    */
   credential?: string;
   /**
-   * The entry runs only as a probe campaign's assignment, as a probe-only
-   * driver's entry does (`DriverEntry.probeOnly`): its tier buys no scored
-   * run, it has no idle work, and a queue job naming it for a scored or
-   * freeplay episode is gated. For a harness variant that is not a driver of
-   * its own (an arm's `--loop program` on the wrathbench driver), so its
-   * model's probe needs no scored run first. Its probe runs map back to it by
+   * The entry is held from the scored lane, as a probe-only driver's entry
+   * is (`DriverEntry.probeOnly`): its tier buys no scored run, and a queue job
+   * naming it for a scored or freeplay episode is gated. A probe campaign may
+   * assign it, and `idle: "unlimited"` still gives it the policy's one
+   * freeplay session (operator, 2026-11-15). For a harness variant that is
+   * not a driver of its own (an arm's `--loop program` on the wrathbench
+   * driver), so its model's probe needs no scored run first, and for a model
+   * that plays freeplay with no scored field. Its probe runs map back to it by
    * name (`matchesRoster`), so it never pools with another entry's.
    */
   campaignOnly?: true;
@@ -1237,7 +1239,9 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
       fail(`roster ${name}: credential must be a credential's id (credentials/<id>), never a secret`);
     }
     if (rawCampaignOnly !== undefined && rawCampaignOnly !== true) fail(`roster ${name}: campaignOnly is true or absent`);
-    if (rawCampaignOnly === true && rawIdle !== undefined && rawIdle !== "none") fail(`roster ${name}: a campaignOnly entry has no idle work — drop idle or set it to "none"`);
+    // A held entry may still play freeplay (operator, 2026-11-15): its
+    // `idle` is parsed like any entry's, and `unlimited` gives it a freeplay
+    // character beside no scored runs.
     // The five-agent Deadmines episode's opt-in (operator, 2026-11-14): one
     // spelling, and only where a tier can buy it.
     if (rawDeadmines !== undefined && rawDeadmines !== true) {
