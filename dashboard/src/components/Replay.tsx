@@ -30,11 +30,23 @@ export function clipLabel(c: ClipView): string {
 
 function clipTitle(c: ClipView): string {
   const from = new Date(c.from).toISOString().slice(0, 16).replace("T", " ");
-  return `${clipLabel(c)} · ${from} UTC · ${Math.round(c.seconds)} s of video`;
+  const to = new Date(c.to).toISOString().slice(11, 16);
+  return `${clipLabel(c)} · ${from}–${to} UTC · ${Math.round(c.seconds)} s of video`;
 }
+
+/**
+ * Posters drawn in the clip row: the timelapse's and the newest event clips'.
+ * Older clips are listed by name alone. A poster is one request, and on the
+ * public site every request under a run counts against the edge's rate limit
+ * (60 per 10 s per reader, `docs/PUBLIC-DASHBOARD.md`), which a long run's
+ * hundreds of quest clips would otherwise spend on one page load.
+ */
+export const POSTERS_SHOWN = 12;
 
 export function ReplayBlock(props: { clips: ClipsResponse }) {
   const ordered = createMemo(() => orderClips(props.clips.clips));
+  /** Index in `ordered` from which an event clip draws its poster. */
+  const posterFrom = (): number => Math.max(0, ordered().length - POSTERS_SHOWN);
   const [picked, setPicked] = createSignal(0);
   const current = (): ClipView | undefined => ordered()[Math.min(picked(), ordered().length - 1)];
   let video: HTMLVideoElement | undefined;
@@ -65,7 +77,9 @@ export function ReplayBlock(props: { clips: ClipsResponse }) {
               <For each={ordered()}>
                 {(clip, i) => (
                   <button class={i() === picked() ? "on" : ""} title={clipTitle(clip)} onClick={() => pick(i())}>
-                    <Show when={clip.poster}>{(p) => <img src={api.mediaUrl(p())} alt="" loading="lazy" />}</Show>
+                    <Show when={clip.kind === "timelapse" || i() >= posterFrom() ? clip.poster : null}>
+                      {(p) => <img src={api.mediaUrl(p())} alt="" loading="lazy" />}
+                    </Show>
                     {clipLabel(clip)}
                   </button>
                 )}
@@ -97,7 +111,6 @@ export function HighlightClip(props: { runId: string; model: string | null; clip
         <Show when={props.clip.caption !== ""}>
           <p class="dim">{props.clip.caption}</p>
         </Show>
-        <div class="dim">{clipLabel(props.clip)}</div>
       </div>
     </div>
   );

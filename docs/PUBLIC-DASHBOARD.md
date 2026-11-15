@@ -377,7 +377,8 @@ from objects in the same bucket as everything else.
   `Cache-Control`; the `/v1/run/*` cache rule is what makes a clip an edge
   hit, and its rate limit (60 requests per 10 s per IP) counts each range
   request a video makes. The player loads metadata only until it is played,
-  and the posters load lazily.
+  and the clip row draws posters for the timelapse and the newest twelve
+  event clips only, lazily; older clips are listed by name.
 - **Cold runs.** `camera/clips.json` is one of a run's watched files, so a
   clip a director adds after the run went cold publishes on the next pass,
   not six hours later.
@@ -385,6 +386,9 @@ from objects in the same bucket as everything else.
   only while some published run has a clip: the newest event clip, or the
   newest timelapse, with its run and model. A tree without a camera publishes
   the set it always did.
+- **Either deploy order is safe.** A site from before ignores
+  `snapshot.clips`, `highlight.json` and `camera`; this site reads their
+  absence as a run without clips.
 
 ### Data plane: R2 behind a custom domain with a cache rule
 
