@@ -15,6 +15,7 @@ import type {
   CharacterResponse,
   ClipsResponse,
   HighlightResponse,
+  LatestFrameResponse,
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
@@ -42,6 +43,7 @@ export type {
   ClipView,
   ClipsResponse,
   HighlightResponse,
+  LatestFrameResponse,
   ComparabilityView,
   CostBreakdown,
   CostView,
@@ -355,6 +357,22 @@ export function createClient(opts: ClientOptions = {}) {
     highlight: (): Promise<HighlightResponse> => get<HighlightResponse>("/api/highlight"),
     /** A clip's video or poster ref as a URL: the viewer's own route, same-origin. */
     mediaUrl: (ref: string): string => `${opts.base ?? ""}${ref}`,
+    /**
+     * The run's newest camera frame, `{seq, t}`, or null when it has none: the
+     * private viewer's live still. Not memoised, since every poll wants the
+     * frame taken since the last.
+     */
+    cameraLatest: async (id: string): Promise<LatestFrameResponse | null> => {
+      try {
+        return await getJson<LatestFrameResponse>(`${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/camera/latest`, f);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    /** The newest frame's picture; `seq` only tells the browser it is a new one. */
+    cameraFrameUrl: (id: string, seq: number): string =>
+      `${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/camera/latest.jpg?seq=${seq}`,
     /** The raw JSONL line for one entry, secrets already stripped server-side. */
     raw: async (id: string, i: number): Promise<string> => {
       // Not memoised: one raw line is fetched when a reader opens it, never polled.

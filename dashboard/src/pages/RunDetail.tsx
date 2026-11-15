@@ -61,7 +61,7 @@ import { Coins, QuestCount } from "../components/CharacterFacts";
 import { EventFeed, InventoryPanel, XpBar, createInspectorClient, type SessionSummary } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
-import { ReplayBlock } from "../components/Replay";
+import { LiveFrame, ReplayBlock } from "../components/Replay";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
@@ -823,6 +823,14 @@ export default function RunDetail() {
                     tally. The cards below keep the run's own figures, under a
                     heading that says which they are.
                   */}
+                  {/*
+                    The camera's newest still while the run plays, private
+                    only; when it ends the poll goes with it and the clips the
+                    director makes take its place.
+                  */}
+                  <Show when={!SNAPSHOT_MODE && live()}>
+                    <LiveFrame runId={params.id} now={now()} />
+                  </Show>
                   <Show when={clips()}>{(c) => <ReplayBlock clips={c()} />}</Show>
 
                   <Show when={d().character}>

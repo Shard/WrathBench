@@ -310,8 +310,9 @@ h3.section { font-size: var(--fs-md); }
 .scroller { overflow-x: auto; }
 
 /* A camera clip (components/Replay.tsx): the native player at the width it is
-   given, never wider, and the other clips as small posters in a chip row. */
-video { display: block; width: 100%; max-width: 100%; height: auto; aspect-ratio: 16 / 9;
+   given, never wider, and the other clips as small posters in a chip row. The
+   live still on the run page and in the map's sidebar is drawn the same. */
+video, .runview-side > img, .side .v > img { display: block; width: 100%; max-width: 100%; height: auto; aspect-ratio: 16 / 9;
         background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 .chips button > img { display: block; width: 112px; max-width: 100%; height: auto; margin-bottom: 3px; border-radius: 3px; }
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-md); }

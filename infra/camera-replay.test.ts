@@ -19,7 +19,7 @@ import type { ClipsResponse, HighlightResponse, RunsResponse } from "../runner/v
 import { createRenderer, type SnapshotResult } from "../runner/viewer/snapshot";
 import { classifyPath, emptyState, needsPut, planPrune, planWithdraw, publishPass, type ObjectStore, type PublishState } from "./publish-core";
 import { reprojectionFindings, scanBody, verifyPublication } from "./publish-accept";
-import { ENDED_RUN, REFERENCE_RUN, writeFixture } from "./shots/fixture";
+import { ENDED_RUN, LIVE_RUN, REFERENCE_RUN, writeFixture } from "./shots/fixture";
 
 const MP4 = readFileSync(join(import.meta.dir, "..", "runner", "test", "fixtures", "camera", "clip.mp4"));
 
@@ -168,6 +168,39 @@ describe("camera clips, viewer to bucket", () => {
         expect(a.get(id)).not.toEqual(snap);
         expect((snap as Record<string, unknown>)["clips"]).toBeUndefined();
       } else expect(a.get(id), id).toEqual(snap);
+    }
+  }, 60_000);
+});
+
+describe("the live camera frame", () => {
+  /*
+   * Live viewing is the private viewer's alone (operator, 2026-11-15): the
+   * fixture's live run is published and has stills under `camera/frames/`, and
+   * neither a public handle nor a publisher pass may carry one, or the route.
+   */
+  test("is served by a private handle, and by no public handle or publisher pass", async () => {
+    const runsDir = await fixture();
+    const frames = readFileSync(join(runsDir, LIVE_RUN, "camera", "frames.jsonl"), "utf8").trim().split("\n");
+    expect(frames.length).toBeGreaterThan(0);
+    const priv = api(runsDir, false);
+    const pub = api(runsDir, true);
+    // The live run is one the public handle publishes.
+    expect((await pub(new Request(`http://x/api/run/${LIVE_RUN}`))).status).toBe(200);
+    for (const path of [`/api/run/${LIVE_RUN}/camera/latest`, `/api/run/${LIVE_RUN}/camera/latest.jpg`]) {
+      expect((await priv(new Request(`http://x${path}`))).status, path).toBe(200);
+      expect((await pub(new Request(`http://x${path}`))).status, path).toBe(404);
+    }
+
+    const render = createRenderer({ runsDir, configDbPath: join(runsDir, "none.sqlite") });
+    const b = bucket();
+    await publishPass(async (sink, published) => await render(undefined, { sink, batch: 3 }, published), b.store, emptyState());
+    const keys = [...b.objects.keys()];
+    expect(keys.some((k) => k.includes(LIVE_RUN))).toBe(true);
+    expect(keys.filter((k) => k.includes("frame") || k.includes("latest") || k.includes("camera"))).toEqual([]);
+    for (const [k, v] of b.objects) {
+      if (!k.endsWith(".json")) continue;
+      const body = v.toString("utf8");
+      for (const word of ["camera/latest", "frames.jsonl", "frames/"]) expect(body, `${k}: ${word}`).not.toContain(word);
     }
   }, 60_000);
 });

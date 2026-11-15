@@ -102,6 +102,7 @@ import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
 import { fanoutSession, fanoutSessions, isFanoutRun, runSession, runsSource } from "./runs-source";
 import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
+import { latestFrameResponse } from "./camera-live";
 import { CLIP_CONTENT_TYPE, CLIP_MEDIA_ROUTE, clipMedia, clipsView, fileResponse, hadCamera, pickHighlight, type ClipMediaKind } from "./camera";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
@@ -2061,6 +2062,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body = clipsView(runsDir, runId);
       if (body === null) return notFound("no clips");
       return pub(body, projectClips, [runId]);
+    }
+    /*
+     * The newest camera frame and its `{seq, t}` (`camera-live.ts`), for the
+     * run page's live still. Private only: frames are never published, and
+     * nothing on the public site may act as a live view of the world, so a
+     * public handle has no such route, before anything is read.
+     */
+    if (rest.startsWith("/camera/")) {
+      if (publicMode) return notFound("no such route");
+      const live = latestFrameResponse(req, runsDir, runId, rest);
+      if (live !== null) return live;
     }
     const media = CLIP_MEDIA_ROUTE.exec(rest);
     if (media !== null) {

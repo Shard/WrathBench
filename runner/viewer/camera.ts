@@ -4,10 +4,10 @@
  * A camera that followed a run leaves `camera/` in the run's directory
  * (`docs/PUBLIC-DASHBOARD.md`, "Camera replays"): still frames, the clips made
  * from them, and `camera/clips.json`, which lists the clips and is the only
- * file read here to find them. The frames are never served and never
- * published: no function in this file names a path under `frames/`, and a clip
- * or poster is served only when `clips.json` names it as `clips/<file>` with a
- * plain file name.
+ * file read here to find them. The frames are never published: no function in
+ * this file names a path under `frames/`, and a clip or poster is served only
+ * when `clips.json` names it as `clips/<file>` with a plain file name. The one
+ * frame a private handle serves, the newest, is read by `camera-live.ts`.
  *
  * Every path is checked component by component with `lstat`: the run
  * directory, `camera/`, `clips/` and the file itself must each be what they
@@ -62,7 +62,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typ
  * Stat a path without following a link, and only when it is the kind asked
  * for: a link, a missing entry or the wrong kind is null.
  */
-function plain(path: string, kind: "dir" | "file"): Stats | null {
+export function plain(path: string, kind: "dir" | "file"): Stats | null {
   let st: Stats;
   try {
     st = lstatSync(path);
@@ -74,7 +74,7 @@ function plain(path: string, kind: "dir" | "file"): Stats | null {
 }
 
 /** `<runs>/<id>/camera`, when the run's directory and it are both plain directories. */
-function cameraDir(runsDir: string, runId: string): string | null {
+export function cameraDir(runsDir: string, runId: string): string | null {
   if (!isValidRunId(runId)) return null;
   const run = join(runsDir, runId);
   if (plain(run, "dir") === null) return null;

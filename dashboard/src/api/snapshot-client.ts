@@ -704,6 +704,12 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     raw: async (): Promise<string> => {
       throw new ApiError(403, `raw: ${WITHHELD}`);
     },
+    /*
+     * Camera frames are never published, and nothing on the public site is a
+     * live view of the world: there is no frame, and nothing is asked for one.
+     */
+    cameraLatest: async (): Promise<null> => null,
+    cameraFrameUrl: (): string => "",
     /** There is no stream behind a bucket; the call site guards on the mode. */
     streamUrl: (): string => "",
   };
