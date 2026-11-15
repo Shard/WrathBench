@@ -64,7 +64,6 @@ import {
   owedCopies,
   owesNothing,
   progressLabel,
-  planPolicy,
   affinityFrom,
   affinityOf,
   takeAccount,
@@ -2146,13 +2145,13 @@ describe("scheduling policy: defer ladder and retirement", () => {
   test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second run", () => {
     const states = modelStatesOf(rosterModels(roster));
     // Two accounts, one taken by a manual job: the policy gets the other.
-    let picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2"], running: new Map([["glm-e90", "RUNNER"]]), held: () => undefined, queuePlan: empty, runningRefs: new Set(["glm"]) });
+    let picks = planPolicyHeld({ states, pool: ["RUNNER", "RUNNER2"], running: new Map([["glm-e90", "RUNNER"]]), held: () => undefined, queuePlan: empty, runningRefs: new Set(["glm"]) }).picks;
     expect(picks.map((p) => [p.job.name, p.account, p.job.attempt])).toEqual([["ox-e90", "RUNNER2", 1]]);
     // A manual job waiting outranks the policy even with accounts free.
-    picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2"], running: new Map(), held: () => undefined, queuePlan: { ...empty, waiting: [job({ ref: "mimo" })] }, runningRefs: new Set() });
+    picks = planPolicyHeld({ states, pool: ["RUNNER", "RUNNER2"], running: new Map(), held: () => undefined, queuePlan: { ...empty, waiting: [job({ ref: "mimo" })] }, runningRefs: new Set() }).picks;
     expect(picks).toEqual([]);
     // Accounts the queue just assigned this tick, or held live by anything, are not free.
-    picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: (a) => (a === "RUNNER3" ? "hand-run" : undefined), queuePlan: { ...empty, assign: [{ job: job({ ref: "glm" }), account: "RUNNER" }] }, runningRefs: new Set() });
+    picks = planPolicyHeld({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: (a) => (a === "RUNNER3" ? "hand-run" : undefined), queuePlan: { ...empty, assign: [{ job: job({ ref: "glm" }), account: "RUNNER" }] }, runningRefs: new Set() }).picks;
     expect(picks.map((p) => [p.job.ref, p.account])).toEqual([["ox", "RUNNER2"]]);
   });
 
@@ -2199,7 +2198,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       run("z-ai/glm-5.2:free", "e90", 1, { modelResponses: 0, terminationReason: "adapter-error", endedAt: NOW - 30_000 }),
     ];
     const states = modelStatesOf(rosterModels(roster), runs);
-    const picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set() });
+    const picks = planPolicyHeld({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set() }).picks;
     expect(picks.map((p) => [p.job.name, p.account])).toEqual([["mimo-e90", "RUNNER"], ["ox-e360", "RUNNER2"]]);
     const text = formatModels(states, new Set(), NOW).join("\n");
     expect(text).toMatch(/ox +free +t1>t2 +promoted +3\/3 L5 +0\/1 +0 +yes: schedulable on e360/);
@@ -3560,7 +3559,7 @@ describe("account affinity and cross-account name hygiene", () => {
     const affinity = affinityOf(
       affinityFrom([fact("stealth/ox-alpha:free", { account: "RUNNER3", character: "Zeliana" })], roster),
     );
-    const picks = planPolicy({
+    const picks = planPolicyHeld({
       states: states.filter((s) => s.name === "ox"),
       pool: ["RUNNER", "RUNNER2", "RUNNER3"],
       running: new Map(),
@@ -3568,7 +3567,7 @@ describe("account affinity and cross-account name hygiene", () => {
       queuePlan: empty,
       runningRefs: new Set(),
       affinity,
-    });
+    }).picks;
     expect(picks.map((p) => [p.job.ref, p.account])).toEqual([["ox", "RUNNER3"]]);
   });
 
@@ -4755,7 +4754,7 @@ describe("the read-only views read what is running, not every job the supervisor
       const characters = charactersFrom(runs, c.roster);
       const affinity = characterAffinity(characters, affinityOf(affinityFrom(runs, c.roster)));
       const picks = planContinuations(
-        planPolicy({
+        planPolicyHeld({
           states,
           pool: c.accounts.pool,
           running: new Map(resumes.resume.map((r) => [r.job.name, r.account])),
@@ -4764,7 +4763,7 @@ describe("the read-only views read what is running, not every job the supervisor
           runningRefs,
           policy: c.policy,
           affinity,
-        }),
+        }).picks,
         characters,
         c.roster,
       ).picks;

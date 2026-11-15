@@ -450,8 +450,8 @@ export interface PolicyPick {
 }
 
 /**
- * The policy's fill for whatever the queue left free. Pure: the projection is
- * handed in. Only runs when no manual job is waiting — a manual entry always
+ * What the policy's fill for whatever the queue left free reads
+ * (`planPolicyHeld`). Pure: the projection is handed in. Only runs when no manual job is waiting — a manual entry always
  * outranks the policy — and never puts a second run on a model.
  *
  * `place` is where a pick may start (`placeRef` over this tick's `SlotBook`:
@@ -465,7 +465,7 @@ export interface PolicyPick {
  * `maxLive` is the pool's cap (`accounts.max`): at most that many pool
  * accounts live at once, the running ones and the queue's included.
  */
-export function planPolicy(opts: {
+export interface PolicyPlanOptions {
   states: readonly ModelState[];
   pool: string[];
   maxLive?: number;
@@ -492,8 +492,6 @@ export function planPolicy(opts: {
    * task pick is held: it has nowhere to stage.
    */
   drawTask?: (pick: NextJob) => { accounts: string[] } | { held: string };
-}): PolicyPick[] {
-  return planPolicyHeld(opts).picks;
 }
 
 /** Where a pick may start: its credential (null when it needs none) and the keys it spends, or why it may not. */
@@ -512,8 +510,8 @@ export function freePoolAccounts(o: {
   return free.slice(0, Math.max(0, o.maxLive - live));
 }
 
-/** `planPolicy` plus what it held back and why. */
-export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
+/** The policy's picks for what the queue left free, and what it held back and why. */
+export function planPolicyHeld(opts: PolicyPlanOptions): { picks: PolicyPick[]; held: HeldPick[] } {
   // A waiting manual job reserves the pool. Such a job has no account and can
   // only ever take a pool one, so the policy takes none this tick, and says
   // what the reservation was for.

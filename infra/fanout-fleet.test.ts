@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignSquares, type ProbeRun } from "../runner/src/campaigns";
 import { campaignLaunch } from "../runner/src/campaign-launch";
@@ -21,7 +21,7 @@ import { planOf } from "./fixtures/tick";
 import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
 import { liveRunStuck, rosterResumes, runProgress } from "./run-fleet-state";
 import { FANOUT_RUN, writeFanoutRun } from "../runner/test/fixtures/fanout";
-import { accountHolderIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
+import { accountHolderIn, accountHoldersIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -298,5 +298,50 @@ describe("fleet status reads a fan-out run", () => {
     expect(runProgress(FANOUT_RUN, root)).toMatchObject({ level: 5, xp: 900 });
     // No heartbeat: not live, so no stuck flag either way.
     expect(liveRunStuck(FANOUT_RUN, Date.now(), root)).toBeUndefined();
+  });
+});
+
+describe("every account's holder in one pass", () => {
+  test("accountHoldersIn answers what accountHolderIn answers, account by account", () => {
+    const root = tempDir("wb-holders-");
+    const write = (id: string, o: { account: string; fanout?: string[]; warm?: boolean; termination?: string; pause?: string }): void => {
+      const dir = join(root, id);
+      mkdirSync(dir, { recursive: true });
+      const meta = {
+        runId: id,
+        startedAt: Date.now() - 60_000,
+        config: { account: o.account, ...(o.fanout !== undefined ? { fanout: { characters: o.fanout.length, accounts: o.fanout } } : {}) },
+        ...(o.termination !== undefined ? { termination: { reason: o.termination, detail: null } } : {}),
+        ...(o.pause !== undefined ? { pauseReason: o.pause } : {}),
+      };
+      writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
+      writeFileSync(join(dir, "heartbeat"), "x");
+      // Cold: every artefact older than the three-minute rule.
+      if (o.warm === false) for (const f of ["meta.json", "heartbeat"]) utimesSync(join(dir, f), new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
+    };
+    write("a-warm", { account: "RUNNER" });
+    write("b-cold", { account: "RUNNER2", warm: false });
+    write("c-ended", { account: "RUNNER3", termination: "episode-limit" });
+    write("d-paused", { account: "RUNNER4", pause: "operator-pause" });
+    write("e-fanout", { account: "POOL01", fanout: ["POOL01", "POOL02", "POOL03"] });
+    // Two warm runs on one account: the first in the directory's order holds it, as the one-account read says.
+    write("f-first", { account: "SHARED" });
+    write("g-second", { account: "shared" });
+    // An ended run before a live one on the same account: the live one holds it.
+    write("h-ended", { account: "POOL04", termination: "manual" });
+    write("i-live", { account: "POOL04" });
+    const all = accountHoldersIn(root);
+    for (const a of ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "POOL01", "POOL02", "POOL03", "POOL04", "SHARED", "NOBODY"]) {
+      expect(all.get(a)).toBe(accountHolderIn(root, a, "") as string);
+    }
+    expect([...all.entries()].sort()).toEqual([
+      ["POOL01", "e-fanout"],
+      ["POOL02", "e-fanout"],
+      ["POOL03", "e-fanout"],
+      ["POOL04", "i-live"],
+      ["RUNNER", "a-warm"],
+      ["SHARED", accountHolderIn(root, "SHARED", "")!],
+    ]);
+    expect(accountHoldersIn(join(root, "missing")).size).toBe(0);
   });
 });
