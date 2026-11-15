@@ -497,8 +497,10 @@ site        { previewSeries? } or absent: what the dashboard shows, never what t
             `preview (1.0)` rather than as latest: while it is set, `latest` (the default on the
             ladder, the home ladder, the runs page and the social card) is the newest series OTHER
             than it, and a link to `?series=1.0` still shows it (operator, 2026-11-15). The viewer
-            serves it on `/api/info` and the publisher on `info.json`, so private and public both
-            change within a minute of the write, with no release. Nothing schedules, counts or
+            serves it on `/api/info` and the publisher on `info.json`, with no release: the private
+            site follows within about a minute, the public one at the publisher's next pass.
+            Older code refuses the key, so it is written after the release that carries it,
+            and before a new series' first run if that series should open as the preview. Nothing schedules, counts or
             publishes differently. Set it with `bun wb config set site '{"previewSeries":"1.0"}'`;
             the flip is `bun wb config delete site`, after which `latest` follows the newest series
             again. The supervisor never parses the block, so a bad one cannot reject the fleet's
