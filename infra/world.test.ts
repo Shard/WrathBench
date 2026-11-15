@@ -96,7 +96,7 @@ const envOf = (pod: Pod, name: string): Record<string, string | undefined> => {
 };
 
 /** What the fake API server does with a created pod. */
-type Behaviour = "ready" | "never-ready" | "crash" | "quota" | "invalid" | "camera-quota" | "camera-unschedulable" | "camera-pending";
+type Behaviour = "ready" | "never-ready" | "crash" | "quota" | "invalid";
 
 class FakeK8s implements WorldK8s {
   readonly pods = new Map<string, Pod>();
@@ -114,9 +114,13 @@ class FakeK8s implements WorldK8s {
     this.note(`create ${pod.metadata.name}`);
     if (this.behaviour === "quota") throw new K8sError(403, "Forbidden", `pods "${pod.metadata.name}" is forbidden: exceeded quota: wrathbench-v1, requested: limits.memory=4Gi`);
     if (this.behaviour === "invalid") throw new K8sError(422, "Invalid", "Pod is invalid");
-    const withCamera = pod.spec.containers.some((c) => c.name === "camera");
-    if (this.behaviour === "camera-quota" && withCamera) throw new K8sError(403, "Forbidden", `pods "${pod.metadata.name}" is forbidden: exceeded quota: wrathbench-v1, requested: requests.memory=3Gi`);
     const p = structuredClone(pod);
+    p.metadata.uid = `uid-${pod.metadata.name}`;
+    // A camera's pod (infra/camera-pods.ts) is only recorded: it is never a world.
+    if (pod.metadata.labels?.["app.kubernetes.io/component"] === "camera") {
+      this.pods.set(pod.metadata.name!, p);
+      return p;
+    }
     const ws = pod.spec.containers.find((c) => c.name === "worldserver")!;
     const di = (pod.spec["initContainers"] as { name: string; image: string }[]).find((c) => c.name === "db-import")!;
     p.status =
@@ -127,11 +131,6 @@ class FakeK8s implements WorldK8s {
             containerStatuses: [{ name: "worldserver", imageID: `${ws.image.split(":")[0]}@${DIGEST_WS}`, state: { running: {} } }],
             initContainerStatuses: [{ name: "db-import", imageID: `${di.image.split(":")[0]}@${DIGEST_DI}`, state: { terminated: { exitCode: 0, reason: "Completed" } } }],
           };
-    if (withCamera && this.behaviour === "camera-unschedulable") p.status = { phase: "Pending", conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable", message: "0/1 nodes are available: 1 Insufficient devic.es/dri." }] };
-    if (withCamera && this.behaviour === "camera-pending") {
-      // The world is up; its camera's image never arrives, so the pod stays Pending.
-      p.status = { ...p.status, phase: "Pending", containerStatuses: [...(p.status?.containerStatuses ?? []), { name: "camera", state: { waiting: { reason: "ImagePullBackOff" } } }] };
-    }
     this.pods.set(pod.metadata.name!, p);
     return p;
   }
@@ -191,16 +190,8 @@ class FakeDb implements WorldDb {
   async close() {}
 }
 
-/** The template with the chart's camera block on (templates/_camera.tpl): two sidecars, their volumes, two slots. */
-function withCamera(t: Pod): Pod {
-  t.metadata.annotations = { ...(t.metadata.annotations ?? {}), "wrathbench.shard.page/camera-max": "2" };
-  t.spec.containers.push({ name: "camera", image: "reg/camera:c1", env: [{ name: "CAMERA_REALM", value: "" }] }, { name: "camera-director", image: "reg/wrathbench-runner:t1", env: [{ name: "CAMERA_WORLD", value: "" }] });
-  t.spec["volumes"] = [{ name: "camera-run" }, { name: "camera-client-data" }];
-  return t;
-}
-
 /** One launcher over the fakes, a fake clock that each sleep advances, and a log of every call in order. */
-function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: string[]; alive?: (pid: number) => boolean; camera?: boolean } = {}) {
+function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: string[]; alive?: (pid: number) => boolean; cameraTemplate?: Pod } = {}) {
   const calls: string[] = [];
   const k8s = new FakeK8s((c) => calls.push(c));
   k8s.behaviour = o.behaviour ?? "ready";
@@ -214,7 +205,7 @@ function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: s
   const log: string[] = [];
   const launcher = new WorldLauncher({
     client: k8s,
-    template: o.camera === true ? withCamera(template()) : template(),
+    template: template(),
     db: async () => db,
     store,
     owner: { name: "wrathbench-fleet-abc", uid: "uid-1" },
@@ -222,7 +213,7 @@ function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: s
     log: (l) => log.push(l),
     health: async () => {
       healthCalls++;
-      const ready = o.ready?.(healthCalls) ?? (k8s.behaviour === "ready" || k8s.behaviour.startsWith("camera-"));
+      const ready = o.ready?.(healthCalls) ?? k8s.behaviour === "ready";
       return { ready, detail: ready ? "200" : "503 world_not_loaded" };
     },
     now: () => clock.now,
@@ -230,6 +221,7 @@ function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: s
       clock.now += ms;
     },
     startupMs: 60_000,
+    ...(o.cameraTemplate !== undefined ? { cameraTemplate: o.cameraTemplate } : {}),
     alive: o.alive ?? (() => false),
     random: () => {
       const id = ids.shift() ?? newWorldId();
@@ -360,35 +352,38 @@ describe("buildWorldPod: a world of its own, or refused", () => {
 });
 
 describe("WorldLauncher with the camera block on", () => {
-  const pods = (r: ReturnType<typeof rig>) => r.k8s.calls.filter((c) => c.startsWith("create "));
-  const hasCamera = (r: ReturnType<typeof rig>) => r.k8s.pods.get(`wrathbench-world-${ID}`)!.spec.containers.some((c) => c.name === "camera");
+  const camTemplate = (max: number): Pod =>
+    ({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { generateName: "wrathbench-camera-", labels: { "app.kubernetes.io/component": "camera" }, annotations: { "wrathbench.shard.page/camera-max": String(max) } },
+      spec: { containers: [{ name: "camera", image: "c:1", env: [] }, { name: "camera-director", image: "r:1", env: [], command: ["bun"] }] },
+    }) as unknown as Pod;
+  const settle = () => new Promise((r) => setTimeout(r, 20));
 
-  test("a free slot: the world boots with its camera", async () => {
-    const r = rig({ camera: true });
+  test("a world that is up gets its camera as a pod of its own, owned by the world's pod; the world never waits on it", async () => {
+    const r = rig({ cameraTemplate: camTemplate(2) });
     expect(await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] })).toMatchObject({ ok: true });
-    expect(hasCamera(r)).toBe(true);
-    expect(r.log.some((l) => l.includes("with a camera"))).toBe(true);
+    await settle();
+    const cam = r.k8s.pods.get(`wrathbench-camera-${ID}`)!;
+    expect(cam.metadata.ownerReferences).toEqual([{ apiVersion: "v1", kind: "Pod", name: `wrathbench-world-${ID}`, uid: `uid-wrathbench-world-${ID}` }]);
+    // The world's own pod carries nothing of the camera's.
+    expect(r.k8s.pods.get(`wrathbench-world-${ID}`)!.spec.containers.map((c) => c.name)).toEqual(["worldserver"]);
+    expect(r.calls.indexOf(`create wrathbench-world-${ID}`)).toBeLessThan(r.calls.indexOf(`create wrathbench-camera-${ID}`));
   });
 
-  test("a camera the quota will not take: the world boots without it, and the attempt keeps its world", async () => {
-    const r = rig({ camera: true, behaviour: "camera-quota" });
+  test("no slot (the shared world's held): no camera, and the world is up all the same", async () => {
+    const r = rig({ cameraTemplate: camTemplate(1) });
     expect(await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] })).toMatchObject({ ok: true });
-    expect(pods(r)).toHaveLength(2);
-    expect(hasCamera(r)).toBe(false);
+    await settle();
+    expect(r.k8s.pods.has(`wrathbench-camera-${ID}`)).toBe(false);
   });
 
-  test("a camera no node can take (no GPU claim free): the pod is replaced without it", async () => {
-    const r = rig({ camera: true, behaviour: "camera-unschedulable" });
-    expect(await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] })).toMatchObject({ ok: true });
-    expect(r.k8s.calls.some((c) => c.startsWith(`delete wrathbench-world-${ID}`))).toBe(true);
-    expect(hasCamera(r)).toBe(false);
-  });
-
-  test("a camera stuck on its image holds the pod Pending; the world is up anyway", async () => {
-    const r = rig({ camera: true, behaviour: "camera-pending" });
-    expect(await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] })).toMatchObject({ ok: true });
-    expect(pods(r)).toHaveLength(1);
-    expect(r.store.read(ID)!.state).toBe("up");
+  test("the block off: no camera at all", async () => {
+    const r = rig();
+    await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] });
+    await settle();
+    expect(r.calls.some((c) => c.includes("camera"))).toBe(false);
   });
 });
 

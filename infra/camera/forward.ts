@@ -1,9 +1,9 @@
 /**
- * A loopback forwarder for a camera run by hand outside a world's pod: every
- * realm row advertises 127.0.0.1:8085 (infra/world.ts `putRealm`), so a client
- * in a pod of its own is handed its own loopback. This listens there and pipes
- * each connection to the world's real address. A camera sidecar in the world
- * pod never needs it.
+ * The camera pod's loopback forwarder (infra/camera-pods.ts): every realm row
+ * advertises 127.0.0.1:8085 (infra/world.ts `putRealm`), so a client in a pod
+ * of its own is handed its own loopback. The director listens there and pipes
+ * each connection to the world's real address (`<id>.worlds:8085`, or the
+ * `worldserver` Service for the shared world).
  */
 
 import type { Socket } from "bun";
