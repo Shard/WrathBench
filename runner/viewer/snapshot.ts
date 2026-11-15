@@ -77,7 +77,7 @@ import { lineageIndex } from "./lineage";
 import { EPISODE_IDS, isTaskEpisode } from "../src/episodes";
 import type {
   ClipsResponse,
-  ClipView,
+  VideoPartView,
   HighlightResponse,
   ApiInfoResponse,
   CampaignsResponse,
@@ -526,14 +526,16 @@ export function createRenderer(
   };
 
   /**
-   * A run's clips as published: the handle's projected list with each video
-   * and poster named by its bucket key, and the files behind those keys. A
-   * clip whose video is gone by now is left out, a poster that is gone is
-   * null, and a list left empty is no list.
+   * A run's video as published: the handle's projected body with each part's
+   * video and poster named by its bucket key, and the files behind those keys.
+   * The parts stop at the first whose video is gone by now, a poster that is
+   * gone is null, and a video left with no part is none. A closed part is
+   * never encoded again, so its bytes, hash and key stay what they were; only
+   * the open part's key moves as it grows.
    */
   const publishClips = async (runId: string, body: ClipsResponse): Promise<{ clips: ClipsResponse; media: MediaArtifact[] } | null> => {
     const media: MediaArtifact[] = [];
-    const listed = readClips(opts.runsDir, runId) ?? [];
+    const listed = readClips(opts.runsDir, runId);
     const keyOf = async (name: string, kind: ClipMediaKind): Promise<string | null> => {
       const hit = clipMedia(opts.runsDir, runId, name, kind, listed);
       if (hit === null) return null;
@@ -550,15 +552,15 @@ export function createRenderer(
       });
       return path;
     };
-    const clips: ClipView[] = [];
-    for (const c of body.clips) {
-      const video = await keyOf(c.name, "mp4");
-      if (video === null) continue;
-      const poster = c.poster === null ? null : await keyOf(c.name, "jpg");
-      clips.push({ ...c, video, poster });
+    const parts: VideoPartView[] = [];
+    for (const p of body.parts) {
+      const video = await keyOf(p.name, "mp4");
+      if (video === null) break;
+      const poster = p.poster === null ? null : await keyOf(p.name, "jpg");
+      parts.push({ ...p, video, poster });
     }
-    if (clips.length === 0) return null;
-    return { clips: projectClips({ runId, clips }), media };
+    if (parts.length === 0) return null;
+    return { clips: projectClips({ ...body, runId, parts }), media };
   };
   const fullRenderMs = opts.fullRenderMs ?? FULL_RENDER_MS;
   const clock = opts.clock ?? Date.now;

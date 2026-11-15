@@ -139,9 +139,11 @@ import type {
   NearbySelfView,
   NearbyStateView,
   NearbyWindow,
-  ClipView,
+  ChapterType,
+  ChapterView,
   ClipsResponse,
   HighlightResponse,
+  VideoPartView,
 } from "./api-types";
 import { EPISODE_IDS, hasBoard, isTaskEpisode } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
@@ -180,6 +182,7 @@ import {
   type NearbyUnitTypeName,
 } from "@wrathbench/inspector/codec/nearby";
 import { CLIP_MEDIA_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
+import { CHAPTER_TYPES, fitTimeline } from "./video-time";
 
 /**
  * What is published is what the public dashboard reads (operator, 2026-10-18).
@@ -2412,7 +2415,7 @@ export function projectEntries(r: EntriesResponse): EntriesResponse {
   });
 }
 
-/** A caption as the public site shows it, and a clip's event detail: one line, clipped. */
+/** A caption as the public site shows it, and a chapter's detail: one line, clipped. */
 const CAPTION_MAX = 240;
 const CLIP_DETAIL_MAX = 120;
 
@@ -2429,13 +2432,13 @@ function publicClipText(text: unknown, max: number): string {
   return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
 }
 
-const CLIP_EVENT_TYPE_SET: ReadonlySet<string> = new Set(["level", "quest", "death", "zone", "boss", "start", "end"]);
 const CLIP_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+const PART_NAME = /^[A-Za-z0-9_-]{1,80}$/;
 
 /**
- * Where a clip's media may be named: the viewer's own route for this clip, or
+ * Where a part's media may be named: the viewer's own route for this part, or
  * its bucket key (`clipMediaKey`). Anything else is not a place a page may be
- * sent, so the clip (a video) or the poster is dropped.
+ * sent, so the part (a video) or the poster is dropped.
  */
 function clipMediaRef(v: unknown, runId: string, name: string, ext: "mp4" | "jpg"): string | null {
   if (typeof v !== "string") return null;
@@ -2444,57 +2447,71 @@ function clipMediaRef(v: unknown, runId: string, name: string, ext: "mp4" | "jpg
   return m !== null && m[1] === runId && m[2] === name && m[4] === ext ? v : null;
 }
 
-/** One clip, rebuilt field by field; null when it does not read as one. */
-function projectClip(c: ClipView, runId: string): ClipView | null {
-  if (c === null || typeof c !== "object") return null;
-  const name = typeof c.name === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(c.name) ? c.name : null;
-  if (name === null || (c.kind !== "timelapse" && c.kind !== "event")) return null;
-  const video = clipMediaRef(c.video, runId, name, "mp4");
+/** One part, rebuilt field by field; null when it does not read as one. */
+function projectPart(p: VideoPartView, runId: string): VideoPartView | null {
+  if (p === null || typeof p !== "object") return null;
+  const name = typeof p.name === "string" && PART_NAME.test(p.name) ? p.name : null;
+  if (name === null) return null;
+  const video = clipMediaRef(p.video, runId, name, "mp4");
   if (video === null) return null;
-  if (typeof c.from !== "string" || !CLIP_ISO.test(c.from) || typeof c.to !== "string" || !CLIP_ISO.test(c.to)) return null;
-  if (typeof c.seconds !== "number" || !Number.isFinite(c.seconds) || c.seconds < 0) return null;
-  const ev = c.event;
-  const event =
-    ev !== undefined && ev !== null && typeof ev === "object" && CLIP_EVENT_TYPE_SET.has(ev.type)
-      ? { type: ev.type, detail: publicClipText(ev.detail, CLIP_DETAIL_MAX) }
-      : undefined;
-  return {
-    name,
-    kind: c.kind,
-    ...(event !== undefined ? { event } : {}),
-    from: c.from,
-    to: c.to,
-    seconds: c.seconds,
-    caption: publicClipText(c.caption, CAPTION_MAX),
-    video,
-    poster: clipMediaRef(c.poster, runId, name, "jpg"),
-  };
+  if (typeof p.from !== "string" || !CLIP_ISO.test(p.from) || typeof p.to !== "string" || !CLIP_ISO.test(p.to)) return null;
+  if (typeof p.seconds !== "number" || !Number.isFinite(p.seconds) || p.seconds < 0) return null;
+  return { name, from: p.from, to: p.to, seconds: p.seconds, video, poster: clipMediaRef(p.poster, runId, name, "jpg") };
 }
 
 /**
- * A run's camera clips (`/api/run/<id>/clips`, and the published
- * `clips.json`). The clip and its moment pass; the caption and an event's
- * detail cross the model-text strikes (`publicClipText`); the media are named
- * only by the viewer's route or the bucket key. The frames are never named:
- * nothing here can carry a path. A fixed point of itself, like every
+ * A run's camera video (`/api/run/<id>/clips`, and the published
+ * `clips.json`). The parts and their moments pass, up to the first that does
+ * not read, so the timeline has no gaps; the chapters, captions and time map
+ * that fall on it are rebuilt by `fitTimeline`; every caption and chapter
+ * detail crosses the model-text strikes (`publicClipText`); the media are
+ * named only by the viewer's route or the bucket key. The frames are never
+ * named: nothing here can carry a path. A fixed point of itself, like every
  * projector, so the bucket's verifier re-projects it.
  */
 export function projectClips(body: ClipsResponse): ClipsResponse {
   const runId = typeof body.runId === "string" ? body.runId : "";
-  const clips = (Array.isArray(body.clips) ? body.clips : []).flatMap((c) => {
-    const p = projectClip(c, runId);
-    return p === null ? [] : [p];
+  const parts: VideoPartView[] = [];
+  const names = new Set<string>();
+  for (const p of Array.isArray(body.parts) ? body.parts : []) {
+    const part = projectPart(p, runId);
+    if (part === null || names.has(part.name)) break;
+    names.add(part.name);
+    parts.push(part);
+  }
+  const fitted = fitTimeline(parts, { chapters: body.chapters, captions: body.captions, timemap: body.timemap });
+  return scrubPathsValue<ClipsResponse>({
+    runId,
+    parts,
+    chapters: fitted.chapters.map((c) => ({ ...c, detail: publicClipText(c.detail, CLIP_DETAIL_MAX), caption: publicClipText(c.caption, CAPTION_MAX) })),
+    captions: fitted.captions.map((c) => ({ t: c.t, text: publicClipText(c.text, CAPTION_MAX) })),
+    timemap: fitted.timemap,
   });
-  return scrubPathsValue<ClipsResponse>({ runId, clips });
 }
 
-/** The home page's clip, under `projectClips`' rules; none when the clip does not read. */
+/** The home page's excerpt, under `projectClips`' rules; none when its part does not read. */
 export function projectHighlight(body: HighlightResponse): HighlightResponse {
   const h = body.highlight;
   if (h === null || typeof h !== "object" || typeof h.runId !== "string") return { highlight: null };
-  const clip = projectClip(h.clip, h.runId);
-  if (clip === null) return { highlight: null };
+  const part = projectPart(h.part, h.runId);
+  if (part === null) return { highlight: null };
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+  const from = num(h.from);
+  const to = num(h.to);
+  if (from === null || to === null || to < from || to > part.seconds) return { highlight: null };
+  const c = h.chapter as Partial<ChapterView> | null | undefined;
+  const chapter: ChapterView | null =
+    c !== null && typeof c === "object" && typeof c.t === "number" && Number.isFinite(c.t) && c.t >= 0 && Number.isInteger(c.part) && (c.part as number) >= 0 && CHAPTER_TYPES.includes(c.type as ChapterType)
+      ? { t: c.t, part: c.part as number, type: c.type as ChapterType, detail: publicClipText(c.detail, CLIP_DETAIL_MAX), caption: publicClipText(c.caption, CAPTION_MAX) }
+      : null;
   return scrubPathsValue<HighlightResponse>({
-    highlight: { runId: h.runId, model: typeof h.model === "string" ? h.model : null, clip },
+    highlight: {
+      runId: h.runId,
+      model: typeof h.model === "string" ? h.model : null,
+      part,
+      from,
+      to,
+      chapter,
+    },
   });
 }

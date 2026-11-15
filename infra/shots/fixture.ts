@@ -559,10 +559,11 @@ export const LIVE_RUN_4 = "fixture-live-4";
 
 /**
  * A camera's output for a run, in the contract's layout: `camera/clips.json`
- * naming a timelapse and one level clip, both the same two-second synthetic
+ * (version 2) naming a video in two parts, each the same two-second synthetic
  * test pattern (ffmpeg's `testsrc`, `runner/test/fixtures/camera/`) and never
- * a game image, with `meta.json` labelled `camera`. A frame on disk too, with
- * no index, which nothing may ever serve.
+ * a game image, with chapters, the model's words and a time map over the
+ * run's span, and `meta.json` labelled `camera`. A frame on disk too, with no
+ * index, which nothing may ever serve.
  */
 function writeCamera(runsDir: string, runId: string, from: number, to: number, model: string): void {
   const media = join(import.meta.dir, "..", "..", "runner", "test", "fixtures", "camera");
@@ -571,26 +572,47 @@ function writeCamera(runsDir: string, runId: string, from: number, to: number, m
   mkdirSync(join(dir, "frames"), { recursive: true });
   copyFileSync(join(media, "poster.jpg"), join(dir, "frames", "1.jpg"));
   const iso = (t: number): string => new Date(t).toISOString();
-  const levelAt = from + Math.round((to - from) / 2);
-  const clips = [
-    { name: "timelapse", kind: "timelapse", from: iso(from), to: iso(to), seconds: 2, caption: `WrathBench · ${model} · the whole run` },
-    {
-      name: "event-12-level",
-      kind: "event",
-      event: { type: "level", detail: "reached level 5" },
-      from: iso(levelAt - 20_000),
-      to: iso(levelAt + 20_000),
-      seconds: 2,
-      caption: `WrathBench · ${model} · "Five pelts to go, then the scout by the old mill."`,
-    },
+  const mid = from + Math.round((to - from) / 2);
+  const parts = [
+    { file: "clips/part-000.mp4", poster: "clips/part-000.jpg", from: iso(from), to: iso(mid), seconds: 2 },
+    { file: "clips/part-001.mp4", poster: "clips/part-001.jpg", from: iso(mid + 10_000), to: iso(to), seconds: 2 },
   ];
-  for (const c of clips) {
-    copyFileSync(join(media, "clip.mp4"), join(dir, "clips", `${c.name}.mp4`));
-    copyFileSync(join(media, "poster.jpg"), join(dir, "clips", `${c.name}.jpg`));
+  for (const n of ["part-000", "part-001"]) {
+    copyFileSync(join(media, "clip.mp4"), join(dir, "clips", `${n}.mp4`));
+    copyFileSync(join(media, "poster.jpg"), join(dir, "clips", `${n}.jpg`));
   }
+  const at = (frac: number): number => from + Math.round((to - from) * frac);
   writeFileSync(
     join(dir, "clips.json"),
-    `${JSON.stringify({ version: 1, runId, clips: clips.map((c) => ({ ...c, file: `clips/${c.name}.mp4`, poster: `clips/${c.name}.jpg` })) }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        version: 2,
+        runId,
+        parts,
+        chapters: [
+          { t: 0.75, part: 0, type: "zone", detail: "entered zone 12", caption: "Out of the abbey and down the road." },
+          { t: 1.5, part: 0, type: "quest", detail: "turned in quest 33", caption: "Pelts done; turning in." },
+          { t: 2.5, part: 1, type: "level", detail: "reached level 5", caption: "Five pelts to go, then the scout by the old mill." },
+          { t: 3.25, part: 1, type: "death", detail: "died", caption: "Too many wolves at once." },
+        ],
+        captions: [
+          { t: 0, text: `${model}: heading out of the abbey.` },
+          { t: 1, text: "Pelts done; turning in." },
+          { t: 2.25, text: "Five pelts to go, then the scout by the old mill." },
+          { t: 3.25, text: "Too many wolves at once." },
+        ],
+        timemap: [
+          [0, from],
+          [1.875, mid],
+          [2, mid + 10_000],
+          [3, at(0.8)],
+          [3.125, at(0.8)],
+          [3.875, to],
+        ],
+      },
+      null,
+      2,
+    )}\n`,
   );
   const metaPath = join(runsDir, runId, "meta.json");
   writeFileSync(metaPath, JSON.stringify({ ...(JSON.parse(readFileSync(metaPath, "utf8")) as object), camera: true }));
