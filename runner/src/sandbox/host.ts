@@ -16,9 +16,11 @@
 import { join } from "node:path";
 import {
   SandboxHost as StackSandboxHost,
+  type EvalLink,
   type HarnessNotice as StackNotice,
   type SandboxHostOptions,
   type SandboxNoticeKind,
+  type SnippetResult,
 } from "@wrathbench/mcp";
 import type { CallRecord } from "@wrathbench/mcp";
 import type { CharacterRoster } from "@wrathbench/mcp/fanout";
@@ -70,6 +72,13 @@ export type RunnerSandboxHostOptions = Omit<SandboxHostOptions, "record"> & {
    * signals. Given with `fanout` and without `session`.
    */
   signals?: RecordSignals | undefined;
+  /**
+   * A line to add to a snippet's result, from the result itself, or undefined
+   * for none: the runner's failure-path note on a run whose model chooses its
+   * start (`invalidStartNote`). It lands among the result's notes, which
+   * every driver's `run_snippet` renders.
+   */
+  resultNote?: ((res: SnippetResult) => string | undefined) | undefined;
 };
 
 export class SandboxHost extends StackSandboxHost {
@@ -77,8 +86,10 @@ export class SandboxHost extends StackSandboxHost {
   private readonly signals: RecordSignals | undefined;
   private characters: CharacterRoster | undefined;
 
+  private readonly resultNote: RunnerSandboxHostOptions["resultNote"];
+
   constructor(opts: RunnerSandboxHostOptions) {
-    const { session, recordTickMs, signals, ...stack } = opts;
+    const { session, recordTickMs, signals, resultNote, ...stack } = opts;
     const tick = recordTickMs !== undefined ? { tickMs: recordTickMs } : {};
     super({
       ...stack,
@@ -89,6 +100,13 @@ export class SandboxHost extends StackSandboxHost {
     });
     this.session = session;
     this.signals = session?.signals ?? signals;
+    this.resultNote = resultNote;
+  }
+
+  override async evalSnippet(code: string, link?: EvalLink, character?: string): Promise<SnippetResult> {
+    const res = await super.evalSnippet(code, link, character);
+    const note = this.resultNote?.(res);
+    return note === undefined ? res : { ...res, notes: [...(res.notes ?? []), note] };
   }
 
   /**

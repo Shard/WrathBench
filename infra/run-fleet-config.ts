@@ -852,6 +852,23 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
         fail((err as Error).message);
       }
     }
+    // The start keys (operator, 2026-11-15): a freeplay start, or a
+    // hand-written roster's with no episode; a level episode's start is its
+    // id's and a probe's its cell's whatever these say (`episodeStart`,
+    // `resolve` in run-roster.ts). Typed here, since a race the runner cannot
+    // parse would fail every launch of the entry rather than this file.
+    for (const k of ["race", "class"] as const) {
+      const v = e[k] as unknown;
+      if (v !== undefined && (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 11)) {
+        fail(`${where}: entry ${e.model}: ${k} must be the client's numeric id, 1-11 (to let the model choose, set chooseStart: true)`);
+      }
+    }
+    if (e.chooseStart !== undefined && e.chooseStart !== true) {
+      fail(`${where}: entry ${e.model}: chooseStart is true or absent — true lets the model choose its race and class on a freeplay run`);
+    }
+    if (e.chooseStart === true && (e.race !== undefined || e.class !== undefined)) {
+      fail(`${where}: entry ${e.model}: chooseStart lets the model choose its race and class, so the entry cannot also state race or class`);
+    }
     if (
       e.maxToolCalls !== undefined &&
       (typeof e.maxToolCalls !== "number" || !Number.isInteger(e.maxToolCalls) || e.maxToolCalls <= 0)

@@ -103,6 +103,8 @@ import {
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy } from "./run-roster";
+import { EPISODE_LIST } from "../runner/src/episodes";
+import { className as classNameOf, raceName as raceNameOf } from "../runner/viewer/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
@@ -160,6 +162,29 @@ import { GROUPS_ENV, groupsEnvValue, groupsFromEnv, type Groups } from "../runne
  * row's head while it plays, since `characters` (`charactersFrom`, the tick's
  * "continue from") leaves a live run out and would name its predecessor.
  */
+/**
+ * The start keys of the roster, said once so `fleet status` cannot be read as
+ * scoring an entry on the start it names (operator, 2026-11-15): each level
+ * episode's own start, then every entry that carries `race`, `class` or
+ * `chooseStart`, which set its freeplay start and nothing a scored episode
+ * plays. Nothing when no entry carries one. Pure.
+ */
+export function formatStartKeys(roster: Readonly<Record<string, Pick<FleetRosterEntry, "race" | "class" | "chooseStart">>>): string[] {
+  const own = Object.entries(roster).filter(([, e]) => e.race !== undefined || e.class !== undefined || e.chooseStart === true);
+  if (own.length === 0) return [];
+  const fixed = EPISODE_LIST.flatMap((t) =>
+    t.start === undefined ? [] : [`${t.id} ${raceNameOf(t.start.race)} ${classNameOf(t.start.class)} (race ${t.start.race}, class ${t.start.class})`],
+  );
+  return [
+    `start: ${fixed.join(", ")} for every model; an entry's race, class or chooseStart is its freeplay start only`,
+    ...own.map(([name, e]) =>
+      e.chooseStart === true
+        ? `  ${name}: chooseStart — the model chooses its race and class on freeplay`
+        : `  ${name}: ${[e.race !== undefined ? `race ${e.race}` : null, e.class !== undefined ? `class ${e.class}` : null].filter((x) => x !== null).join(", ")} — freeplay only`,
+    ),
+  ];
+}
+
 export function formatCharacters(
   roster: Record<string, FleetRosterEntry>,
   characters: ReadonlyMap<string, Character>,
@@ -1173,6 +1198,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
     }
     const characters = charactersFrom(facts, config.roster);
     for (const line of formatCharacters(config.roster, characters, occupants, running, liveCharactersFrom(facts, config.roster))) console.log(`  ${line}`);
+    for (const line of formatStartKeys(config.roster)) console.log(`  ${line}`);
     /*
      * How much of the schedule is left, bounded by whether anything else
      * promotes (`outstandingWork` carries the formula). Computed from the

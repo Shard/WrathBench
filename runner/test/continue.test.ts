@@ -245,7 +245,8 @@ describe("--continue-from", () => {
 
   test("a scored launch may not continue anything", async () => {
     const { runsDir, runId } = endedFreeplayRun();
-    const stderr = await launch(runsDir, "http://127.0.0.1:9", ["--episode", "e90", "--run-id", "a12", "--continue-from", runId]);
+    // e360's own start (race 3, class 2), which the helper states, so the continuation is what is refused.
+    const stderr = await launch(runsDir, "http://127.0.0.1:9", ["--episode", "e360", "--run-id", "a12", "--continue-from", runId]);
     expect(stderr).toContain("--continue-from is a freeplay continuation");
     expect(existsSync(join(runsDir, "a12"))).toBe(false);
   }, 30_000);

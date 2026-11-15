@@ -29,7 +29,7 @@ import { LOCAL_WITHOUT_SERVING, parseServing, parseServingLabels, SERVING_OFF_LO
  */
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase",
-  "billing", "credential", "race", "class", "watchdogs", "maxToolCalls",
+  "billing", "credential", "race", "class", "chooseStart", "watchdogs", "maxToolCalls",
   "routing", "wiki", "compactWindow", "campaignOnly", "serving", "servingLabels", "deadmines",
 ] as const;
 

@@ -30,8 +30,12 @@ everything else is derived from it — no list of names decides what counts.
 ## `e90` — the default episode
 
 - **Duration.** 90 minutes of wall clock (`episode-limit`).
-- **Start state.** A fresh level-1 character, deleted and recreated per
-  episode. Nothing carries over between episodes.
+- **Start state.** A fresh level-1 Human Paladin (race 1, class 2), deleted
+  and recreated per episode. Nothing carries over between episodes. The race
+  and class are the episode's, the same for every model (operator,
+  2026-11-15): a roster entry's `race` and `class` do not reach it, and a hand
+  launch with another `--race` or `--class` is refused (`startRefusal`,
+  `runner/src/episodes.ts`). The model names the character.
 - **Objective.** None. The standing goal only — an operator objective is what
   makes a run unscored.
 - **Prompt.** The standing goal plus one sentence stating the clock, "This episode lasts 90 minutes.", as `e360` states its own (`runner/src/prompt.ts` holds the wording). Promotion is the scheduler's stopping rule and the model is not told about it (operator, 2026-11-14): a stopping rule the model knows of becomes part of what is measured, and the tiers and the bar can now change without moving a prompt hash. Until then the sentence named the level-5 bar, then that reaching it did not end the episode, because three Sonnet 5.5 runs read the bar as a finish line and idled into the no-XP watchdog.
@@ -65,8 +69,9 @@ because that would silently re-scope every score already carrying this label.
 ## `e360` — the long episode
 
 - **Duration.** Six hours of wall clock.
-- **Start state.** Identical to `e90`: a fresh level-1 character, same prompt,
-  same tools, no carry-over.
+- **Start state.** A fresh level-1 Dwarf Paladin (race 3, class 2), fixed by
+  the episode as `e90`'s is (operator, 2026-11-15); otherwise as `e90`: same
+  prompt, same tools, no carry-over.
 - **Objective.** None. This is a scored episode.
 - **Prompt.** The standing goal plus one sentence stating the clock. Nothing about levels: past the gate, breadth is the point.
 - **Watchdogs.** Idle only. **The no-XP watchdog is off.** Walking across a
@@ -444,7 +449,16 @@ standing sandbox that never finishes. Duration separates neither pair.
   materialises with no ceiling at all. It is the *job* that earns this, not the
   ref: a freeplay job written into the fleet config that names an idle-capable
   ref is an ordinary experiment and keeps the 500.
-- **Start state.** Whatever the experiment needs.
+- **Start state.** Whatever the experiment needs: the roster entry's `race`
+  and `class` (Human Paladin when it states none), or, with `chooseStart:
+  true`, the model's own choice (operator, 2026-11-15). Such a run is told at
+  its first launch that it may create any race and class the server allows,
+  with the pairs listed by id; it names them at `createSession` like the name,
+  through the client's character-create; a pair no character can have is
+  answered with the same list beside the failure. What it chose is written
+  over the launch's placeholder in the run's config (and a `start_chosen`
+  record) once the character is in the world. A continuation keeps the
+  character it has.
 - **Objective.** Allowed. One of the two steered ids where the operator may tell
   the agent where to go, and where `wikiCoords` may be on (the run-dimension
   rule in `docs/METHODOLOGY.md`; `freeplay` was the only steered id until the

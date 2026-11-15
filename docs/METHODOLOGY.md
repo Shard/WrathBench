@@ -315,7 +315,10 @@ loss, and can land after it.
 created level-1 character, because a mid-level start would skip the state a
 real character has. The model names it, since nothing about the name is
 measured; race and class are the episode's, because every run is read against
-them. The one exception is the fixed Deadmines episode (below): a dungeon
+them: `e90` starts a Human Paladin and `e360` a Dwarf Paladin, for every model,
+and a roster entry's own race and class reach only its freeplay runs
+(operator, 2026-11-15). A freeplay run, which never counts, may instead let
+the model choose its race and class at creation (operator, 2026-11-15). The one exception is the fixed Deadmines episode (below): a dungeon
 task's state is the staged party itself, so its start, its characters' names
 and its directive are fixed by the episode id, identical for every model, and
 a change to any of them is a new id (operator, 2026-11-14).

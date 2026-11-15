@@ -491,8 +491,10 @@ export function runRowOf(r: RunTableRow, latest: LatestState | LatestReading | u
   const comparability = parseComparability(
     r.comparability_json.length === 0 ? undefined : JSON.parse(r.comparability_json),
   ) as ComparabilityView | null;
-  const race = num(config["race"]);
-  const klass = num(config["class"]);
+  // A run whose model chooses its start holds a placeholder until its character is seen (`runs.ts`).
+  const startUnchosen = config["chooseStart"] === true && config["character"] === undefined;
+  const race = startUnchosen ? null : num(config["race"]);
+  const klass = startUnchosen ? null : num(config["class"]);
   const apiBase = str(config["apiBase"]);
   const driver = str(r.driver);
   const mtime = r.trajectory_mtime === 0 ? null : r.trajectory_mtime;

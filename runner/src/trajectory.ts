@@ -533,6 +533,18 @@ export class Trajectory {
   }
 
   /**
+   * The race and class the model chose, on a run whose model chooses its
+   * start (`RunConfig.chooseStart`): written over the launch's placeholder in
+   * meta.json's config, where every reader of a run's start looks (the runs
+   * page, a continuation), and as a record.
+   */
+  setStart(_runId: string, race: number, klass: number): Promise<void> {
+    this.append({ t: "harness", kind: "start_chosen", race, class: klass });
+    this.updateMeta((meta) => ({ ...meta, config: { ...meta.config, race, class: klass } }));
+    return SETTLED;
+  }
+
+  /**
    * The run's verdict: the trajectory record first, then meta.json.
    *
    * The record is appended before meta.json is rewritten, so a rewrite that

@@ -64,6 +64,7 @@ import { parseServing, parseServingLabels, type ServingLabels, type ServingSpec 
 import { servingRefusal } from "../runner/src/roster-refusal";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
+import { episodeStart } from "../runner/src/episodes";
 import { readCredentialUsage, type PlacedCredential } from "./run-fleet-credentials";
 import { EXHAUSTED_PCT, gateClassOf, newestByCredential, thresholdOf, thresholdsOf, usageHold } from "../runner/src/subscription-usage";
 import { Trajectory, writeMetaFile } from "../runner/src/trajectory";
@@ -145,8 +146,19 @@ export interface RosterSpec {
    */
   placedOn?: PlacedCredential;
   runId?: string;
+  /**
+   * The start, by the client's ids: a freeplay run's, or a hand-written
+   * roster's with no episode. A level episode's start is its id's
+   * (`episodeStart`) and a probe's its cell's, whatever the entry says.
+   */
   race?: number;
   class?: number;
+  /**
+   * The model chooses its own race and class (`--choose-start`; operator,
+   * 2026-11-15), in place of `race` and `class`: a freeplay run's only, and
+   * ignored on every other episode as they are.
+   */
+  chooseStart?: true;
   episodeMs?: number;
   /**
    * Run dimensions, both optional and both recorded in the run's
@@ -266,8 +278,15 @@ export interface Resolved {
   /** The credential the run takes (`RosterSpec.placedOn`); undefined on a hand-written roster. */
   placedOn: PlacedCredential | undefined;
   runId: string;
+  /** The effective start: the episode's where it fixes one (`episodeStart`), else the entry's, else Human Paladin. */
   race: number;
   class: number;
+  /** The model chooses its start instead: a fresh freeplay launch whose entry asked for it. */
+  chooseStart: boolean;
+  /** Where `race` and `class` came from, for the dry run. */
+  startFrom: "episode" | "file" | "entry" | "default";
+  /** The entry's own start where this launch does not use it (`ignoredStart`), for the dry run. */
+  startIgnored: string | undefined;
   /** Null when the episode watchdog is disabled outright. */
   episodeMs: number | null;
   objective: string | undefined;
@@ -630,8 +649,14 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       runId:
         s.runId ??
         `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}${stampedCompactWindow(compactWindow) !== undefined ? `-${slug(stampedCompactWindow(compactWindow)!)}` : ""}-${stamp}`,
-      race: s.race ?? 1,
-      class: s.class ?? 2,
+      // A level episode's start is its id's, whatever the entry says
+      // (operator, 2026-11-15); the entry's applies only where no episode fixes one.
+      race: episodeStart(s.episode)?.race ?? s.race ?? 1,
+      class: episodeStart(s.episode)?.class ?? s.class ?? 2,
+      chooseStart: s.chooseStart === true && s.episode === "freeplay" && s.campaignFile === undefined,
+      startFrom:
+        s.campaignFile !== undefined ? "file" : episodeStart(s.episode) !== undefined ? "episode" : s.race !== undefined || s.class !== undefined ? "entry" : "default",
+      startIgnored: s.campaignFile !== undefined ? undefined : ignoredStart(s, s.episode),
       // Precedence, fixed and tested: `watchdogs.episodeMs` wins over the
       // entry's own `episodeMs`, which wins over the roster default. They are
       // the same threshold under two names, and only the watchdog spelling can
@@ -757,6 +782,42 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
  * (`runner/src/run-flags.ts`, `SUPERVISOR_FLAGS`), and `run-argv.test.ts`
  * runs every lane's output through the runner's own parser.
  */
+/**
+ * An entry's own start (`race`, `class`, `chooseStart`) that a launch of this
+ * episode does not use, said in one phrase, or undefined when there is none
+ * or it applies. The keys are a freeplay start (operator, 2026-11-15): a
+ * level episode's start is its id's. A launch from a campaign file (a probe,
+ * a task episode) is not asked: its start is the file's, and the spec no
+ * longer holds the entry's. Pure; the dry run says it.
+ */
+export function ignoredStart(entry: Pick<RosterSpec, "race" | "class" | "chooseStart">, episode: string | undefined): string | undefined {
+  const own =
+    entry.chooseStart === true
+      ? "chooseStart"
+      : entry.race !== undefined || entry.class !== undefined
+        ? [entry.race !== undefined ? `race ${entry.race}` : null, entry.class !== undefined ? `class ${entry.class}` : null].filter((x) => x !== null).join(", ")
+        : undefined;
+  if (own === undefined) return undefined;
+  const fixed = episodeStart(episode);
+  if (fixed !== undefined) {
+    // The episode's own start, restated, is no start ignored.
+    if (entry.chooseStart !== true && (entry.race ?? fixed.race) === fixed.race && (entry.class ?? fixed.class) === fixed.class) return undefined;
+    return `the entry's ${own} is ignored: ${episode} fixes race ${fixed.race}, class ${fixed.class}`;
+  }
+  if (entry.chooseStart === true && episode !== "freeplay") return `the entry's chooseStart is ignored: only a freeplay run lets the model choose`;
+  return undefined;
+}
+
+/** The dry run's start phrase for one spec: what the run starts as, from where, and what of the entry's it ignores. */
+export function startLine(s: Pick<Resolved, "race" | "class" | "chooseStart" | "startFrom" | "startIgnored" | "episode">): string {
+  const what = s.chooseStart
+    ? "race and class chosen by the model at createSession (the entry's chooseStart)"
+    : `race ${s.race}, class ${s.class} fixed by ${
+        s.startFrom === "episode" ? `the episode (${s.episode})` : s.startFrom === "file" ? "its campaign file" : s.startFrom === "entry" ? "the entry" : "default"
+      }`;
+  return s.startIgnored === undefined ? what : `${what} — ${s.startIgnored}`;
+}
+
 export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // Identity — driver, model, account, effort, compactWindow, objective, wiki, race/class,
   // episode, the campaign file — is the resumed run's own and is never restated;
@@ -823,7 +884,9 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // The tier id rides its own flag (a string, never interpreted here).
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
   // Race and class only: the name is the model's, and the runner records it.
-  argv.push("--race", String(spec.race), "--class", String(spec.class));
+  // On a freeplay entry that lets the model choose, not even those.
+  if (spec.chooseStart) argv.push("--choose-start", "true");
+  else argv.push("--race", String(spec.race), "--class", String(spec.class));
   return [...argv, ...leashArgv(spec)];
 }
 
@@ -2832,7 +2895,7 @@ async function main(): Promise<void> {
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}` +
           (s.compactWindow !== undefined ? `, compact window ${s.compactWindow}` : "") +
           "\n" +
-          `   character named by the model at createSession; race ${s.race}, class ${s.class} fixed\n` +
+          `   character named by the model at createSession; ${startLine(s)}\n` +
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +
