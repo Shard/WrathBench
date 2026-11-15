@@ -104,6 +104,7 @@ try {
   // 3. Bind, as a client does: gossip, the home option, confirm.
   const result = await client.bindAtInnkeeper(firebrew, { timeout: 10_000 });
   log(`bindAtInnkeeper: ${JSON.stringify(result)}`);
+  if (!result.ok) fail(`bindAtInnkeeper answered ${result.status}: ${result.hint}`);
   const me = client.state.self.position?.value ?? fail("no self position");
   const d = Math.hypot(result.bindPoint.x - me.x, result.bindPoint.y - me.y);
   if (result.bindPoint.map !== 0 || d > 10) fail(`bind point ${JSON.stringify(result.bindPoint)} is ${d.toFixed(1)}y from the character on map ${me.map}`);
