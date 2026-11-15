@@ -48,7 +48,7 @@ import { createRenderer } from "../runner/viewer/snapshot";
 import { ALL_GROUPS, groupsFromEnv, type Groups } from "../runner/viewer/groups";
 import { ConfigStore } from "../runner/src/config-store";
 import { findChromium, launch, type Browser, type Page, type PageOptions } from "./shots/cdp";
-import { E90_DUNGEON_RUN, ENDED_RUN, LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
+import { E90_DUNGEON_RUN, ENDED_RUN, FREEPLAY_FRESH, LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
 import { describeReport, emptyState, publishPass, type ObjectStore } from "./publish-core";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -73,8 +73,8 @@ export interface RigOptions {
    * A preview series (`site.previewSeries`, `runner/src/site-settings.ts`) in
    * the rig's config store. Over the fixture it also stamps the runs with real
    * series, which the fixture's own stamp names none of: every run 0.5, and
-   * the program-loop e90 row and the live runs this series, so both sides
-   * of the selector have something to show.
+   * the program-loop e90 row, the live runs and one freeplay character this
+   * series, so both sides of the selector have something to show.
    */
   preview?: string;
   log?: (line: string) => void;
@@ -175,13 +175,13 @@ async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live
   };
 }
 
-/** The fixture's runs under real series (`RigOptions.preview`): `harness-0.5-…`, and `preview` for the program-loop e90 row and the live runs. */
+/** The fixture's runs under real series (`RigOptions.preview`): `harness-0.5-…`, and `preview` for the program-loop e90 row, the live runs and the fresh freeplay character. */
 function stampSeries(runsDir: string, preview: string): void {
   for (const id of readdirSync(runsDir)) {
     const path = join(runsDir, id, "meta.json");
     if (!existsSync(path)) continue;
     const meta = JSON.parse(readFileSync(path, "utf8")) as { harnessVersion?: string; comparability?: { harnessVersion?: string } };
-    const stamp = id === E90_DUNGEON_RUN || id.startsWith("fixture-live") ? `harness-${preview}-1-gfixture` : "harness-0.5-1-gfixture";
+    const stamp = id === E90_DUNGEON_RUN || id === FREEPLAY_FRESH || id.startsWith("fixture-live") ? `harness-${preview}-1-gfixture` : "harness-0.5-1-gfixture";
     meta.harnessVersion = stamp;
     if (meta.comparability !== undefined) meta.comparability.harnessVersion = stamp;
     writeFileSync(path, JSON.stringify(meta));

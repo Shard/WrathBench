@@ -496,8 +496,11 @@ to — so the publisher did not change and no new object was added.
 Three consequences worth stating rather than discovering:
 
 - The walk runs against the **unfiltered** results, never a tier or series
-  view. A character is durable across both, and resolving it against a filtered
-  set would silently shorten its history instead of saying it is short.
+  view. A character is durable across tiers, one begun before characters
+  stopped carrying across series may span two, and resolving it against a
+  filtered set would silently shorten its history instead of saying it is
+  short. The ladder's freeplay tab, by contrast, applies the series like every
+  tab (operator, 2026-11-15).
 - An attempt the snapshot published no track for contributes nothing to the
   curve and does not fail the page. The attempt list still names it.
 - The page costs one extra object per attempt on first open, fetched six at a
