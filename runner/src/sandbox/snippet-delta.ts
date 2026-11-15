@@ -22,6 +22,11 @@
  * failures and their hints are the `--- harness ---` block's, so a
  * background routine's activity is never said twice.
  *
+ * The same recorder latches a death's cause apart from the drain: the
+ * damage to us in the `DEATH_WINDOW_MS` before our health read zero and who
+ * landed the last hit (`takeDeath`), for the program loop's death wake
+ * (`wake.ts`), worded by the same `damageTaken`.
+ *
  * Every reading is one the HUD already makes off the cache (a party member
  * through `memberState`, chat through `formatChatLine`, a quest through
  * `questLabel`); the recorder adds no observation, only remembers when it
@@ -57,6 +62,25 @@ export const SNIPPET_DELTA = {
 
 export const SNIPPET_DELTA_HEADER = "--- since your last snippet ---";
 
+/**
+ * A death's cause, for the program loop's death wake (`wake.ts`): the damage
+ * taken in this many milliseconds before the character's health read zero.
+ * A constant, not a knob (operator delegated, 2026-11-15).
+ */
+export const DEATH_WINDOW_MS = 10_000;
+/** Hits to us kept for a death's window, at most: a bound, never reached by one fight's ten seconds. */
+const DEATH_HITS_KEPT = 200;
+
+/** The damage taken before the last death, latched as it happened (`SnippetDeltaRecorder.takeDeath`). JSON-safe. */
+export interface DeathCause {
+  /** The event time of the death, as the session record's `death` row has it. */
+  ts: number;
+  /** The source of the last hit before the death, by name; absent when no hit landed in the window. */
+  killer?: string;
+  /** Damage to us in the `DEATH_WINDOW_MS` before it, by source, as a snippet delta carries it. */
+  damage: SnippetDelta["damage"];
+}
+
 /** What one drain carries: JSON-safe, so it crosses the rpc as it is. */
 export interface SnippetDelta {
   /** Members with a transition since the last drain, in the group list's order. */
@@ -75,6 +99,8 @@ export interface SnippetDelta {
 /** What the recorder reads off the SDK's cache, and nothing more. */
 export interface SnippetDeltaState {
   selfGuid(): string | undefined;
+  /** Our own health as the player frame reads it; undefined until observed. */
+  health?(): number | undefined;
   level(): number | undefined;
   /** `state.group()`; undefined until any group packet. */
   group(): { inGroup: boolean; members: readonly GroupMemberLike[] } | undefined;
@@ -88,6 +114,8 @@ export interface SnippetDeltaState {
 export interface SnippetDeltaEvent {
   opcode: string;
   seq: number;
+  /** The event's time; a death's window is measured on it. */
+  ts?: number;
   data: unknown;
 }
 
@@ -144,16 +172,66 @@ export class SnippetDeltaRecorder {
   /** Level and quest log as the last drain left them; undefined until the first drain seeds them. */
   private levelBase: number | undefined;
   private questBase: Map<string, { complete: boolean; label: string }> | undefined;
+  /** Hits to us in the last `DEATH_WINDOW_MS`, oldest first: a death's cause. Apart from the drain's damage, which a snippet result owns. */
+  private recent: { ts: number; name: string; what: string; amount: number }[] = [];
+  /** The time of the event being read. */
+  private at = 0;
+  /** Whether our health has read zero since it last read above a ghost's one point (the stack's death rule). */
+  private dead = false;
+  private death: DeathCause | null = null;
 
   constructor(private readonly state: SnippetDeltaState) {}
 
   /** Read one event; call after the SDK's own fold has applied it. */
   observe(event: SnippetDeltaEvent): void {
     if (AMBIENT.test(event.opcode)) return;
+    this.at = typeof event.ts === "number" ? event.ts : Date.now();
     if (event.opcode === "SMSG_MESSAGECHAT") this.chatLine(event.data);
     else if (event.opcode === "SMSG_SPELLNONMELEEDAMAGELOG") this.spellHit(event.data);
     else if (event.opcode === "SMSG_ATTACKERSTATEUPDATE") this.swing(event.data);
+    this.readDeath();
     this.readMembers(event.seq);
+  }
+
+  /**
+   * The cause of the last death since the last call, or null; resets it. Its
+   * own latch, so the snippet result's drain neither takes nor is taken from.
+   */
+  takeDeath(): DeathCause | null {
+    const d = this.death;
+    this.death = null;
+    return d;
+  }
+
+  /** On the death itself (health read zero from a reading that was not): latch the window's hits, overwriting any earlier death's. */
+  private readDeath(): void {
+    const health = this.state.health?.();
+    if (health === undefined) return;
+    if (health > 1) {
+      this.dead = false;
+      return;
+    }
+    if (health !== 0 || this.dead) return;
+    this.dead = true;
+    const from = this.at - DEATH_WINDOW_MS;
+    const hits = this.recent.filter((h) => h.ts >= from);
+    const by = new Map<string, { total: number; hits: Map<string, { count: number; total: number }> }>();
+    for (const h of hits) {
+      const d = by.get(h.name) ?? { total: 0, hits: new Map() };
+      d.total += h.amount;
+      const k = d.hits.get(h.what) ?? { count: 0, total: 0 };
+      k.count++;
+      k.total += h.amount;
+      d.hits.set(h.what, k);
+      by.set(h.name, d);
+    }
+    const killer = hits.at(-1)?.name;
+    this.death = {
+      ts: this.at,
+      ...(killer !== undefined ? { killer } : {}),
+      damage: [...by].map(([name, d]) => ({ name, total: d.total, hits: [...d.hits].map(([what, k]) => ({ what, count: k.count, total: k.total })) })),
+    };
+    this.recent = [];
   }
 
   /** Everything latched since the last drain; resets it. */
@@ -243,6 +321,13 @@ export class SnippetDeltaRecorder {
 
   private took(source: string, what: string, amount: number): void {
     const name = this.state.nameOf(source) ?? "an unnamed unit";
+    if (amount > 0) {
+      this.recent.push({ ts: this.at, name, what, amount });
+      const from = this.at - DEATH_WINDOW_MS;
+      let drop = 0;
+      while (drop < this.recent.length && (this.recent[drop]!.ts < from || this.recent.length - drop > DEATH_HITS_KEPT)) drop++;
+      if (drop > 0) this.recent.splice(0, drop);
+    }
     let d = this.damage.get(name);
     if (d === undefined) {
       if (this.damage.size >= SNIPPET_DELTA.TRACKED_SOURCES) {
@@ -367,6 +452,21 @@ function hitLabel(h: { what: string; count: number }): string {
 }
 
 function damageLine(d: SnippetDelta): string | undefined {
+  const taken = damageTaken(d.damage, d.damageOther);
+  return taken === undefined ? undefined : `took ${taken.total}: ${taken.text}`;
+}
+
+/**
+ * Damage to us as the snippet delta words it, without its `took N: ` head:
+ * the three heaviest sources, each with its two heaviest kinds of hit, and
+ * the rest lumped. Undefined when nothing landed. Pure. Shared with the death
+ * wake (`wake.ts`), so the two read alike.
+ */
+export function damageTaken(
+  damage: SnippetDelta["damage"],
+  damageOther: SnippetDelta["damageOther"] = { sources: 0, total: 0 },
+): { total: number; text: string } | undefined {
+  const d = { damage, damageOther };
   const total = d.damage.reduce((n, s) => n + s.total, 0) + d.damageOther.total;
   if (total <= 0) return undefined;
   const sources = [...d.damage].filter((s) => s.total > 0).sort((a, b) => b.total - a.total || byText(a.name, b.name));
@@ -379,7 +479,7 @@ function damageLine(d: SnippetDelta): string | undefined {
   const restSources = sources.length - shown.length + d.damageOther.sources;
   const restTotal = sources.slice(SNIPPET_DELTA.DAMAGE_SOURCES).reduce((n, s) => n + s.total, 0) + d.damageOther.total;
   if (restSources > 0) shown.push(`+${restSources} more ${restTotal}`);
-  return `took ${total}: ${shown.join(", ")}`;
+  return { total, text: shown.join(", ") };
 }
 
 /**

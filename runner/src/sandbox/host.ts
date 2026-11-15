@@ -25,7 +25,7 @@ import type { CharacterRoster } from "@wrathbench/mcp/fanout";
 import type { PartySignal } from "@wrathbench/mcp/record";
 import type { RecordSignals, SessionRecord } from "../session-record";
 import type { ContextEvents } from "./signals";
-import type { SnippetDelta } from "./snippet-delta";
+import type { DeathCause, SnippetDelta } from "./snippet-delta";
 
 export { SANDBOX_FORWARDED_ENV, sandboxChildEnv, STATE_LOSS_RECOVERY } from "@wrathbench/mcp";
 export type { ActionsFlush, EvalLink, SandboxHostOptions, SnippetResult } from "@wrathbench/mcp";
@@ -148,5 +148,16 @@ export class SandboxHost extends StackSandboxHost {
   async snippetDelta(): Promise<SnippetDelta | null> {
     const drained = await this.drain("snippet_delta");
     return drained === null ? null : ((drained.value ?? null) as SnippetDelta | null);
+  }
+
+  /**
+   * The cause of the last death the child saw since the last call
+   * (`SnippetDeltaRecorder.takeDeath`): for the program loop's death wake.
+   * Destructive, and its own latch: the snippet delta's drain is untouched.
+   * Never spawns a child; null when none is running or nothing died.
+   */
+  async deathCause(): Promise<DeathCause | null> {
+    const drained = await this.drain("death_cause");
+    return drained === null ? null : ((drained.value ?? null) as DeathCause | null);
   }
 }

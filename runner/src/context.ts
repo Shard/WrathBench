@@ -715,7 +715,7 @@ const DURABILITY_LOW_FRACTION = 0.25;
  * item is above `DURABILITY_LOW_FRACTION` (the ordinary case costs nothing).
  * Broken first, then low, each in slot order.
  */
-function durabilityLine(inventory: SnapshotLike["inventory"]): string | undefined {
+export function durabilityLine(inventory: SnapshotLike["inventory"]): string | undefined {
   const broken: string[] = [];
   const low: string[] = [];
   for (const it of inventory ?? []) {

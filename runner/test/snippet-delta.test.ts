@@ -23,6 +23,7 @@ import { ReflectGate } from "../src/reflect";
 import { SecretRedactor } from "@wrathbench/mcp";
 import { SandboxHost, type SnippetResult } from "../src/sandbox/host";
 import {
+  DEATH_WINDOW_MS,
   SNIPPET_DELTA,
   SNIPPET_DELTA_HEADER,
   SnippetDeltaRecorder,
@@ -427,6 +428,125 @@ describe("the child latches it and the host drains it", () => {
     expect(d.chat).toEqual(["  [party] <Tankpartyb> wipe, run back"]);
     const again = (await host.snippetDelta())!;
     expect(renderSnippetDelta(again)).toBeUndefined();
+  });
+});
+
+describe("a death's cause, latched apart from the drain", () => {
+  /** Our own health and the event clock, both the test's to move. */
+  function dying() {
+    const w = { health: 300 as number | undefined, ts: 1_000_000 };
+    const names = new Map([["99", "Defias Evoker"], ["98", "Defias Miner"], ["97", "Defias Squallshaper"]]);
+    const rec = new SnippetDeltaRecorder({
+      selfGuid: () => ME,
+      health: () => w.health,
+      level: () => 19,
+      group: () => undefined,
+      memberUnit: () => undefined,
+      questLog: () => [],
+      nameOf: (guid) => names.get(guid),
+    });
+    let seq = 1;
+    const feed = (opcode: string, data: unknown = {}, after = 0): void => {
+      w.ts += after;
+      rec.observe({ opcode, seq: seq++, ts: w.ts, data });
+    };
+    const die = (after = 0): void => {
+      w.health = 0;
+      feed("SMSG_UPDATE_OBJECT", {}, after);
+    };
+    return { w, rec, feed, die };
+  }
+
+  test("the hits of the window before the health read zero, by source, and the last hitter as the killer", () => {
+    const t = dying();
+    // Outside the window: long before the death.
+    t.feed("SMSG_SPELLNONMELEEDAMAGELOG", spell("97", "Lightning Bolt", 80));
+    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 30), DEATH_WINDOW_MS + 1_000);
+    t.feed("SMSG_SPELLNONMELEEDAMAGELOG", spell("99", "Fireball", 120), 2_000);
+    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 0, true), 1_000);
+    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 25), 1_000);
+    t.die(500);
+    expect(t.rec.takeDeath()).toEqual({
+      ts: t.w.ts,
+      killer: "Defias Miner",
+      damage: [
+        { name: "Defias Miner", total: 55, hits: [{ what: "melee", count: 2, total: 55 }] },
+        { name: "Defias Evoker", total: 120, hits: [{ what: "Fireball", count: 1, total: 120 }] },
+      ],
+    });
+    // Taken once.
+    expect(t.rec.takeDeath()).toBeNull();
+  });
+
+  test("a death is latched once, not on every event while dead or a ghost; a ghost's one point is still dead", () => {
+    const t = dying();
+    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 25));
+    t.die(1_000);
+    expect(t.rec.takeDeath()).not.toBeNull();
+    t.feed("SMSG_UPDATE_OBJECT", {}, 1_000);
+    t.w.health = 1;
+    t.feed("SMSG_UPDATE_OBJECT", {}, 1_000);
+    expect(t.rec.takeDeath()).toBeNull();
+    // Back to life, then dead again: a new death.
+    t.w.health = 150;
+    t.feed("SMSG_UPDATE_OBJECT", {}, 60_000);
+    t.feed("SMSG_SPELLNONMELEEDAMAGELOG", spell("99", "Fireball", 150), 1_000);
+    t.die(100);
+    expect(t.rec.takeDeath()).toMatchObject({ killer: "Defias Evoker", damage: [{ name: "Defias Evoker", total: 150 }] });
+  });
+
+  test("a death with no hit in its window overwrites the one before, so an old cause is never told for it", () => {
+    const t = dying();
+    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 25));
+    t.die(1_000);
+    t.w.health = 300;
+    t.feed("SMSG_UPDATE_OBJECT", {}, 60_000);
+    // A fall: no hit, and the latch from the first death never taken.
+    t.die(60_000);
+    expect(t.rec.takeDeath()).toEqual({ ts: t.w.ts, damage: [] });
+  });
+
+  test("the snippet result's drain neither takes the cause nor loses its own damage to it", () => {
+    const t = dying();
+    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 25));
+    t.die(1_000);
+    expect(t.rec.drain().damage).toEqual([{ name: "Defias Miner", total: 25, hits: [{ what: "melee", count: 1, total: 25 }] }]);
+    expect(t.rec.takeDeath()).toMatchObject({ killer: "Defias Miner" });
+  });
+
+  test("through the real child: the host's death cause is the latch, and the snippet delta still has its damage", async () => {
+    const dir = tempDir("wrathbench-death-child-");
+    const host = new SandboxHost({
+      moduleUrl: "http://worldserver:8086",
+      token: "test-token",
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      snippetTimeoutMs: 5_000,
+      pingGraceMs: 1_000,
+    });
+    hosts.push(host);
+    const res = await host.evalSnippet(`
+      state.seedSelf({ guid: "7", name: "Magepartyd" });
+      globalThis.seq = 1;
+      globalThis.feed = (opcode, opcodeId, data) =>
+        events.ingest(JSON.stringify({ seq: seq++, opcode, opcodeId, ts: Date.now(), data }));
+      feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "create", guid: "99", objectType: "unit",
+        pos: { x: 6, y: 8, z: 0, o: 0 }, fields: { health: 500, maxHealth: 500, level: 18 } }] });
+      feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "values", guid: "7", fields: { health: 40, maxHealth: 400 } }] });
+      "fed"
+    `);
+    expect(res.ok).toBe(true);
+    expect(await host.deathCause()).toBeNull();
+    await host.evalSnippet(`
+      feed("SMSG_ATTACKERSTATEUPDATE", 0x14a, { hitInfo: 0, attackerGuid: "99", victimGuid: "7", damage: 40, overkill: 3, absorb: 0, resist: 0, blocked: 0, victimState: 1, miss: false, crit: false });
+      feed("SMSG_UPDATE_OBJECT", 0xa9, { blocks: 1, objects: [{ update: "values", guid: "7", fields: { health: 0 } }] });
+      "died"
+    `);
+    const cause = (await host.deathCause())!;
+    expect(cause.damage.map((d) => d.total)).toEqual([40]);
+    // Named as the snippet delta names a source (this fixture serves no name, so its fallback).
+    expect(cause.killer).toBe(cause.damage[0]!.name);
+    expect(await host.deathCause()).toBeNull();
+    expect((await host.snippetDelta())!.damage.map((d) => d.total)).toEqual([40]);
   });
 });
 

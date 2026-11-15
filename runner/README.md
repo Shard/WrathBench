@@ -1353,7 +1353,15 @@ was refused, `[Alfa, Bravo]` after the status, as the stack's hint lines
 do), moves that replaced one another, `wake` calls, what
 changed for the character, and the routines' last console entries (at most
 20, in at most 2,000 characters, since one log call can print an object over
-many lines). A routine's error or returned value is shown whole once; a later
+many lines). Two lines are on the failure path only, for a single character:
+a wake that carries a death says `last death: killed by <last hitter>, took
+N in the 10s before: …`, from a latch the child keeps apart from the snippet
+delta's drain (`SnippetDeltaRecorder.takeDeath`, `SandboxHost.deathCause`)
+and worded by the same `damageTaken`; and a block no HUD rides with (a
+`yield` result on claude-code and codex, `hud: false`) says
+`character: ghost, died 5m10s ago` (or dead) and the HUD's own durability
+line when worn gear is broken or low. A turn's message and every fixed-loop
+request carry a fresh HUD, so their blocks leave the condition out. A routine's error or returned value is shown whole once; a later
 routine line refers to it (`(value shown before)`). The stack's program host
 keeps that ledger for its own tool results and the wake alike; a wake marks
 what it showed only when its block stays in the conversation (a `yield`

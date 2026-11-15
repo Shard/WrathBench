@@ -1031,6 +1031,8 @@ async function main(): Promise<void> {
     ...(session !== undefined ? { session } : {}),
     ...(config.fanout !== undefined ? { fanout: { maxCharacters: config.fanout.characters }, signals: fanoutSignals } : {}),
   });
+  // A single character's death wake says what killed it, from the child's latch (`wake.ts`, `deathLine`).
+  if (programWake !== undefined && config.fanout === undefined) programWake.useDeathCause(() => sandbox.deathCause());
   /** A fan-out run's roster, on that sandbox: its seats, their leases and their records (`fanout-run.ts`). */
   const roster: CharacterRoster | undefined =
     config.fanout !== undefined && fanoutSignals !== undefined

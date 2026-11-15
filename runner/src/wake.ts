@@ -40,6 +40,17 @@
  * console lines. No advice and no judgement of stalls: "last action 3s ago"
  * and "no routine is running" are the two stall facts.
  *
+ * Two lines are on the failure path only (operator delegated, 2026-11-15),
+ * so a character that never dies and keeps its gear sees neither. A wake that
+ * carries a death says what landed the last hit and the damage taken in the
+ * ten seconds before it (`deathLine`, in the snippet delta's words). And a
+ * `yield`'s block, which no HUD follows on a CLI driver, says when the
+ * character is dead or a ghost and for how long, and the HUD's own
+ * durability line when worn gear is broken or low (`conditionLines`); where
+ * a fresh HUD rides with the block (a turn's message, any fixed-loop
+ * request) it would say it twice, so it is left out there. At fan-out
+ * neither is shown.
+ *
  * Every sleep writes one `wake` record (`via`, `turn`, `fired`, `sleptMs`,
  * `maxMs`), every fact a `deploy`, `routine` or `program_error` record as it
  * happens, and every wake the repeats it counted, so `bun wb inspect requests`
@@ -48,8 +59,9 @@
  */
 
 import { renderRoutines, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
-import { renderNotices } from "./context";
+import { durabilityLine, PLAYER_FLAGS_GHOST, renderNotices, type SnapshotLike } from "./context";
 import type { HarnessNotice } from "./sandbox/host";
+import { damageTaken, DEATH_WINDOW_MS, type DeathCause } from "./sandbox/snippet-delta";
 
 /** The program loop's workspace, in the run directory: files, versions, registry and memory. */
 export const PROGRAM_DIR = "program";
@@ -356,6 +368,8 @@ export interface WakeProgress {
 
 /** Everything a wake block says, as data. */
 export interface WakeView {
+  /** The failure-path lines under what changed: the last death's cause, the character's condition (`deathLine`, `conditionLines`). */
+  condition?: readonly string[] | undefined;
   /** This run's wake count, from 1. */
   n: number;
   sleptMs: number;
@@ -511,6 +525,7 @@ export function renderWake(v: WakeView): string {
     parts.push(`quests completed ${p.quests}`, `deaths ${p.deaths}`);
     lines.push(`since you slept: ${parts.join(" · ")}`);
   }
+  if (v.condition !== undefined) lines.push(...v.condition);
 
   if (v.facts.factsDropped > 0) lines.push(`${v.facts.factsDropped} older program events were not kept`);
 
@@ -626,7 +641,18 @@ export interface WakeProgram {
 
 /** A state sample, as far as a wake reads it. */
 export interface WakeSample {
-  self?: { level?: { value?: unknown } } | null | undefined;
+  self?:
+    | {
+        level?: { value?: unknown };
+        /** The player frame's `{ current, max }`: zero is dead. */
+        health?: { value?: unknown };
+        /** Read for `playerFlags`, the ghost bit. */
+        fields?: Record<string, { value?: unknown } | undefined>;
+      }
+    | null
+    | undefined;
+  /** Worn and carried items, as the HUD's durability line reads them. */
+  inventory?: SnapshotLike["inventory"];
   xp?: { value?: unknown } | null | undefined;
   observation?: { connected?: boolean } | undefined;
   /** A fan-out run's sample: each character's level and whether its stream is open (the loop's digests). */
@@ -657,6 +683,13 @@ export interface WakeSleepOptions {
   /** The watchdogs' idle clock, held while asleep (`Watchdogs.noteAsleep`). */
   idle?: { noteAsleep(): void; noteAwake(): void } | undefined;
   /**
+   * Whether a fresh HUD rides with the block: a turn's message on every
+   * driver, and on the fixed loop the request right after a `yield` result.
+   * Only a block without one says the character's condition (`conditionLines`);
+   * absent reads as without.
+   */
+  hud?: boolean | undefined;
+  /**
    * Whether the block stays in the model's conversation: a `yield` result
    * does, and so does a codex turn's message; the fixed loop's turn-end
    * message is never kept. Only a kept block marks the routine errors and
@@ -685,6 +718,10 @@ export class ProgramWake {
   private readonly rowsShown = new Map<string, RoutineRow>();
   /** Restarts the program was blamed for: each counts toward `snippet-runaway` (`takeBlamedRestarts`). */
   private blamed = 0;
+  /** The last death's time, of a single character (`onDeath`): how long it has been dead. */
+  private lastDeathTs: number | undefined;
+  /** The child's latched cause of the last death (`SandboxHost.deathCause`), once the sandbox exists (`useDeathCause`). */
+  private deathCause: (() => Promise<DeathCause | null>) | undefined;
   private readonly now: () => number;
   private readonly sleepFn: (ms: number) => Promise<void>;
 
@@ -732,8 +769,14 @@ export class ProgramWake {
     );
   }
 
+  /** Where a death wake reads what killed the character: the sandbox, made after this. Single character only. */
+  useDeathCause(read: () => Promise<DeathCause | null>): void {
+    this.deathCause = read;
+  }
+
   /** A `death` row of the session record: at fan-out, of `character`'s. */
   onDeath(ts: number, character?: string): void {
+    if (character === undefined) this.lastDeathTs = Math.max(ts, this.lastDeathTs ?? -Infinity);
     this.waker.note(
       character === undefined
         ? { key: "died", ts, text: "your character died", inContext: true }
@@ -827,6 +870,26 @@ export class ProgramWake {
     return `${block}\n\n${this.o.trajectory.scrub(renderNotices(notices))}`;
   }
 
+  /**
+   * The cause of the death this wake carries, as the child latched it, or
+   * nothing: a latch from another death than the record's last (a child
+   * restarted between) is not this one's cause. Taken only by a death wake,
+   * so a wake with none leaves it for the one the death row brings.
+   */
+  private async deathLines(): Promise<string[]> {
+    if (this.deathCause === undefined) return [];
+    let cause: DeathCause | null;
+    try {
+      cause = await this.deathCause();
+    } catch {
+      return [];
+    }
+    if (cause === null) return [];
+    if (this.lastDeathTs !== undefined && Math.abs(cause.ts - this.lastDeathTs) > DEATH_MATCH_MS) return [];
+    const line = deathLine(cause);
+    return line === undefined ? [] : [line];
+  }
+
   /** Restarts the program was blamed for since the last call. */
   takeBlamedRestarts(): number {
     const n = this.blamed;
@@ -895,6 +958,10 @@ export class ProgramWake {
       quests: Math.max(0, after.counts.quests - before.counts.quests),
       deaths: Math.max(0, after.counts.deaths - before.counts.deaths),
     };
+    const condition = [
+      ...(reasons.some((r) => r.key === "died") || progress.deaths > 0 ? await this.deathLines() : []),
+      ...(o.hud === true ? [] : conditionLines(this.lastSample, this.lastDeathTs, now)),
+    ];
     const block = this.o.trajectory.scrub(
       renderWake({
         n: this.n,
@@ -907,6 +974,7 @@ export class ProgramWake {
         progress,
         now,
         shown: program.shownDetails(),
+        ...(condition.length > 0 ? { condition } : {}),
       }),
     );
     if (o.kept) program.markShown(facts.routines);
@@ -925,6 +993,45 @@ export class ProgramWake {
     for (const r of facts.repeats) this.o.trajectory.append({ t: "program_error", kind: "repeat", signature: r.signature, count: r.count });
     return { block, fired: woke.fired, sleptMs: woke.sleptMs };
   }
+}
+
+/** How far a latched death's time may sit from the record's death row and still be that death. */
+const DEATH_MATCH_MS = 30_000;
+/** A death line's longest, in characters; past it, cut and ended with "…". */
+const DEATH_LINE_CHARS = 240;
+
+/**
+ * "last death: killed by Burly Rockjaw Trogg, took 412 in the 10s before:
+ * Burly Rockjaw Trogg 300 (melee ×4), …", the damage in the snippet delta's
+ * own words (`damageTaken`), or undefined when no hit landed in the window
+ * (a fall, a drowning). Pure.
+ */
+export function deathLine(cause: DeathCause): string | undefined {
+  const taken = damageTaken(cause.damage);
+  if (cause.killer === undefined || taken === undefined) return undefined;
+  const line = `last death: killed by ${cause.killer}, took ${taken.total} in the ${Math.round(DEATH_WINDOW_MS / 1000)}s before: ${taken.text}`;
+  return line.length > DEATH_LINE_CHARS ? `${line.slice(0, DEATH_LINE_CHARS - 1).trimEnd()}…` : line;
+}
+
+/**
+ * The character's condition when something is wrong, in the HUD's own
+ * reading, or nothing: "character: ghost, died 10m09s ago" (or dead) off the
+ * player frame's health and the ghost bit, and the HUD's durability line
+ * when worn gear is broken or low (`durabilityLine`). Nothing at fan-out,
+ * whose sample is the characters' digests. Pure.
+ */
+export function conditionLines(sample: WakeSample | null, diedAt: number | undefined, now: number): string[] {
+  if (sample === null || sample.seats !== undefined) return [];
+  const out: string[] = [];
+  const self = sample.self ?? undefined;
+  const health = self?.health?.value as { current?: unknown } | null | undefined;
+  const flags = self?.fields?.["playerFlags"]?.value;
+  const ghost = typeof flags === "number" && (flags & PLAYER_FLAGS_GHOST) !== 0;
+  const dead = health !== null && typeof health === "object" && health.current === 0;
+  if (ghost || dead) out.push(`character: ${ghost ? "ghost" : "dead"}${diedAt !== undefined ? `, died ${sleptWords(now - diedAt)} ago` : ""}`);
+  const worn = durabilityLine(sample.inventory);
+  if (worn !== undefined) out.push(worn);
+  return out;
 }
 
 /** The trajectory record of one program fact: `deploy`, `routine` or `program_error`. */
