@@ -16,6 +16,9 @@ import { chosenStartNote, configFromArgs } from "../src/run";
 import { isValidStart, VALID_STARTS } from "../src/starts";
 import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "@wrathbench/mcp";
+import { mkdirSync } from "node:fs";
+import { Trajectory } from "../src/trajectory";
+import { readRun } from "../viewer/runs";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -190,3 +193,22 @@ describe("the note reaches the snippet's result", () => {
     expect((await hostWith(chosenStartNote).evalSnippet("40 + 2")).notes ?? []).toEqual([]);
   }, 30_000);
 });
+
+describe("what a reader shows of a chosen start", () => {
+  test("nothing until the character is seen, then what it chose", () => {
+    const runsDir = tempDir("wb-start-view-");
+    const runId = "fleet-chooser-freeplay-x-20261115";
+    const dir = join(runsDir, runId);
+    mkdirSync(dir, { recursive: true });
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({ runId, driver: "stub", model: "x/chooser", episode: "freeplay", chooseStart: true });
+    traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
+    // The placeholder is never shown as the run's start.
+    expect(readRun(runsDir, runId)).toMatchObject({ race: null, class: null, characterLabel: null });
+    traj.setCharacter(runId, "Brannoc");
+    traj.setStart(runId, 6, 7);
+    expect(readRun(runsDir, runId)).toMatchObject({ race: 6, class: 7, characterLabel: "Tauren Shaman" });
+    traj.close();
+  });
+});
+
