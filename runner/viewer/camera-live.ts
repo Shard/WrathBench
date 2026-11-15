@@ -1,26 +1,26 @@
 /**
  * A run's newest camera frame, for the private viewer's live still.
  *
- * The camera writes stills while a run plays (`camera/frames/<seq>.jpg`) and
- * appends a line per still to `camera/frames.jsonl`. Frames are never
- * published (`docs/PUBLIC-DASHBOARD.md`, "Camera video ships; frames never
- * do"): this file is the only reader of either, a private handle serves the
- * newest frame and nothing else, and a public handle has no such route at all.
+ * The camera writes stills while a run plays (`camera/frames/000042.jpg`, the
+ * seq zero-padded to six digits by `frameFile` in `infra/camera/layout.ts`,
+ * the one place the name is made) and appends a line per still to
+ * `camera/frames.jsonl`. Frames are never published (`docs/PUBLIC-DASHBOARD.md`,
+ * "Camera video ships; frames never do"): in the viewer this file is the only
+ * reader of either, a private handle serves the newest frame and nothing else,
+ * and a public handle has no such route at all.
  *
  * The index grows by a line every few seconds for as long as the run plays, so
  * only its tail is read: the last `TAIL_BYTES`, the newest complete line that
- * reads, and the frame its `seq` names. The path is built from the number and
- * never taken from the line, and every step (the run, `camera/`, the index,
- * `frames/`, the file) is a plain entry under `lstat`, opened without following
- * a link, as `camera.ts` does for clips.
+ * reads, and the frame its `seq` names. The path is built from the number by
+ * that same `frameFile` and never taken from the line, and every step (the run,
+ * `camera/`, the index, `frames/`, the file) is a plain entry under `lstat`,
+ * opened without following a link, as `camera.ts` does for clips.
  */
 
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
+import { FRAMES_DIR, FRAMES_INDEX, frameFile } from "../../infra/camera/layout";
 import { cameraDir, isoOrNull, plain } from "./camera";
-
-export const FRAMES_INDEX = "frames.jsonl";
-export const FRAMES_DIR = "frames";
 
 /**
  * How much of the index's end is read. A line is about 100 bytes, so this holds
@@ -78,7 +78,7 @@ export function tailLines(path: string, bytes = TAIL_BYTES): string[] {
   }
 }
 
-/** One index line, checked: a whole `seq`, an ISO time, and a `file` that is that frame's own when it is there at all. */
+/** One index line, checked: a whole `seq`, an ISO time, and a `file` that is that frame's own (`frameFile(seq)`) when it is there at all. */
 export function readIndexLine(line: string): LatestFrame | null {
   let v: unknown;
   try {
@@ -91,7 +91,7 @@ export function readIndexLine(line: string): LatestFrame | null {
   if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0) return null;
   const t = isoOrNull(v["t"]);
   if (t === null) return null;
-  if (v["file"] !== undefined && v["file"] !== `${FRAMES_DIR}/${seq}.jpg`) return null;
+  if (v["file"] !== undefined && v["file"] !== frameFile(seq)) return null;
   return { seq, t };
 }
 
@@ -111,7 +111,7 @@ export function latestFrame(runsDir: string, runId: string): (LatestFrame & { fi
   for (const line of lines) {
     const hit = readIndexLine(line);
     if (hit === null) continue;
-    const file = join(frames, `${hit.seq}.jpg`);
+    const file = join(dir, frameFile(hit.seq));
     if (plain(file, "file") !== null) return { ...hit, file };
   }
   return null;
@@ -147,10 +147,13 @@ export function latestFrameRoute(runId: string, kind: "jpg" | "json"): string {
 const NO_STORE = "no-store";
 
 /**
- * The private routes: `/camera/latest` is `{runId, seq, t}`, and
+ * The private routes: `/camera/latest` is `{runId, seq, t}`, or `null` when
+ * the run has no frame (the run page and the live map ask on every live run,
+ * filmed or not, and a 404 is a console error on each), and
  * `/camera/latest.jpg` the frame itself with the same two facts in
- * `x-camera-seq` and `x-camera-time`. Both are `no-store`: the newest frame is
- * a different picture every few seconds. Null for any other path.
+ * `x-camera-seq` and `x-camera-time`, a 404 when there is none. All are
+ * `no-store`: the newest frame is a different picture every few seconds. Null
+ * for any other path.
  */
 export function latestFrameResponse(req: Request, runsDir: string, runId: string, rest: string): Response | null {
   if (rest !== "/camera/latest" && rest !== "/camera/latest.jpg") return null;
@@ -160,12 +163,12 @@ export function latestFrameResponse(req: Request, runsDir: string, runId: string
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": NO_STORE },
     });
   const frame = latestFrame(runsDir, runId);
-  if (frame === null) return missing();
   if (rest === "/camera/latest") {
-    return new Response(JSON.stringify({ runId, seq: frame.seq, t: frame.t }), {
+    return new Response(JSON.stringify(frame === null ? null : { runId, seq: frame.seq, t: frame.t }), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": NO_STORE },
     });
   }
+  if (frame === null) return missing();
   const bytes = readFrame(frame.file);
   if (bytes === null) return missing();
   const head = req.method.toUpperCase() === "HEAD";

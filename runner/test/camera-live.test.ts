@@ -8,7 +8,8 @@
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { frameFile } from "../../infra/camera/layout";
 import { createApi } from "../viewer/api";
 import type { LatestFrameResponse } from "../viewer/api-types";
 import { latestFrame, readIndexLine, tailLines, TAIL_BYTES } from "../viewer/camera-live";
@@ -25,7 +26,7 @@ interface Layout {
 
 const iso = (s: number): string => new Date(Date.parse("2026-11-15T03:00:00Z") + s * 1000).toISOString();
 const line = (seq: number, over: Record<string, unknown> = {}): string =>
-  `${JSON.stringify({ seq, t: iso(seq * 10), file: `frames/${seq}.jpg`, kind: "interval", ...over })}\n`;
+  `${JSON.stringify({ seq, t: iso(seq * 10), file: frameFile(seq), kind: "interval", ...over })}\n`;
 
 /** A live run with a camera: frames 1..n on disk and a line for each. */
 function layout(n = 3): Layout {
@@ -40,7 +41,7 @@ function layout(n = 3): Layout {
 }
 
 function frame(cam: string, seq: number, onDisk = true): void {
-  if (onDisk) copyFileSync(STILL, join(cam, "frames", `${seq}.jpg`));
+  if (onDisk) copyFileSync(STILL, join(cam, frameFile(seq)));
   appendFileSync(join(cam, "frames.jsonl"), line(seq));
 }
 
@@ -54,9 +55,21 @@ const get = (h: (req: Request) => Promise<Response>, path: string, method = "GET
 describe("the newest frame", () => {
   test("is the index's last line, with the frame its seq names", () => {
     const l = layout(3);
-    expect(latestFrame(l.runsDir, RUN)).toEqual({ seq: 3, t: iso(30), file: join(l.cam, "frames", "3.jpg") });
+    expect(latestFrame(l.runsDir, RUN)).toEqual({ seq: 3, t: iso(30), file: join(l.cam, frameFile(3)) });
     frame(l.cam, 4);
     expect(latestFrame(l.runsDir, RUN)?.seq).toBe(4);
+  });
+
+  test("is found under the name the camera writes: the seq zero-padded to six digits", () => {
+    // Spelled out, not built: this is the shape on disk in every filmed run.
+    const l = layout(0);
+    copyFileSync(STILL, join(l.cam, "frames", "000868.jpg"));
+    appendFileSync(join(l.cam, "frames.jsonl"), `${JSON.stringify({ seq: 868, t: iso(8680), file: "frames/000868.jpg", kind: "interval" })}\n`);
+    expect(latestFrame(l.runsDir, RUN)).toEqual({ seq: 868, t: iso(8680), file: join(l.cam, "frames", "000868.jpg") });
+    // An unpadded file beside it is not that frame.
+    copyFileSync(STILL, join(l.cam, "frames", "869.jpg"));
+    appendFileSync(join(l.cam, "frames.jsonl"), `${JSON.stringify({ seq: 869, t: iso(8690), kind: "interval" })}\n`);
+    expect(latestFrame(l.runsDir, RUN)?.seq).toBe(868);
   });
 
   test("is none for an empty index, no index, no frames directory or no camera", () => {
@@ -78,7 +91,7 @@ describe("the newest frame", () => {
 
   test("passes over a last line cut short by a writer mid-append", () => {
     const l = layout(3);
-    copyFileSync(STILL, join(l.cam, "frames", "4.jpg"));
+    copyFileSync(STILL, join(l.cam, frameFile(4)));
     appendFileSync(join(l.cam, "frames.jsonl"), line(4).slice(0, 25));
     expect(latestFrame(l.runsDir, RUN)?.seq).toBe(3);
     // Finished, even before its newline, it is the newest.
@@ -90,8 +103,8 @@ describe("the newest frame", () => {
     const l = layout(2);
     frame(l.cam, 3, false);
     expect(latestFrame(l.runsDir, RUN)?.seq).toBe(2);
-    rmSync(join(l.cam, "frames", "2.jpg"));
-    rmSync(join(l.cam, "frames", "1.jpg"));
+    rmSync(join(l.cam, frameFile(2)));
+    rmSync(join(l.cam, frameFile(1)));
     expect(latestFrame(l.runsDir, RUN)).toBeNull();
   });
 
@@ -111,9 +124,11 @@ describe("the newest frame", () => {
     expect(readIndexLine(line(5).trimEnd())).toEqual({ seq: 5, t: iso(50) });
     expect(readIndexLine(JSON.stringify({ seq: 5, t: iso(50) }))).toEqual({ seq: 5, t: iso(50) });
     for (const bad of [
-      line(5, { file: "frames/6.jpg" }),
+      line(5, { file: frameFile(6) }),
+      // The unpadded name is not the one the camera writes.
+      line(5, { file: "frames/5.jpg" }),
       line(5, { file: "../../meta.json" }),
-      line(5, { file: "frames/../5.jpg" }),
+      line(5, { file: "frames/../000005.jpg" }),
       line(5, { seq: "5" }),
       line(5, { seq: -1 }),
       line(5, { seq: 1.5 }),
@@ -149,14 +164,24 @@ describe("the private routes", () => {
     expect((await head.arrayBuffer()).byteLength).toBe(0);
   });
 
-  test("are a 404 for a run with no frame, never a fault", async () => {
-    const l = layout(0);
-    for (const p of ["latest", "latest.jpg"]) {
-      const res = await get(handle(l), `/api/run/${RUN}/camera/${p}`);
-      expect(res.status, p).toBe(404);
-      expect(res.headers.get("cache-control"), p).toBe("no-store");
+  test("for a run with no frame: null for its seq and time, a 404 for the picture, never a fault", async () => {
+    // Asked on every live run's page, filmed or not: no frame is an answer, not a console error.
+    for (const l of [layout(0), (() => {
+      const bare = layout(0);
+      rmSync(bare.cam, { recursive: true });
+      return bare;
+    })()]) {
+      const meta = await get(handle(l), `/api/run/${RUN}/camera/latest`);
+      expect(meta.status).toBe(200);
+      expect(await meta.json()).toBeNull();
+      expect(meta.headers.get("cache-control")).toBe("no-store");
+      const pic = await get(handle(l), `/api/run/${RUN}/camera/latest.jpg`);
+      expect(pic.status).toBe(404);
+      expect(pic.headers.get("cache-control")).toBe("no-store");
     }
-    expect((await get(handle(l), `/api/run/no-such-run/camera/latest.jpg`)).status).toBe(404);
+    // A run that is not there is still not there.
+    const l = layout(0);
+    for (const p of ["latest", "latest.jpg"]) expect((await get(handle(l), `/api/run/no-such-run/camera/${p}`)).status, p).toBe(404);
   });
 
   test("serve no other frame, by name or by any path", async () => {
@@ -165,6 +190,7 @@ describe("the private routes", () => {
     for (const path of [
       `/api/run/${RUN}/camera/1.jpg`,
       `/api/run/${RUN}/camera/frames/1.jpg`,
+      `/api/run/${RUN}/camera/frames/000001.jpg`,
       `/api/run/${RUN}/camera/latest/../frames/1.jpg`,
       `/api/run/${RUN}/camera/%2e%2e/camera/frames/1.jpg`,
       `/api/run/${RUN}/camera/frames%2F1.jpg`,
@@ -184,15 +210,15 @@ describe("the private routes", () => {
     writeFileSync(join(outside, "secret.jpg"), "not for the viewer");
     const cases: ((l: Layout) => void)[] = [
       (l) => {
-        rmSync(join(l.cam, "frames", "3.jpg"));
-        symlinkSync(join(outside, "secret.jpg"), join(l.cam, "frames", "3.jpg"));
-        rmSync(join(l.cam, "frames", "2.jpg"));
-        rmSync(join(l.cam, "frames", "1.jpg"));
+        rmSync(join(l.cam, frameFile(3)));
+        symlinkSync(join(outside, "secret.jpg"), join(l.cam, frameFile(3)));
+        rmSync(join(l.cam, frameFile(2)));
+        rmSync(join(l.cam, frameFile(1)));
       },
       (l) => {
         const real = join(outside, `frames-${Math.random()}`);
         mkdirSync(real);
-        copyFileSync(STILL, join(real, "3.jpg"));
+        copyFileSync(STILL, join(real, basename(frameFile(3))));
         rmSync(join(l.cam, "frames"), { recursive: true });
         symlinkSync(real, join(l.cam, "frames"));
       },
@@ -205,7 +231,7 @@ describe("the private routes", () => {
       (l) => {
         const real = join(outside, `camera-${Math.random()}`);
         mkdirSync(join(real, "frames"), { recursive: true });
-        copyFileSync(STILL, join(real, "frames", "3.jpg"));
+        copyFileSync(STILL, join(real, frameFile(3)));
         copyFileSync(join(l.cam, "frames.jsonl"), join(real, "frames.jsonl"));
         rmSync(l.cam, { recursive: true });
         symlinkSync(real, l.cam);
@@ -215,9 +241,9 @@ describe("the private routes", () => {
       const l = layout(3);
       link(l);
       expect(latestFrame(l.runsDir, RUN), `case ${i}`).toBeNull();
-      for (const p of ["latest", "latest.jpg"]) {
-        expect((await get(handle(l), `/api/run/${RUN}/camera/${p}`)).status, `case ${i} ${p}`).toBe(404);
-      }
+      // No frame is reachable: none named, and no picture served.
+      expect(await (await get(handle(l), `/api/run/${RUN}/camera/latest`)).json(), `case ${i}`).toBeNull();
+      expect((await get(handle(l), `/api/run/${RUN}/camera/latest.jpg`)).status, `case ${i}`).toBe(404);
     }
   });
 });

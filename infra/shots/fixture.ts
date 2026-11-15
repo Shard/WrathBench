@@ -65,6 +65,7 @@ import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
 import { SESSIONS_DIR } from "../../runner/src/run-reader";
 import { sessionDirOf } from "../../runner/src/session-record";
 import { Trajectory } from "../../runner/src/trajectory";
+import { frameFile } from "../camera/layout";
 import { taskDefinition, taskHash } from "../../runner/src/task-episodes";
 
 export const LIVE_RUN = "fixture-live";
@@ -622,9 +623,9 @@ function writeCamera(runsDir: string, runId: string, from: number, to: number, m
 const LIVE_FRAME_MS = 10_000;
 
 /**
- * A camera's stills while a run plays: `camera/frames/<seq>.jpg` and a line
- * each in `camera/frames.jsonl`, the last few up to `now`, each the synthetic
- * test pattern (`runner/test/fixtures/camera/poster.jpg`). Only the private
+ * A camera's stills while a run plays: `camera/frames/000042.jpg` (the
+ * camera's own `frameFile`) and a line each in `camera/frames.jsonl`, the last
+ * few up to `now`, each the synthetic test pattern (`runner/test/fixtures/camera/poster.jpg`). Only the private
  * viewer serves the newest of them, so `meta.json` is left alone and the
  * public snapshot stays what it was. Returns the ticker that keeps taking them.
  */
@@ -637,8 +638,8 @@ function writeLiveFrames(runsDir: string, runId: string, now: number): (t: numbe
   const take = (t: number): void => {
     seq += 1;
     last = t;
-    copyFileSync(still, join(dir, "frames", `${seq}.jpg`));
-    appendFileSync(join(dir, "frames.jsonl"), `${JSON.stringify({ seq, t: new Date(t).toISOString(), file: `frames/${seq}.jpg`, kind: "interval" })}\n`);
+    copyFileSync(still, join(dir, frameFile(seq)));
+    appendFileSync(join(dir, "frames.jsonl"), `${JSON.stringify({ seq, t: new Date(t).toISOString(), file: frameFile(seq), kind: "interval" })}\n`);
   };
   for (let t = now - 3 * LIVE_FRAME_MS; t <= now - LIVE_FRAME_MS / 2; t += LIVE_FRAME_MS) take(t);
   return (t) => {

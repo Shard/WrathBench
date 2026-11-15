@@ -3,8 +3,10 @@
  * (docs/ARCHITECTURE.md, "Camera"). The director writes it and the viewer and
  * publisher read it, so its shape is fixed here and nowhere else:
  *
- *   frames/<seq>.jpg   still frames, JPEG q75, 1280×720; kept for the logs'
- *                      retention window, never published
+ *   frames/<seq>.jpg   still frames, JPEG q75, 1280×720, `<seq>` zero-padded
+ *                      to six digits (`frames/000042.jpg`, `frameFile`): a
+ *                      frames.jsonl line's `file` is exactly that name; kept
+ *                      for the logs' retention window, never published
  *   frames.jsonl       one FrameLine per frame
  *   clips/part-<n>.mp4 the run's one video, in parts of at most six hours of
  *                      run time each: H.264, yuv420p, faststart, 1280×720,
