@@ -2,11 +2,12 @@
  * The camera's own pods (infra/camera-pods.ts): built from the chart's
  * template with the world's realm, id and forward target and an owner; a
  * world per eval gets one only while a slot is free, one slot always held for
- * the shared world's; and neither start ever throws.
+ * the shared world's; neither start ever throws; and with the camera off,
+ * every camera pod left up is removed.
  */
 import { describe, expect, test } from "bun:test";
 import { K8sError, type Pod } from "./k8s-client";
-import { buildCameraPod, CAMERA_WORLD_LABEL, cameraPodName, cameraSlotFree, ensureSharedCamera, startWorldCamera, type CameraK8s } from "./camera-pods";
+import { buildCameraPod, CAMERA_REAP_GRACE_S, CAMERA_WORLD_LABEL, cameraPodName, cameraSlotFree, ensureSharedCamera, reapCameras, startWorldCamera, type CameraK8s } from "./camera-pods";
 
 const ID = "wabcdefghij";
 
@@ -109,5 +110,49 @@ describe("starting cameras", () => {
     expect(pod.metadata.ownerReferences?.[0]?.name).toBe("wrathbench-fleet-x");
     expect(await ensureSharedCamera({ client: k, template: template(1), target: "worldserver:8085", log: () => {} })).toBe("present");
     expect(k.created).toHaveLength(1);
+  });
+});
+
+describe("the camera off", () => {
+  class ReapK8s {
+    deleted: { name: string; grace: number }[] = [];
+    selectors: string[] = [];
+    failList = false;
+    failDelete = new Set<string>();
+    constructor(readonly pods: Pod[]) {}
+    async listPods(selector: string) {
+      this.selectors.push(selector);
+      if (this.failList) throw new K8sError(403, "Forbidden", "pods is forbidden");
+      return this.pods;
+    }
+    async deletePod(name: string, grace: number) {
+      if (this.failDelete.has(name)) throw new K8sError(500, "InternalError", "boom");
+      this.deleted.push({ name, grace });
+    }
+  }
+
+  test("removes every camera pod still up, the shared one and the worlds', with the director's grace", async () => {
+    const k = new ReapK8s([camera("shared"), camera(ID), camera("wzzzzzzzzzz", { deletionTimestamp: "2026-11-15T10:00:00Z" })]);
+    const logs: string[] = [];
+    expect(await reapCameras({ client: k, log: (l) => logs.push(l) })).toEqual(["wrathbench-camera-shared", `wrathbench-camera-${ID}`]);
+    expect(k.selectors).toEqual(["app.kubernetes.io/component=camera"]);
+    expect(k.deleted).toEqual([
+      { name: "wrathbench-camera-shared", grace: CAMERA_REAP_GRACE_S },
+      { name: `wrathbench-camera-${ID}`, grace: CAMERA_REAP_GRACE_S },
+    ]);
+    expect(logs.every((l) => l.includes("the camera is off"))).toBe(true);
+    // Nothing left: a later pass does nothing.
+    expect(await reapCameras({ client: new ReapK8s([]), log: () => {} })).toEqual([]);
+  });
+
+  test("a refusal (the list, one delete) is logged and never thrown; the rest still go", async () => {
+    const k = new ReapK8s([camera("shared"), camera(ID)]);
+    k.failDelete.add("wrathbench-camera-shared");
+    const logs: string[] = [];
+    expect(await reapCameras({ client: k, log: (l) => logs.push(l) })).toEqual([`wrathbench-camera-${ID}`]);
+    expect(logs.some((l) => l.includes("wrathbench-camera-shared: not removed"))).toBe(true);
+    k.failList = true;
+    expect(await reapCameras({ client: k, log: (l) => logs.push(l) })).toEqual([]);
+    expect(logs.at(-1)).toContain("cameras: not listed");
   });
 });

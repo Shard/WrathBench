@@ -19,6 +19,11 @@
  * The cap is the template's `camera-max` (values.yaml `camera.maxConcurrent`),
  * one slot always held for the shared world's camera: worlds per eval share
  * the rest.
+ *
+ * Off (`camera.enabled: false`, so no template) means no camera: the fleet
+ * deletes every camera pod in the namespace (`reapCameras`), the shared one
+ * and the worlds' alike, so turning the camera off is a values change alone. A
+ * world's camera otherwise goes with its world's pod, at a park or an end.
  */
 
 import { readFileSync } from "node:fs";
@@ -35,6 +40,9 @@ export const SHARED = "shared";
 export const WORLD_PORT = 8085;
 
 export type CameraK8s = Pick<K8sClient, "createPod" | "getPod" | "listPods">;
+export type CameraReapK8s = Pick<K8sClient, "listPods" | "deletePod">;
+/** A reaped camera's grace: its director keeps the frames its ring holds (the template's own `terminationGracePeriodSeconds`). */
+export const CAMERA_REAP_GRACE_S = 30;
 
 /** The chart's camera pod template, or undefined when the block is off. */
 export function readCameraTemplate(env: Record<string, string | undefined> = process.env): Pod | undefined {
@@ -140,4 +148,28 @@ export async function ensureSharedCamera(o: { client: CameraK8s; template: Pod; 
     o.log(`shared camera: ${e instanceof Error ? e.message : String(e)}`);
     return "failed";
   }
+}
+
+/**
+ * With the camera off, every camera pod still up is deleted, with the grace its
+ * director keeps its frames in. The names deleted; never throws.
+ */
+export async function reapCameras(o: { client: CameraReapK8s; log: (line: string) => void }): Promise<string[]> {
+  const gone: string[] = [];
+  try {
+    for (const p of await o.client.listPods(`app.kubernetes.io/component=${CAMERA_COMPONENT}`)) {
+      const name = p.metadata.name;
+      if (name === undefined || p.metadata.deletionTimestamp !== undefined) continue;
+      try {
+        await o.client.deletePod(name, CAMERA_REAP_GRACE_S);
+        gone.push(name);
+        o.log(`camera ${name} removed: the camera is off`);
+      } catch (e) {
+        o.log(`camera ${name}: not removed (${e instanceof Error ? e.message : String(e)})`);
+      }
+    }
+  } catch (e) {
+    o.log(`cameras: not listed (${e instanceof Error ? e.message : String(e)})`);
+  }
+  return gone;
 }

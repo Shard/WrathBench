@@ -3084,9 +3084,10 @@ hour of play). Size `maxConcurrent` against the PVC's free space.
 not started, and the shared one is retried every minute.
 
 **Disable.** `camera.enabled: false` and a release. The fleet then starts no
-camera; delete any left with `kubectl -n <ns> delete pod -l
-app.kubernetes.io/component=camera`. Frames and video already written stay
-with their runs.
+camera and, within a minute of reading the template without one, deletes
+every camera pod left up, the shared one and the worlds' (`camera ... removed:
+the camera is off` in its log), each with its 30 s grace to keep its frames.
+Frames and video already written stay with their runs.
 
 **Troubleshoot.** A camera pod's two containers are `camera` (the client) and
 `camera-director`:
