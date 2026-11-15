@@ -209,27 +209,35 @@ test("a refused task launch is a CampaignLaunchError", () => {
   }
 });
 
-describe("the public projection, since the board was published", () => {
-  test("keeps the task episodes in the episode list and a model row, the scheduler's words included", async () => {
+describe("the public projection of the task episodes", () => {
+  test("names deadmines-solo on the episode list and a model row, and not the five-agent id", async () => {
     const { projectEpisodes, projectModels } = await import("../viewer/public-projection");
     const tier = (id: string) => ({ id, minutes: 240, idleMinutes: 20, noXpMinutes: null, toolCalls: 8000, objectiveAllowed: true, scored: true, summary: id, members: 1, overrides: 0, lapsed: 0, derived: 0 });
     const episodes = projectEpisodes({ episodes: ["e90", "deadmines-solo", "deadmines"].map(tier), untiered: 0, now: 1 } as unknown as Parameters<typeof projectEpisodes>[0]);
-    expect(episodes.episodes.map((e) => e.id)).toEqual(["e90", "deadmines-solo", "deadmines"]);
-    // What a t2 model's Deadmines evals wait on is as public as the evals (operator, 2026-11-15).
-    const why = "schedulable on e90, e360; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
+    expect(episodes.episodes.map((e) => e.id)).toEqual(["e90", "deadmines-solo"]);
+    // What a t2 model's Deadmines eval waits on is as public as the eval (operator, 2026-11-15).
+    const wait = "; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
     const stats = { counted: 1, attempts: 1, extras: 0, target: 3, bestLevel: null };
-    const row = {
+    const row = (why: string) => ({
       name: "m", model: "m", effort: null, platform: null, harness: "wrathbench", billing: "metered", declaredTier: "t2", tier: "t2",
-      earnedPromotion: true, earnedDeadmines: true, idle: "none", status: "ok", eligible: ["e90", "e360", "deadmines-solo"],
-      perEpisode: { e90: stats, "deadmines-solo": stats }, ladder: null, schedulable: { ok: true, why, extras: false }, runs: [], newestRunId: null, lastError: null,
-    };
+      earnedPromotion: true, earnedDeadmines: true, idle: "none", status: "ok", eligible: ["e90", "e360", "deadmines-solo", "deadmines"],
+      perEpisode: { e90: stats, "deadmines-solo": stats, deadmines: stats }, ladder: null, schedulable: { ok: true, why, extras: false }, runs: [], newestRunId: null, lastError: null,
+    });
     const tiers = Object.fromEntries(["t0", "t1", "t2"].map((t) => [t, { runsPerEpisode: { e90: 1, e360: 1 }, promotesTo: null, label: t }]));
-    const models = { models: [row], roster: { path: null, shape: "roster", count: 1, excluded: [] }, policy: { promoteAtLevel: 5, series: "1.0", tiers, maxSessions: {} }, ladderMs: [], harness: "all", now: 1 };
-    const projected = projectModels(models as unknown as Parameters<typeof projectModels>[0]).models[0]!;
+    const project = (why: string) =>
+      projectModels({ models: [row(why)], roster: { path: null, shape: "roster", count: 1, excluded: [] }, policy: { promoteAtLevel: 5, series: "1.0", tiers, maxSessions: {} }, ladderMs: [], harness: "all", now: 1 } as unknown as Parameters<typeof projectModels>[0]).models[0]!;
+    const projected = project(`schedulable on e90, e360${wait}`);
     expect(projected.eligible).toEqual(["e90", "e360", "deadmines-solo"]);
     expect(Object.keys(projected.perEpisode)).toEqual(["e90", "deadmines-solo"]);
-    expect(projected.schedulable.why).toBe(why);
+    expect(projected.schedulable.why).toBe(`schedulable on e90, e360${wait}`);
     // No page reads it, so it is not published.
     expect("earnedDeadmines" in projected).toBe(false);
+    expect(project("targets met on e90, e360, deadmines-solo, deadmines — unlimited sessions while its account is idle").schedulable.why).toBe(
+      "targets met on e90, e360, deadmines-solo — unlimited sessions while its account is idle",
+    );
+    expect(project("schedulable on deadmines, e90").schedulable.why).toBe("schedulable on e90");
+    // A list of nothing else is kept whole: dropping every item would say something false.
+    expect(project("schedulable on deadmines").schedulable.why).toBe("schedulable on deadmines");
+    expect(project("cooling until 12:00").schedulable.why).toBe("cooling until 12:00");
   });
 });

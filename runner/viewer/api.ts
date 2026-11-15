@@ -25,7 +25,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { EPISODES, EPISODE_IDS, EPISODE_LIST, isTaskEpisode } from "../src/episodes";
+import { EPISODES, EPISODE_IDS, EPISODE_LIST, hasBoard, isTaskEpisode } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import { badEvidenceReason, countedRun } from "../src/lapse";
 import type {
@@ -1465,16 +1465,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * every probe.
    */
   /**
-   * The dungeon board (`dungeons.ts`): the two Deadmines episodes' runs, read
-   * with each character's milestones, as one table per id. Off the handle's
-   * own listing, so a run a public handle withholds is in no row.
+   * The dungeon board (`dungeons.ts`): the runs of each Deadmines id with a
+   * table (`hasBoard`, `deadmines-solo` alone), read with each character's
+   * milestones. Off the handle's own listing, so a run a public handle
+   * withholds is in no row.
    */
   async function dungeonsResponse(): Promise<Response> {
-    const all = (await resultRuns()).filter((r) => isTaskEpisode(r.episode) && r.episodeSource === "stamped");
+    const all = (await resultRuns()).filter((r) => hasBoard(r.episode) && r.episodeSource === "stamped");
     const runs = await Promise.all(
       all.map(async (run) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character }) })),
     );
-    // Both tables on either handle: the one-agent id's runs are the only
+    // The same table on either handle: the one-agent id's runs are the only
     // fan-out runs a public handle lists (`resultRuns`).
     const boards = boardsOf(runs);
     const body: DungeonsResponse = { version: DUNGEON_BOARD_VERSION, boards, now: Date.now() };

@@ -140,10 +140,13 @@ other.
   `deadmines`, and a codex row on either id until it names `codex`: neither
   has run on the program loop yet. Both wait behind the scored-episode hold
   like every scored id. Run on the program loop, any harness that has one.
-- **Scoring.** Scored, each id its own group: a table per id, each its own tab
-  on the ladder page with a chart, never pooled with the other (METHODOLOGY,
-  "The Deadmines evals, and rung 6"). No milestone rung reads it: rung 6 is a
-  group of agents in a dungeon in freeplay.
+- **Scoring.** Scored, each id its own group, never pooled with the other.
+  `deadmines-solo` is the Deadmines eval: its table, with a chart, is the
+  ladder's one Deadmines tab (`?episode=deadmines-solo`). The five-agent
+  `deadmines` runs only as a probe campaign for now and has no ladder tab
+  (operator, 2026-11-15; METHODOLOGY, "The Deadmines evals, and rung 6"). No
+  milestone rung reads either: rung 6 is a group of agents in a dungeon in
+  freeplay.
 - **Pins in the tuple.** The episode, its budget, `objective: false`,
   `agents` and `characters` (1 and 5, or 5 and 1) as keys, and `task`: the
   pinned definition's content hash and the hash of the staging fixtures, the

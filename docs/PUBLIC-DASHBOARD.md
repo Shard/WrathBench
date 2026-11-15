@@ -624,7 +624,7 @@ A fan-out run, one agent driving several characters, is withheld the same
 way: a probe's has no public form, since its run is no one character and its
 game side is per character. The exception is the one-agent Deadmines id: a
 run stamped `deadmines-solo` is published with its table, the ladder's
-`deadmines-solo` tab (operator delegated, 2026-11-15), by that id and no other
+Deadmines tab (operator delegated, 2026-11-15), by that id and no other
 (`isWithheldFanoutRun`), so another one-agent id would be its own call. What
 it publishes is the run's own: its row, its detail, entries, scratchpad and
 a track with no points. Its detail carries neither the `fanout` list nor
@@ -724,11 +724,14 @@ pass leaves out, and who reads what is left:
 - **Models** leave out, per run, the version and series, the character's ids,
   the served model and the start time, and per tier `otherSeries`,
   `countedLevel`, `lastEnded`, `lastReason` and the run ids; the roster table
-  prints the counts and the target, and the run list is its own. The
-  Deadmines task episodes ride on a model row like any id (operator
-  delegated, 2026-11-15): in `eligible`, `perEpisode` and the schedulable
-  line, what they still wait on included. `earnedDeadmines` does not, since
-  no page reads it. `episodes.json` lists both ids too, for the About page.
+  prints the counts and the target, and the run list is its own.
+  `deadmines-solo` rides on a model row like any id (operator delegated,
+  2026-11-15): in `eligible`, `perEpisode` and the schedulable line, what it
+  still waits on included, and `episodes.json` lists it for the About page.
+  The five-agent `deadmines` is on neither, since it runs only as a probe
+  campaign for now and has no table (operator, 2026-11-15;
+  `isUnpublishedEpisode`). `earnedDeadmines` is not published: no page reads
+  it.
 - **A move's `z`** (on the live feed and in a track): the map marks a
   destination on the plane.
 

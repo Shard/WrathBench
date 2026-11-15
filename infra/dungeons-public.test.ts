@@ -1,9 +1,11 @@
 /**
- * The dungeon board on a public handle: both tables are served, the
- * one-agent id's with its runs, since a `deadmines-solo` attempt is the one
- * fan-out run a public handle publishes (operator delegated, 2026-11-15).
- * Every other fan-out run stays withheld: the shots fixture's two probe
- * fan-out runs are in no public body and come back as withdrawn.
+ * The dungeon board on either handle: one table, the Deadmines eval
+ * `deadmines-solo`, with its runs, since such an attempt is the one fan-out
+ * run a public handle publishes (operator delegated, 2026-11-15). The
+ * five-agent `deadmines` has no table and is named on neither About nor a
+ * model row: it runs only as a probe campaign for now (operator,
+ * 2026-11-15). Every other fan-out run stays withheld: the shots fixture's
+ * two probe fan-out runs are in no public body and come back as withdrawn.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -29,15 +31,12 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("/api/dungeons", () => {
-  test("either handle serves both tables, with the one-agent id's runs", async () => {
+  test("either handle serves the one table, deadmines-solo's, with its runs", async () => {
     for (const publicMode of [false, true]) {
       const body = (await (await get(publicMode, "/api/dungeons")).json()) as DungeonsResponse;
       expect({ publicMode, boards: body.boards.map((b) => [b.episode, b.rows.length]) }).toEqual({
         publicMode,
-        boards: [
-          ["deadmines-solo", 2],
-          ["deadmines", 1],
-        ],
+        boards: [["deadmines-solo", 2]],
       });
       const solo = JSON.stringify(body.boards.find((b) => b.episode === "deadmines-solo"));
       for (const id of SOLO) expect({ publicMode, id, named: solo.includes(`"${id}"`) }).toEqual({ publicMode, id, named: true });
@@ -78,11 +77,11 @@ describe("the one fan-out exception, on a public handle", () => {
     }
   }, 60_000);
 
-  test("About lists both Deadmines ids", async () => {
-    const body = (await (await get(true, "/api/episodes")).json()) as EpisodesResponse;
-    const ids = body.episodes.map((e) => e.id);
-    expect(ids).toContain("deadmines-solo");
-    expect(ids).toContain("deadmines");
+  test("About lists the Deadmines eval and not the five-agent id; the private list has both", async () => {
+    const ids = async (publicMode: boolean) => ((await (await get(publicMode, "/api/episodes")).json()) as EpisodesResponse).episodes.map((e) => e.id);
+    expect(await ids(true)).toContain("deadmines-solo");
+    expect(await ids(true)).not.toContain("deadmines");
+    expect(await ids(false)).toContain("deadmines");
   }, 60_000);
 });
 
@@ -97,7 +96,9 @@ describe("a publisher pass over the fixture", () => {
     }
     for (const id of SOLO) expect(res.withdrawn).not.toContain(id);
     const dungeons = JSON.parse(objects.get(res.snap["dungeons.json"]!)!) as DungeonsResponse;
-    expect(dungeons.boards.map((b) => b.episode)).toEqual(["deadmines-solo", "deadmines"]);
+    expect(dungeons.boards.map((b) => b.episode)).toEqual(["deadmines-solo"]);
+    const episodes = JSON.parse(objects.get(res.snap["episodes.json"]!)!) as EpisodesResponse;
+    expect(episodes.episodes.map((e) => e.id).filter((id) => id.startsWith("deadmines"))).toEqual(["deadmines-solo"]);
     const report = await verifyPublication({ get: async (key) => objects.get(key) ?? null });
     expect(report.findings).toEqual([]);
     expect(report.missing).toEqual([]);

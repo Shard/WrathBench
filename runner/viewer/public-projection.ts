@@ -140,7 +140,7 @@ import type {
   NearbyStateView,
   NearbyWindow,
 } from "./api-types";
-import { EPISODE_IDS } from "../src/episodes";
+import { EPISODE_IDS, hasBoard, isTaskEpisode } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
@@ -943,9 +943,10 @@ export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
 
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
   return scrubPathsValue<EpisodesResponse>({
-    // Every id, the Deadmines task episodes included (operator delegated,
-    // 2026-11-15); the dungeon board is where their runs are read.
-    episodes: e.episodes.map((t) => ({
+    // Every id but a task episode with no table (`isUnpublishedEpisode`):
+    // `deadmines-solo` is listed (operator delegated, 2026-11-15) and the
+    // five-agent `deadmines`, a probe-campaign id for now, is not.
+    episodes: e.episodes.filter((t) => !isUnpublishedEpisode(t.id)).map((t) => ({
       id: t.id,
       minutes: t.minutes,
       idleMinutes: t.idleMinutes,
@@ -1147,11 +1148,36 @@ function projectModelRun(r: ModelRunView): ModelRunView {
   });
 }
 
+/**
+ * An episode id the public site does not name: a task episode with no table
+ * on the ladder (`hasBoard`), which today is the five-agent `deadmines`, run
+ * only as a probe campaign for now (operator, 2026-11-15). Off the episode
+ * list and a model row alike.
+ */
+export function isUnpublishedEpisode(id: string): boolean {
+  return isTaskEpisode(id) && !hasBoard(id);
+}
+
+/**
+ * A scheduler's "schedulable on …" or "targets met on …" with the unpublished
+ * ids (`isUnpublishedEpisode`) left out of its list, as the rest of the row
+ * leaves them out. What follows the list (what `deadmines-solo` still waits
+ * on, the session note) is kept. A list of nothing else is kept whole:
+ * dropping every item would say something false.
+ */
+export function withoutUnpublishedEpisodes(why: string): string {
+  const m = /^(schedulable on|targets met on) (.+?)((?:; | — ).*)?$/.exec(why);
+  if (m === null) return why;
+  const kept = m[2]!.split(", ").filter((x) => !isUnpublishedEpisode(x));
+  return kept.length === 0 ? why : `${m[1]} ${kept.join(", ")}${m[3] ?? ""}`;
+}
+
 function projectModelRow(row: ModelRowView): ModelRowView {
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
   // Keyed off the known episode ids, not the object's own keys: an input
   // parsed from JSON could carry any key, and only those ids are speakable.
   for (const id of EPISODE_IDS) {
+    if (isUnpublishedEpisode(id)) continue;
     const e = row.perEpisode[id];
     if (e === undefined) continue;
     // Not emitted: `otherSeries`, `countedLevel`, `lastEnded`, `lastReason` and
@@ -1180,14 +1206,14 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     // Not emitted: `earnedDeadmines`, which no page reads.
     idle: row.idle,
     status: row.status,
-    eligible: [...row.eligible],
+    eligible: row.eligible.filter((id) => !isUnpublishedEpisode(id)),
     perEpisode,
     ...(row.cooling !== undefined
       ? { cooling: { until: row.cooling.until, rung: row.cooling.rung, reason: row.cooling.reason } }
       : {}),
     ...(row.retired !== undefined ? { retired: { at: row.retired.at, reason: row.retired.reason } } : {}),
     ladder: row.ladder,
-    schedulable: { ok: row.schedulable.ok, why: row.schedulable.why, extras: row.schedulable.extras },
+    schedulable: { ok: row.schedulable.ok, why: withoutUnpublishedEpisodes(row.schedulable.why), extras: row.schedulable.extras },
     ...(row.resolvedModels !== undefined ? { resolvedModels: [...row.resolvedModels] } : {}),
     runs: row.runs.map(projectModelRun),
     newestRunId: row.newestRunId,

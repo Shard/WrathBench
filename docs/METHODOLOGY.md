@@ -370,12 +370,14 @@ version never changes, so any change is a new version, for the same reason
 (2026-10-09; arms 2026-10-11).
 Definitions: `docs/EPISODES.md`.
 
-**The fixed Deadmines episode is two evals, never pooled** (operator,
+**The fixed Deadmines episode is two ids, never pooled** (operator,
 2026-11-14). The same staged level-20 party, kill end and clock, played by five
 agents of one model with one character each (`deadmines`) or by one agent
 driving all five (`deadmines-solo`). Each id is its own comparability group,
 with the number of agents and of characters per agent as keys, and neither is
 ranked against the other: one measures coordination, the other orchestration.
+For now `deadmines-solo` is the Deadmines eval, and the five-agent id runs only
+as a probe campaign (operator, 2026-11-15).
 An attempt ends cleared only on the kill. A member that goes idle or reaches
 its call ceiling makes the attempt not cleared, since the model stopped; a
 provider's refusal is one rung of the cooling ladder per attempt, however
@@ -485,10 +487,12 @@ milestones, with the reader's filters applied — except the series, because a c
 series and cutting its older attempts would misreport its age.
 
 **The Deadmines evals, and rung 6** (operator, 2026-11-14). The Deadmines
-episodes are shown like the other evals, each id its own ladder tab with a
-chart, never pooled or ranked against the other (operator, 2026-11-15): a row
-per model condition on its best attempt with "k of n cleared" printed and a
-row shown from n = 1. Cleared rows come first, by time to clear from launch;
+eval, `deadmines-solo`, is shown like the other evals, on a ladder tab of its
+own with a chart (operator, 2026-11-15): a row per model condition on its best
+attempt with "k of n cleared" printed and a row shown from n = 1. The
+five-agent `deadmines` has no tab while it runs only as a probe campaign
+(operator, 2026-11-15); as an eval it would get its own, never pooled or
+ranked against the one-agent id's. Cleared rows come first, by time to clear from launch;
 the rest by distinct bosses killed, all eight counted alike, Cookie included.
 Deaths and wipes are shown and never order a row. Rung 6 is a 5-man dungeon
 done with others in freeplay, a group of agents in a dungeon, and is not read
