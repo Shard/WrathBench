@@ -509,6 +509,16 @@ model, a character each (`docs/proposals/GROUP-PLAY.md`), not server-side bots.
 
 The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation of upstream AzerothCore's own multi-stage Dockerfile with the build context at our repo root: it copies the pinned submodule plus `wrath-mcp/module/` as `modules/mod-wrathbench` and keeps upstream's stage names, base image, toolchain, runtime user and filesystem layout, so upstream docker fixes diff cleanly against ours at each submodule bump. Two departures: `-DWITHOUT_GIT=1`, because a submodule checkout has no usable `.git` (version strings read `unknown`; the submodule pointer and `infra/PINS.md` are the pin), and a 10G ccache mount, because upstream's 1G thrashes on a full core build and module iteration is the hot path. RelWithDebInfo is kept because symbols matter when the module crashes the worldserver. A `db-import` target is built alongside because upstream's boot flow expects it.
 
+### Camera
+
+An optional camera films runs for replays (`camera` in the chart, off by default; docs/RUNBOOK.md, "Camera"). It is an unattended game client, the camera client image, built outside this repository and pulled from the operator's private registry, logged in on a GM account of its own (`CAMERA`) and driven by a director of ours, `infra/camera/director.ts`. Both run as sidecars in a world's pod, because every realm row advertises 127.0.0.1:8085: a client anywhere else would be handed its own loopback. The shared world's pod always carries one when the block is on; a world per eval carries one only while a slot is free (`maxConcurrent`, decided by the launcher in `infra/world.ts`), so a world without a slot is the same pod as before and claims nothing for a camera.
+
+- **Invisible from load.** A world with the block on sets `GM.LoginState = 1` and `GM.Visible = 0`, which the core applies to a GM while it loads the character, before it is on the map. The server then sends the camera's player object to no session below its GM level, and harness accounts carry none, so it is absent from the agent's objects by the server's own visibility rule: the observation contract holds with no module change (wrath-mcp/docs/CONTRACTS.md). The director checks the camera's invisibility aura before every move and logs out, for good, if it is ever missing.
+- **What it does in the world.** Only GM movement: `.appear` to the subject, a `.morph` that hides its own body, and nothing else. It never targets, speaks, casts or interacts. Its frames show the world only: the interface, chat bubbles and name text are off, the light is pinned to noon on the camera's own clock (the world's time is untouched), and it has no sound.
+- **What it keeps.** Under the run's own directory, `camera/`: still frames (`frames/<seq>.jpg`, JPEG q75, 1280×720) and their index `frames.jsonl`, and at the run's end `clips/` (a timelapse and one clip per level, quest turn-in, death, zone change and boss kill, each with a poster) and `clips.json`, the one file a reader opens to find clips. `infra/camera/layout.ts` is the shape. A frame is kept every `intervalSeconds`, and around each event the 30 s before it and the 10 s after; the director holds about 45 s of frames in memory so an event the session record reports late still has its lead-in. Captions are the model's own words at that moment, from the trajectory's responses and pad writes, never from a tool result, beside the benchmark's name and the model's.
+- **The label.** `meta.json` gains `camera: true`, written by the director the way the runner writes the file (a temporary file renamed into place) and kept by the runner's own rewrites. It is a label like `world`, never a key in the comparability tuple (docs/METHODOLOGY.md).
+- **Who it follows.** The live runs on its own world, newest first: an eval world's attempt, or a freeplay character on the shared one. A fan-out run is not followed.
+
 ## Data flow for one action
 
 One action's path through the stack, from `run_snippet` to the opcode the module dispatches and the packets it taps back, is [wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md#data-flow-for-one-action). The benchmark is at both ends: the runner serves the call through its tool set, its rendering and its child extension, and appends the snippet, its result, the actions it dispatched and the events the model was shown to the trajectory.
@@ -778,6 +788,10 @@ Every episode starts with a freshly created character at level 1 in its starting
   session that never asks for an entry twice. A new run, a continuation
   included, starts without one, and the collector does not read it. It is
   operational state, outside the session record.
+- The camera's frames and clips, `data/runs/<id>/camera/`, when a camera
+  followed the run ("Camera" above). Derived pictures of the run, never read
+  by the scorer, the collector or a resume; the frames follow the logs'
+  retention window and the clips are kept.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
 - A single-node ClickHouse holding a **derived, disposable** copy of all of it,
   filled by `collector/`.

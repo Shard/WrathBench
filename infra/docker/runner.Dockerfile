@@ -31,8 +31,12 @@
 FROM oven/bun:1.4.4
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git tini fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends curl ca-certificates git tini fonts-dejavu-core ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# ffmpeg is the camera director's (infra/camera/assemble.ts): it encodes a run's
+# clips, with their captions drawn in DejaVu Sans, in the director sidecar that
+# runs this image (templates/_camera.tpl).
 
 # fonts-dejavu-core is the publisher's, not the fleet's. The publisher runs
 # this image and renders the social card (infra/og-render.ts), and resvg

@@ -404,6 +404,8 @@ export class Trajectory {
     for (const k of [...VERDICT_FIELDS, "reflectingSince"] as const) delete given[k];
     const kept: RunVerdictFields = {};
     for (const k of VERDICT_FIELDS) if (before?.[k] !== undefined) (kept as Record<string, unknown>)[k] = before[k];
+    // The camera's label (infra/camera/label.ts) is the director's to write, never the runner's: kept as found.
+    if ((before as { camera?: unknown } | null)?.camera === true) (kept as Record<string, unknown>)["camera"] = true;
     const next = { ...given, ...kept };
     writeMetaFile(this.dir, JSON.parse(this.scrub(jsonLine(next))) as object);
     this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });

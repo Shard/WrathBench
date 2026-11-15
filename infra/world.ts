@@ -69,6 +69,16 @@ export const WORLD_LOG_FILE = "server.log";
 /** The pointer a launcher leaves in a run directory: `{ "id": … }`, one of the launch files. */
 export const WORLD_POINTER_FILE = "world.json";
 export const MODULE_PORT = 8086;
+/** A world pod carrying the camera (templates/_camera.tpl): what the slot count selects on. */
+export const CAMERA_LABEL = `${LABEL_PREFIX}camera`;
+/** On the template: how many cameras may run at once, the shared world's included (values.yaml `camera.maxConcurrent`). */
+export const CAMERA_MAX_ANNOTATION = `${LABEL_PREFIX}camera-max`;
+const CAMERA_CONTAINERS = new Set(["camera", "camera-director"]);
+const CAMERA_VOLUMES = new Set(["camera-run", "camera-client-data"]);
+/** The name a world's realm row carries (`putRealm`), which its camera picks. */
+export function worldRealmName(id: string): string {
+  return `WrathBench ${id}`;
+}
 
 /**
  * `w` and ten base32 characters, lowercase: the id is the pod's `hostname`,
@@ -425,7 +435,7 @@ export async function mysqlWorldDb(env: Record<string, string | undefined> = pro
       // Never advertised to a client: a spectator port-forwards to one pod.
       await sql`
         INSERT INTO realmlist (id, name, address, localAddress, localSubnetMask, port, gamebuild)
-        VALUES (${realmId}, ${`WrathBench ${id}`}, '127.0.0.1', '127.0.0.1', '255.255.255.0', 8085, ${GAMEBUILD})
+        VALUES (${realmId}, ${worldRealmName(id)}, '127.0.0.1', '127.0.0.1', '255.255.255.0', 8085, ${GAMEBUILD})
         ON DUPLICATE KEY UPDATE name = VALUES(name)`;
     },
     async deleteRealm(realmId) {
@@ -454,6 +464,34 @@ export interface BuildWorldPodOptions {
   rosterPid: number;
   /** A re-boot's recorded digests (`repo@sha256:…`); the template's images otherwise. */
   images?: { worldserver?: string; dbImport?: string };
+  /**
+   * Whether this world takes a camera slot (`cameraSlotFree`). A template with
+   * the camera's containers keeps them, stamped with this world's realm, only
+   * when true; otherwise they and their volumes are removed, so a world
+   * without a slot claims no camera resources at all.
+   */
+  camera?: boolean;
+}
+
+/** Whether a template carries the camera (the chart's `camera.enabled`). */
+export function templateHasCamera(template: Pod): boolean {
+  return template.spec.containers.some((c) => CAMERA_CONTAINERS.has(c.name));
+}
+
+/**
+ * Whether a world may take a camera now: fewer cameras run than the
+ * template's `camera-max`, counting the shared world's, which runs whenever
+ * the block is on, and every other world pod still carrying one. A template
+ * without a max (an older chart) gives none.
+ */
+export function cameraSlotFree(template: Pod, worldPods: readonly Pod[], self: string): boolean {
+  if (!templateHasCamera(template)) return false;
+  const max = Number(template.metadata.annotations?.[CAMERA_MAX_ANNOTATION]);
+  if (!Number.isInteger(max) || max < 1) return false;
+  const others = worldPods.filter(
+    (p) => p.metadata.name !== self && p.metadata.labels?.[CAMERA_LABEL] === "true" && p.metadata.deletionTimestamp === undefined && p.status?.phase !== "Succeeded" && p.status?.phase !== "Failed",
+  ).length;
+  return 1 + others < max;
 }
 
 const ACCOUNT_RE = /^[A-Z0-9]{1,16}$/;
@@ -502,6 +540,11 @@ export function worldPodRefusal(pod: Pod): string | undefined {
   if (list.some((a) => !ACCOUNT_RE.test(a))) return `the allowlist ${JSON.stringify(accounts)} holds a name that is not an account`;
   if (pod.spec["hostname"] === undefined || !isWorldId(pod.spec["hostname"])) return "the world pod has no world id as its hostname";
   if (pod.spec["subdomain"] !== WORLDS_SERVICE) return `the world pod template's subdomain is ${JSON.stringify(pod.spec["subdomain"])}, not the ${WORLDS_SERVICE} Service`;
+  // A camera picks its realm by name: one stamped for any other world would film that world's run.
+  const cam = pod.spec.containers.find((c) => c.name === "camera");
+  if (cam !== undefined && envValue(cam, "CAMERA_REALM") !== worldRealmName(pod.spec["hostname"])) return "the world pod's camera is not stamped with this world's realm";
+  const director = pod.spec.containers.find((c) => c.name === "camera-director");
+  if (director !== undefined && envValue(director, "CAMERA_WORLD") !== pod.spec["hostname"]) return "the world pod's camera director is not stamped with this world's id";
   return undefined;
 }
 
@@ -530,6 +573,19 @@ export function buildWorldPod(template: Pod, o: BuildWorldPodOptions): Pod {
     if (c.name !== "worldserver") continue;
     c.env = setEnv(setEnv(setEnv(c.env, "AC_CHARACTER_DATABASE_INFO", info), "AC_REALM_ID", String(o.realmId)), "AC_WRATH_BENCH_ACCOUNTS", accounts);
     if (o.images?.worldserver !== undefined) c.image = o.images.worldserver;
+  }
+  if (templateHasCamera(pod)) {
+    if (o.camera === true) {
+      for (const c of pod.spec.containers) {
+        if (c.name === "camera") c.env = setEnv(c.env, "CAMERA_REALM", worldRealmName(o.id));
+        if (c.name === "camera-director") c.env = setEnv(c.env, "CAMERA_WORLD", o.id);
+      }
+      pod.metadata.labels[CAMERA_LABEL] = "true";
+    } else {
+      pod.spec.containers = pod.spec.containers.filter((c) => !CAMERA_CONTAINERS.has(c.name));
+      const vols = pod.spec["volumes"] as { name: string }[] | undefined;
+      if (vols !== undefined) pod.spec["volumes"] = vols.filter((v) => !CAMERA_VOLUMES.has(v.name));
+    }
   }
   const refusal = worldPodRefusal(pod);
   if (refusal !== undefined) throw new Error(`world pod ${o.id} refused: ${refusal}`);
@@ -705,10 +761,21 @@ export class WorldLauncher {
     return `${this.opts.template.metadata.generateName ?? "world-"}${id}`;
   }
 
+  /** Whether this world's next pod takes a camera slot; never on an API failure. */
+  private async cameraSlot(podName: string): Promise<boolean> {
+    if (!templateHasCamera(this.opts.template)) return false;
+    try {
+      return cameraSlotFree(this.opts.template, await this.opts.client.listPods(`app.kubernetes.io/component=${WORLD_COMPONENT},${CAMERA_LABEL}=true`), podName);
+    } catch {
+      return false;
+    }
+  }
+
   private async boot(rec: WorldRecord): Promise<{ ok: true } | { ok: false; reason: string; noCapacity?: true }> {
     let body: Pod;
+    const camera = await this.cameraSlot(this.podName(rec.id));
     try {
-      body = buildWorldPod(this.opts.template, { id: rec.id, realmId: rec.realmId, accounts: rec.accounts, owner: this.opts.owner, rosterPid: this.opts.rosterPid, images: rec.images });
+      body = buildWorldPod(this.opts.template, { id: rec.id, realmId: rec.realmId, accounts: rec.accounts, owner: this.opts.owner, rosterPid: this.opts.rosterPid, images: rec.images, camera });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       noteBoot(this.opts.store.dir, reason, this.now());
@@ -731,7 +798,7 @@ export class WorldLauncher {
       noteBoot(this.opts.store.dir, reason, this.now());
       return { ok: false, reason };
     }
-    this.opts.log(`world ${rec.id}: pod ${name} created${rec.images.worldserver !== undefined ? ` on ${rec.images.worldserver}` : ""}`);
+    this.opts.log(`world ${rec.id}: pod ${name} created${rec.images.worldserver !== undefined ? ` on ${rec.images.worldserver}` : ""}${camera ? ", with a camera" : ""}`);
     const deadline = at + (this.opts.startupMs ?? 6 * 60_000);
     const url = worldModuleUrl(rec.id);
     let last = "not yet scheduled";
@@ -746,8 +813,10 @@ export class WorldLauncher {
         return this.bootFailed(rec, boot, "the world pod disappeared while it booted");
       }
       const status = pod?.status;
-      const ended = status?.phase === "Failed" || status?.phase === "Succeeded" || status?.containerStatuses?.some((c) => c.state?.terminated !== undefined);
-      const waiting = [...(status?.initContainerStatuses ?? []), ...(status?.containerStatuses ?? [])]
+      // The world's own containers decide its boot; a camera's state never does.
+      const own = (status?.containerStatuses ?? []).filter((c) => !CAMERA_CONTAINERS.has(c.name ?? ""));
+      const ended = status?.phase === "Failed" || status?.phase === "Succeeded" || own.some((c) => c.state?.terminated !== undefined);
+      const waiting = [...(status?.initContainerStatuses ?? []), ...own]
         .map((c) => c.state?.waiting?.reason)
         .find((r) => r !== undefined && FATAL_WAITING.has(r));
       if (ended === true || waiting !== undefined) {

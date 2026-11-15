@@ -80,7 +80,7 @@ export const GROUPS: Readonly<Record<string, string>> = {
   campaign: "probe campaign definitions",
   release: "build the images, release them, and the deploy window",
   server: "the worldserver's module, and the viewer",
-  accounts: "game accounts: the harness's, the operator's GM spectator, the party stager's, and the characters on them",
+  accounts: "game accounts: the harness's, the operator's GM spectator, the party stager's, the camera's, and the characters on them",
   smoke: "the smoke scripts under infra/smoke",
   site: "the public site",
   data: "prices and logos this checkout carries",
@@ -128,6 +128,7 @@ const CONFIG_STORE = "runner/src/config-store.ts";
 const BOOTSTRAP = "infra/bootstrap/bootstrap.ts";
 const SPECTATOR = "infra/spectator-account.ts";
 const STAGER = "infra/stager-account.ts";
+const CAMERA = "infra/camera-account.ts";
 const RUN_FLEET = "infra/run-fleet.ts";
 const FLEET_UPDATE = "infra/fleet-update.sh";
 const INSPECT_RUN = "infra/inspect-run.ts";
@@ -222,9 +223,9 @@ export const ENTRIES: readonly Entry[] = [
   { group: "server", command: "restart-viewer", summary: "rollout restart the viewer, then check it answers", ...clusterOnly("infra/viewer-restart.sh") },
   { group: "server", command: "log-retention", takes: "[--days n | --apply]", summary: "what the audit-log retention pass would prune now, as counts and bytes; --apply runs it", ...clusterOnly("infra/log-retention.sh") },
 
-  // All three write game accounts, so none has a default: `ensure` creates
-  // only the accounts it is given, `spectator` and `stager` only with a
-  // password on stdin.
+  // All four write game accounts, so none has a default: `ensure` creates
+  // only the accounts it is given, `spectator`, `stager` and `camera` only
+  // with a password on stdin.
   {
     group: "accounts",
     command: "ensure",
@@ -248,6 +249,14 @@ export const ENTRIES: readonly Entry[] = [
     summary: "ensure the party stager's SOAP account STAGER (GM, never on the module allowlist); read -rs P && printf '%s\\n' \"$P\" | bun wb accounts stager",
     requires: "--password-stdin",
     ...inRunner("bun", STAGER, "--password-stdin"),
+  },
+  {
+    group: "accounts",
+    command: "camera",
+    takes: "(password on stdin)",
+    summary: "ensure the camera's GM account CAMERA (never on the module allowlist); read -rs P && printf '%s\\n' \"$P\" | bun wb accounts camera",
+    requires: "--password-stdin",
+    ...inRunner("bun", CAMERA, "--password-stdin"),
   },
   // The character archive (docs/RUNBOOK.md, "Backing up and moving a
   // character"): the runs volume, the databases and SOAP are all in the runner.

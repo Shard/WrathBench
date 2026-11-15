@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -148,6 +148,22 @@ describe("Trajectory", () => {
     expect(traj.runRow("run-z")?.["harness_version"]).toBe("v2");
     // A repair writes only where there is no verdict.
     expect(traj.repairTermination("run-z", "idle", null, 9)).toBe(false);
+    traj.close();
+  });
+
+  test("the camera's label survives the runner's own rewrites: a resume's writeMeta and an updateMeta", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({});
+    traj.writeMeta({ runId: "run-cam", harnessVersion: "v", startedAt: 1, config });
+    // The director's write (infra/camera/label.ts): beside the runner's fields, never through it.
+    const path = join(dir, "meta.json");
+    writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), camera: true }, null, 2)}\n`);
+    traj.writeMeta({ runId: "run-cam", harnessVersion: "v2", startedAt: 1, config });
+    traj.setPause("run-cam", "quota-exhausted", "429");
+    const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(meta["camera"]).toBe(true);
+    expect(meta["harnessVersion"]).toBe("v2");
     traj.close();
   });
 

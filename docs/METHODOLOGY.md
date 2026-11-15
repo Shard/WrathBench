@@ -388,7 +388,10 @@ characters database of its own, and dropped at its verdict. No other agent,
 corpse or respawn timer is in it. Freeplay plays on the one long-lived world.
 The world is a label on the run (`config.world`), never a key in the tuple.
 Each attempt's world is its own, and while worlds are on the fleet refuses a
-scored or probing launch on the shared world.
+scored or probing launch on the shared world. A camera may be present in any
+world, invisible to the agent under the observation contract; a run that had
+one is labelled `camera`, which is never part of the condition (operator,
+2026-11-15).
 
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and
