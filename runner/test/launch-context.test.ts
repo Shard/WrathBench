@@ -1,14 +1,13 @@
 /**
  * What a run pod's launcher reads from the other runs on its behalf
  * (`launch-context.ts`): built from a runs directory as the runner would read
- * it, written beside the run, and read back as untrusted.
+ * it, handed over in the env, and read back through a parser.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
-import { buildLaunchContext, hygieneAccountsOf, LAUNCH_CONTEXT_FILE, launchOwners, readLaunchContext, writeLaunchContext } from "../src/launch-context";
-import { holdsOnlyLaunchFiles } from "../src/launch-files";
+import { buildLaunchContext, encodeLaunchContext, hygieneAccountsOf, LAUNCH_CONTEXT_ENV, launchContextOf, launchOwners } from "../src/launch-context";
 import { SHARED_WORLD } from "../src/session-record";
 import { Trajectory } from "../src/trajectory";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -66,31 +65,26 @@ describe("buildLaunchContext", () => {
     expect(ctx.ownGuids).toEqual(["13", "14"]);
   });
 
-  test("written beside the run, it reads back whole, and the directory still holds only launch files", () => {
+  test("encoded into the env, it reads back whole", () => {
     const runsDir = fixture();
-    const dir = join(runsDir, "me-now");
     const ctx = buildLaunchContext({ runsDir, runId: "me-now", resume: false, accounts: ["RUNNER2", "RUNNER9"], credentials: ["codex-1"], world: SHARED_WORLD });
-    writeLaunchContext(dir, ctx);
-    expect(readLaunchContext(dir)).toEqual(ctx);
-    expect(holdsOnlyLaunchFiles(dir)).toBe(true);
-    expect(launchOwners(readLaunchContext(dir), "runner2")?.get("aurelian")).toEqual({ runId: "paused-freeplay", ended: false });
+    const env = { [LAUNCH_CONTEXT_ENV]: encodeLaunchContext(ctx) };
+    expect(launchContextOf(env)).toEqual(ctx);
+    expect(launchOwners(launchContextOf(env), "runner2")?.get("aurelian")).toEqual({ runId: "paused-freeplay", ended: false });
     // An account the launcher read with nothing on it is an empty map, not a missing one.
-    expect(launchOwners(readLaunchContext(dir), "RUNNER9")).toEqual(new Map());
-    expect(launchOwners(readLaunchContext(dir), "RUNNER5")).toBeUndefined();
+    expect(launchOwners(launchContextOf(env), "RUNNER9")).toEqual(new Map());
+    expect(launchOwners(launchContextOf(env), "RUNNER5")).toBeUndefined();
   });
 
-  test("read as untrusted: a missing, torn or misshapen file is no context, and a bad usage reading is dropped", () => {
-    const dir = tempDir("wrathbench-launch-context-bad-");
-    expect(readLaunchContext(dir)).toBeUndefined();
-    writeFileSync(join(dir, LAUNCH_CONTEXT_FILE), "{");
-    expect(readLaunchContext(dir)).toBeUndefined();
-    writeFileSync(join(dir, LAUNCH_CONTEXT_FILE), JSON.stringify({ subscriptionUsage: [], ownGuids: [12] }));
-    expect(readLaunchContext(dir)).toBeUndefined();
-    writeFileSync(join(dir, LAUNCH_CONTEXT_FILE), JSON.stringify({ characterOwners: { RUNNER: { x: { runId: "r", ended: "no" } } }, subscriptionUsage: [], ownGuids: [] }));
-    expect(readLaunchContext(dir)).toBeUndefined();
-    writeFileSync(join(dir, LAUNCH_CONTEXT_FILE), JSON.stringify({ subscriptionUsage: [{ credential: "codex-1" }], ownGuids: ["7"] }));
-    expect(readLaunchContext(dir)).toEqual({ subscriptionUsage: [], ownGuids: ["7"] });
-    expect(launchOwners(readLaunchContext(dir), "RUNNER")).toBeUndefined();
+  test("read through a parser: absent, torn or misshapen is no context, and a bad usage reading is dropped", () => {
+    const of = (value: string | undefined) => launchContextOf({ [LAUNCH_CONTEXT_ENV]: value });
+    expect(launchContextOf({})).toBeUndefined();
+    expect(of("")).toBeUndefined();
+    expect(of("{")).toBeUndefined();
+    expect(of(JSON.stringify({ subscriptionUsage: [], ownGuids: [12] }))).toBeUndefined();
+    expect(of(JSON.stringify({ characterOwners: { RUNNER: { x: { runId: "r", ended: "no" } } }, subscriptionUsage: [], ownGuids: [] }))).toBeUndefined();
+    expect(of(JSON.stringify({ subscriptionUsage: [{ credential: "codex-1" }], ownGuids: ["7"] }))).toEqual({ subscriptionUsage: [], ownGuids: ["7"] });
+    expect(launchOwners(of(JSON.stringify({ subscriptionUsage: [], ownGuids: [] })), "RUNNER")).toBeUndefined();
   });
 });
 

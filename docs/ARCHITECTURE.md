@@ -173,8 +173,8 @@ takes from the stack and how.
   ones named by the records of the other runs on the same world (a guid is
   per characters database, so it names a different player on another
   world; a run with no `config.world` is on the shared one; a run pod, which
-  cannot see the other runs, takes the ones its launcher read at launch from
-  `launch-context.json`), and a party's
+  cannot see the other runs, takes the ones its launcher read at launch,
+  `WRATHBENCH_LAUNCH_CONTEXT`), and a party's
   members from the first row: the stager reports each member's character
   guid, the roster writes them into every member's `campaign.json` before
   any launches, and the run's config carries them to the gate
@@ -544,6 +544,8 @@ when the arm pinned one; a digest-only pin stamps
 `<repository basename>@sha256:<12 hex>`, which names no series),
 `WRATHBENCH_RUN_IMAGE` (the image as requested, when the episode is a probe's pod),
 `WRATHBENCH_MODULE_URL`, `WRATHBENCH_RUNS_DIR`, `WRATHBENCH_IN_CONTAINER=1`, `WRATHBENCH_RUN_POD=1` (on every run pod, so a codex episode can tell it is in one),
+`WRATHBENCH_LAUNCH_CONTEXT` (on a run pod, what run.ts would otherwise read
+from the other runs, which it cannot see: `runner/src/launch-context.ts`),
 `WRATHBENCH_LOCAL_MODEL_HOSTS` (the self-hosted hosts the provider table pairs
 with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
 reads the key), the module port secret, and the one credential the driver
@@ -561,9 +563,7 @@ it gets, read-only). Before the run starts it holds at most launch
 files — a probe's `campaign.json`, a pod's `image.json`, the pointer to its
 own world `world.json` (`{ "id" }`, with the world's module URL in
 `WRATHBENCH_MODULE_URL`), which run.ts stamps as `config.world` at a fresh
-launch (`shared` without one), and a pod's `launch-context.json`: what run.ts
-would otherwise read from the other runs, read by the launcher
-(`runner/src/launch-context.ts`) — and a directory
+launch (`shared` without one) — and a directory
 holding only those is not a run: a fresh launch onto it proceeds and
 overwrites them, where anything else there refuses the launch.
 

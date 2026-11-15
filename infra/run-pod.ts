@@ -16,7 +16,8 @@
  * STAGER one (the party stager's admin console and credential), which
  * `runPodEnv` enforces by throwing rather than filtering. Of the runs tree it
  * mounts only its own run directory (`runPodRunsMounts`), and what run.ts
- * would read from the other runs the launcher reads for it (`stageRunDir`).
+ * would read from the other runs the launcher reads for it and hands over in
+ * its env (`stageRunDir`).
  *
  * Images are refused unless their repository is in the chart's allow-list
  * (`runPods.allowedImages`; the release runner by default, GHCR's copy of it on
@@ -35,8 +36,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { archiveIfStillborn } from "../runner/src/archive";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
-import { buildLaunchContext, hygieneAccountsOf, writeLaunchContext } from "../runner/src/launch-context";
-import { parseRunArgs } from "../runner/src/run-flags";
+import { buildLaunchContext, encodeLaunchContext, hygieneAccountsOf, LAUNCH_CONTEXT_ENV } from "../runner/src/launch-context";
 import { runWorldOf, SHARED_WORLD } from "../runner/src/session-record";
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, RUN_POD_STAMP_ENV, type RosterDriver } from "../runner/src/drivers";
@@ -451,7 +451,7 @@ export class PodLauncher implements EpisodeLauncher {
         // The run names the image only when a probe's arm chose it: any other
         // pod runs the release image, as a child process would, and is stamped
         // as one.
-        stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, ...(launch.spec.launch !== undefined ? { WRATHBENCH_RUN_IMAGE: resolved.requested.ref } : {}) },
+        stamps: { ...launch.env, WRATHBENCH_HARNESS_VERSION: resolved.stamp, ...(launch.spec.launch !== undefined ? { WRATHBENCH_RUN_IMAGE: resolved.requested.ref } : {}), [LAUNCH_CONTEXT_ENV]: staged.context },
         ...(launch.onWorld === true && this.opts.worldsSecretKey !== undefined ? { moduleSecretKey: this.opts.worldsSecretKey } : {}),
         ...(stored?.source === "store" && secretName !== undefined ? { sealed: { name: secretName, sealed: stored.sealed } } : {}),
       },
@@ -478,48 +478,58 @@ export class PodLauncher implements EpisodeLauncher {
 }
 
 /**
- * The run directory as the pod will see it, made here before the pod exists.
- * The fleet pod makes it, as the user both pods run as, rather than the
- * kubelet, whose subPath directory would be root's. And what run.ts would
- * have read from the other runs, which the pod cannot see, is read here and
- * left in it (`launch-context.ts`): hygiene's owners, the credential's newest
- * usage, the deployment's own guids on the run's world. A fresh launch is
- * also checked against the archive here, the half of `assertRunDirFree` the
- * pod cannot do, and a continuation's predecessor is found where it is, live
- * or archived, so the pod mounts that directory and no other. A predecessor
- * found nowhere is not mounted at all (the kubelet would make an empty one):
- * the runner then starts fresh and records the drop, as it always has.
+ * The run directory as the pod will see it, made here before the pod exists,
+ * and what run.ts would have read from the other runs, which the pod cannot
+ * see. The fleet pod makes the directory, as the user both pods run as,
+ * rather than the kubelet, whose subPath directory would be root's. It reads
+ * hygiene's owners, the credential's newest usage and the deployment's own
+ * guids on the run's world into the context the pod is handed
+ * (`launch-context.ts`). A fresh launch is checked against the archive here,
+ * the half of `assertRunDirFree` the pod cannot make, and a continuation's
+ * predecessor is found where it is, live or archived, so the pod mounts that
+ * directory and no other. One found nowhere is not mounted at all (the kubelet
+ * would make an empty one): the runner then starts fresh and records the drop,
+ * as it always has.
  */
-export function stageRunDir(launch: Pick<EpisodeLaunch, "spec" | "resume" | "runDir" | "args">): { predecessor?: string } | { refused: string } {
+export function stageRunDir(launch: Pick<EpisodeLaunch, "spec" | "resume" | "runDir" | "args">): { context: string; predecessor?: string } | { refused: string } {
   const runId = launch.spec.runId;
   const runsDir = dirname(launch.runDir);
   try {
-    const args = parseRunArgs(launch.args);
     if (!launch.resume && !holdsOnlyLaunchFiles(join(runsDir, ARCHIVE_DIR, runId))) {
       return { refused: `run id already on disk: ${join(runsDir, ARCHIVE_DIR, runId)} — an archived run answers to ${runId}` };
     }
     mkdirSync(launch.runDir, { recursive: true });
     const placed = launch.spec.placedOn;
-    writeLaunchContext(
-      launch.runDir,
+    const context = encodeLaunchContext(
       buildLaunchContext({
         runsDir,
         runId,
         resume: launch.resume,
-        accounts: hygieneAccountsOf(args),
+        accounts: hygieneAccountsOf({ ...flagOf(launch.args, "account"), ...flagOf(launch.args, "accounts") }),
         credentials: placed === undefined ? null : [placed.id, `env:${placed.env}`],
         world: runWorldOf(launch.runDir) ?? SHARED_WORLD,
       }),
     );
-    const from = launch.resume ? undefined : args["continue-from"];
-    if (typeof from !== "string") return {};
+    const from = launch.resume ? undefined : flagOf(launch.args, "continue-from")["continue-from"];
+    if (from === undefined) return { context };
     for (const rel of [from, `${ARCHIVE_DIR}/${from}`]) {
-      if (existsSync(join(runsDir, rel, "meta.json"))) return { predecessor: rel };
+      if (existsSync(join(runsDir, rel, "meta.json"))) return { context, predecessor: rel };
     }
-    return {};
+    return { context };
   } catch (e) {
     return { refused: `run pod for ${runId}: its run directory could not be staged (${e instanceof Error ? e.message : String(e)})` };
   }
+}
+
+/**
+ * A supervisor flag's value from run.ts's args, the first time it is given:
+ * the supervisor's own come before an arm's, and an arm on its own image may
+ * carry flags run.ts's parser would refuse, so this never parses the rest.
+ */
+function flagOf(args: readonly string[], name: string): Record<string, string> {
+  const at = args.indexOf(`--${name}`);
+  const value = at < 0 ? undefined : args[at + 1];
+  return value === undefined || value.startsWith("--") ? {} : { [name]: value };
 }
 
 /**

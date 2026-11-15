@@ -66,7 +66,7 @@ import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import type { ChatAdapter } from "./adapter";
 import { DRIVER_ADAPTERS, type LaunchInputs } from "./driver-adapters";
 import { DEFAULT_DRIVER, DRIVER_TABLE, entryOf, inProcessRunPodRefusal, isDriver, RUN_POD_STAMP_ENV, type Driver } from "./drivers";
-import { LAUNCH_CONTEXT_FILE, launchOwners, readLaunchContext } from "./launch-context";
+import { LAUNCH_CONTEXT_ENV, launchContextOf, launchOwners } from "./launch-context";
 import { referenceProgramPath, resolveReferenceLaunch } from "./reference-program";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { providerOfModel } from "./credential-slots";
@@ -756,16 +756,16 @@ async function main(): Promise<void> {
 
   // A run pod mounts its own run directory and nothing else of the runs tree
   // (infra/run-pod.ts): what the runner would read from the other runs, its
-  // launcher read for it and left beside it (`launch-context.ts`). A fresh
+  // launcher read for it and handed over in the env (`launch-context.ts`). A fresh
   // launch there without hygiene's owners for every account it clears is
   // refused before anything is written, never run on an empty map.
   const inRunPod = process.env[RUN_POD_STAMP_ENV] === "1";
-  const launchContext = readLaunchContext(join(config.runsDir, config.runId));
+  const launchContext = launchContextOf(process.env);
   if (inRunPod && !resumed) {
     const accounts = config.fanout !== undefined && config.fanout.accounts.length > 0 ? config.fanout.accounts : [config.account];
     const unread = accounts.filter((a) => launchOwners(launchContext, a) === undefined);
     if (unread.length > 0) {
-      console.error(`[wrathbench] launch refused: a run pod's launcher left no character owners for ${unread.join(", ")} (${LAUNCH_CONTEXT_FILE}), and hygiene cannot read the other runs here`);
+      console.error(`[wrathbench] launch refused: a run pod's launcher left no character owners for ${unread.join(", ")} (${LAUNCH_CONTEXT_ENV}), and hygiene cannot read the other runs here`);
       process.exit(2);
     }
   }

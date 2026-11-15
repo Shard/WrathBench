@@ -41,7 +41,7 @@ import { tempDirs } from "./temp-dirs";
 import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { RUN_POD_STAMP_ENV } from "../runner/src/drivers";
 import { loadRunConfig, newSessionToken } from "../runner/src/config";
-import { LAUNCH_CONTEXT_FILE, readLaunchContext } from "../runner/src/launch-context";
+import { LAUNCH_CONTEXT_ENV, launchContextOf } from "../runner/src/launch-context";
 import { Trajectory } from "../runner/src/trajectory";
 import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
 import { KEY_HEX, SENTINEL } from "../runner/test/fixtures/store-secrets";
@@ -635,7 +635,7 @@ describe("PodLauncher against a fake API", () => {
     }
   });
 
-  test("the run directory is staged before the pod: made by the fleet, its launch context beside it, a continuation's predecessor found where it is", async () => {
+  test("the run directory is staged before the pod: made by the fleet, its launch context in the env, a continuation's predecessor found where it is", async () => {
     const api = new FakeApi();
     try {
       const runs = tempDir("wb-run-pod-runs-");
@@ -644,10 +644,12 @@ describe("PodLauncher against a fake API", () => {
       const argsOf = (from: string) => ["--driver", "codex", "--model", "gpt-6", "--account", "runner7", "--continue-from", from];
       const mountsOf = (pod: Pod) => pod.spec.containers[0]!.volumeMounts!.filter((m) => m.subPath?.startsWith("runs") === true).map((m) => [m.subPath, m.readOnly ?? false]);
 
+      const contextOf = (pod: Pod) => launchContextOf({ [LAUNCH_CONTEXT_ENV]: envOf(pod)[LAUNCH_CONTEXT_ENV]?.value });
+
       // Found nowhere: no mount at all, so the kubelet never makes an empty one.
       const h0 = await launcher(api).start(launch(dir, { args: argsOf(pred) }));
-      expect(existsSync(join(dir, LAUNCH_CONTEXT_FILE))).toBe(true);
-      expect(readLaunchContext(dir)?.characterOwners).toEqual({ RUNNER7: {} });
+      expect(existsSync(dir)).toBe(true);
+      expect(contextOf(api.only())?.characterOwners).toEqual({ RUNNER7: {} });
       expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false]]);
       await h0.stop(0);
 
@@ -667,8 +669,22 @@ describe("PodLauncher against a fake API", () => {
       // A resume mounts no predecessor and reads no owners.
       const h3 = await launcher(api).start(launch(dir, { resume: true, args: ["--resume", basename(dir)] }));
       expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false]]);
-      expect(readLaunchContext(dir)?.characterOwners).toBeUndefined();
+      expect(contextOf(api.only())?.characterOwners).toBeUndefined();
       await h3.stop(0);
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("an arm with its own command and flags run.ts does not know is staged all the same: only the supervisor's flags are read", async () => {
+    const api = new FakeApi();
+    try {
+      const dir = join(tempDir("wb-run-pod-runs-"), launch("").spec.runId);
+      const h = await launcher(api).start(launch(dir, { image: "ghcr.io/shard/wrathbench-runner:probe-x-0123456789ab", command: ["/app/harness"], args: ["--driver", "claude-code", "--account", "runner3", "--their-own", "--knob", "7"] }));
+      const pod = api.only();
+      expect(pod.spec.containers[0]!.command).toEqual(["/app/harness"]);
+      expect(launchContextOf({ [LAUNCH_CONTEXT_ENV]: envOf(pod)[LAUNCH_CONTEXT_ENV]?.value })?.characterOwners).toEqual({ RUNNER3: {} });
+      await h.stop(0);
     } finally {
       api.stop();
     }

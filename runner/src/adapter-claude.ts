@@ -142,7 +142,7 @@ import {
   usageKeyOf,
   type UsageWindow,
 } from "./subscription-usage";
-import { readLaunchContext } from "./launch-context";
+import { launchContextOf } from "./launch-context";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "@wrathbench/mcp";
 import type { Trajectory } from "./trajectory";
@@ -1084,7 +1084,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const thresholds = thresholdsOf(config.usageMaxPct);
   const usage = new SubscriptionUsageTracker(usageKeyOf(config, DEFAULT_CLAUDE_TOKEN_ENV)!, (u) => trajectory.recordSubscriptionUsage(u, turn));
   // The credential's newest reading from before this run (`SubscriptionUsageTracker.seed`).
-  usage.seed(newestCredentialUsage(config.runsDir, usage.credential, readLaunchContext(join(config.runsDir, config.runId))?.subscriptionUsage));
+  usage.seed(newestCredentialUsage(config.runsDir, usage.credential, launchContextOf(process.env)?.subscriptionUsage));
   /** A spent quota's pause, waiting for its window's reset when one is known. */
   const quotaPause = (l: { reason: PauseReason; detail: string; resetAt?: number }): Promise<LoopOutcome> => {
     const notBefore = l.reason === "quota-exhausted" ? usage.quotaReset(Date.now(), l.resetAt, cliModel ?? config.model) : undefined;

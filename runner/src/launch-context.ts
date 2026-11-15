@@ -1,6 +1,6 @@
 /**
  * What the runner would read from its sibling runs, read by the launcher
- * instead and left in the run directory before the run starts.
+ * instead and handed to the run in its environment.
  *
  * A run pod mounts its own run directory and nothing else of the runs tree
  * (`infra/run-pod.ts`, `buildRunPod`): a codex model's own runtime can read
@@ -19,20 +19,21 @@
  *   counts them. A sibling that records its character after the launch is
  *   not in it, and reads as foreign.
  *
- * The file sits in a directory the run's model can write to, so it is parsed
- * as untrusted, and read only before the model's first turn. The launcher
- * writes it afresh on every launch, a resume's included.
+ * It travels as one environment variable, `WRATHBENCH_LAUNCH_CONTEXT`, rather
+ * than a file in the run directory: the launcher then writes nothing into a
+ * directory a model can write to, and a runner image built before this
+ * existed, which would take an unknown file there for a run already on disk,
+ * simply never reads it. Read through a parser all the same. The snippet
+ * sandbox's env allowlist does not forward it.
  */
 
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 import { DEFAULT_ACCOUNT } from "./config";
 import { characterOwners, type CharacterOwner } from "./hygiene";
 import { deploymentOwnGuids } from "./session-record";
 import { newestByCredential, parseSubscriptionUsage, readCredentialUsage, type SubscriptionUsage } from "./subscription-usage";
 
-export const LAUNCH_CONTEXT_FILE = "launch-context.json";
+export const LAUNCH_CONTEXT_ENV = "WRATHBENCH_LAUNCH_CONTEXT";
 
 const Owner = z.object({ runId: z.string(), ended: z.boolean() });
 const LaunchContextSchema = z.object({
@@ -75,18 +76,18 @@ export function buildLaunchContext(o: BuildLaunchContextOptions): LaunchContext 
   };
 }
 
-/** Written whole and renamed into place. */
-export function writeLaunchContext(runDir: string, ctx: LaunchContext): void {
-  const path = join(runDir, LAUNCH_CONTEXT_FILE);
-  writeFileSync(`${path}.tmp`, JSON.stringify(ctx, null, 2) + "\n");
-  renameSync(`${path}.tmp`, path);
+/** The context as the variable's value. */
+export function encodeLaunchContext(ctx: LaunchContext): string {
+  return JSON.stringify(ctx);
 }
 
-/** The run directory's context, or undefined when it has none or it does not parse. */
-export function readLaunchContext(runDir: string): LaunchContext | undefined {
+/** The context the launcher handed this process, or undefined when it handed none or it does not parse. */
+export function launchContextOf(env: Readonly<Record<string, string | undefined>>): LaunchContext | undefined {
+  const value = env[LAUNCH_CONTEXT_ENV];
+  if (value === undefined || value === "") return undefined;
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(join(runDir, LAUNCH_CONTEXT_FILE), "utf8"));
+    raw = JSON.parse(value);
   } catch {
     return undefined;
   }

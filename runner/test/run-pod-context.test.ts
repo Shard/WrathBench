@@ -1,6 +1,6 @@
 /**
  * run.ts in a run pod, which mounts only its own run directory: hygiene takes
- * the owners its launcher read (`launch-context.ts`), and a fresh launch with
+ * the owners its launcher read and handed over (`launch-context.ts`), and a fresh launch with
  * none is refused before anything is written, never run on an empty map.
  * run.ts runs as a subprocess with the stub driver against a fake module that
  * answers only the character listing and delete.
@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { RUN_POD_STAMP_ENV } from "../src/drivers";
-import { writeLaunchContext } from "../src/launch-context";
+import { encodeLaunchContext, LAUNCH_CONTEXT_ENV, type LaunchContext } from "../src/launch-context";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -34,13 +34,13 @@ function fakeModule(chars: { name: string; guid: string; level?: number }[]) {
   return { url: `http://127.0.0.1:${server.port}`, deleted, stop: () => server.stop(true) };
 }
 
-async function launchInPod(runsDir: string, moduleUrl: string, runId: string): Promise<{ code: number; stderr: string }> {
+async function launchInPod(runsDir: string, moduleUrl: string, runId: string, context?: LaunchContext): Promise<{ code: number; stderr: string }> {
   const script = join(runsDir, "..", "stub.json");
   writeFileSync(script, JSON.stringify([{ content: "hello", toolCalls: [] }]));
   const proc = Bun.spawn({
     cmd: [process.execPath, RUN_TS, "--driver", "stub", "--stub", script, "--runs-dir", runsDir, "--module-url", moduleUrl, "--account", "RUNNER2", "--race", "3", "--class", "2", "--step-interval-ms", "0", "--episode", "freeplay", "--run-id", runId],
     cwd: runsDir,
-    env: { ...process.env, WRATHBENCH_MODULE_URL: moduleUrl, WRATHBENCH_MODULE_SECRET: undefined, [RUN_POD_STAMP_ENV]: "1" },
+    env: { ...process.env, WRATHBENCH_MODULE_URL: moduleUrl, WRATHBENCH_MODULE_SECRET: undefined, [RUN_POD_STAMP_ENV]: "1", [LAUNCH_CONTEXT_ENV]: context === undefined ? undefined : encodeLaunchContext(context) },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -68,13 +68,13 @@ describe("run.ts in a run pod", () => {
     const runsDir = join(tempDir("wrathbench-run-pod-ctx-"), "runs");
     mkdirSync(join(runsDir, "pod-run"), { recursive: true });
     // The sibling that owns Novice is not in this pod's runs directory at all: only the launcher saw it.
-    writeLaunchContext(join(runsDir, "pod-run"), { characterOwners: { RUNNER2: { novice: { runId: "paused-sibling", ended: false } } }, subscriptionUsage: [], ownGuids: [] });
+    const context: LaunchContext = { characterOwners: { RUNNER2: { novice: { runId: "paused-sibling", ended: false } } }, subscriptionUsage: [], ownGuids: [] };
     const mod = fakeModule([
       { name: "Novice", guid: "311", level: 1 },
       { name: "Stray", guid: "312", level: 1 },
     ]);
     try {
-      const { stderr } = await launchInPod(runsDir, mod.url, "pod-run");
+      const { stderr } = await launchInPod(runsDir, mod.url, "pod-run", context);
       expect(mod.deleted).toEqual(["Stray"]);
       expect(stderr).toContain("Novice");
       expect(existsSync(join(runsDir, "pod-run", "meta.json"))).toBe(true);

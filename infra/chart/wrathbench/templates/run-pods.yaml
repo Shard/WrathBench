@@ -109,8 +109,8 @@ docs/RUNBOOK.md "Run pods"). Three objects:
 
     What a run pod does NOT get, deliberately: the runs directory (only its
     own run directory, and a continuation's predecessor read-only; the
-    launcher reads what run.ts needs of the other runs and leaves it in
-    launch-context.json), write access to the wiki, the config store (run.ts
+    launcher reads what run.ts needs of the other runs and hands it over as
+    WRATHBENCH_LAUNCH_CONTEXT), write access to the wiki, the config store (run.ts
     never opens it), the database env (fixture staging is the fleet's), and any
     ANTHROPIC_* variable (claude-code is subscription-only; infra/run-pod.ts
     refuses to build a pod carrying one, and infra/run-pod.test.ts asserts it

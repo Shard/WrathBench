@@ -1897,8 +1897,8 @@ read another run's records; a freeplay continuation also gets its
 predecessor's directory read-only, live or archived, wherever it is (none when
 it is in neither place, and the run starts fresh as it always has). The
 launcher makes the directory as the fleet's user before the pod exists, and
-reads for it what run.ts would read from the other runs, into
-`runs/<id>/launch-context.json`: hygiene's character owners on the launch's
+reads for it what run.ts would read from the other runs, handed over as
+`WRATHBENCH_LAUNCH_CONTEXT`: hygiene's character owners on the launch's
 accounts (a fresh launch in a pod without them exits 2 before writing
 anything), the run's credential's newest usage reading, and the guids the
 other runs on its world have recorded, which its session record counts as
@@ -1906,7 +1906,9 @@ the deployment's own. That last is a snapshot: a character a sibling records
 after the launch reads as foreign in this run's record. Two things the runner
 does to the runs directory are the launcher's for a pod: refusing a fresh id
 the archive already holds, and archiving a run that terminated with no model
-response, which it does once the pod is gone.
+response, which it does once the pod is gone. An arm image built before this
+reads none of the context: its hygiene sees no owners but the ones on its own
+account's `keep` list, and its own archive attempt fails and is logged.
 
 **Codex episodes.** On the cluster every codex episode runs as a run pod —
 freeplay, probing and scored alike — whatever `runPods` says, and no store
