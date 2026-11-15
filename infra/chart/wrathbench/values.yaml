@@ -510,15 +510,19 @@ worlds:
 # "Camera"). OFF by default, and off renders exactly what the chart rendered
 # before it existed. On:
 #
-#   - the shared world's pod and the world-per-eval template carry the camera
-#     client and its director as sidecars; a world gets them only while a
-#     camera slot is free (`maxConcurrent`, the shared world's own counted),
-#     so a world without one is unchanged;
+#   - a camera is a pod of its own (templates/_camera.tpl), never a container
+#     in a world's: the fleet keeps one on the shared world, and the world
+#     launcher starts one beside a world per eval once the world is up, each
+#     while a slot is free (`maxConcurrent`, one always held for the shared
+#     world's). A camera can never hold a world short of Ready, delay its
+#     deletion, or stall a release;
+#   - a CronJob sweeps the runs tree every ten minutes: clips assembled,
+#     frames pruned (templates/camera.yaml);
 #   - every worldserver makes a GM invisible before it is on the map
 #     (GM.LoginState = 1, GM.Visible = 0). The harness accounts never carry
 #     GM; the operator's SPECTATOR now also enters invisible, in GM mode;
-#   - turning it on or off changes the shared worldserver's pod, so it is a
-#     release window like any worldserver change.
+#   - turning it on or off changes the worldservers' env (those two
+#     settings), so it is a release window like any worldserver change.
 #
 # Needs, before it is turned on: the CAMERA account (`bun wb accounts camera`,
 # password on stdin) with the same password under `passwordKey` in
@@ -535,8 +539,7 @@ camera:
   # Seconds between the timelapse's frames. Events keep a burst whatever this is.
   intervalSeconds: 10
   # Hours still frames are kept after the assembly that covers them; the clips
-  # are kept. The shared world's director prunes them (infra/camera/sweep.ts),
-  # so its camera must be on for any frame to be pruned.
+  # are kept. The camera sweep CronJob prunes them (infra/camera/sweep.ts).
   frameKeepHours: 24
   # gpu: Vulkan on the node's /dev/dri, through the device plugin. software:
   # Mesa's lavapipe on the CPU, no claim, several cores per camera.
@@ -567,9 +570,18 @@ camera:
         ephemeral-storage: 256Mi
       limits:
         memory: 6Gi
+  # The sweep CronJob: ffmpeg's encodes, at nice 19.
+  sweep:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 1Gi
   director:
     # The follow loop, the frame ring (about 45 s of JPEGs in memory) and
-    # ffmpeg's encode at the run's end.
+    # ffmpeg's encode when it leaves a subject.
     resources:
       requests:
         cpu: 50m

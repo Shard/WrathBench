@@ -56,13 +56,8 @@ spec:
         {{- include "wrathbench.podLabels" . | nindent 8 }}
         app.kubernetes.io/component: worldserver
         {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
-      {{- if or .Values.podAnnotations .Values.camera.enabled }}
-      annotations:
-        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
-        {{- if .Values.camera.enabled }}
-        # `kubectl exec|logs` with no -c lands on the world, not a camera.
-        kubectl.kubernetes.io/default-container: worldserver
-        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
       {{- with .Values.priorityClassName }}
@@ -86,9 +81,6 @@ spec:
         {{- include "wrathbench.worldserver.waitForDb" . | nindent 8 }}
       containers:
         {{- include "wrathbench.worldserver.container" (dict "ctx" . "world" false) | nindent 8 }}
-        {{- if .Values.camera.enabled }}
-        {{- include "wrathbench.camera.containers" (dict "ctx" . "world" false) | nindent 8 }}
-        {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -96,6 +88,4 @@ spec:
         - name: temp
           emptyDir:
             sizeLimit: {{ .Values.worldserver.tempSizeLimit }}
-        {{- if .Values.camera.enabled }}
-        {{- include "wrathbench.camera.volumes" . | nindent 8 }}
-        {{- end }}
+

@@ -18,7 +18,7 @@ Screenshots and video are a second exception (operator, 2026-11-15). A camera ma
 
 - No game client can connect. The game protocol is never exposed publicly; the only outside surface is the MCP.
 - No web client, no spectate-and-type, no interface that amounts to a person playing through an agent.
-- The one client login that exists is the operator's own inspection account, created by `infra/spectator-account.ts` on the operator's realm and reached only over a port-forward on the operator's machine. It is how the operator watches a run, not a way for anyone else to play, and it stays in the tree.
+- The operator's own inspection account, created by `infra/spectator-account.ts` on the operator's realm, is the one client login a person uses, reached only over a port-forward on the operator's machine. It is how the operator watches a run, not a way for anyone else to play, and it stays in the tree.
 - The camera is an unattended client on its own account. It is invisible to every other session and only takes pictures; no one can play through it.
 - No recruited players, no public realm listing, no advertised server.
 

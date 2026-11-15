@@ -210,6 +210,7 @@ import {
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
+import { ensureSharedCamera, readCameraTemplate } from "./camera-pods";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
 import type { FleetWorldView } from "../runner/viewer/api-types";
 import { fleetWorldViews, mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, worldUsedBy, WorldStore, WORLDS_DIR } from "./world";
@@ -378,6 +379,10 @@ export async function sweepNames(
 
 /** How often the supervisor settles the worlds no roster holds (`reconcileWorlds`); the first is at its start. */
 export const WORLDS_RECONCILE_EVERY_MS = 60 * 60_000;
+/** How often the fleet checks the shared world's camera is there (infra/camera-pods.ts). */
+export const CAMERA_ENSURE_EVERY_MS = 60_000;
+/** The shared world's port, which its camera's director forwards 127.0.0.1:8085 to: the un-prefixed `worldserver` Service. */
+const SHARED_CAMERA_TARGET = "worldserver:8085";
 
 /** The worlds the fleet page lists, and their boot hold, off the records under data/worlds; nothing when there are none. */
 function worldsState(now: number = Date.now()): { worlds?: FleetWorldView[]; worldsHold?: string } {
@@ -1057,6 +1062,8 @@ async function main(): Promise<void> {
   let codexPrunedAt = 0;
   let worldsReconciledAt = 0;
   let worldsReconciling = false;
+  let cameraEnsuredAt = 0;
+  let cameraEnsuring = false;
   // Job bookkeeping: which job holds which account, the job itself
   // for every live process, and the last plan's waiting/skipped rows for
   // --status. A skip reason is logged once per (job, reason), not once a tick.
@@ -2221,6 +2228,22 @@ async function main(): Promise<void> {
         worldsReconciling = true;
         void runWorldsReconcile(store, say).finally(() => {
           worldsReconciling = false;
+        });
+      }
+    }
+    // The shared world's camera (infra/camera-pods.ts), when the chart's
+    // camera block is on: put back within a minute whenever it is missing.
+    // Its own pod, owned by this one; nothing here waits on it.
+    if (!stopping && !cameraEnsuring && parseOpts.onCluster && Date.now() - cameraEnsuredAt >= CAMERA_ENSURE_EVERY_MS) {
+      cameraEnsuredAt = Date.now();
+      const template = readCameraTemplate();
+      const client = template !== undefined ? K8sClient.inCluster() : null;
+      if (template !== undefined && client !== null) {
+        cameraEnsuring = true;
+        const podName = process.env["POD_NAME"];
+        const podUid = process.env["POD_UID"];
+        void ensureSharedCamera({ client, template, target: SHARED_CAMERA_TARGET, log: say, ...(podName && podUid ? { owner: { name: podName, uid: podUid } } : {}) }).finally(() => {
+          cameraEnsuring = false;
         });
       }
     }
