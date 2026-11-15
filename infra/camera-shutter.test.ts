@@ -104,6 +104,16 @@ describe("the shutter", () => {
     expect(kept.find((k) => k.frame.ts === t0 + 86_000)).toBeUndefined();
   });
 
+  test("a level-up and the turn-in that caused it are one burst, the level-up's", () => {
+    const t0 = 1_762_000_000_000;
+    const quest: TimedEvent = { ts: t0 + 60_000, type: "quest", detail: "turned in quest 33" };
+    const level: TimedEvent = { ts: t0 + 60_000, type: "level", detail: "reached level 3" };
+    const kept = capture(new Shutter({ intervalMs: 10_000 }), t0, t0 + 150_000, [quest, level], 2_000);
+    const burst = kept.filter((k) => k.kind === "event");
+    expect(burst.length).toBe(41);
+    expect(new Set(burst.map((k) => k.event?.detail))).toEqual(new Set(["reached level 3"]));
+  });
+
   test("start marks the first frame and end the last; neither keeps a window", () => {
     const t0 = 1_762_000_000_000;
     const s = new Shutter({ intervalMs: 10_000 });

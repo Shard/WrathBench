@@ -8,7 +8,8 @@
  * still finds the lead-in it wants:
  *
  * - inside an event's window (`leadMs` before it to `tailMs` after) it is kept
- *   as an `event` frame, tagged with the nearest such event;
+ *   as an `event` frame, tagged with the nearest such event (of events at one
+ *   moment, a level-up with its turn-in, the weightier);
  * - otherwise it is kept as an `interval` frame when `intervalMs` has passed
  *   since the last frame kept;
  * - otherwise it is dropped.
@@ -66,6 +67,17 @@ export function cameraEventOf(row: SessionEventRow, bosses: ReadonlySet<number>)
     default:
       return null;
   }
+}
+
+/** Which of two events that land together names the burst: a level-up from a turn-in is the level-up's clip. */
+const RANK: Record<CameraEventType, number> = { level: 5, boss: 4, death: 3, quest: 2, zone: 1, start: 0, end: 0 };
+/** Events this close are one moment. */
+const SAME_MOMENT_MS = 3_000;
+
+/** Whether `e` names frame `t` over `best`: the nearer one, or of two at one moment the weightier. */
+function closer(t: number, e: TimedEvent, best: TimedEvent): boolean {
+  if (Math.abs(e.ts - best.ts) <= SAME_MOMENT_MS) return RANK[e.type] > RANK[best.type] || (RANK[e.type] === RANK[best.type] && Math.abs(t - e.ts) < Math.abs(t - best.ts));
+  return Math.abs(t - e.ts) < Math.abs(t - best.ts);
 }
 
 export interface Captured {
@@ -151,7 +163,7 @@ export class Shutter {
       const w = this.window(e.type);
       if (w.lead === 0) continue;
       if (f.ts < e.ts - w.lead || f.ts > e.ts + w.tail) continue;
-      if (best === null || Math.abs(f.ts - e.ts) < Math.abs(f.ts - best.ts)) best = e;
+      if (best === null || closer(f.ts, e, best)) best = e;
     }
     // `start`: the first frame at or after it; `end`: the last frame the camera has.
     const mark = this.events.find((e) => (e.type === "start" && f.ts >= e.ts && e.ts > this.lastKept) || (e.type === "end" && last));
