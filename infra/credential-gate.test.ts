@@ -15,7 +15,8 @@ import { parseCredentials } from "../runner/src/credential-slots";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../runner/viewer/public-projection";
 import type { EntrySummary, FleetResponse, ResumeHoldCode } from "../runner/viewer/api-types";
-import { parseFleet, planResumes, planTick, resumeNotBefore, rosterModels, type FleetConfig } from "./run-fleet";
+import { parseFleet, planResumes, resumeNotBefore, rosterModels, type FleetConfig } from "./run-fleet";
+import { planOf } from "./fixtures/tick";
 import type { JobSpawn } from "./run-fleet-config";
 import {
   CREDENTIAL_USAGE_SIDECAR,
@@ -26,6 +27,7 @@ import {
   gateSpawns,
   placeRef,
   publishedReads,
+  type ReadHold,
   readCredentialUsage,
   readHoldsOf,
   readsGoUsage,
@@ -35,7 +37,7 @@ import {
 } from "./run-fleet-credentials";
 import type { GoFetch } from "../runner/src/opencode-go";
 import { awaitUsageBudget } from "./run-roster";
-import { localCredentialStatuses, readerCredentialGate } from "./run-fleet-status";
+import { localCredentialStatuses, readerCredentialReads } from "./run-fleet-status";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -91,17 +93,24 @@ function statesOf(cfg: FleetConfig, runs: RunFact[] = []): ModelState[] {
  * run in `runs` is a job of the supervisor's in flight, on the credential its
  * run recorded, as the tick reads it back.
  */
-function picks(cfg: FleetConfig, runs: RunFact[] = [], gate = credentialGate(cfg.credentials, [], runs, NOW)) {
+function picks(cfg: FleetConfig, runs: RunFact[] = [], usage: GateInputs = {}) {
   const roster = rosterModels(cfg.roster);
-  const inFlight = runs
+  const running = runs
     .filter((f) => f.live)
-    .map((f) => ({ name: f.runId, account: f.account ?? "RUNNER4", refs: roster.filter((r) => r.model === f.model).map((r) => r.name) }));
-  const plan = planTick(cfg, statesOf(cfg, runs), () => undefined, STAMP, [], [], undefined, liveCredentials(runs, roster), new Set(), inFlight, [], gate);
+    .map((f) => ({ name: f.runId, account: f.account ?? "RUNNER4", refs: roster.filter((r) => r.model === f.model).map((r) => r.name), runIds: [f.runId] }));
+  const plan = planOf(cfg, { runs, running, now: usage.now ?? NOW, stamp: STAMP, ...(usage.usage !== undefined ? { usage: usage.usage } : {}), ...(usage.readHolds !== undefined ? { readHolds: usage.readHolds } : {}) });
   return {
     plan,
-    on: Object.fromEntries(plan.policy.map((p) => [p.job.ref, p.job.placed?.[p.job.ref]?.id ?? null])),
-    held: Object.fromEntries(plan.heldPicks.map((h) => [h.name, h.why])),
+    on: Object.fromEntries(plan.picks.map((p) => [p.job.ref, p.job.placed?.[p.job.ref]?.id ?? null])),
+    held: Object.fromEntries(plan.holds.map((h) => [h.name, h.why])),
   };
+}
+
+/** What a gate reads beyond the runs: the usage readings, the keys' read holds, and the clock. */
+interface GateInputs {
+  usage?: readonly SubscriptionUsage[];
+  readHolds?: ReadonlyMap<string, ReadHold>;
+  now?: number;
 }
 
 function fact(over: Partial<RunFact>): RunFact {
@@ -196,9 +205,9 @@ describe("a run takes a slot on the first credential that serves it and has room
 
   test("the spawn carries the credential to the run: its id, its variable's NAME, its thresholds", () => {
     const { plan } = picks(fleet());
-    const spawn = planTick(fleet(), statesOf(fleet()), () => undefined, STAMP).policy.find((p) => p.job.ref === "opus")!;
+    const spawn = plan.picks.find((p) => p.job.ref === "opus")!;
     expect(spawn.job.placed?.["opus"]).toEqual({ id: "claude-1", env: "CLAUDE_CODE_OAUTH_TOKEN", usageMaxPct: { scored: 80, freeplay: 80 } });
-    expect(plan.policy.length).toBeGreaterThan(0);
+    expect(plan.picks.length).toBeGreaterThan(0);
   });
 });
 
@@ -218,15 +227,13 @@ describe("the per-driver host cap", () => {
 describe("a credential's budget holds new starts", () => {
   test("a subscription over its scored threshold holds scored starts; the other subscription still takes them", () => {
     const cfg = fleet();
-    const gate = credentialGate(cfg.credentials, [reading("claude-1", 85)], [], NOW);
-    const { on, held } = picks(cfg, [], gate);
+    const { on, held } = picks(cfg, [], { usage: [reading("claude-1", 85)] });
     expect(on["opus"]).toBe("claude-2");
     expect(held["sonnet"]).toBe(
       "no credential has room (credential claude-1: at or over its scored usage threshold — held until its usage window resets; cap: credential claude-2 1/1 in flight)",
     );
     // Every subscription spent: nothing claude starts, and the words carry no figure.
-    const both = credentialGate(cfg.credentials, [reading("claude-1", 85), reading("claude-2", 100)], [], NOW);
-    const all = picks(cfg, [], both);
+    const all = picks(cfg, [], { usage: [reading("claude-1", 85), reading("claude-2", 100)] });
     expect(Object.keys(all.on)).toEqual(["glm"]);
     expect(Object.values(all.held).join(" ")).not.toMatch(/\d+%/);
   });
@@ -327,10 +334,10 @@ describe("the account pool", () => {
   test("every unreserved account is drawn from it, one live session each, under its cap", () => {
     const cfg = fleet({ accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4"], max: 2 } });
     const { plan } = picks(cfg);
-    expect(plan.policy.map((p) => p.account)).toEqual(["RUNNER", "RUNNER2"]);
+    expect(plan.picks.map((p) => p.account)).toEqual(["RUNNER", "RUNNER2"]);
     // A live pool session counts against the cap.
-    const live = planTick(cfg, statesOf(cfg), () => undefined, STAMP, [], [], undefined, new Map(), new Set(), [{ name: "x", account: "RUNNER4", refs: ["haiku"] }]);
-    expect(live.policy.map((p) => p.account)).toEqual(["RUNNER"]);
+    const live = planOf(cfg, { now: NOW, stamp: STAMP, running: [{ name: "x", account: "RUNNER4", refs: ["haiku"] }] });
+    expect(live.picks.map((p) => p.account)).toEqual(["RUNNER"]);
   });
 
   test("reserved accounts are never the pool's: SMOKE*, PROBE, the gate's, and an enabled pin's", () => {
@@ -476,7 +483,7 @@ describe("a per-model cap on a Claude subscription", () => {
         { usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H, family: "opus" },
       ],
     };
-    const { on, held } = picks(cfg, [], credentialGate(cfg.credentials, [capped], [], NOW));
+    const { on, held } = picks(cfg, [], { usage: [capped] });
     expect(on).toEqual({ son: "claude-1" });
     expect(held["op"]).toContain("a usage window is spent");
   });
@@ -589,11 +596,11 @@ describe("the seeded example", () => {
     expect(cfg.accounts.pool).toEqual(["POOL01", "POOL02"]);
     expect(cfg.credentials.length).toBeGreaterThan(0);
     expect(cfg.credentials.every((c) => !c.enabled)).toBe(true);
-    const plan = planTick(cfg, statesOf(cfg), () => undefined, STAMP);
+    const plan = planOf(cfg, { now: NOW, stamp: STAMP });
     expect(plan.pinned).toEqual([]);
     expect(plan.queue.assign).toEqual([]);
-    expect(plan.policy).toEqual([]);
-    expect(plan.heldPicks.length).toBeGreaterThan(0);
+    expect(plan.picks).toEqual([]);
+    expect(plan.holds.length).toBeGreaterThan(0);
   });
 });
 
@@ -639,7 +646,7 @@ describe("OpenCode Go", () => {
     await go.refresh(config.credentials, config.roster);
     expect(f.urls).toEqual(["https://opencode.ai/inference/go/v1/usage"]);
     expect(f.auth).toEqual(["Bearer fake-go-key"]);
-    const { on, held } = picks(config, [], credentialGate(config.credentials, go.observations(), [], now));
+    const { on, held } = picks(config, [], { usage: go.observations(), now });
     expect(on).toEqual({ gofree: "go-free" });
     expect(held["gopaid"]).toContain("credential go-paid: at or over its scored usage threshold");
     now += 60_000;
@@ -689,12 +696,14 @@ describe("OpenCode Go", () => {
     go.noteOverages(runs);
     return credentialGate(config.credentials, go.observations(), [], NOW, go.readHolds(config.credentials));
   };
+  /** What the tick reads off `go` once it has refreshed. */
+  const inputsOf = (go: FleetGoUsage): GateInputs => ({ usage: go.observations(), readHolds: go.readHolds(config.credentials) });
 
   test("a refused key (401) holds every Go credential naming it, free side included, said once with its code", async () => {
     const said: string[] = [];
     const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(401, "api_key_expired"), now: () => NOW, say: (l) => said.push(l) });
     const gate = await gateAfter(go);
-    const { on, held } = picks(config, [], gate);
+    const { on, held } = picks(config, [], inputsOf(go));
     expect(on).toEqual({});
     expect(held["gopaid"]).toBe("credential go-paid: its key was refused (auth-failed) — held until a usage read succeeds");
     expect(held["gofree"]).toBe("credential go-free: its key was refused (auth-failed) — held until a usage read succeeds");
@@ -712,13 +721,15 @@ describe("OpenCode Go", () => {
   });
 
   test("a key that may not read usage (403) holds only the credential read; an unread endpoint (5xx, timeout) holds nothing", async () => {
-    const forbidden = await gateAfter(new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(403), now: () => NOW }));
-    const a = picks(config, [], forbidden);
+    const fgo = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(403), now: () => NOW });
+    await gateAfter(fgo);
+    const a = picks(config, [], inputsOf(fgo));
     expect(a.on).toEqual({ gofree: "go-free" });
     expect(a.held["gopaid"]).toContain("no-access");
     for (const fetch of [refusing(502), (async () => Promise.reject(new DOMException("t", "TimeoutError"))) as unknown as GoFetch]) {
       const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch, now: () => NOW });
-      const b = picks(config, [], await gateAfter(go));
+      await gateAfter(go);
+      const b = picks(config, [], inputsOf(go));
       expect(b.on).toEqual({ gopaid: "go-paid", gofree: "go-free" });
       expect(go.readHolds(config.credentials).size).toBe(0);
     }
@@ -729,7 +740,7 @@ describe("OpenCode Go", () => {
     const go = new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: fetchOf([okBody(20)]), now: () => now });
     const billed = fact({ runId: "fleet-go-1", credential: "go-paid", credentialOverageAt: NOW + 1_000 });
     const gate = await gateAfter(go, [billed]);
-    expect(picks(config, [], gate).held["gopaid"]).toBe("credential go-paid: billed past its allowance (overage) — held until its usage shows room");
+    expect(picks(config, [], inputsOf(go)).held["gopaid"]).toBe("credential go-paid: billed past its allowance (overage) — held until its usage shows room");
     const [paid] = credentialStatuses({ credentials: config.credentials, book: new SlotBook(config.credentials, {}), gate, runs: [], env: { OPENCODE_KEY: "fake-go-key" }, reads: go.lastReads() });
     expect(paid!.holds?.scored?.code).toBe("overage");
     expect(paid!.health?.state).toBe("overage");
@@ -792,13 +803,13 @@ describe("OpenCode Go", () => {
     await go.refresh(onRuns.credentials, onRuns.roster);
     expect(f.urls).toEqual(["https://opencode.ai/inference/go/v1/usage"]);
     // 88% is under a runs budget's only usage line, a spent window.
-    expect(picks(onRuns, [], credentialGate(onRuns.credentials, go.observations(), [], now, go.readHolds(onRuns.credentials))).on).toEqual({ gopaid: "go-paid", gofree: "go-free" });
+    expect(picks(onRuns, [], { usage: go.observations(), readHolds: go.readHolds(onRuns.credentials), now }).on).toEqual({ gopaid: "go-paid", gofree: "go-free" });
     now += 60_000;
     await go.refresh(onRuns.credentials, onRuns.roster);
     const gate = credentialGate(onRuns.credentials, go.observations(), [], now, go.readHolds(onRuns.credentials));
     expect(gate.holdReasonOf("go-paid", "e90")?.code).toBe("usage-spent");
     expect(gate.holdReasonOf("go-paid", "freeplay")?.code).toBe("usage-spent");
-    expect(picks(onRuns, [], gate).on).toEqual({ gofree: "go-free" });
+    expect(picks(onRuns, [], { usage: go.observations(), readHolds: go.readHolds(onRuns.credentials), now }).on).toEqual({ gofree: "go-free" });
   });
 
   test("a runs-budget Go credential's refused key holds both sides; no access holds the paid side only", async () => {
@@ -834,7 +845,8 @@ describe("OpenCode Go", () => {
     expect(published.find((s) => s.id === "go-free")!.lastRead?.classification).toBe("no-access");
     expect([...publishedReads(config.credentials, published).keys()]).toEqual(["go-paid"]);
     const runsDir = tempDir("wrathbench-reader-gate-");
-    const { gate, reads } = readerCredentialGate(config.credentials, [], NOW, published, runsDir);
+    const { usage, readHolds, reads } = readerCredentialReads(config.credentials, published, runsDir);
+    const gate = credentialGate(config.credentials, usage, [], NOW, readHolds);
     for (const id of ["go-paid", "go-free"]) {
       for (const ep of ["e90", "freeplay"]) expect(gate.holdReasonOf(id, ep)).toEqual(live.holdReasonOf(id, ep));
     }
@@ -844,13 +856,13 @@ describe("OpenCode Go", () => {
     expect(local.find((s) => s.id === "go-paid")!.lastRead?.classification).toBe("no-access");
     expect(local.find((s) => s.id === "go-paid")!.holds?.scored?.code).toBe("no-access");
     // Without the published reads (no state file, or one from before them) nothing is held by a read.
-    expect(readerCredentialGate(config.credentials, [], NOW, undefined, runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
-    expect(readerCredentialGate(config.credentials, [], NOW, [{ id: "go-paid" }], runsDir).gate.holdOf("go-paid", "e90")).toBeUndefined();
+    expect(readerCredentialReads(config.credentials, undefined, runsDir).readHolds.size).toBe(0);
+    expect(readerCredentialReads(config.credentials, [{ id: "go-paid" }], runsDir).readHolds.size).toBe(0);
     // A paid side switched off after its key was refused: its stale refusal holds nothing, on the tick or the reader.
     const off = config.credentials.map((c) => (c.id === "go-paid" ? { ...c, enabled: false } : c));
     const refused = [{ id: "go-paid", lastRead: { at: NOW, http: 401, classification: "auth-failed" as const, since: NOW } }];
     expect(readHoldsOf(off, new Map([["go-paid", refused[0]!.lastRead]])).size).toBe(0);
-    expect(readerCredentialGate(off, [], NOW, refused, runsDir).gate.holdOf("go-free", "freeplay")).toBeUndefined();
+    expect(readerCredentialReads(off, refused, runsDir).readHolds.size).toBe(0);
   });
 
   test("a credential no longer read keeps no poller: switched off, its stale refusal stops holding its siblings; switched on, it is read afresh", async () => {

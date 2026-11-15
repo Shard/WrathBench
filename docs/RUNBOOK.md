@@ -1641,11 +1641,22 @@ stored except an operator's clear.
 
 ```
 bun wb fleet status                       # models table: status, counted/target per episode, why (not) schedulable
-bun wb fleet dry-run                      # the picks the policy would make for the free accounts right now
+bun wb fleet dry-run                      # what the next tick launches, holds and ends, and why
 bun wb fleet clear-model <roster-name>    # forgive a retired/cooling model (not one gone from its provider's list); picked up on the next tick
 ```
 
-Both reports read what is running as the supervisor does: a job whose process
+Both reports print the supervisor's own plan for its next tick. The tick
+gathers one snapshot of what it reads (the config, every run's facts, the
+credentials' readings and holds, the accounts' holders, run pods, worlds, its
+own live jobs and the clock), plans from it with no I/O (`planTick`,
+`infra/run-fleet-plan.ts`), then acts; `--status` and `--dry-run` gather the
+same snapshot from disk and `fleet-state.json` and print that plan, so a
+model the models table calls schedulable but the tick holds reads `held:`
+with the tick's reason, and one it launches says where. What a report cannot
+see is the supervisor's memory of the last seconds: a job handed an account
+that has not spawned yet, or a probe or party spawned so recently that
+neither its row nor its run says its square or its accounts.
+Both read what is running as the supervisor does: a job whose process
 is alive, never a row `fleet-state.json` keeps for a roster that has exited.
 `--dry-run` plans the next tick around that: a job in flight keeps its account
 and its model, and its row says what a restart does to its run; a paused run

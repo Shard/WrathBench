@@ -1503,6 +1503,39 @@ export function accountHolderIn(root: string, account: string | undefined, ownRu
   return undefined;
 }
 
+/**
+ * `accountHolderIn` for every account at once, in one pass over the runs
+ * directory: each account's first holder in the same readdir order, under the
+ * same tests. What a tick's snapshot reads (`TickSnapshot.holders`); an
+ * account absent from the map is free.
+ */
+export function accountHoldersIn(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let dirs: string[];
+  try {
+    dirs = readdirSync(root);
+  } catch {
+    return out;
+  }
+  for (const id of dirs) {
+    const dir = join(root, id);
+    const age = activityAgeMs(dir);
+    if (age === undefined || age >= LIVE_TRAJECTORY_MS) continue;
+    const accounts = accountsOfRunDir(dir).filter((a) => !out.has(a));
+    if (accounts.length === 0) continue;
+    const row = rowOf(dir, id);
+    if (row !== undefined && row.termination_reason !== null && row.termination_reason !== "") continue;
+    if (row !== undefined && row.pause_reason !== null && row.pause_reason !== "") continue;
+    for (const a of accounts) out.set(a, id);
+  }
+  return out;
+}
+
+/** Every account's holder in this checkout's runs directory (`accountHoldersIn`). */
+export function accountHolders(): Map<string, string> {
+  return accountHoldersIn(join(REPO_ROOT, RUNS_DIR));
+}
+
 /** @returns true when the account came free (or was never held). */
 async function awaitAccount(
   spec: Resolved,

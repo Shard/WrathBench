@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignSquares, type ProbeRun } from "../runner/src/campaigns";
 import { campaignLaunch } from "../runner/src/campaign-launch";
@@ -17,10 +17,11 @@ import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
 import { accountsOfRun, DEFAULT_POLICY, type RunFact } from "../runner/src/models";
 import { defsBlock, ONE_AGENT_IMAGE, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig } from "./run-fleet-config";
-import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, planTick, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
+import { planOf } from "./fixtures/tick";
+import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
 import { liveRunStuck, rosterResumes, runProgress } from "./run-fleet-state";
 import { FANOUT_RUN, writeFanoutRun } from "../runner/test/fixtures/fanout";
-import { accountHolderIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
+import { accountHolderIn, accountHoldersIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -66,25 +67,23 @@ describe("a one-agent arm's job", () => {
   });
 
   test("starts on a credential with one slot and a driver cap of one, where a party of five could not", () => {
-    const planned = planTick(cfg, [], () => undefined, STAMP);
-    expect(planned.heldPicks).toEqual([]);
+    const planned = planOf(cfg, { stamp: STAMP });
+    expect(planned.holds.filter((h) => h.by === "pinned")).toEqual([]);
     expect(planned.pinned.map((p) => p.job.name)).toEqual(["deadmines-party-one-agent"]);
     const capped = fleet({ over: { policy: { maxSessions: { "claude-code": 1 } } } });
-    expect(planTick(capped, [], () => undefined, STAMP).pinned).toHaveLength(1);
+    expect(planOf(capped, { stamp: STAMP }).pinned).toHaveLength(1);
   });
 
   test("waits, with the reason, when its credential has no slot, and starts on none of its accounts", () => {
     const none = fleet({ slots: 1 });
     // The slot is held by a live run of another job on the same credential.
-    const held = planTick(none, [], () => undefined, STAMP, [], [], undefined, new Map([["son2", CRED2]]), new Set(), [
-      { name: "other", account: "RUNNER", refs: ["son2"], placed: { son2: { id: CRED2, env: LANE2 } } },
-    ]);
+    const held = planOf(none, { stamp: STAMP, running: [{ name: "other", account: "RUNNER", refs: ["son2"], placed: { son2: { id: CRED2, env: LANE2 } } }] });
     expect(held.pinned).toEqual([]);
-    expect(held.heldPicks.find((h) => h.name === "deadmines-party-one-agent")?.why).toContain("one agent on 5 accounts");
+    expect(held.holds.find((h) => h.name === "deadmines-party-one-agent")?.why).toContain("one agent on 5 accounts");
   });
 
   test("its spawn is one entry on the leader's account, every account held, a campaign file naming each character", () => {
-    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned[0]!.spawn;
+    const spawn = planOf(cfg, { stamp: STAMP }).pinned[0]!.spawn;
     expect(spawn.account).toBe("PARTY1");
     expect(spawn.accounts).toEqual(ACCOUNTS);
     expect(spawn.resumeRunId).toBeUndefined();
@@ -97,7 +96,7 @@ describe("a one-agent arm's job", () => {
   });
 
   test("the roster waits on every account, stages the party as this one run, and launches it with no --character", () => {
-    const spawn = planTick(cfg, [], () => undefined, STAMP).pinned[0]!.spawn;
+    const spawn = planOf(cfg, { stamp: STAMP }).pinned[0]!.spawn;
     const [spec] = resolve(fillEntries(spawn, STAMP), STAMP);
     expect(specAccounts(spec!)).toEqual(ACCOUNTS);
     const req = fanoutStageRequestOf(spec!);
@@ -299,5 +298,50 @@ describe("fleet status reads a fan-out run", () => {
     expect(runProgress(FANOUT_RUN, root)).toMatchObject({ level: 5, xp: 900 });
     // No heartbeat: not live, so no stuck flag either way.
     expect(liveRunStuck(FANOUT_RUN, Date.now(), root)).toBeUndefined();
+  });
+});
+
+describe("every account's holder in one pass", () => {
+  test("accountHoldersIn answers what accountHolderIn answers, account by account", () => {
+    const root = tempDir("wb-holders-");
+    const write = (id: string, o: { account: string; fanout?: string[]; warm?: boolean; termination?: string; pause?: string }): void => {
+      const dir = join(root, id);
+      mkdirSync(dir, { recursive: true });
+      const meta = {
+        runId: id,
+        startedAt: Date.now() - 60_000,
+        config: { account: o.account, ...(o.fanout !== undefined ? { fanout: { characters: o.fanout.length, accounts: o.fanout } } : {}) },
+        ...(o.termination !== undefined ? { termination: { reason: o.termination, detail: null } } : {}),
+        ...(o.pause !== undefined ? { pauseReason: o.pause } : {}),
+      };
+      writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
+      writeFileSync(join(dir, "heartbeat"), "x");
+      // Cold: every artefact older than the three-minute rule.
+      if (o.warm === false) for (const f of ["meta.json", "heartbeat"]) utimesSync(join(dir, f), new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
+    };
+    write("a-warm", { account: "RUNNER" });
+    write("b-cold", { account: "RUNNER2", warm: false });
+    write("c-ended", { account: "RUNNER3", termination: "episode-limit" });
+    write("d-paused", { account: "RUNNER4", pause: "operator-pause" });
+    write("e-fanout", { account: "POOL01", fanout: ["POOL01", "POOL02", "POOL03"] });
+    // Two warm runs on one account: the first in the directory's order holds it, as the one-account read says.
+    write("f-first", { account: "SHARED" });
+    write("g-second", { account: "shared" });
+    // An ended run before a live one on the same account: the live one holds it.
+    write("h-ended", { account: "POOL04", termination: "manual" });
+    write("i-live", { account: "POOL04" });
+    const all = accountHoldersIn(root);
+    for (const a of ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "POOL01", "POOL02", "POOL03", "POOL04", "SHARED", "NOBODY"]) {
+      expect(all.get(a)).toBe(accountHolderIn(root, a, "") as string);
+    }
+    expect([...all.entries()].sort()).toEqual([
+      ["POOL01", "e-fanout"],
+      ["POOL02", "e-fanout"],
+      ["POOL03", "e-fanout"],
+      ["POOL04", "i-live"],
+      ["RUNNER", "a-warm"],
+      ["SHARED", accountHolderIn(root, "SHARED", "")!],
+    ]);
+    expect(accountHoldersIn(join(root, "missing")).size).toBe(0);
   });
 });

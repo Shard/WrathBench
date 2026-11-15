@@ -11,27 +11,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ConfigRefusal,
-  eligibleFrom,
   type EpisodeId,
   type FleetConfig,
   type FleetJob,
   type FleetPreflight,
   type FleetRosterEntry,
+  type JobSource,
   type JobSpawn,
-  parseFleet,
   pinnedJobs,
   policyExclusion,
   poolJobs,
   preflightAccounts,
   type PreflightRecord,
-  probeRunsOf,
   rosterModels,
   scheduledAccounts,
   withoutEvals,
 } from "./run-fleet-config";
 import {
-  affinityFrom,
-  affinityOf,
   type ConfigRejection,
   countedFrom,
   type CountedRuns,
@@ -41,9 +37,11 @@ import {
   fmtElapsed,
   fmtPaused,
   HEARTBEAT_STALE_MS,
-  type InFlight,
+  type SupervisorView,
+  type TickHold,
+  type TickPlan,
+  type TickSnapshot,
   isExtraJob,
-  jobSpawn,
   type Occupant,
   owedCopies,
   owesNothing,
@@ -51,11 +49,7 @@ import {
   type PausedListing,
   pausesOnDrain,
   implicitPauses,
-  planResumes,
-  withResumesPlaying,
   planStaleRuns,
-  evalPoolDraw,
-  evalPoolTaken,
   planTick,
   progressLabel,
   providerResetOf,
@@ -68,7 +62,6 @@ import {
   unownedLiveRuns,
   countOutsideRuns,
   outsideRuns,
-  type OutsideRun,
 } from "./run-fleet-plan";
 import { fmtAge } from "./inspect-run";
 import { SCORED_EPISODES_WAIT } from "../runner/src/config";
@@ -78,6 +71,7 @@ import {
   foreignRosters,
   jobArgv,
   rosterResumes,
+  jobCoolingOf,
   jobDefers,
   jobJsonlPath,
   jobLogPath,
@@ -102,33 +96,31 @@ import {
 } from "./run-fleet-state";
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
-import { accountHeldBy } from "./run-roster";
+import { accountHeldBy, accountHolders } from "./run-roster";
 import { EPISODE_LIST } from "../runner/src/episodes";
 import { className as classNameOf, raceName as raceNameOf } from "../runner/viewer/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
-import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
+import { runCampaignFile } from "../runner/src/campaign-file";
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { resolveStoreSecrets } from "../runner/src/store-secrets";
 import { resumesOnPause } from "../runner/src/lapse";
 import {
-  credentialGate,
   credentialStatuses,
   formatCredentialStatus,
   publishedReads,
   readCredentialUsage,
+  type ReadHold,
   readHoldsOf,
-  resumeHoldOf,
   SlotBook,
-  type BudgetRun,
   type CredentialGate,
   type CredentialStatus,
-  type WorldsSetting,
 } from "./run-fleet-credentials";
 import type { CredentialRead } from "../runner/src/credential-health";
 import { worldsHere } from "./world";
 import { formatModelLists } from "./run-fleet-model-lists";
 import { readModelListsSidecar } from "../runner/src/model-lists";
+import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { providerById } from "../runner/src/credential-slots";
 import { credentialIdsOf } from "./run-fleet-state";
 import { rosterPriceGap } from "../runner/viewer/pricing";
@@ -138,13 +130,12 @@ import {
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   extrasSoFar,
   formatOutstanding,
-  type HeldPick,
   isStandingPause,
   LADDER_MS,
-  liveCredentials,
   type ModelState,
   modelStates,
   outstandingWork,
+  readModelsSidecar,
   type RunFact,
   type UnstampedRun,
   schedulability,
@@ -336,22 +327,20 @@ export function codexHomeVolume(c: Pick<CredentialStatus, "provider" | "secretEn
 }
 
 /**
- * The credentials' budgets as the supervisor applies them, for a reader that
- * is not the supervisor (`--status`, the dry run): off the same readings and
- * runs, and held by the supervisor's last reads of its keys
- * (`publishedReads`, fleet-state.json) the way its tick holds by its own
- * (`FleetGoUsage.readHolds`), so a Go credential whose key was refused never
- * reads open here. The reads come back too, for the statuses' health.
+ * What the credentials' gate reads beyond the runs, for a reader that is not
+ * the supervisor (`--status`, the dry run): the usage readings it left beside
+ * the runs, and the holds the supervisor's last reads of its keys put on
+ * credentials (`publishedReads`, fleet-state.json), the way its tick holds by
+ * its own (`FleetGoUsage.readHolds`), so a Go credential whose key was refused
+ * never reads open here. The reads come back too, for the statuses' health.
  */
-export function readerCredentialGate(
+export function readerCredentialReads(
   credentials: FleetConfig["credentials"],
-  runs: readonly BudgetRun[],
-  now: number,
   published: readonly Pick<CredentialStatus, "id" | "lastRead">[] | undefined,
   runsDir: string = RUNS_DIR,
-): { gate: CredentialGate; reads: Map<string, CredentialRead> } {
+): { usage: SubscriptionUsage[]; readHolds: Map<string, ReadHold>; reads: Map<string, CredentialRead> } {
   const reads = publishedReads(credentials, published);
-  return { gate: credentialGate(credentials, readCredentialUsage(runsDir), runs, now, readHoldsOf(credentials, reads)), reads };
+  return { usage: readCredentialUsage(runsDir), readHolds: readHoldsOf(credentials, reads), reads };
 }
 
 /**
@@ -366,7 +355,7 @@ export function localCredentialStatuses(
   runs: readonly RunFact[],
   /** The runs with no episode (`readReportRuns`): a live one is on its credential's slot like any run the fleet did not launch. */
   unstamped: readonly UnstampedRun[] = [],
-  /** The supervisor's last reads of its keys (`readerCredentialGate`): the statuses' health input. */
+  /** The supervisor's last reads of its keys (`readerCredentialReads`): the statuses' health input. */
   reads?: ReadonlyMap<string, CredentialRead>,
 ): CredentialStatus[] {
   const book = new SlotBook(config.credentials, config.policy.maxSessions);
@@ -621,6 +610,8 @@ export function formatModels(
   policy: SchedulingPolicy = { ...DEFAULT_POLICY_FOR_FORMAT },
   /** The evals group (`runner/viewer/groups.ts`): off, a model that owes a counted run reads as free, as the policy treats it. */
   evals = true,
+  /** What the tick does with each model this time (`plannedVerdicts`), said after its verdict. */
+  planned: ReadonlyMap<string, PlannedVerdict> = new Map(),
 ): string[] {
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
@@ -655,7 +646,11 @@ export function formatModels(
     // the whole reason the verdict stopped being a pair of booleans: `free` is
     // where probe campaigns and idle work draw from.
     const verdictWord = { eval: "yes", free: "free", blocked: "no" } as const;
-    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${verdictWord[v.verdict]}: ${v.why}`)(verdictForGroups(schedulability(s, running, policy), evals));
+    const verdict = verdictForGroups(schedulability(s, running, policy), evals);
+    const decided = planned.get(s.name);
+    // The tick's own decision wins the word: a model the projection would schedule but the tick holds is held.
+    const word = decided?.held === true && verdict.verdict !== "blocked" ? "held" : verdictWord[verdict.verdict];
+    const sched = ex !== undefined ? `no: ${ex}` : `${word}: ${verdict.why}${decided !== undefined ? ` — ${decided.text}` : ""}`;
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
@@ -675,9 +670,35 @@ export function formatModels(
   return out;
 }
 
-/** `--dry-run`: the picks the policy held back and why. Pure. */
-export function formatHeld(held: readonly HeldPick[]): string[] {
-  return held.map((h) => `  ${h.name}: HELD — ${h.episode} wanted, ${h.why}`);
+/** `--status` / `--dry-run`: the launches the tick holds back and why (`TickPlan.holds`). Pure. */
+export function formatHeld(held: readonly Pick<TickHold, "name" | "episode" | "why">[]): string[] {
+  return held.map((h) => `  ${h.name}: HELD — ${h.episode ?? "an episode"} wanted, ${h.why}`);
+}
+
+/**
+ * What the tick does with each model this time, by roster name, where it
+ * decides anything: launches it (and where), resumes it, or holds it and why.
+ * The models table says this in place of the projection's verdict, so a model
+ * the projection calls schedulable but the tick holds reads as held. Pure.
+ */
+export function plannedVerdicts(plan: TickPlan): Map<string, PlannedVerdict> {
+  const out = new Map<string, PlannedVerdict>();
+  const launches = new Set(plan.spawns.filter((sp) => sp.enabled).map((sp) => sp.name));
+  const say = (refs: readonly string[], text: string, held = false): void => {
+    for (const r of refs) if (!out.has(r)) out.set(r, { held, text });
+  };
+  for (const r of plan.resumed) if (launches.has(r.job.name)) say(r.job.refs, `next tick: resumes ${r.plan.runId} on ${r.plan.account}`);
+  for (const p of plan.pinned) if (launches.has(p.job.name)) say(p.job.refs, `next tick: ${p.job.name} on ${p.job.account}`);
+  for (const a of plan.queue.assign) if (launches.has(a.job.name)) say(a.job.refs, `next tick: ${a.job.name} on ${a.account}`);
+  for (const p of plan.picks) if (launches.has(p.job.name)) say(p.job.refs, `next tick: ${p.job.episode} on ${p.account}`);
+  for (const h of plan.holds) say(h.refs, `${h.episode ?? "a launch"} held — ${h.why}`, true);
+  return out;
+}
+
+/** What the tick does with one model (`plannedVerdicts`): held, or the words for what it launches. */
+export interface PlannedVerdict {
+  held: boolean;
+  text: string;
 }
 
 /**
@@ -916,8 +937,7 @@ export function fleetLogsHint(env: Readonly<Record<string, string | undefined>>)
 }
 
 /**
- * The config as this deployment's supervisor runs it (`run-fleet.ts`'s
- * `effectiveJobs`): with the evals group off, every campaign and scored or
+ * The config as this deployment's supervisor runs it (`planTick`): with the evals group off, every campaign and scored or
  * probing job reads as disabled (`withoutEvals`), and `offByGroup` names the
  * jobs and campaigns the store enables that only the group turns off, so a
  * report can say why rather than show an operator's switch. Pure.
@@ -1024,26 +1044,13 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   // Newest start first, so an account's row names the paused run the resume
   // planner would bring back (`byNewestStart`).
   const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort(byNewestStart);
-  // The credentials' budgets as the supervisor applies them, off the same
-  // readings and runs, and its last reads of its keys.
-  const readerGate = config !== undefined ? readerCredentialGate(config.credentials, [...facts, ...unstamped], Date.now(), state?.credentials) : undefined;
-  const credGate = readerGate?.gate;
-  const resumePlan =
-    config !== undefined
-      ? planResumes({
-          runs: runFacts,
-          config,
-          // The supervisor's live processes, as its own tick passes them: an
-          // exited job's account is free, and a paused run on it resumes.
-          running: new Map([...aliveJobs].map(([name, j]) => [name, j.account])),
-          held: (a) => accountHeldBy(a, ""),
-          now: Date.now(),
-          campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
-          hasImageRecord: (id) => runHasImageRecord(id),
-          ...(credGate !== undefined ? { credentialHold: (f: RunFact) => resumeHoldOf(f, config, credGate) } : {}),
-          inFlight: [...aliveJobs].map(([name, j]) => ({ name, refs: j.ref.split("+"), episode: j.episode ?? null })),
-        })
-      : { resume: [], listed: [], end: [] };
+  // The next tick, as the supervisor would plan it from what is on disk now
+  // and what its state file says it has in flight (`planTick`): the paused
+  // runs it resumes and the ones it lists instead, the lapsed ones it ends,
+  // what it launches and what it holds, and why.
+  const plan = config !== undefined ? plannedHere(() => readerSnapshot({ config, state, jobs: aliveJobs, runs: { facts, unstamped }, now: Date.now(), stamp: state?.stamp ?? "", evals: groups.evals })) : undefined;
+  const credGate = plan?.credentials.gate;
+  const resumePlan = plan?.resumes ?? { resume: [], listed: [], end: [] };
   const jobRow = (name: string, j: StateJob): JobRow => {
     const row: JobRow = {
       name,
@@ -1160,7 +1167,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   // The credentials: the supervisor's own view while it is up (it counts the
   // runs it has just spawned), else this reader's, off the live runs.
   if (config !== undefined && credGate !== undefined) {
-    const statuses = fleetUp && state?.credentials !== undefined ? state.credentials : localCredentialStatuses(config, credGate, runFacts, unarchived(unstamped), readerGate?.reads);
+    const statuses = fleetUp && state?.credentials !== undefined ? state.credentials : localCredentialStatuses(config, credGate, runFacts, unarchived(unstamped), publishedReads(config.credentials, state?.credentials));
     for (const line of formatCredentialStatus(statuses, config.policy.maxSessions, Date.now(), { volumeOf: (s) => codexHomeVolume(s) })) console.log(`  ${line}`);
   }
 
@@ -1169,18 +1176,17 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
     // Only a job whose process is alive is running: an exited one's model
     // reads its real reason (tainted, cooling, free), not "running". A live
     // fleet run no alive job owns holds its model too, as on the tick.
-    const running = new Set([
-      ...runningRefsOf(aliveJobs),
-      ...unownedLiveRuns({ runs: runFacts, roster: config.roster, campaigns: config.campaigns, running: aliveRunIds, busyAccounts: aliveAccounts }).flatMap((u) => u.refs),
-    ]);
-    // A resume the tick would make holds its model's scored episodes, as on the tick.
-    const states = withResumesPlaying(projected, resumePlan.resume, config.roster);
+    const running = new Set([...runningRefsOf(aliveJobs), ...(plan?.unownedRefs ?? [])]);
+    // The projection the tick plans with: after its ends, its resumes holding their models' scored episodes.
+    const states = plan?.states ?? projected;
     const excluded = new Map<string, string>();
     for (const name of Object.keys(config.roster)) {
       const why = policyExclusion(config, name);
       if (why !== undefined) excluded.set(name, why);
     }
-    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals)) console.log(`  ${line}`);
+    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals, plan !== undefined ? plannedVerdicts(plan) : undefined)) console.log(`  ${line}`);
+    // What the next tick holds back, beside what it launches (the table above): the queue's own skips are in its block below.
+    for (const line of formatHeld(plan?.holds.filter((h) => h.by !== "queue") ?? [])) console.log(`  ${line}`);
     for (const line of formatModelLists(readModelListsSidecar(RUNS_DIR), Date.now())) console.log(`  ${line}`);
 
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
@@ -1222,10 +1228,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
   // (d) paused runs the supervisor is not resuming, and why; and the ones it
   // ends — a lapsed eval reads as a failed attempt, not as something waiting
   // to come back.
-  const lapsed = [
-    ...resumePlan.end,
-    ...planStaleRuns({ runs: runFacts, ...(config !== undefined ? { campaigns: config.campaigns, refs: Object.keys(config.roster) } : {}), now: Date.now() }),
-  ];
+  const lapsed = plan?.ends ?? planStaleRuns({ runs: runFacts, now: Date.now() });
   for (const line of formatPaused(resumePlan.listed, pauseDetailOf())) console.log(`  ${line}`);
   for (const line of formatEnded(lapsed, fleetUp)) console.log(`  ${line}`);
   if (state?.ended !== undefined && state.ended.length > 0) {
@@ -1262,7 +1265,12 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
 // ------------------------------------------------------------------ dry run
 
 /** Something already running when the dry-run plans, with what its account row needs. */
-export interface InFlightRun extends InFlight {
+export interface InFlightRun {
+  /** The job name; for a run no job owns, its run id. */
+  name: string;
+  account: string;
+  refs: readonly string[];
+  source?: JobSource;
   /** A job of the running supervisor; false for a live fleet run on disk that no live job of it owns. */
   owned: boolean;
   models: string[];
@@ -1333,95 +1341,163 @@ export function inFlightRuns(opts: {
   return out;
 }
 
-/** The dry-run: the plan, and one row per account saying what it does next. */
+/**
+ * What fleet-state.json says of the supervisor's own jobs, as the planner
+ * reads them (`SupervisorView`): the jobs with a live process, the runs they
+ * were materialized with, the pool accounts they hold. A job the config
+ * still names is that job; any other is rebuilt from its row. What a reader
+ * cannot know it leaves empty: the jobs a tick handed out seconds ago that
+ * have not spawned (`pending`), and where they were placed before their run
+ * is on disk, beyond the one credential a row records. Pure.
+ */
+export function supervisorFromState(o: {
+  jobs: ReadonlyMap<string, StateJob>;
+  config: FleetConfig;
+  /** The runs on disk: a job's probe square and accounts are read off the runs it plays. */
+  runs?: readonly RunFact[];
+  /** The queue jobs the supervisor last reported finished (`FleetState.queue.finished`). */
+  finished?: readonly string[];
+  /** The run a job is playing now (its log's last launch), for a row from a supervisor that wrote no run ids. */
+  runIdOf?: (name: string, j: StateJob) => string | undefined;
+}): SupervisorView {
+  const ownRunIds = new Set<string>();
+  const assigned = new Map<string, string>();
+  const liveJobs = new Map<string, FleetJob>();
+  const placedMemo = new Map<string, NonNullable<FleetJob["placed"]>>();
+  for (const [name, j] of o.jobs) {
+    const ids = j.runIds ?? [j.resuming, o.runIdOf?.(name, j)].filter((id): id is string => id !== undefined);
+    for (const id of ids) ownRunIds.add(id);
+    const configured = o.config.jobs.find((x) => x.name === name);
+    const refs = j.ref.split("+");
+    // What the row does not carry, its runs do: the square a probe plays, and every account a party or fan-out holds.
+    const mine = (o.runs ?? []).filter((f) => ids.includes(f.runId));
+    const lead = mine[0];
+    const probe = lead?.campaign != null && lead.campaignVersion != null && lead.cell != null && lead.arm != null ? { campaign: lead.campaign, version: lead.campaignVersion, cell: lead.cell, arm: lead.arm } : undefined;
+    const accounts = lead?.fanoutAccounts != null ? [...lead.fanoutAccounts] : mine.length > 1 && lead?.party != null ? mine.flatMap((f) => (f.account !== null ? [f.account] : [])) : undefined;
+    const job: FleetJob = configured ?? {
+      refs,
+      ref: j.ref,
+      episode: j.episode ?? "e90",
+      repeat: 1,
+      name,
+      enabled: true,
+      source: j.source,
+      ...(j.source === "pinned" ? { account: j.account } : {}),
+      ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
+      ...(probe !== undefined ? { probe } : {}),
+      ...(accounts !== undefined ? { accounts } : {}),
+      ...(lead?.fanoutAccounts != null ? { fanout: true as const } : {}),
+    };
+    liveJobs.set(name, job);
+    if (j.source !== "pinned") assigned.set(name, j.account);
+    // One credential for every ref is where each was placed; a job split across several reads them off its runs.
+    if (j.credentials?.length === 1) placedMemo.set(name, Object.fromEntries(refs.map((r) => [r, { id: j.credentials![0]!, env: "" }])));
+  }
+  return {
+    ownRunIds,
+    running: new Set(o.jobs.keys()),
+    finished: new Set(o.finished ?? []),
+    assigned,
+    liveJobs,
+    pending: new Set(),
+    placedMemo,
+  };
+}
+
+/**
+ * The snapshot the next tick would plan from, read where the reader runs:
+ * the runs on disk, the accounts' holders, the defer sidecars, the
+ * credentials' readings and the supervisor's last reads of its keys, run pods
+ * and worlds as this deployment sets them, and the supervisor's jobs from its
+ * state file (`supervisorFromState`). `--status` and `--dry-run` print
+ * `planTick` over it.
+ */
+export function readerSnapshot(o: {
+  config: FleetConfig;
+  state: FleetState | undefined;
+  /** The supervisor's jobs with a live process (`runningJobs`). */
+  jobs: ReadonlyMap<string, StateJob>;
+  runs: ReportRuns;
+  now: number;
+  stamp: string;
+  evals: boolean;
+}): TickSnapshot {
+  const { config, state, now } = o;
+  const open = o.runs.facts.filter((f) => f.terminationReason === null);
+  // The defer sidecars are the supervisor's epoch's, under its stamp.
+  const coolingStamp = state?.stamp ?? o.stamp;
+  return {
+    config,
+    evals: o.evals,
+    stamp: o.stamp,
+    now,
+    scoredWait: SCORED_EPISODES_WAIT,
+    paused: readPauseSidecar() !== undefined,
+    facts: o.runs.facts,
+    unstamped: o.runs.unstamped,
+    modelsSidecar: readModelsSidecar(RUNS_DIR),
+    modelLists: readModelListsSidecar(RUNS_DIR),
+    ...((r) => ({ usage: r.usage, readHolds: r.readHolds }))(readerCredentialReads(config.credentials, state?.credentials)),
+    runPods: runPodsHere(config.policy.runPods),
+    worlds: worldsHere(config.policy.worlds),
+    holders: accountHolders(),
+    cooling: new Map(poolJobs(config).flatMap((j) => ((why) => (why !== undefined ? [[j.name, why] as const] : []))(jobCoolingOf(j, coolingStamp, now)))),
+    campaignFiles: new Map(open.map((f) => [f.runId, runCampaignFile(join(RUNS_DIR, f.runId))])),
+    imageRecords: new Set(open.filter((f) => runHasImageRecord(f.runId)).map((f) => f.runId)),
+    supervisor: supervisorFromState({
+      jobs: o.jobs,
+      config,
+      runs: o.runs.facts,
+      finished: state?.queue?.finished ?? [],
+      ...(state !== undefined ? { runIdOf: (name: string, j: StateJob) => lastLaunchedRunId(resolveStatePath(j.log, jobLogPath(name, state.stamp))) } : {}),
+    }),
+  };
+}
+
+/**
+ * The tick's plan over a reader's snapshot, or undefined with the reason said:
+ * a job the state file names but this reader cannot rebuild well enough to
+ * plan around (a probe whose run is not on disk yet, from an older
+ * supervisor) must not take the rest of the report down with it.
+ */
+function plannedHere(snapshot: () => TickSnapshot): TickPlan | undefined {
+  try {
+    return planTick(snapshot());
+  } catch (e) {
+    console.log(`!! the next tick could not be planned here: ${e instanceof Error ? e.message : String(e)} — try again in a minute`);
+    return undefined;
+  }
+}
+
+/** The dry-run: the tick's plan, and one row per account saying what it does next. */
 export interface DryRunPlan {
-  resumes: { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] };
-  plan: ReturnType<typeof planTick>;
+  plan: TickPlan;
   rows: AccountRow[];
   /** Every spawn the rows make, in row order, for the argv block. */
   spawns: { job: FleetJob; spawn: JobSpawn }[];
 }
 
 /**
- * --dry-run's plan and its account rows. Pure over what the caller read: the
- * run facts as the tick reads them (`implicitPauses` applied), the
- * projection, the account holders, and what is already running
- * (`inFlightRuns`) — handed to the resume planner and to `planTick` the way
- * the live tick hands them its own processes. A row says what its account
- * does next: resumes a paused run in place, keeps a run in flight, spawns
- * one, or stays free and why.
+ * --dry-run's account rows over the tick's plan (`planTick`). A row says what
+ * its account does next: keeps a run in flight, resumes a paused run in
+ * place, spawns one, or stays free and why. `inFlight` is what the rows show
+ * as running (`inFlightRuns`); the plan holds the same runs' accounts and
+ * models because its snapshot names them. Pure.
  */
 export function planDryRun(opts: {
-  config: FleetConfig;
-  runs: readonly RunFact[];
-  states: readonly ModelState[];
-  held: (account: string) => string | undefined;
+  plan: TickPlan;
+  /** The accounts' holders the plan read (`TickSnapshot.holders`). */
+  holders: ReadonlyMap<string, string>;
   stamp: string;
   inFlight?: readonly InFlightRun[];
-  now?: number;
-  campaignFileOf?: (runId: string) => CampaignFile | null;
-  hasImageRecord?: (runId: string) => boolean;
-  /** The credentials' budgets (`credentialGate`), as the tick applies them; absent holds nothing. */
-  gate?: CredentialGate;
-  /** The evals group (`planTick`'s `evals`); the config is already `forGroups`'. Absent is on. */
-  evals?: boolean;
   /** The jobs only the evals group being off disables (`forGroups`). */
   offByGroup?: ReadonlySet<string>;
-  /** Live runs the fleet did not launch, each on its credential's slot (`outsideRuns`), as the tick counts them. */
-  outside?: readonly OutsideRun[];
-  /** The book's run-pod setting (`runPodsOf`), as the tick plans under it. */
-  runPods?: { max: number | undefined };
-  /** The book's world setting (`worldsOf`), as the tick plans under it. */
-  worlds?: WorldsSetting;
-  /** Scored episodes closed, and why (`SCORED_EPISODES_WAIT`), as the tick plans under it. Absent is open. */
-  scoredGate?: string;
 }): DryRunPlan {
-  const { config, runs, states, held, stamp, gate } = opts;
+  const { plan, stamp } = opts;
+  const config = plan.config;
   const inFlight = opts.inFlight ?? [];
-  const resumes = planResumes({
-    runs,
-    config,
-    running: new Map(inFlight.filter((r) => r.owned).map((r) => [r.name, r.account])),
-    held,
-    now: opts.now ?? Date.now(),
-    ...(opts.campaignFileOf !== undefined ? { campaignFileOf: opts.campaignFileOf } : {}),
-    ...(opts.hasImageRecord !== undefined ? { hasImageRecord: opts.hasImageRecord } : {}),
-    ...(gate !== undefined ? { credentialHold: (f: RunFact) => resumeHoldOf(f, config, gate) } : {}),
-    inFlight: inFlight.filter((r) => r.owned),
-  });
-  // Affinity, so the printed plan places accounts the way the live
-  // supervisor would: a report that disagrees with the tick is worse than none.
-  // For the same reason a live run no job owns keeps its account (via `held`)
-  // and its model, and is on its credential and the run-pod cap, as on the tick.
-  const plan = planTick(
-    config,
-    states,
-    held,
-    stamp,
-    resumes.resume,
-    probeRunsOf(runs),
-    affinityOf(affinityFrom(runs, config.roster)),
-    liveCredentials(runs, rosterModels(config.roster)),
-    new Set(runs.map((f) => f.runId)),
-    inFlight.filter((r) => r.owned),
-    inFlight.filter((r) => !r.owned).flatMap((r) => r.refs),
-    gate,
-    opts.evals ?? true,
-    opts.outside ?? [],
-    inFlight.filter((r) => !r.owned).map((r) => ({ credential: r.credentials?.[0] ?? null, episode: r.episode })),
-    opts.runPods,
-    opts.scoredGate,
-    opts.worlds,
-    // A party that draws its accounts, drawn as the live tick draws them.
-    evalPoolDraw({
-      mode: config.policy.worlds,
-      pool: config.accounts.evalPool ?? [],
-      taken: evalPoolTaken(runs, inFlight.flatMap((r) => r.accounts ?? [r.account])),
-      held,
-      running: (name) => inFlight.find((r) => r.name === name)?.accounts,
-    }),
-  );
-  const counted = countedFrom(states);
+  const held = (a: string): string | undefined => opts.holders.get(a.toUpperCase());
+  const counted = countedFrom(plan.states);
   const rows: AccountRow[] = [];
   const spawns: DryRunPlan["spawns"] = [];
   const planned = (job: FleetJob, spawn: JobSpawn, name: string = job.name): JobRow => {
@@ -1438,10 +1514,10 @@ export function planDryRun(opts: {
       ...(credentialIdsOf(job).length > 0 ? { credentials: credentialIdsOf(job) } : {}),
     };
   };
-  const resumeRow = (r: ResumePlan, account: string, kind: AccountKind): AccountRow => ({
+  const resumeRow = (r: TickPlan["resumed"][number], account: string, kind: AccountKind): AccountRow => ({
     account,
     kind,
-    job: planned(r.job, jobSpawn(r.job, config.roster, r.account, stamp, undefined, config.campaigns), `${r.job.name} (paused: ${r.why})`),
+    job: planned(r.job, r.spawn, `${r.job.name} (paused: ${r.plan.why})`),
   });
   const inFlightOn = (account: string): InFlightRun | undefined => inFlight.find((r) => r.account.toUpperCase() === account.toUpperCase());
   const inFlightRow = (r: InFlightRun, account: string, kind: AccountKind): AccountRow =>
@@ -1465,25 +1541,33 @@ export function planDryRun(opts: {
           free: true,
           held: true,
           // Said plainly: nothing here knows when this run stops. The plan
-          // above holds its model while it is live, and its lane decides what
+          // holds its model while it is live, and its lane decides what
           // comes after.
           note:
             `held by run ${r.runId ?? r.name} — live, and no job of a running supervisor owns it` +
             (r.refs.length > 0 ? `; ${r.refs.join("+")} is held while it stays live` : "") +
             `; ${r.resumesInPlace ? "if it stops without a verdict, the supervisor resumes it in place here" : "once it lapses it is ended, not resumed"}`,
         };
+  // What launches: a spawn the credential gate held is planned but does not start.
+  const launch = new Map(plan.spawns.filter((sp) => sp.enabled).map((sp) => [sp.name, sp]));
+  const heldRow = (account: string, kind: AccountKind, name: string): AccountRow => {
+    const hold = plan.holds.find((h) => h.name === name);
+    return { account, kind, free: true, note: `${name} held — ${hold?.why ?? "not launched this tick"}` };
+  };
+  const resumedOn = (account: string) => plan.resumed.find((r) => r.plan.account.toUpperCase() === account.toUpperCase());
   const listed = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   for (const account of Object.keys(config.accounts.pinned).filter((a) => !listed.has(a.toUpperCase()))) {
     const fl = inFlightOn(account);
-    const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
+    const rs = resumedOn(account);
     const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
     if (fl !== undefined) rows.push(inFlightRow(fl, account, "pinned"));
-    else if (rs !== undefined) rows.push(resumeRow(rs, account, "pinned"));
-    else if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.spawn) });
+    else if (rs !== undefined) rows.push(launch.has(rs.job.name) ? resumeRow(rs, account, "pinned") : heldRow(account, "pinned", rs.job.name));
+    else if (p !== undefined) rows.push(launch.has(p.job.name) ? { account, kind: "pinned", job: planned(p.job, launch.get(p.job.name)!) } : heldRow(account, "pinned", p.job.name));
     else {
       const holder = held(account);
       const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
       const met = job?.enabled === true && owesNothing(owedCopies(job, job.refs, counted));
+      const hold = job !== undefined ? plan.holds.find((h) => h.name === job.name) : undefined;
       rows.push({
         account,
         kind: "pinned",
@@ -1496,28 +1580,30 @@ export function planDryRun(opts: {
               ? `job ${job.name} done (${progressLabel(job, counted) ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
               : job !== undefined && opts.offByGroup?.has(job.name) === true
                 ? `job ${job.name} disabled (evals group off)`
-                : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn`,
+                : hold !== undefined
+                  ? `${hold.name} held — ${hold.why}`
+                  : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn`,
       });
     }
   }
   for (const [kind, accounts] of [["pool", config.accounts.pool]] as const) {
     for (const account of accounts) {
       const fl = inFlightOn(account);
-      const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
+      const rs = resumedOn(account);
       const q = plan.queue.assign.find((a) => a.account === account);
-      const pp = plan.policy.find((a) => a.account === account);
+      const pp = plan.picks.find((a) => a.account === account);
       if (fl !== undefined) rows.push(inFlightRow(fl, account, kind));
-      else if (rs !== undefined) rows.push(resumeRow(rs, account, kind));
-      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stamp, eligibleFrom(states), config.campaigns)) });
+      else if (rs !== undefined) rows.push(launch.has(rs.job.name) ? resumeRow(rs, account, kind) : heldRow(account, kind, rs.job.name));
+      else if (q !== undefined) rows.push(launch.has(q.job.name) ? { account, kind, job: planned(q.job, launch.get(q.job.name)!) } : heldRow(account, kind, q.job.name));
       else if (pp !== undefined) {
-        rows.push({ account, kind, job: planned(pp.job, jobSpawn(pp.job, config.roster, account, stamp, undefined, config.campaigns), `${pp.job.name} (policy: ${pp.why})`) });
+        rows.push(launch.has(pp.job.name) ? { account, kind, job: planned(pp.job, launch.get(pp.job.name)!, `${pp.job.name} (policy: ${pp.why})`) } : heldRow(account, kind, pp.job.name));
       } else {
         const holder = held(account);
         rows.push({ account, kind, free: true, ...(holder !== undefined ? { held: true as const, note: `held by run ${holder}` } : {}) });
       }
     }
   }
-  return { resumes, plan, rows, spawns };
+  return { plan, rows, spawns };
 }
 
 /**
@@ -1572,67 +1658,46 @@ export function printDryRun(
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }
-  // The tick's own read: a verdict-less run is a paused one unless a live job holds it.
-  const { facts: stamped, unstamped } = facts ?? readReportRuns(now);
-  const ownRunIds = new Set([...jobs.values()].flatMap((j) => j.runIds ?? []));
-  const busyAccounts = new Set([...jobs.values()].map((j) => j.account.toUpperCase()));
-  const runs = implicitPauses({ runs: stamped, campaigns: config.campaigns, running: ownRunIds, busyAccounts, now });
-  const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
-  // The credentials' budgets as the supervisor applies them, and its last reads of its keys.
-  const { gate: credGate, reads } = readerCredentialGate(config.credentials, [...runs, ...unstamped], now, state?.credentials);
+  // The tick's own snapshot and the tick's own plan (`planTick`).
+  const runs = facts ?? readReportRuns(now);
+  const snap = readerSnapshot({ config, state, jobs, runs, now, stamp: stampToday, evals: groups.evals });
+  const plan = plannedHere(() => snap);
+  if (plan === undefined) return;
   const inFlight = inFlightRuns({
     jobs,
-    runs,
+    runs: plan.runs,
     roster: config.roster,
     campaigns: config.campaigns,
     runIdOf: (name, j) => lastLaunchedRunId(resolveStatePath(j.log, jobLogPath(name, state!.stamp))),
   });
-  const { resumes, plan, rows, spawns } = planDryRun({
-    config,
-    runs,
-    states,
-    held: (a) => accountHeldBy(a, ""),
-    stamp: stampToday,
-    inFlight,
-    now,
-    campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
-    hasImageRecord: (id) => runHasImageRecord(id),
-    gate: credGate,
-    evals: groups.evals,
-    offByGroup,
-    outside: outsideRuns([...runs, ...unstamped], { running: ownRunIds, busyAccounts }),
-    runPods: runPodsHere(config.policy.runPods),
-    worlds: worldsHere(config.policy.worlds),
-    // While scored episodes are held: held with the reason, as the tick holds them.
-    ...(SCORED_EPISODES_WAIT !== null ? { scoredGate: SCORED_EPISODES_WAIT } : {}),
-  });
+  const { rows, spawns } = planDryRun({ plan, holders: snap.holders, stamp: stampToday, inFlight, offByGroup });
+  const reads = publishedReads(config.credentials, state?.credentials);
   console.log("");
-  for (const line of formatCredentialStatus(localCredentialStatuses(config, credGate, runs, unstamped, reads), config.policy.maxSessions, now)) console.log(line);
+  for (const line of formatCredentialStatus(localCredentialStatuses(config, plan.credentials.gate, plan.runs, runs.unstamped, reads), config.policy.maxSessions, now)) console.log(line);
   for (const line of formatAccounts(rows, config.accounts.max)) console.log(line);
   for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
   for (const sk of plan.queue.skipped) console.log(`  ${sk.job.name}: SKIP — ${sk.reason}`);
-  for (const job of plan.queue.done) console.log(`  ${job.name}: done — ${progressLabel(job, countedFrom(states)) ?? "repeat met"}; nothing spawns (raise repeat for more)`);
-  if (plan.policy.length === 0 && plan.queue.waiting.length > 0) console.log("  (manual jobs are waiting; they outrank the policy)");
+  for (const job of plan.queue.done) console.log(`  ${job.name}: done — ${progressLabel(job, countedFrom(plan.states)) ?? "repeat met"}; nothing spawns (raise repeat for more)`);
+  if (plan.picks.length === 0 && plan.queue.waiting.length > 0) console.log("  (manual jobs are waiting; they outrank the policy)");
   console.log("");
   const excluded = new Map<string, string>();
   for (const name of Object.keys(config.roster)) {
     const why = policyExclusion(config, name);
     if (why !== undefined) excluded.set(name, why);
   }
-  // Every run in flight holds its model, owned or not, as the plan above does.
-  for (const line of formatModels(states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals)) console.log(line);
-  for (const line of formatHeld(plan.heldPicks)) console.log(line);
-  for (const line of formatPaused(resumes.listed, pauseDetailOf())) console.log(line);
-  for (const line of formatEnded([...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now })], false)) {
-    console.log(line);
-  }
+  // Every run in flight holds its model, owned or not, as the plan does.
+  for (const line of formatModels(plan.states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals, plannedVerdicts(plan))) console.log(line);
+  for (const line of formatHeld(plan.holds.filter((h) => h.by !== "pinned" && h.by !== "queue"))) console.log(line);
+  for (const line of formatPaused(plan.resumes.listed, pauseDetailOf())) console.log(line);
+  for (const line of formatEnded(plan.ends, false)) console.log(line);
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
-  for (const line of formatQueue(poolJobs(config), undefined, countedFrom(states), offByGroup)) console.log(line);
+  for (const line of formatQueue(poolJobs(config), undefined, countedFrom(plan.states), offByGroup)) console.log(line);
   const running = inFlight.filter((r) => r.owned).length;
+  const launching = (names: readonly string[]): number => names.filter((n) => plan.spawns.some((sp) => sp.name === n && sp.enabled)).length;
   console.log(
     `\n${running > 0 ? `${running} job(s) already running keep their accounts; ` : ""}` +
-      `${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
+      `${launching(plan.resumed.map((r) => r.job.name))} paused run(s) would resume first; ${launching(plan.pinned.map((p) => p.job.name))} pinned job(s) would spawn now plus ${launching([...plan.queue.assign.map((a) => a.job.name), ...plan.picks.map((p) => p.job.name)])} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
       `\nsupervision: re-read the config store every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor, not rolled at midnight.` +
