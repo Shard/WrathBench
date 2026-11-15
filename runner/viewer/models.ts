@@ -59,6 +59,7 @@ import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type Publishe
 import { rosterEntryRefusal } from "../src/roster-refusal";
 import { poolSizeOf } from "../src/account-pool";
 import { parseCredentials, type Credential } from "../src/credential-slots";
+import { siteSettingsOf, type SiteSettings } from "../src/site-settings";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { redactSecrets } from "./tail";
@@ -189,6 +190,8 @@ export interface RosterRead {
    * one refusal keyed `campaigns`. The campaigns page shows every one.
    */
   campaignRefusals: CampaignRefusal[];
+  /** The store's `site` block (`runner/src/site-settings.ts`); empty when absent or unreadable. */
+  site: SiteSettings;
 }
 
 /** The series this viewer runs from — what the projection counts against. */
@@ -229,16 +232,24 @@ export function readFleetRoster(
   env: Record<string, string | undefined> = process.env,
 ): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, credentials: [], excluded: [], count: 0, accounts: 0, campaigns: [], campaignDefs: [], campaignRefusals: [] };
+  const empty = { models: [], policy: defaults, credentials: [], excluded: [], count: 0, accounts: 0, campaigns: [], campaignDefs: [], campaignRefusals: [], site: {} };
   const read = readFleetConfig(dbPath);
   const path = read.path;
   if (read.status === "empty") return { ...empty, shape: "missing", path };
   if (read.status === "unreadable") return { ...empty, shape: "unreadable", path };
-  let parsed: z.infer<typeof fleetRosterSchema>;
+  let doc: unknown;
   try {
-    parsed = fleetRosterSchema.parse(JSON.parse(read.text));
+    doc = JSON.parse(read.text);
   } catch {
     return { ...empty, shape: "unreadable", path };
+  }
+  // Before the roster: a display setting holds whatever shape the roster is in.
+  const site = siteSettingsOf(typeof doc === "object" && doc !== null ? (doc as { site?: unknown }).site : undefined);
+  let parsed: z.infer<typeof fleetRosterSchema>;
+  try {
+    parsed = fleetRosterSchema.parse(doc);
+  } catch {
+    return { ...empty, site, shape: "unreadable", path };
   }
   let policy: SchedulingPolicy = defaults;
   try {
@@ -329,6 +340,7 @@ export function readFleetRoster(
     campaigns,
     campaignDefs,
     campaignRefusals,
+    site,
   };
 }
 

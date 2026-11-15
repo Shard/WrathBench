@@ -1816,6 +1816,13 @@ export interface ApiInfoResponse extends SnapshotEnvelope {
    */
   harnessSeries?: { series: string; runs: number }[];
   /**
+   * A series the site offers as "preview (<series>)" instead of as "latest":
+   * the store's `site.previewSeries` (`runner/src/site-settings.ts`). While it
+   * is set, the selector's "latest" is the newest series other than this one.
+   * Absent when unset, which is how a body from an older viewer reads too.
+   */
+  previewSeries?: string;
+  /**
    * Which of the deployment's groups are on (`groups.ts`), present only when
    * one is off: absent is every group, which is how a body from an older
    * viewer, and today's deployment, read. The public projection keeps it, so

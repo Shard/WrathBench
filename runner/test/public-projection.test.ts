@@ -2099,6 +2099,25 @@ describe("projectInfo", () => {
     expect(JSON.stringify(out)).not.toContain("app-abc123.js");
     assertClean(JSON.stringify(out));
   });
+
+  test("carries the preview series when the store names one, and nothing when it does not", () => {
+    const base: ApiInfoResponse = {
+      service: "wrathbench-viewer",
+      publicMode: false,
+      dashboard: true,
+      dashboardBuild: null,
+      worldserver: null,
+      harnessSeries: [{ series: "1.0", runs: 2 }, { series: "0.5", runs: 9 }],
+      now: 5000,
+    };
+    const set = projectInfo({ ...base, previewSeries: "1.0" });
+    expect(set.previewSeries).toBe("1.0");
+    expect(keyPaths(set)).toContain("previewSeries");
+    const unset = projectInfo(base);
+    expect("previewSeries" in unset).toBe(false);
+    // A smuggled non-string never crosses.
+    expect("previewSeries" in projectInfo(smuggle<ApiInfoResponse>({ ...base, previewSeries: { series: "1.0" } as unknown as string }))).toBe(false);
+  });
 });
 
 /* ------------------------------------------------------------- entries --- */

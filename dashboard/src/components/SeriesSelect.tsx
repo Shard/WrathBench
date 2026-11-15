@@ -28,7 +28,7 @@ export function SeriesSelect() {
   return (
     <label
       class="series"
-      title={'Harness series — the harness version line a run was played on; runs are only comparable within one. "latest" follows the newest version rather than pinning to it.'}
+      title={'Harness series — the harness version line a run was played on; runs are only comparable within one. "latest" follows the newest version rather than pinning to it. "preview", when offered, is a newer series still filling up; "latest" stays on the established one until then.'}
     >
       <span class="dim">series</span>
       {/*
@@ -40,7 +40,7 @@ export function SeriesSelect() {
         * makes it checkable without a scripted browser.
         */}
       <select onChange={(e) => feeds.setSeriesChoice(e.currentTarget.value as SeriesChoice)}>
-        <For each={seriesOptions(feeds.seriesAvailable(), shown())}>
+        <For each={seriesOptions(feeds.seriesAvailable(), shown(), feeds.seriesPreview())}>
           {(o) => (
             <option value={o.value} selected={o.value === shown()}>
               {o.label}
@@ -75,7 +75,7 @@ export function useSeriesFilter<
 >(rows: () => readonly T[], active: () => boolean = () => true): SeriesFilterResult<T> {
   const feeds = useFeeds();
   const series = (): string | null =>
-    active() ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), rows()) : null;
+    active() ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), rows(), feeds.seriesPreview()) : null;
   const kept = (): T[] => filterBySeries(rows(), series());
   return { series, kept };
 }

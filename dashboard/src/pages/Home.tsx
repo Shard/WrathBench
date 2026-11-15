@@ -324,14 +324,15 @@ function LoopDiagram() {
 
 /** The e90 ladder, full-bleed; mounted only where the evals group is on. */
 function HomeLadder() {
-  // The e90 ladder, fixed: latest series present, free runs always out (`lib/homeladder.ts`);
+  // The e90 ladder, fixed: latest series present (never a preview one), free runs always out (`lib/homeladder.ts`);
   // the one control draws the Pareto front of cost against XP over the field
   // (`lib/pareto.ts`) — the same treatment as the ladder page's toggle, so the
   // words mean one thing on both. It used to filter to the front; the field
   // is the context that makes the front a claim, so it stays.
   const ladder = poll(() => api.ladder(HOME_EPISODE).then((r) => r.runs), LADDER_POLL_MS);
   const [pareto, setPareto] = createSignal(readBoolPref(PARETO_KEY, false));
-  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], true);
+  const feeds = useFeeds();
+  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], true, feeds.seriesPreview());
   // Full-bleed: the one thing on the page that wants the whole width.
   return (
     <section class="home-bleed">

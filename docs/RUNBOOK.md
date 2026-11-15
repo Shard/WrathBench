@@ -492,6 +492,21 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             holds those picks, saying why. Anything else is refused.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
+site        { previewSeries? } or absent: what the dashboard shows, never what the fleet does.
+            `previewSeries` — a series (`"1.0"`) the site's series selector offers as
+            `preview (1.0)` rather than as latest: while it is set, `latest` (the default on the
+            ladder, the home ladder, the runs page and the social card) is the newest series OTHER
+            than it, and a link to `?series=1.0` still shows it (operator, 2026-11-15). The viewer
+            serves it on `/api/info` and the publisher on `info.json`, with no release: the private
+            site follows within about a minute, the public one at the publisher's next pass.
+            Older code refuses the key, so it is written after the release that carries it,
+            and before a new series' first run if that series should open as the preview. Nothing schedules, counts or
+            publishes differently. Set it with `bun wb config set site '{"previewSeries":"1.0"}'`;
+            the flip is `bun wb config delete site`, after which `latest` follows the newest series
+            again. The supervisor never parses the block, so a bad one cannot reject the fleet's
+            config; the store refuses it at write instead (any other key, or a value that is not
+            `major.minor`). Validated by `runner/src/site-settings.ts`, which a release must carry
+            before the key can be written: older code refuses `site` as not a config key.
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
             publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
             `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second

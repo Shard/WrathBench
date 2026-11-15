@@ -176,7 +176,7 @@ const render: PassRenderer = async (sink, published) => {
   const result = await renderer(undefined, { sink, batch: BATCH }, published);
   // The card draws the ladder, which is the evals group's. With a delay it
   // waits for its pass to be shown, as the manifest does.
-  if (GROUPS.evals) await publishCard(cardDue(result));
+  if (GROUPS.evals) await publishCard(cardDue(result), previewOf(result));
   await publishRobots();
   return result;
 };
@@ -231,8 +231,23 @@ function cardDue(result: SnapshotResult): SnapshotArtifact | undefined | null {
   return due === undefined ? null : due.ladder;
 }
 
+/**
+ * The preview series this pass's `info.json` names, which the card leaves out
+ * as the homepage does (`homeLadderRuns`); null when it names none.
+ */
+function previewOf(result: SnapshotResult): string | null {
+  const info = result.artifacts.find((a) => a.path.endsWith("/info.json"));
+  if (info === undefined) return null;
+  try {
+    const p = (JSON.parse(info.body) as { previewSeries?: unknown }).previewSeries;
+    return typeof p === "string" ? p : null;
+  } catch {
+    return null;
+  }
+}
+
 /** `null`: nothing is due yet (a delay), so the card stays as it is. */
-async function publishCard(artifact: SnapshotArtifact | undefined | null): Promise<void> {
+async function publishCard(artifact: SnapshotArtifact | undefined | null, preview: string | null): Promise<void> {
   if (artifact === null) return;
   try {
     if (artifact === undefined) {
@@ -247,7 +262,7 @@ async function publishCard(artifact: SnapshotArtifact | undefined | null): Promi
       return;
     }
     const runs = (JSON.parse(artifact.body) as { runs?: ResultRun[] }).runs ?? [];
-    const card = renderOgPng(runs);
+    const card = renderOgPng(runs, { preview });
     if (card.stamp === cardStamp) return;
     await s3.write(OG_KEY, card.png, { type: "image/png" });
     cardStamp = card.stamp;

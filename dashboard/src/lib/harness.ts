@@ -59,6 +59,22 @@ export function latestSeries(available: readonly string[]): string | null {
 }
 
 /**
+ * The series "latest" means, which is the site's default view.
+ *
+ * The newest series, except while the operator has named a *preview* series
+ * (the config store's `site.previewSeries`, carried on `/api/info`): then it
+ * is the newest series other than that one, so a new series can fill up
+ * under its own "preview" option while the established one stays the default
+ * (operator, 2026-11-15). When the preview is all there is, it is "latest"
+ * too: a default that selects nothing reads as a broken page. No preview, or
+ * none passed, is exactly `latestSeries`.
+ */
+export function defaultSeries(available: readonly string[], preview?: string | null): string | null {
+  if (preview === undefined || preview === null) return latestSeries(available);
+  return latestSeries(available.filter((s) => s !== preview)) ?? latestSeries(available);
+}
+
+/**
  * The selection. `latest` is stored as the token, never as the series it
  * resolves to today: the operator asked for "latest", which must follow a
  * minor bump rather than freeze on the series that was newest when they picked.
@@ -85,11 +101,11 @@ export function seriesParam(raw: string | string[] | undefined): SeriesChoice | 
   return /^\d+\.\d+$/.test(v) ? v : null;
 }
 
-/** What a choice actually filters to: a series, or null for "no filter". */
-export function resolveSeries(choice: SeriesChoice, available: readonly string[]): string | null {
+/** What a choice actually filters to: a series, or null for "no filter". `preview` is `defaultSeries`'s. */
+export function resolveSeries(choice: SeriesChoice, available: readonly string[], preview?: string | null): string | null {
   if (choice === SERIES_ALL) return null;
-  if (choice === SERIES_LATEST) return latestSeries(available);
-  return available.includes(choice) ? choice : latestSeries(available);
+  if (choice === SERIES_LATEST) return defaultSeries(available, preview);
+  return available.includes(choice) ? choice : defaultSeries(available, preview);
 }
 
 /**
@@ -116,12 +132,18 @@ export interface SeriesOption {
  * latest, then the series descending. Latest carries the series it currently
  * means, so the reader is never guessing which one they are on.
  *
+ * A preview series (`defaultSeries`) that has runs comes right after latest as
+ * `preview (<series>)`, in place of its own number: its value IS the number, so
+ * `?series=1.0` and a remembered choice mean the same thing before and after
+ * the operator clears the setting, and one value never sits on two options.
+ * With no runs in it yet it is not offered, since choosing it would show latest.
+ *
  * The newest series appears *both* as `latest` and under its own number, which
  * looks redundant and is not: `latest` tracks the next minor bump, its number
  * pins. A link that means "0.5 specifically" has to survive a bump, and a
  * selection the option list cannot represent renders as a blank control.
  */
-export function seriesOptions(available: readonly string[], current?: SeriesChoice): SeriesOption[] {
+export function seriesOptions(available: readonly string[], current?: SeriesChoice, preview?: string | null): SeriesOption[] {
   const all = [...available];
   // A selection the list does not (yet) hold still has to be an option, or the
   // control renders blank: the list arrives on a poll, and a viewer that
@@ -130,10 +152,12 @@ export function seriesOptions(available: readonly string[], current?: SeriesChoi
     all.push(current);
   }
   const sorted = all.sort(compareSeriesDesc);
-  const latest = sorted[0];
+  const latest = defaultSeries(sorted, preview);
   const out: SeriesOption[] = [{ value: SERIES_ALL, label: "all" }];
-  out.push({ value: SERIES_LATEST, label: latest === undefined ? "latest" : `latest (${latest})` });
-  for (const s of sorted) out.push({ value: s, label: s });
+  out.push({ value: SERIES_LATEST, label: latest === null ? "latest" : `latest (${latest})` });
+  const offered = preview !== undefined && preview !== null && sorted.includes(preview) ? preview : null;
+  if (offered !== null) out.push({ value: offered, label: `preview (${offered})` });
+  for (const s of sorted) if (s !== offered) out.push({ value: s, label: s });
   return out;
 }
 
@@ -164,9 +188,10 @@ export function pageSeries(
   choice: SeriesChoice,
   shellAvailable: readonly string[],
   rows: readonly { harnessSeries?: string | null; harnessVersion?: string | null }[],
+  preview?: string | null,
 ): string | null {
   const available = [...new Set([...shellAvailable, ...seriesPresent(rows)])];
-  return resolveSeries(choice, available);
+  return resolveSeries(choice, available, preview);
 }
 
 const PREF_KEY = "wrathbench.harnessSeries";

@@ -24,6 +24,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
+import type { SiteSettings } from "../src/site-settings";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { EPISODES, EPISODE_IDS, EPISODE_LIST, hasBoard, isTaskEpisode } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
@@ -411,6 +412,11 @@ const HIGHLIGHT_CACHE_MS = 15_000;
  * cost, playtime — do not come from this listing at all.
  */
 export const RESULT_RUNS_CACHE_MS = 15_000;
+
+/** `/api/info`'s `previewSeries`, spread in: the field when the store's `site` block names one, nothing otherwise. */
+export function previewSeriesField(site: SiteSettings): { previewSeries?: string } {
+  return site.previewSeries === undefined ? {} : { previewSeries: site.previewSeries };
+}
 
 /**
  * The harness series present in the run directory, newest first, with counts.
@@ -1702,6 +1708,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
         harnessSeries: await seriesCensus(),
+        // Only when the store's `site` block names one, so a deployment without it serves the body it did.
+        ...previewSeriesField(fleetRoster().site),
         // Only when one is off, so today's deployment serves the body it did.
         ...(allGroupsOn(groups) ? {} : { groups: { ...groups } }),
         ...(admin ? { admin: true } : {}),

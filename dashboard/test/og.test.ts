@@ -138,6 +138,13 @@ describe("ogSvgOf", () => {
     const free = { ...run("z/free-model", 0, 99999), billing: "free" } as ResultRun;
     expect(count(ogSvgOf([...RUNS, free]), /fill="#ffffff"/g)).toBe(3);
   });
+
+  test("a preview series is out, exactly as on the homepage", () => {
+    const next = { ...run("z/next-model", 1, 99999), harnessVersion: "harness-1.0-1-gabc", harnessSeries: "1.0" } as ResultRun;
+    // Unset, the newer series is the card's, as it is the homepage's.
+    expect(count(ogSvgOf([...RUNS, next]), /fill="#ffffff"/g)).toBe(1);
+    expect(count(ogSvgOf([...RUNS, next], { preview: "1.0" }), /fill="#ffffff"/g)).toBe(3);
+  });
 });
 
 describe("ogTags", () => {

@@ -1010,6 +1010,39 @@ front are unchanged. What else is above the chart:
   the effort rule. On the data measured, with free models excluded, it hides 24 of 57 entries at
   e90 and 7 of 20 at e360; with the effort rule, 27 and 8.
 
+### The series selector
+
+The shell's one series control (docs/ARCHITECTURE.md, "The harness series is
+one shell-wide filter") defaults to `latest`, which follows the newest series.
+At a minor bump the operator can hold the default back: while the config
+store's `site.previewSeries` names a series (operator, 2026-11-15), `latest`
+is the newest series other than that one, and it is offered as `preview
+(1.0)` right after `latest (0.5)`, in place of its plain number. A visitor
+keeps seeing the established series by default while the new one fills up,
+and anyone can look at it. The rule is `defaultSeries` in
+`dashboard/src/lib/harness.ts`. It governs every place `latest` did: the
+selector on the ladder and the runs page, the homepage's fixed e90 ladder,
+the social card the publisher draws, and the about page's status line.
+
+- The preview option's value is the series itself, so `?series=1.0` and a
+  remembered choice mean 1.0 before and after the flip, and one value never
+  sits on two options. It is offered only once the series has runs; until
+  then choosing it would show `latest` anyway. If the preview series is the
+  only one with runs, `latest` is that series too, so the default never
+  selects nothing.
+- It reaches the site the way the series list does: on `/api/info` and the
+  snapshot's `info.json` (`previewSeries`, absent when unset, so a deployment
+  without it publishes the bytes it did). A viewer that predates the field
+  reads as unset.
+- Display only. The scheduler still counts the series the fleet runs, the
+  publisher still publishes every run, and the models page, which is the
+  scheduler's verdict computed server-side, shows the deployed series as it
+  always has.
+- Set it with `bun wb config set site '{"previewSeries":"1.0"}'`. To flip,
+  run `bun wb config delete site`. Both take effect within a minute on the
+  private viewer and on the next publisher pass, with nothing released
+  (docs/RUNBOOK.md, "Config reference").
+
 ### Labels and the hover card
 
 On the scatter, only the entries on the Pareto front of the axes in view

@@ -394,7 +394,11 @@ the SPA owns everything that is UI.
   consolidated to prevent. `latest` is stored as the token rather than the
   series it resolves to today, so it follows a minor bump instead of freezing;
   the newest series also appears under its own number, because `latest` tracks
-  and a number pins. The choice lives in `?series=` so a link is shareable and
+  and a number pins. While the config store's `site.previewSeries` names a
+  series, `latest` is the newest series other than it, and that one is offered
+  as `preview (<series>)` under its own number, so a new series fills up
+  without becoming the default view; clearing the key is the flip (operator,
+  2026-11-15; docs/PUBLIC-DASHBOARD.md, "The series selector"). The choice lives in `?series=` so a link is shareable and
   in `localStorage` so a tab reopens where it was, URL first. A run whose stamp
   names no series belongs to no group and appears only under `all`. Filtering is client-side over rows the API already carries,
   with `/api/info` (the route the shell already polls) naming the series that

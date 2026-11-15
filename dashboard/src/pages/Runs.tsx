@@ -89,7 +89,7 @@ export default function Runs() {
   const feeds = useFeeds();
   /* Each unchanged run stays the object it was, so a poll redraws only the rows that moved (`keepRowIdentity`). */
   const served = createMemo<ResultRun[]>((prev) => keepRowIdentity(prev, body()?.runs ?? []), []);
-  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
+  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served(), feeds.seriesPreview());
   const inSeries = createMemo((): ResultRun[] => filterBySeries(served(), series()));
   // A party's members together wherever the sort put the first of them (`groupParties`).
   const rows = createMemo(() => groupParties(sortRuns(filterRuns(inSeries(), filter()), sort())));

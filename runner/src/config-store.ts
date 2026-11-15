@@ -63,6 +63,7 @@ import {
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
 import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credential-slots";
+import { parseSiteBlock } from "./site-settings";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -76,7 +77,7 @@ export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
  * unknown top-level keys, and silently round-tripping something nothing reads
  * would make the store a place to hide config that does nothing.
  */
-export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "credentials", "roster", "policy", "campaign-defs", "campaigns", "queue"] as const;
+export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "credentials", "roster", "policy", "site", "campaign-defs", "campaigns", "queue"] as const;
 
 /** The keys whose entries get a row each. Everything else is a singleton row. */
 export const COLLECTION_KEYS = ["credentials", "roster", "campaign-defs", "campaigns", "queue"] as const;
@@ -337,10 +338,15 @@ export function renderFleet(rows: readonly ConfigRow[]): Record<string, unknown>
   return out;
 }
 
-/** The accept/reject gate: exactly what the supervisor does to the file. */
+/**
+ * The accept/reject gate: exactly what the supervisor does to the file, and
+ * then the `site` block, which the supervisor never reads (`site-settings.ts`)
+ * but a write must not be able to leave unreadable either.
+ */
 export function validateFleet(doc: unknown, env: Record<string, string | undefined> = process.env): void {
   try {
     parseFleet(doc, { env });
+    if (typeof doc === "object" && doc !== null) parseSiteBlock((doc as { site?: unknown }).site);
   } catch (e) {
     throw new ConfigRejected(e instanceof Error ? e.message : String(e));
   }
