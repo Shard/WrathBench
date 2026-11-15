@@ -2977,9 +2977,10 @@ any worldserver change ("Updating the live fleet").
    ```
 
 4. The renderer. `gpu` claims one `devic.es/dri` per camera through the
-   node's device plugin, so `maxConcurrent` is at most the free claims;
-   `software` renders on the CPU (Mesa's lavapipe) and claims none, at a few
-   cores each. Size either against the namespace quota.
+   node's device plugin, so `maxConcurrent` is at most the free claims:
+   about 0.25 core and 3 GiB on the reference node's Intel Iris Xe at 5 fps.
+   `software` renders on the CPU (Mesa's lavapipe) and claims none: about one
+   core and 3 GiB at 2 fps. Size either against the namespace quota.
 
 ```yaml
 camera:
@@ -3023,6 +3024,12 @@ kubectl -n <ns> logs <world pod> -c camera --tail=50
   world's boot.
 - No adapter: the client's log names the Vulkan device it picked; `llvmpipe`
   on a `gpu` camera means the device was not visible in the container.
+- `skip: a blank frame`: the client answered with a flat image (seen once
+  on the Intel GPU, in a client's first minutes in the world). Blank frames
+  are never kept; if it persists, switch `renderer` to `software`.
+- A world per eval's realm row must exist with `flag` 0, or the client is
+  handed another realm and the world refuses it (`login: refused (World(39),
+  0x27)` in the client's log).
 - No clips: assembly runs at the run's verdict. By hand, in the runner pod:
   `bun infra/camera/assemble.ts data/runs/<run-id>`; it is idempotent.
 - Is the camera ever in an agent's record? Search the run's trajectory and the
