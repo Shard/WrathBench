@@ -1707,7 +1707,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       return pub({ positions }, projectPositions, positions.map((p) => p.runId));
     }
     if (path === "/api/episodes") return await episodesResponse();
-    /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
+    /* The model-facing tool list, off `toolsFor` at request time (`tools.ts`); harness text only. */
     if (path === "/api/tools") return pub(toolsResponse(), projectTools);
     if (path === "/api/campaigns") return await campaignsResponse();
     if (path === "/api/dungeons") return await dungeonsResponse();
