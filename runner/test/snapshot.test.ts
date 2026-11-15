@@ -447,7 +447,7 @@ describe("renderSnapshot", () => {
     const runs = fixture(false);
     const bucket = new Map<string, string>();
     const store: ObjectStore = {
-      put: async (path, body) => void bucket.set(path, body),
+      put: async (path, body) => void bucket.set(path, typeof body === "string" ? body : await body.text()),
       delete: async (path) => void bucket.delete(path),
     };
     const state = emptyState();
@@ -1053,7 +1053,7 @@ describe("trace segments in a pass", () => {
     const store: ObjectStore = {
       put: async (path, body) => {
         puts.push(path);
-        bucket.set(path, body);
+        bucket.set(path, typeof body === "string" ? body : await body.text());
       },
       delete: async (path) => void bucket.delete(path),
     };

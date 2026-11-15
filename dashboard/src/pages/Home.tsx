@@ -17,6 +17,8 @@ import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 import { displayError } from "../lib/errors";
 import { modelDisplay } from "../lib/format";
 import { InfoHint } from "../components/InfoHint";
+import { HighlightClip } from "../components/Replay";
+import type { HighlightResponse } from "../api/client";
 import { useFeeds } from "../lib/feeds";
 import { groupsOf } from "../lib/nav";
 
@@ -59,6 +61,12 @@ export default function Home() {
   };
   const [picked, setPicked] = createSignal<string | undefined>(undefined);
   const current = () => selectedTool(tools.latest ?? [], picked());
+  // One recent clip from a camera, when any run has one; read once per visit.
+  const [highlight, setHighlight] = createSignal<HighlightResponse["highlight"]>(null);
+  void api
+    .highlight()
+    .then((h) => setHighlight(h.highlight))
+    .catch(() => setHighlight(null));
   // The ladder is the evals group's: absent with it, and not asked for until
   // `/api/info` has said the group is there.
   const feeds = useFeeds();
@@ -100,6 +108,14 @@ export default function Home() {
           </p>
         </Show>
       </section>
+      <Show when={highlight()}>
+        {(h) => (
+          <>
+            <h2 class="section">a recent clip</h2>
+            <HighlightClip runId={h().runId} model={h().model} clip={h().clip} />
+          </>
+        )}
+      </Show>
       </div>
 
       <Show when={evals()}>
