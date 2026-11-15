@@ -172,7 +172,9 @@ takes from the stack and how.
   characters, which the stack's write gate may name in a party row, are the
   ones named by the records of the other runs on the same world (a guid is
   per characters database, so it names a different player on another
-  world; a run with no `config.world` is on the shared one), and a party's
+  world; a run with no `config.world` is on the shared one; a run pod, which
+  cannot see the other runs, takes the ones its launcher read at launch from
+  `launch-context.json`), and a party's
   members from the first row: the stager reports each member's character
   guid, the roster writes them into every member's `campaign.json` before
   any launches, and the run's config carries them to the gate
@@ -553,11 +555,15 @@ and drops both before anything reads its environment
 (`runner/src/store-secrets.ts`, `unsealLaunchSecret`). Nothing else: no database variables, no config
 store, and no `ANTHROPIC_*` variable ever (claude-code is subscription-only;
 the pod env builder refuses to build a pod that would carry one). The run
-directory is on a shared volume. Before the run starts it holds at most launch
+directory is on a shared volume; a pod mounts it alone, never the runs
+directory around it (a continuation's predecessor is the one other directory
+it gets, read-only). Before the run starts it holds at most launch
 files — a probe's `campaign.json`, a pod's `image.json`, the pointer to its
 own world `world.json` (`{ "id" }`, with the world's module URL in
 `WRATHBENCH_MODULE_URL`), which run.ts stamps as `config.world` at a fresh
-launch (`shared` without one) — and a directory
+launch (`shared` without one), and a pod's `launch-context.json`: what run.ts
+would otherwise read from the other runs, read by the launcher
+(`runner/src/launch-context.ts`) — and a directory
 holding only those is not a run: a fresh launch onto it proceeds and
 overwrites them, where anything else there refuses the launch.
 

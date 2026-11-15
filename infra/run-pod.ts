@@ -14,7 +14,9 @@
  * lane token its driver bills, and nothing else; and no `ANTHROPIC_*` variable
  * can reach it at all (claude-code is subscription-only), nor any SOAP or
  * STAGER one (the party stager's admin console and credential), which
- * `runPodEnv` enforces by throwing rather than filtering.
+ * `runPodEnv` enforces by throwing rather than filtering. Of the runs tree it
+ * mounts only its own run directory (`runPodRunsMounts`), and what run.ts
+ * would read from the other runs the launcher reads for it (`stageRunDir`).
  *
  * Images are refused unless their repository is in the chart's allow-list
  * (`runPods.allowedImages`; the release runner by default, GHCR's copy of it on
@@ -30,7 +32,13 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { archiveIfStillborn } from "../runner/src/archive";
+import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
+import { buildLaunchContext, hygieneAccountsOf, writeLaunchContext } from "../runner/src/launch-context";
+import { parseRunArgs } from "../runner/src/run-flags";
+import { runWorldOf, SHARED_WORLD } from "../runner/src/session-record";
+import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, RUN_POD_STAMP_ENV, type RosterDriver } from "../runner/src/drivers";
 import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher, LaunchSecretReader } from "./episode-launcher";
 import { EPISODE_TERM_GRACE_MS, episodeSecretEnv, refusedEpisode } from "./episode-launcher";
@@ -270,6 +278,40 @@ export interface BuildRunPodOptions {
   rosterPid: number;
   graceMs: number;
   extraPullSecrets?: readonly string[];
+  /**
+   * A freeplay continuation's predecessor, relative to the runs directory
+   * (`<id>`, or `archive/<id>` once archived): the one other run directory
+   * the pod mounts, read-only (`runPodRunsMounts`).
+   */
+  predecessor?: string;
+}
+
+type VolumeMount = NonNullable<Pod["spec"]["containers"][number]["volumeMounts"]>[number];
+
+/** The template's mount of the whole runs directory, which no run pod keeps. */
+const RUNS_SUBPATH = "runs";
+const RUN_ID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * The run pod's view of the runs tree: its own run directory read-write, at
+ * the path it has in the fleet pod, and a continuation's predecessor
+ * read-only. Never the runs directory itself: a codex model's own runtime can
+ * read every file in its pod, and the other runs' records are not its to
+ * read. What run.ts reads from the other runs, the launcher reads for it
+ * (`runner/src/launch-context.ts`).
+ */
+export function runPodRunsMounts(mounts: readonly VolumeMount[], runId: string, predecessor: string | undefined): VolumeMount[] {
+  if (!RUN_ID_SEGMENT.test(runId)) throw new Error(`run id ${JSON.stringify(runId)} is not one path segment`);
+  if (predecessor !== undefined) {
+    const id = predecessor.startsWith(`${ARCHIVE_DIR}/`) ? predecessor.slice(ARCHIVE_DIR.length + 1) : predecessor;
+    if (!RUN_ID_SEGMENT.test(id) || id === runId) throw new Error(`predecessor ${JSON.stringify(predecessor)} is not another run's directory`);
+  }
+  const at = mounts.findIndex((m) => m.subPath === RUNS_SUBPATH);
+  const runs = mounts[at];
+  if (runs === undefined) throw new Error(`run pod template mounts no runs directory (subPath ${RUNS_SUBPATH})`);
+  const own = { name: runs.name, mountPath: `${runs.mountPath}/${runId}`, subPath: `${RUNS_SUBPATH}/${runId}` };
+  const pred = predecessor === undefined ? [] : [{ name: runs.name, mountPath: `${runs.mountPath}/${predecessor}`, subPath: `${RUNS_SUBPATH}/${predecessor}`, readOnly: true }];
+  return [...mounts.slice(0, at), own, ...pred, ...mounts.slice(at + 1)];
 }
 
 /**
@@ -300,6 +342,7 @@ export function buildRunPod(template: Pod, opts: BuildRunPodOptions): Pod {
   container.args = [...opts.args];
   // The stamp run.ts reads to know it is in a run pod (`inProcessRunPodRefusal`), set last so nothing overrides it.
   container.env = [...runPodEnv(container.env ?? [], opts.env).filter((e) => e.name !== RUN_POD_STAMP_ENV), { name: RUN_POD_STAMP_ENV, value: "1" }];
+  container.volumeMounts = runPodRunsMounts(container.volumeMounts ?? [], opts.runId, opts.predecessor);
   // A lane volume (the Codex home) is mounted only on its own driver's pod.
   const unused = DRIVER_POD_VOLUMES.filter((v) => !entryOf(opts.env.driver).podVolumes.includes(v));
   if (unused.length > 0) {
@@ -391,6 +434,8 @@ export class PodLauncher implements EpisodeLauncher {
     const secretName = episodeSecretEnv(launch.spec);
     const stored = secretName === undefined ? undefined : (this.opts.secrets ?? ((n) => launchSecret(n)))(secretName);
     if (stored?.source === "refused") return refusedEpisode(`${launch.spec.runId}: ${stored.why}`);
+    const staged = stageRunDir(launch);
+    if ("refused" in staged) return refusedEpisode(staged.refused);
     let body: Pod;
     try {
       body = buildRunPod(this.opts.template, {
@@ -414,6 +459,7 @@ export class PodLauncher implements EpisodeLauncher {
       rosterPid: this.opts.rosterPid,
       graceMs: EPISODE_TERM_GRACE_MS,
       ...(this.opts.imagePullSecrets !== undefined ? { extraPullSecrets: this.opts.imagePullSecrets } : {}),
+      ...(staged.predecessor !== undefined ? { predecessor: staged.predecessor } : {}),
       });
     } catch (e) {
       return refusedEpisode(`run pod for ${launch.spec.runId} refused: ${e instanceof Error ? e.message : String(e)}`);
@@ -428,6 +474,51 @@ export class PodLauncher implements EpisodeLauncher {
     const name = created.metadata.name ?? body.metadata.generateName ?? "?";
     launch.log(`run pod ${name} created for ${launch.spec.runId}: image ${resolved.image}, harness stamp ${resolved.stamp}`);
     return new PodHandle(this.opts, name, resolved.image, resolved.requested.ref, launch);
+  }
+}
+
+/**
+ * The run directory as the pod will see it, made here before the pod exists.
+ * The fleet pod makes it, as the user both pods run as, rather than the
+ * kubelet, whose subPath directory would be root's. And what run.ts would
+ * have read from the other runs, which the pod cannot see, is read here and
+ * left in it (`launch-context.ts`): hygiene's owners, the credential's newest
+ * usage, the deployment's own guids on the run's world. A fresh launch is
+ * also checked against the archive here, the half of `assertRunDirFree` the
+ * pod cannot do, and a continuation's predecessor is found where it is, live
+ * or archived, so the pod mounts that directory and no other. A predecessor
+ * found nowhere is not mounted at all (the kubelet would make an empty one):
+ * the runner then starts fresh and records the drop, as it always has.
+ */
+export function stageRunDir(launch: Pick<EpisodeLaunch, "spec" | "resume" | "runDir" | "args">): { predecessor?: string } | { refused: string } {
+  const runId = launch.spec.runId;
+  const runsDir = dirname(launch.runDir);
+  try {
+    const args = parseRunArgs(launch.args);
+    if (!launch.resume && !holdsOnlyLaunchFiles(join(runsDir, ARCHIVE_DIR, runId))) {
+      return { refused: `run id already on disk: ${join(runsDir, ARCHIVE_DIR, runId)} — an archived run answers to ${runId}` };
+    }
+    mkdirSync(launch.runDir, { recursive: true });
+    const placed = launch.spec.placedOn;
+    writeLaunchContext(
+      launch.runDir,
+      buildLaunchContext({
+        runsDir,
+        runId,
+        resume: launch.resume,
+        accounts: hygieneAccountsOf(args),
+        credentials: placed === undefined ? null : [placed.id, `env:${placed.env}`],
+        world: runWorldOf(launch.runDir) ?? SHARED_WORLD,
+      }),
+    );
+    const from = launch.resume ? undefined : args["continue-from"];
+    if (typeof from !== "string") return {};
+    for (const rel of [from, `${ARCHIVE_DIR}/${from}`]) {
+      if (existsSync(join(runsDir, rel, "meta.json"))) return { predecessor: rel };
+    }
+    return {};
+  } catch (e) {
+    return { refused: `run pod for ${runId}: its run directory could not be staged (${e instanceof Error ? e.message : String(e)})` };
   }
 }
 
@@ -447,6 +538,8 @@ export function isQuotaRefusal(e: unknown): boolean {
 class PodHandle implements EpisodeHandle {
   readonly exited: Promise<EpisodeExit>;
   private stopping = false;
+  /** The watch ended with the API silent, so the pod may still be running. */
+  private apiLost = false;
   private node: string | undefined;
   private readonly now: () => number;
   private readonly sink: (chunk: Uint8Array) => void;
@@ -462,7 +555,25 @@ class PodHandle implements EpisodeHandle {
   ) {
     this.now = opts.now ?? Date.now;
     this.sink = opts.sink ?? ((chunk) => process.stdout.write(chunk));
-    this.exited = this.watch();
+    this.exited = this.watch().then((exit) => this.settle(exit));
+  }
+
+  /**
+   * A run that terminated with no model response goes to the archive, as
+   * run.ts does it in a process (`archiveIfNoResponses`): the pod cannot see
+   * the archive, so its launcher moves it, once the pod is gone and before the
+   * roster reads the exit. Not when the API stopped answering, which leaves
+   * the pod possibly still running.
+   */
+  private settle(exit: EpisodeExit): EpisodeExit {
+    if (this.apiLost) return exit;
+    try {
+      const moved = archiveIfStillborn(dirname(this.launch.runDir), this.launch.spec.runId);
+      if (moved !== null) this.launch.log(`${this.launch.spec.runId}: no model response — archived to ${moved}`);
+    } catch (e) {
+      this.launch.log(`${this.launch.spec.runId}: could not archive: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return exit;
   }
 
   describe(): string {
@@ -498,6 +609,7 @@ class PodHandle implements EpisodeHandle {
       } catch (e) {
         apiErrorSince ??= this.now();
         if (this.now() - apiErrorSince > apiErrorMax) {
+          this.apiLost = true;
           return { code: 1, failure: `the Kubernetes API has not answered for ${Math.round(apiErrorMax / 60_000)}m (${e instanceof Error ? e.message : String(e)}); pod ${this.name} may still be running` };
         }
         continue;
