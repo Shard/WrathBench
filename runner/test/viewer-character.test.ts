@@ -504,6 +504,7 @@ describe("the public projection of a character", () => {
         "characterLabel",
         "driver",
         "effort",
+        "episode",
         "harnessVersion",
         "model",
         "name",

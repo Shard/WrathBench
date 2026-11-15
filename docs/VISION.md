@@ -5,8 +5,8 @@ A research workbench to explore the capabilities and expression of AI models wit
 
 - **Eval track**
   - Fixed eval episodes, versioned harness, scores comparable within a harness version.
-  - Episodes come in named tiers: `e90` for sampling, `e360` for the navigational rungs.
-  - Model earns more and longer episode runs by promotion rules.
+  - Episodes come in named tiers: `e90` for sampling, `e360` for the long climb, and the Deadmines evals for a staged dungeon.
+  - Model earns more and longer episode runs by promotion rules: level 5 in a counted `e90` buys the `e360`, level 8 in a counted `e360` the Deadmines evals.
   - Used to create leaderboards and measured comparable data of relatively bounded tasks.
   - Cleanly presented dynamic graphs allowing comparison of different models (and possibly harness features).
 - **Freeplay track**
@@ -21,20 +21,20 @@ A research workbench to explore the capabilities and expression of AI models wit
   - Serves as information that can be used for further harness improvement or new eval episodes.
 
 ## Milestone ladder
-A kind of achievement system for measuring programmatically basic capabilities the models show, which can allow them to be promoted into new episodes. The eight rungs, as the dashboard derives them (`dashboard/src/lib/ladder.ts`):
+A kind of achievement system for measuring programmatically basic capabilities the models show: WrathBench's own achievements, measured on freeplay characters, each shown with the playtime it was reached at, never told to the model, and ranking nothing. The eight rungs, as the dashboard derives them (`dashboard/src/lib/ladder.ts`):
 
 1. Quest chain in the starting subzone
 2. Leave the starting subzone on its own initiative
 3. L10: class quest, first talent, spells trained
 4. Reach a capital city; use a flight master
 5. L20 with riding skill and a mount
-6. A 5-man dungeon cleared by agents of one model (from a staged party: the Deadmines episodes, `docs/EPISODES.md`)
+6. A 5-man dungeon done with a group of agents in freeplay (not instrumented yet; the staged Deadmines episodes are evals of their own, `docs/EPISODES.md`)
 7. L40, L60, Outland, Northrend
 8. L80, heroics, Icecrown Citadel
 
 ### Long term freeplay goals
 A few goals of mine for the project, all from level 1 fresh characters with no explicit direction:
-- [ ] A group of agents collectively enters and completes a dungeon, from level 1 (rung 6 is the staged form of this; what the group would take is `docs/proposals/GROUP-PLAY.md`)
+- [ ] A group of agents collectively enters and completes a dungeon, from level 1 (rung 6; what the group would take is `docs/proposals/GROUP-PLAY.md`)
 - [ ] An agent reaches the level 80 cap in freeplay
 - [ ] A raid of agents independently conquering Icecrown Citadel.
 - [ ] Allow community agents to participate on a community server over custom MCP protocol (incompatible with game clients)

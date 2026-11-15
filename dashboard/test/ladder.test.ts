@@ -37,8 +37,8 @@ import {
   LABEL_ROW,
   MARK_RING_R,
   RUNGS,
-  BOARD_RUNG,
-  rungSixKey,
+  characterMilestones,
+  type MilestoneAttempt,
   chartCue,
   puckRect,
   rectsOverlap,
@@ -194,87 +194,11 @@ describe("the resolved model id on a ladder row", () => {
 });
 
 describe("ladderRows", () => {
-  test("rung 6 is never claimed, and rungs 2 and 4 are no longer blanks", () => {
-    const row = ladderRows([run({ levels: [mark(80, 1, 1)], maxLevel: 80 })])[0]!;
-    expect(row.cells.find((c) => c.n === 6)!.status).toBe("not-instrumented");
-    // No milestone records on this run: answered, and answered "no".
-    for (const n of [2, 4]) expect(row.cells.find((c) => c.n === n)!.status).toBe("not-reached");
-    expect(row.highest).toBe(8);
-  });
-
-  test("rung 6 is the dungeon board's: filled for the same model and condition, never in the highest rung or the order", () => {
-    const climber = run({ runId: "c", model: "climber", levels: [mark(10, 1, 1)], maxLevel: 10 });
-    const dungeoneer = run({ runId: "d", model: "dungeoneer", levels: [mark(5, 1, 1)], maxLevel: 5 });
-    const key = (r: ResultRun): string => {
-      const row = ladderRows([r])[0]!;
-      return rungSixKey({ model: row.model, effort: row.effort, compactWindow: row.compactWindow, harness: r.harness, series: r.harnessSeries, condition: row.condition });
-    };
-    const best = { runIds: ["solo-1"], party: null, launchedAt: 0, counted: true, live: false, cleared: true, reason: "kill-target", timeToClearMs: 1, bosses: [639], lastBossMs: 1, enteredMs: 0, deaths: 0, wipes: 0 };
-    const boardRow = (r: ResultRun, cleared: number, n: number) => ({
-      model: r.model, effort: r.effort, harness: r.harness, series: r.harnessSeries, condition: ladderRows([r])[0]!.condition, n, cleared, best: { ...best, cleared: cleared > 0 },
-    });
-    const boards = [
-      { episode: "deadmines-solo" as const, rows: [boardRow(dungeoneer, 1, 2)] },
-      { episode: "deadmines" as const, rows: [boardRow(climber, 0, 1)] },
-    ];
-    expect(rungSixKey(boards[0]!.rows[0]!)).toBe(key(dungeoneer));
-    const rows = ladderRows([climber, dungeoneer], boards);
-    const d = rows.find((r) => r.model === "dungeoneer")!;
-    const c = rows.find((r) => r.model === "climber")!;
-    expect(d.cells.find((x) => x.n === BOARD_RUNG)).toMatchObject({ status: "reached", reached: 1, askable: 2, arm: "1 agent × 5", runId: "solo-1" });
-    expect(c.cells.find((x) => x.n === BOARD_RUNG)).toMatchObject({ status: "not-reached", reached: 0, askable: 1, arm: "5 agents" });
-    // A cleared dungeon claims no rung and moves no row: the climber still leads.
-    expect(d.highest).toBe(1);
-    expect(rows.map((r) => r.model)).toEqual(["climber", "dungeoneer"]);
-    // Another condition of the same model is another row, which the board does not fill.
-    const other = ladderRows([run({ runId: "o", model: "dungeoneer", effort: "high" })], boards)[0]!;
-    expect(other.cells.find((x) => x.n === BOARD_RUNG)!.status).toBe("not-instrumented");
-    expect(RUNGS.find((r) => r.n === BOARD_RUNG)!.title).toBe("A 5-man dungeon cleared by agents of one model");
-  });
-
-  test("a run that predates the milestone producer never claims rung 2 or 4", () => {
-    const row = ladderRows([run({ areas: null }), run({ runId: "older" })])[0]!;
-    for (const n of [2, 4]) expect(row.cells.find((c) => c.n === n)!.status).toBe("not-reached");
-  });
-
-  test("leaving the first-observed area reaches rung 2, staying in it does not", () => {
-    const stayed = ladderRows([
-      run({ model: "stayer", areas: areas({ leftStartArea: false }) }),
-    ])[0]!;
-    expect(stayed.cells.find((c) => c.n === 2)!.status).toBe("not-reached");
-    const left = ladderRows([run({ model: "walker", areas: areas({ leftStartArea: true, distinctAreas: 3 }) })])[0]!;
-    expect(left.cells.find((c) => c.n === 2)!.status).toBe("reached");
-    expect(left.highest).toBe(2);
-  });
-
-  test("rung 4 needs both halves: a capital zone AND a recorded flight", () => {
-    const both = ladderRows([
-      run({ model: "cap", areas: areas({ capitalZone: 1519 }), taxi: { flights: 1 } }),
-    ])[0]!;
-    expect(both.cells.find((c) => c.n === 4)!.status).toBe("reached");
-    // Walked to Stormwind, never flew: the rung says "and", so it says no.
-    const walked = ladderRows([
-      run({ model: "walker", areas: areas({ capitalZone: 1519 }), taxi: { flights: 0 } }),
-    ])[0]!;
-    expect(walked.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
-    const flewNoCapital = ladderRows([
-      run({ model: "flier", areas: areas({ capitalZone: null }), taxi: { flights: 2 } }),
-    ])[0]!;
-    expect(flewNoCapital.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
-  });
-
-  test("a run from before the flight taps cannot pass rung 4, and says nothing about one that can", () => {
-    // `taxi: null` is "not recorded", not "flew nowhere" — the pre-deploy run
-    // simply fails to answer, and a cell is reached as soon as ANY run does.
-    const pre = run({ runId: "pre", areas: areas({ capitalZone: 1519 }), taxi: null });
-    expect(ladderRows([pre])[0]!.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
-    const row = ladderRows([
-      pre,
-      run({ runId: "post", areas: areas({ capitalZone: 1519 }), taxi: { flights: 1 } }),
-    ])[0]!;
-    const cell = row.cells.find((c) => c.n === 4)!;
-    expect(cell.status).toBe("reached");
-    expect(cell.runId).toBe("post");
+  test("a scored row carries no rung: the milestones are freeplay's (operator, 2026-11-15)", () => {
+    const row = ladderRows([run({ levels: [mark(80, 1, 1)], maxLevel: 80, areas: areas({ leftStartArea: true, capitalZone: 1519 }), taxi: { flights: 3 } })])[0]!;
+    expect("cells" in row).toBe(false);
+    expect("highest" in row).toBe(false);
+    expect(row.bestLevel).toBe(80);
   });
 
   test("achievement points are a displayed signal and change no ordering", () => {
@@ -285,83 +209,20 @@ describe("ladderRows", () => {
     expect(rows.map((r) => r.model)).toEqual(["plain", "decorated"]);
   });
 
-  test("a hole at rung 2 does not lower the highest rung reached", () => {
-    // The model got to L10 without a milestone record ever showing it moved.
-    const row = ladderRows([run({ levels: [mark(10, 1, 1)], maxLevel: 10, areas: areas({ leftStartArea: false }) })])[0]!;
-    expect(row.cells.find((c) => c.n === 2)!.status).toBe("not-reached");
-    expect(row.highest).toBe(3);
-  });
-
-  test("the highest derivable rung is reported per model, best run counting", () => {
+  test("one row per model and condition, best run counting", () => {
     const rows = ladderRows([
       run({ model: "m", runId: "low", maxLevel: 4 }),
       run({ model: "m", runId: "high", maxLevel: 12 }),
       run({ model: "other", maxLevel: 2 }),
     ]);
     const m = rows.find((r) => r.model === "m")!;
-    expect(m.highest).toBe(3);
     expect(m.runs).toBe(2);
-    expect(m.cells.find((c) => c.n === 3)!.runId).toBe("high");
-    expect(rows[0]!.model).toBe("m"); // sorted by how far each model got
-    expect(rows.find((r) => r.model === "other")!.highest).toBe(0);
-  });
-
-  test("an expansion continent reaches rung 7 without the level threshold", () => {
-    const row = ladderRows([run({ maxLevel: 12, maps: [EXPANSION_MAPS[0]!] })])[0]!;
-    expect(row.cells.find((c) => c.n === 7)!.status).toBe("reached");
-  });
-
-  test("every rung either has a rule to apply or says it has none", () => {
-    expect(RUNGS).toHaveLength(8);
-    for (const r of RUNGS) expect(r.rule.length).toBeGreaterThan(10);
+    expect(m.bestRunId).toBe("high");
+    expect(rows[0]!.model).toBe("m");
   });
 });
 
 describe("the ladder's dispersion (operator 2026-09-16)", () => {
-  test("a rung cell counts how many runs reached it, not just that one did", () => {
-    const rows = ladderRows([
-      run({ model: "m", runId: "a", maxLevel: 12 }),
-      run({ model: "m", runId: "b", maxLevel: 10 }),
-      run({ model: "m", runId: "c", maxLevel: 4 }),
-    ]);
-    const cell = rows[0]!.cells.find((c) => c.n === 3)!;
-    expect(cell.status).toBe("reached");
-    expect(cell.reached).toBe(2);
-    expect(cell.askable).toBe(3);
-    // The link is unchanged: the first run that passes, not the furthest.
-    expect(cell.runId).toBe("a");
-  });
-
-  test("a run that could not be asked is not counted as a failure", () => {
-    // Two runs predate the area record entirely; only one can answer rung 2.
-    const rows = ladderRows([
-      run({ model: "m", runId: "new", maxLevel: 6, areas: areas({ leftStartArea: true }) }),
-      run({ model: "m", runId: "old1", maxLevel: 6 }),
-      run({ model: "m", runId: "old2", maxLevel: 6 }),
-    ]);
-    const cell = rows[0]!.cells.find((c) => c.n === 2)!;
-    expect(cell.reached).toBe(1);
-    expect(cell.askable).toBe(1); // 1/1, never 1/3
-    expect(rows[0]!.runs).toBe(3);
-  });
-
-  test("rung 4 needs both records, so a run with areas but no taxi cannot be asked", () => {
-    const rows = ladderRows([
-      run({ model: "m", maxLevel: 6, areas: areas({ capitalZone: 1537 }) }),
-      run({ model: "m", maxLevel: 6, areas: areas({ capitalZone: 1537 }), taxi: { flights: 1 } }),
-    ]);
-    const cell = rows[0]!.cells.find((c) => c.n === 4)!;
-    expect(cell.askable).toBe(1);
-    expect(cell.reached).toBe(1);
-  });
-
-  test("an uninstrumented rung counts nothing rather than reporting 0 of n", () => {
-    const cell = ladderRows([run({ maxLevel: 6 })])[0]!.cells.find((c) => c.n === 6)!;
-    expect(cell.status).toBe("not-instrumented");
-    expect(cell.askable).toBe(0);
-    expect(cell.reached).toBe(0);
-  });
-
   test("the level range is min, median and max over the runs that recorded a level", () => {
     expect(levelRangeOf([run({ maxLevel: 5 }), run({ maxLevel: 7 }), run({ maxLevel: 6 })])).toEqual({
       min: 5,
@@ -453,18 +314,19 @@ describe("the ladder's filters", () => {
 });
 
 describe("ladder row order", () => {
-  test("the rung decides first, then total XP as a (level, xp) pair, then gold", () => {
+  test("level first, then xp within it, then gold; no rung orders a scored row (operator, 2026-11-15)", () => {
     const rows = ladderRows([
-      // All three below are on rung 5 (L20). `higher` leads them on level alone,
-      // even though it holds the least xp within it — the pair is lexicographic.
+      // `higher` leads `poorer` and `richer` on level alone, even though it
+      // holds the least xp within it — the pair is lexicographic.
       run({ runId: "a", model: "poorer", levels: [mark(21, 1, 1)], maxLevel: 21, xp: 10, money: 9_999 }),
       run({ runId: "b", model: "higher", levels: [mark(22, 1, 1)], maxLevel: 22, xp: 5, money: 1 }),
-      // Rung 7 beats all of them regardless of what it holds.
-      run({ runId: "c", model: "rung", levels: [mark(40, 1, 1)], maxLevel: 40, xp: 0, money: 0 }),
+      // What would have been rung 7 (an expansion continent) and rung 4 at a
+      // lower level: it used to lead; now it sits where its level puts it.
+      run({ runId: "c", model: "traveller", levels: [mark(12, 1, 1)], maxLevel: 12, xp: 0, money: 0, maps: [0, EXPANSION_MAPS[0]!], areas: areas({ leftStartArea: true, capitalZone: 1519 }), taxi: { flights: 2 } }),
       // Tied with "poorer" on the pair (21, 10); only gold separates the two.
       run({ runId: "d", model: "richer", levels: [mark(21, 1, 1)], maxLevel: 21, xp: 10, money: 10_000 }),
     ]);
-    expect(rows.map((r) => r.model)).toEqual(["rung", "higher", "richer", "poorer"]);
+    expect(rows.map((r) => r.model)).toEqual(["higher", "richer", "poorer", "traveller"]);
   });
 
   test("the two tie-breaks are maxima that may come from different runs", () => {
@@ -2028,5 +1890,113 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
     expect(fmtPlaytimeTick(75 * MIN)).toBe("1h15m");
     expect(fmtPlaytimeTick(90 * MIN)).toBe("1.5h");
     expect(fmtPlaytimeTick(6 * 60 * MIN)).toBe("6h");
+  });
+});
+
+/*
+ * The milestone rungs as freeplay achievements (operator, 2026-11-15): which a
+ * character reached across its attempts, and the cumulative active playtime it
+ * reached each at.
+ */
+describe("freeplay milestones", () => {
+  const H = 3_600_000;
+  const at = (ts: number, playtimeMs: number | null) => ({ ts, playtimeMs });
+  const times = (p: Partial<NonNullable<MilestoneAttempt["milestoneAt"]>> = {}): NonNullable<MilestoneAttempt["milestoneAt"]> => ({
+    areas: true,
+    flights: true,
+    leftStartArea: null,
+    capitalZone: null,
+    flight: null,
+    expansion: null,
+    ...p,
+  });
+  const attempt = (runId: string, playtimeMs: number | null, levels: LevelMark[], milestoneAt?: MilestoneAttempt["milestoneAt"]): MilestoneAttempt => ({
+    runId,
+    playtimeMs,
+    levels,
+    ...(milestoneAt !== undefined ? { milestoneAt } : {}),
+  });
+  const lv = (level: number, ms: number | null): LevelMark => ({ level, ts: level * 1000, turn: null, playtimeMs: ms });
+  const byN = (rs: ReturnType<typeof characterMilestones>, n: number) => rs.find((r) => r.n === n)!;
+
+  test("a level rung is placed on the character's cumulative playtime, across attempts", () => {
+    const rs = characterMilestones([
+      attempt("a1", 2 * H, [lv(1, 0), lv(5, H)], times()),
+      // Attempt 2 opens holding L5: its first mark is no new level, and L10 lands 30 minutes in.
+      attempt("a2", H, [lv(5, 0), lv(10, H / 2)], times()),
+    ]);
+    expect(byN(rs, 1)).toEqual({ n: 1, status: "reached", playtimeMs: H, runId: "a1" });
+    expect(byN(rs, 3)).toEqual({ n: 3, status: "reached", playtimeMs: 2 * H + H / 2, runId: "a2" });
+    expect(byN(rs, 5).status).toBe("not-reached");
+    expect(byN(rs, 8).status).toBe("not-reached");
+  });
+
+  test("an attempt with no active time leaves later rungs reached, with no playtime rather than a short one", () => {
+    const rs = characterMilestones([attempt("a1", null, [lv(1, null)]), attempt("a2", H, [lv(10, H / 4)])]);
+    expect(byN(rs, 3)).toEqual({ n: 3, status: "reached", playtimeMs: null, runId: "a2" });
+  });
+
+  test("rung 2 is the sustained exit's mark, read from the character's start only", () => {
+    const left = characterMilestones([attempt("a1", H, [lv(1, 0)], times({ leftStartArea: at(5_000, 20 * 60_000) }))]);
+    expect(byN(left, 2)).toEqual({ n: 2, status: "reached", playtimeMs: 20 * 60_000, runId: "a1" });
+    const stayed = characterMilestones([attempt("a1", H, [lv(1, 0)], times())]);
+    expect(byN(stayed, 2).status).toBe("not-reached");
+    // The first attempt recorded no area: a later attempt's "exit" is from wherever it resumed, so it is not read.
+    const blind = characterMilestones([
+      attempt("a1", H, [lv(1, 0)], times({ areas: false })),
+      attempt("a2", H, [lv(4, 0)], times({ leftStartArea: at(9_000, 60_000) })),
+    ]);
+    expect(byN(blind, 2).status).toBe("not-recorded");
+    // Nor when the chain begins mid-history.
+    const midway = characterMilestones([attempt("a2", H, [lv(4, 0)], times({ leftStartArea: at(9_000, 60_000) }))], true);
+    expect(byN(midway, 2).status).toBe("not-recorded");
+  });
+
+  test("rung 4 needs a capital and a flight, on any attempts, and is reached at the later", () => {
+    const rs = characterMilestones([
+      attempt("a1", 2 * H, [lv(1, 0)], times({ capitalZone: at(1_000, H) })),
+      attempt("a2", H, [lv(9, 0)], times({ flight: at(2_000, H / 2) })),
+    ]);
+    expect(byN(rs, 4)).toEqual({ n: 4, status: "reached", playtimeMs: 2 * H + H / 2, runId: "a2" });
+    // Walked to the capital, never flew: no.
+    expect(byN(characterMilestones([attempt("a1", H, [lv(1, 0)], times({ capitalZone: at(1_000, H) }))]), 4).status).toBe("not-reached");
+    // Flew, but no record could say whether it ever saw a capital: not recorded, never "no".
+    const noAreas = characterMilestones([attempt("a1", H, [lv(1, 0)], times({ areas: false, flight: at(1_000, H) }))]);
+    expect(byN(noAreas, 4).status).toBe("not-recorded");
+    // An attempt from before the producers: nothing to ask.
+    expect(byN(characterMilestones([attempt("a1", H, [lv(1, 0)])]), 4).status).toBe("not-recorded");
+  });
+
+  test("rung 7 is level 40 or an expansion continent, whichever came first", () => {
+    const rs = characterMilestones([attempt("a1", 9 * H, [lv(30, H), lv(40, 8 * H)], times({ expansion: at(100, 3 * H) }))]);
+    expect(byN(rs, 7)).toEqual({ n: 7, status: "reached", playtimeMs: 3 * H, runId: "a1" });
+  });
+
+  test("rung 6 is a group of agents in a 5-man dungeon in freeplay, and reads not instrumented", () => {
+    const six = RUNGS.find((r) => r.n === 6)!;
+    expect(six.title).toBe("A 5-man dungeon done with a group of agents");
+    expect(six.parts).toBeNull();
+    expect(byN(characterMilestones([attempt("a1", 99 * H, [lv(80, H)], times({ capitalZone: at(1, 1), flight: at(2, 2) }))]), 6)).toEqual({
+      n: 6,
+      status: "not-instrumented",
+      playtimeMs: null,
+      runId: null,
+    });
+  });
+
+  test("every rung says what it applies", () => {
+    expect(RUNGS.map((r) => r.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    for (const r of RUNGS) expect(r.rule.length).toBeGreaterThan(10);
+  });
+
+  test("a freeplay row carries its character's milestones, over the whole chain", () => {
+    const fp = (over: Partial<ResultRun>): ResultRun => run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
+    const rows = characterRows([
+      fp({ runId: "c1", playtimeMs: H, levels: [lv(1, 0), lv(5, H / 2)], milestoneAt: times() }),
+      fp({ runId: "c2", continuedFrom: "c1", playtimeMs: H, levels: [lv(5, 0), lv(6, H / 2)], milestoneAt: times({ leftStartArea: at(1, H / 4) }) }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.milestones.map((m) => m.status)).toEqual(["reached", "reached", "not-reached", "not-reached", "not-reached", "not-instrumented", "not-reached", "not-reached"]);
+    expect(rows[0]!.milestones[1]).toEqual({ n: 2, status: "reached", playtimeMs: H + H / 4, runId: "c2" });
   });
 });

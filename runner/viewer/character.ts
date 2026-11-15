@@ -225,6 +225,7 @@ function attemptOf(r: ResultRun): CharacterAttempt {
     levels: r.levels,
     // Absent rather than empty from a row that does not answer, as on the row.
     ...(r.sessions === undefined ? {} : { sessions: r.sessions }),
+    ...(r.milestoneAt === undefined ? {} : { milestoneAt: r.milestoneAt }),
   };
 }
 
@@ -335,6 +336,7 @@ export function characterViewOf(runId: string, all: readonly ResultRun[]): Chara
     harnessVersion: latest(runs.map((r) => r.harnessVersion)),
     name: latest(runs.map((r) => r.character)),
     characterLabel: latest(runs.map((r) => r.characterLabel)),
+    episode: runs.at(-1)!.episode,
     attempt: at + 1,
     attempts: chain.length,
     previous: at > 0 ? chain[at - 1]! : null,

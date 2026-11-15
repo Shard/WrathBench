@@ -1093,6 +1093,12 @@ export interface CharacterAttempt {
    */
   levels: LevelMark[];
   /**
+   * The freeplay milestones' other marks on this attempt's clock
+   * (`ResultRun.milestoneAt`), so the character page can place every
+   * milestone the character reached. Optional for the reason it is there.
+   */
+  milestoneAt?: MilestoneTimes;
+  /**
    * The attempt's sessions (`ResultRun.sessions`), so the character page can
    * lay every sample on one session clock and mark each resume as well as
    * each new attempt. Optional for the reason it is on `ResultRun`.
@@ -1207,6 +1213,11 @@ export interface CharacterView {
   /** The in-game character name, and its race/class label. */
   name: string | null;
   characterLabel: string | null;
+  /**
+   * The newest attempt's episode: a `freeplay` character is the one the
+   * milestones are shown for (operator, 2026-11-15). Optional: an older viewer has none.
+   */
+  episode?: EpisodeIdView | null;
   /** This run's 1-based place in `runs`. */
   attempt: number;
   attempts: number;
@@ -1801,6 +1812,40 @@ export interface LevelMark {
 }
 
 /**
+ * When a run first showed one thing a freeplay milestone reads: the record's
+ * instant, and the active time from the run's start to it, on the clock
+ * `LevelMark.playtimeMs` uses. `playtimeMs` is null when the run has no
+ * session to measure against.
+ */
+export interface MilestoneMark {
+  ts: number;
+  playtimeMs: number | null;
+}
+
+/**
+ * Where on a run's own clock the freeplay milestones beyond its level were
+ * first shown (`dashboard/src/lib/ladder.ts`, `RUNGS`, operator 2026-11-15).
+ * A mark is null when the run never showed it; `areas` and `flights` say
+ * whether the run recorded what the first three read at all, which is the
+ * line between "not reached" and "not recorded". First observation, a lower
+ * bound in the sense `AreaFacts` is.
+ */
+export interface MilestoneTimes {
+  /** The run wrote zone/area records (`ResultRun.areas` non-null). */
+  areas: boolean;
+  /** The run's flights were recorded (`ResultRun.taxi` non-null). */
+  flights: boolean;
+  /** The mark that completed the first sustained exit from the start region (`AreaFacts.leftStartArea`). */
+  leftStartArea: MilestoneMark | null;
+  /** The first capital zone entered (`AreaFacts.capitalZone`). */
+  capitalZone: MilestoneMark | null;
+  /** The first takeoff (`TaxiFacts`). */
+  flight: MilestoneMark | null;
+  /** The first state sample on Outland or Northrend (`EXPANSION_MAPS`). */
+  expansion: MilestoneMark | null;
+}
+
+/**
  * What a run's zone/area milestones say about where it went.
  *
  * A **lower bound in every field**: the producer reads the state cache on
@@ -2184,8 +2229,13 @@ export interface ResultRun {
    * so a resume or a sandbox restart starts it again at zero.
    */
   questsCompleted: number | null;
-  /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
+  /** Maps the run was observed on; the Outland/Northrend half of freeplay milestone 7 reads these. */
   maps: number[];
+  /**
+   * When the freeplay milestones beyond the level were first shown, on this
+   * run's clock (`MilestoneTimes`). Optional: a viewer that predates it has none.
+   */
+  milestoneAt?: MilestoneTimes;
   /*
    * The listing columns. The runs page is the per-run grain, so the facts
    * the fleet's run table used to carry ride on this row rather than being
@@ -2233,7 +2283,7 @@ export interface ResultRun {
   billing?: "free" | "paid";
   /**
    * Where the run went, from its zone/area milestone records:
-   * the ladder's rungs 2 and 4 read this. `null` is a run that wrote no such
+   * freeplay milestones 2 and 4 read this. `null` is a run that wrote no such
    * record — everything before the producer shipped on 2026-08-23 — and must
    * not be read as "never left"; `undefined` is a viewer that predates the
    * field, the same convention `xpEarned` and `expectedCost` use.
@@ -2250,13 +2300,13 @@ export interface ResultRun {
    * wrote none — everything before the achievement taps were deployed — and
    * must not be read as zero; `undefined` is a viewer that predates the field.
    * A displayed signal only: nothing in the ladder's ordering reads it
-   * (highest rung, then XP, then gold).
+   * (level, then XP, then gold).
    */
   achievements?: AchievementFacts | null;
   /**
    * Flights taken, from the same records; `null` when flights were not recorded
-   * for this run. Rung 4's second half. See `TaxiFacts` for why null and zero
-   * are different facts.
+   * for this run. Freeplay milestone 4's second half. See `TaxiFacts` for why
+   * null and zero are different facts.
    */
   taxi?: TaxiFacts | null;
   /**
@@ -2318,7 +2368,7 @@ export interface DungeonRowView {
   harness: HarnessView | null;
   compactWindow?: string | null;
   series: string | null;
-  /** The condition's public dimensions beside the ones above (`RunCondition` without its id), which rung 6 joins the ladder on. */
+  /** The condition's public dimensions beside the ones above (`RunCondition` without its id), which the tab's chart and table key a row on. */
   condition: { loop: "program" | "snippet"; yield: boolean; pinned: boolean; wiki: boolean };
   /** Counted attempts. */
   n: number;
@@ -2538,8 +2588,11 @@ export interface ModelEpisodeView {
   /** Runs the policy wants at this tier before it stops scheduling them. */
   target: number;
   bestLevel: number | null;
-  /** A counted run reached the promotion level — the e360 witness. */
-  reachedL5: boolean;
+  /**
+   * The highest level a counted run reached: on e90 the promotion witness
+   * (`policy.promoteAtLevel`), on e360 the Deadmines one (`policy.deadminesAtLevel`).
+   */
+  countedLevel: number | null;
   lastEnded: number | null;
   lastReason: string | null;
   /** The counted runs, newest first. The ids behind `counted`, not a sample. */
@@ -2636,14 +2689,20 @@ export interface ModelRowView {
   billing: "free" | "paid";
   /** The tier the config admitted this model to. */
   declaredTier: TierView;
-  /** The tier it is scheduled under: `declaredTier` advanced once if it earned rung 1. */
+  /** The tier it is scheduled under: `declaredTier` advanced once if it earned promotion. */
   tier: TierView;
   /**
    * A counted e90 in this series reached the promotion level. What the model
    * EARNED, kept apart from where it was ADMITTED: a `t0` model can hold this
    * without spending it, and a hand-promoted model never shows it falsely.
    */
-  earnedRung1: boolean;
+  earnedPromotion: boolean;
+  /**
+   * A counted e360 in this series reached `policy.deadminesAtLevel`, which
+   * opens the Deadmines evals its tier buys. Operator-only: the public build
+   * shows no Deadmines episode on this page and ships none.
+   */
+  earnedDeadmines?: boolean;
   /** What it does with an account once its tier is spent. */
   idle: IdleModeView;
   status: ModelStatusView;
@@ -2694,6 +2753,8 @@ export interface ModelsResponse extends SnapshotEnvelope {
   };
   policy: {
     promoteAtLevel: number;
+    /** The level a counted e360 must reach to open the Deadmines evals. Operator-only, as `earnedDeadmines` is. */
+    deadminesAtLevel?: number;
     /** The series the counts are keyed on (this checkout's); null when unversioned, which counts every run. */
     series: string | null;
     /** The ladder itself, so a page can name a tier's budget without hardcoding it. */

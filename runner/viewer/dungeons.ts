@@ -1,6 +1,6 @@
 /**
  * The dungeon board's derivation (operator, 2026-11-14; docs/METHODOLOGY.md,
- * "The dungeon board, and rung 6"): the two Deadmines episodes read as
+ * "The Deadmines evals, and rung 6"): the two Deadmines episodes read as
  * attempts, one table per id, a row per model condition.
  *
  * Versioned (`DUNGEON_BOARD_VERSION`) and recomputable over every recorded
@@ -70,8 +70,8 @@ export function countedRow(r: ResultRun): boolean {
 /**
  * What a row is keyed on: the model, and the ladder's condition
  * (`condition.ts`: series, harness, effort, routing, wiki, window, loop and
- * `yield`) with the episode left out, so a row of either id names the same
- * condition as the solo ladder's row it fills rung 6 of.
+ * `yield`) with the episode left out, so a row of either id names its
+ * condition as the level ladders name theirs.
  */
 export function boardKey(r: Pick<ResultRun, "model" | "harnessSeries" | "harness" | "effort" | "compactWindow" | "wiki" | "condition">): string {
   const id = r.condition?.id;

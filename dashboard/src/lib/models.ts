@@ -48,8 +48,8 @@ const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2 };
  * edit that lowers a model's declared tier must not make the page report that
  * it un-climbed. A max over both is the honest reading either way.
  *
- * What it is not: a tier the model could reach. `earnedRung1` is a rung, not a
- * tier, and a witness the model has not been allowed to spend buys it nothing.
+ * What it is not: a tier the model could reach. `earnedPromotion` is a witness,
+ * not a tier, and a witness the model has not been allowed to spend buys it nothing.
  */
 export function highestTierOf(row: Pick<ModelRowView, "tier" | "declaredTier">): TierView {
   return TIER_RANK[row.declaredTier] > TIER_RANK[row.tier] ? row.declaredTier : row.tier;
@@ -142,17 +142,17 @@ export function isPromoted(row: Pick<ModelRowView, "tier" | "declaredTier">): bo
  * promotion its tier will not let it spend, which is exactly the row an operator
  * scans for when deciding what to promote. It is a promotion, not a second tier. A model that
  * is both promoted and holding an unspent witness (declared t2, scheduled back
- * to t1, `earnedRung1`) shows the star: the witness is still true of it.
+ * to t1, `earnedPromotion`) shows the star: the witness is still true of it.
  */
 export function tierOf(row: ModelRowView): string {
   const tier = highestTierOf(row);
-  return row.earnedRung1 && !isPromoted(row) ? `${tier}*` : tier;
+  return row.earnedPromotion && !isPromoted(row) ? `${tier}*` : tier;
 }
 
 /** The tier cell's hover: what the model was admitted to, and what it earned. */
 export function tierTitle(row: ModelRowView): string {
   const budget = (t: string): string => `tier ${t}`;
-  const earned = row.earnedRung1
+  const earned = row.earnedPromotion
     ? "earned promotion (a counted e90 reached the promotion level)"
     : "has not earned promotion";
   if (isPromoted(row)) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
@@ -162,7 +162,7 @@ export function tierTitle(row: ModelRowView): string {
   if (TIER_RANK[row.declaredTier] > TIER_RANK[row.tier]) {
     return `${budget(row.declaredTier)} in the config, scheduled on ${row.tier} — ${earned}`;
   }
-  if (row.earnedRung1) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
+  if (row.earnedPromotion) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
   return `${budget(row.tier)} — ${earned}`;
 }
 

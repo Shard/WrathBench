@@ -112,10 +112,16 @@ evals group's.
 
 ## The ladder's derivations
 
-The scored ladder's row ordering — highest rung, then the `(level, xp)` pair,
-then gold; missing readings sort last, never as zero — is one derivation over
-recorded signals (docs/METHODOLOGY.md, "Scoring"), versioned with the
-dashboard in `src/lib/ladder.ts`: three separate numbers, no aggregate score.
+The scored ladder's row ordering — the `(level, xp)` pair, then gold; missing
+readings sort last, never as zero — is one derivation over recorded signals
+(docs/METHODOLOGY.md, "Scoring"), versioned with the dashboard in
+`src/lib/ladder.ts`: separate numbers, no aggregate score. The milestone rungs
+are freeplay achievements (operator, 2026-11-15): `characterMilestones` walks a
+freeplay character's attempts and places each rung it reached on its
+cumulative active playtime, the axis the freeplay chart draws, from the level
+marks and the run's `milestoneAt` (the start-area exit, the first capital, the
+first flight, the first sample on Outland or Northrend); the freeplay tab shows
+a column per rung, and the character page a table.
 
 The freeplay ladder is an overview of the top characters on freeplay at the
 current time, not a leaderboard (operator, 2026-08-29). It shows the whole

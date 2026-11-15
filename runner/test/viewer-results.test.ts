@@ -15,6 +15,7 @@ import {
   resultRunOf,
   levelMarks,
   mapsOf,
+  milestoneTimesOf,
   questsAcrossRestarts,
   trackFrom,
   turnsUsable,
@@ -158,6 +159,37 @@ describe("turnsUsable", () => {
     expect(turnsUsable(states)).toBe(false);
     // And the marks say "no turn index" rather than crediting L3 to turn 3.
     expect(levelMarks(states).map((m) => m.turn)).toEqual([null, null]);
+  });
+});
+
+describe("milestoneTimesOf (freeplay milestones, operator 2026-11-15)", () => {
+  // Two sessions: 1000–2000 and 5000 onwards, a pause between them.
+  const segs = [{ start: 1000, end: 2000 }, { start: 5000, end: null }];
+  const areas = { startArea: 132, distinctAreas: 3, leftStartArea: true, capitalZone: 1537, zoneMarks: 2, areaMarks: 3 };
+
+  test("each instant on the run's own active clock, a pause not counted", () => {
+    const t = milestoneTimesOf([state({ ts: 1500, map: 0 }), state({ ts: 6000, map: 530 })], segs, areas, { flights: 1 }, { leftStartArea: 1800, capitalZone: 5500, flight: 5200 });
+    expect(t).toEqual({
+      areas: true,
+      flights: true,
+      leftStartArea: { ts: 1800, playtimeMs: 800 },
+      capitalZone: { ts: 5500, playtimeMs: 1500 },
+      flight: { ts: 5200, playtimeMs: 1200 },
+      expansion: { ts: 6000, playtimeMs: 2000 },
+    });
+  });
+
+  test("a fact the run's records do not hold places no mark, and unrecorded is said apart from unreached", () => {
+    const t = milestoneTimesOf([state({ ts: 1500, map: 0 })], segs, { ...areas, leftStartArea: false, capitalZone: null }, null, { leftStartArea: 1800, capitalZone: 5500, flight: 5200 });
+    expect(t).toEqual({ areas: true, flights: false, leftStartArea: null, capitalZone: null, flight: null, expansion: null });
+    // A stored total from before the instants: it cannot say when, so it reads as not recorded, never not reached.
+    const old = milestoneTimesOf([], segs, areas, { flights: 2 }, undefined);
+    expect(old).toMatchObject({ areas: false, flights: false, leftStartArea: null, capitalZone: null, flight: null });
+    expect(milestoneTimesOf([], [], null, null, undefined)).toMatchObject({ areas: false, flights: false });
+  });
+
+  test("a run with no session to measure against keeps the instant and no playtime", () => {
+    expect(milestoneTimesOf([state({ ts: 7, map: 571 })], [], null, null, undefined).expansion).toEqual({ ts: 7, playtimeMs: null });
   });
 });
 

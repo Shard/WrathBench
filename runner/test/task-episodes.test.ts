@@ -217,6 +217,10 @@ describe("the public projection, until the board is published", () => {
       "targets met on e90, e360 — unlimited sessions while its account is idle",
     );
     expect(withoutTaskEpisodes("schedulable on deadmines-solo")).toBe("schedulable on deadmines-solo");
+    // What a t2 model's Deadmines evals wait on is no more public than the evals (operator, 2026-11-15).
+    const wait = "; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
+    expect(withoutTaskEpisodes(`schedulable on e90, e360${wait}`)).toBe("schedulable on e90, e360");
+    expect(withoutTaskEpisodes(`targets met on e90, e360${wait} — unlimited sessions while its account is idle`)).toBe("targets met on e90, e360 — unlimited sessions while its account is idle");
     expect(withoutTaskEpisodes("cooling until 12:00")).toBe("cooling until 12:00");
   });
 });

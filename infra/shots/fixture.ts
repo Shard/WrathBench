@@ -379,6 +379,66 @@ function writeLadderRun(runsDir: string, runId: string, raw: Record<string, unkn
   traj.close();
 }
 
+/**
+ * A freeplay character of two attempts, both ended, for the freeplay ladder
+ * and its character page: it climbs to L12, leaves its starting area, enters a
+ * capital on the first attempt and takes a flight on the second, so the
+ * milestone columns show reached, not reached and not instrumented together.
+ */
+export const FREEPLAY_RUN = "fixture-freeplay-1";
+export const FREEPLAY_RUN_2 = "fixture-freeplay-2";
+
+interface FreeplayAttempt {
+  runId: string;
+  continuedFrom?: string;
+  startedAt: number;
+  minutes: number;
+  /** The levels it shows, one a step, from the first. */
+  levels: [number, number];
+  /** Its zone, area and taxi rows, at minutes into the attempt. */
+  events: { at: number; kind: "zone" | "area" | "taxi"; to?: number }[];
+}
+
+function writeFreeplayAttempt(runsDir: string, a: FreeplayAttempt): Promise<void> {
+  const dir = join(runsDir, a.runId);
+  mkdirSync(dir, { recursive: true });
+  let clock = a.startedAt;
+  const traj = new Trajectory(dir, { now: () => clock });
+  const token = `${a.runId}-fixture-token-000000000000`;
+  const config = {
+    ...loadRunConfig({ episode: "freeplay", account: "FIXTURE", driver: "openai", model: "fixture/freeplay-model", character: "Wanderly" }),
+    runId: a.runId,
+    token,
+    runsDir,
+    ...(a.continuedFrom !== undefined ? { continuedFrom: a.continuedFrom } : {}),
+  };
+  traj.writeMeta({ runId: a.runId, harnessVersion: "harness-fixture", startedAt: a.startedAt, config, comparability: comparabilityOf(config, "harness-fixture") });
+  traj.setCharacter(a.runId, "Wanderly");
+  const id = createHash("sha256").update(token).digest("hex").slice(0, 16);
+  const writer = new SessionWriter({ dir: sessionDirOf(dir), id, stack: { version: "fixture" }, now: () => clock, log: () => {} });
+  writer.open();
+  const [from, to] = a.levels;
+  const step = (a.minutes * 60_000) / (to - from + 1);
+  const rows: TraceRow[] = [];
+  for (let l = from, i = 0; l <= to; l++, i++) {
+    const t = a.startedAt + 60_000 + Math.round(i * step);
+    clock = t;
+    traj.append({ t: "request", turn: i + 1, adapter: "stub", promptChars: 9000 });
+    traj.append({ t: "response", turn: i + 1, message: { role: "assistant", content: `Turn ${i + 1}.` } });
+    rows.push({ ts: t, kind: "key", map: 0, x: CENTRE.x, y: CENTRE.y, z: CENTRE.z, o: 0, data: { ...keyData(l, 100 * l, 1, 400 * l, false), xpMax: null } });
+  }
+  const events = a.events.map((e, i) => {
+    const ts = a.startedAt + e.at * 60_000;
+    return e.kind === "taxi" ? { ts, seq: i + 1, kind: "taxi" as const } : { ts, seq: i + 1, kind: e.kind, to: e.to! };
+  });
+  writer.ingest({ trace: { rows, dropped: 0, dict: DICT }, events: { rows: events, dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: SELF_GUID, name: "Wanderly", race: 1, class: 1 }, stream: { connected: true, events: 0, seq: 0 } });
+  clock = a.startedAt + a.minutes * 60_000;
+  const closed = writer.close();
+  traj.setTermination(a.runId, "idle", "idle watchdog");
+  traj.close();
+  return closed;
+}
+
 const PAD = (character: string): string => `# ${character}: an invented plan
 
 ## Goal
@@ -674,14 +734,20 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   fanoutRun.traj.close();
   // Its launch's session tokens, which no reader may serve.
   writeFileSync(join(runsDir, FANOUT_RUN, "roster.json"), JSON.stringify({ characters: [{ character: "Oakhart", token: FANOUT_ROSTER_TOKEN }, { character: "Pellira", token: FANOUT_ROSTER_TOKEN }] }), { mode: 0o600 });
-  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now))]).then(() => undefined);
+  // Two attempts of one freeplay character: Northshire's areas (9, 24) then Goldshire's (87) twice, Stormwind (1519), and a flight on the second.
+  const freeplayAt = at(now - 10 * 3_600_000);
+  const freeplay = [
+    writeFreeplayAttempt(runsDir, { runId: FREEPLAY_RUN, startedAt: freeplayAt, minutes: 180, levels: [1, 8], events: [{ at: 1, kind: "area", to: 9 }, { at: 30, kind: "area", to: 24 }, { at: 70, kind: "area", to: 87 }, { at: 75, kind: "area", to: 87 }, { at: 150, kind: "zone", to: 1519 }] }),
+    writeFreeplayAttempt(runsDir, { runId: FREEPLAY_RUN_2, continuedFrom: FREEPLAY_RUN, startedAt: freeplayAt + 4 * 3_600_000, minutes: 120, levels: [8, 12], events: [{ at: 1, kind: "zone", to: 1519 }, { at: 40, kind: "taxi" }] }),
+  ];
+  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now)), ...freeplay]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
   // A second row, under an invented id a family's weights rules still answer
   // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter
   // has two buckets to offer; `fixture/e90-model` reads `unknown`.
   writeLadderRun(runsDir, E90_CLOSED_RUN, { driver: "openai", model: "anthropic/fixture-model", character: "Closewyn" }, 4, at(now - 6 * 3_600_000));
   writeLadderRun(runsDir, REFERENCE_RUN, { driver: "reference", character: "Routeric" }, 9, at(now - 4 * 3_600_000));
-  // The dungeon board's model on the solo ladder, on the board runs' condition, so rung 6 fills.
+  // The dungeon board's model on the e90 ladder too, on the board runs' condition: a program-loop row of its own.
   writeLadderRun(runsDir, E90_DUNGEON_RUN, { driver: "openai", model: "fixture/dungeon-model", loop: "program", yield: true, character: "Delvara" }, 3, at(now - 7 * 3_600_000));
   const liveSpecs: Spec[] = [
     liveSpec,

@@ -2112,6 +2112,20 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(runnableRefs(job({ ref: "glm" }), roster)).toEqual(["glm"]);
   });
 
+  test("a declared t2 opens no Deadmines eval: only the projection's e360 witness does, and the refusal says so", () => {
+    const t2: Record<string, FleetRosterEntry> = { ...roster, big: { model: "vendor/big", tier: "t2", idle: "none" } };
+    const solo = job({ ref: "big", episode: "deadmines-solo" });
+    // No projection: the declared tier is a floor for e360, never for a Deadmines id.
+    expect(runnableRefs(job({ ref: "big", episode: "e360" }), t2)).toEqual(["big"]);
+    expect(runnableRefs(solo, t2)).toEqual([]);
+    // The projection's answer is what opens it.
+    const states = modelStatesOf(rosterModels(roster));
+    expect(runnableRefs(solo, t2, eligibleFrom([{ ...states[0]!, name: "big", eligible: ["e90", "e360"] }]))).toEqual([]);
+    expect(runnableRefs(solo, t2, eligibleFrom([{ ...states[0]!, name: "big", eligible: ["e90", "e360", "deadmines-solo"] }]))).toEqual(["big"]);
+    const plan = planQueue({ queue: [solo], roster: t2, pool: ["RUNNER"], running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined, eligible: eligibleFrom([]) });
+    expect(plan.skipped.map((x) => x.reason)).toEqual(["big is not eligible for deadmines-solo (the Deadmines evals open on level 8 in a counted e360, on a tier that buys them)"]);
+  });
+
   test("a probe-only driver's entry runs under a campaign's job and no other", () => {
     const withPi: Record<string, FleetRosterEntry> = { ...roster, "ds-pi": { model: "deepseek-flash", driver: "pi", tier: "t1", idle: "none" } };
     // A queue job naming it for a scored or freeplay episode is the scored lane it is kept out of.

@@ -348,8 +348,8 @@ launch, every model gets the same bytes, and the prompt hash covers it
 (operator, 2026-11-14). An objective replaces
 the broad goal for that run rather than adding to it, and since such a run is
 already unscored, no eval prompt changes (operator, 2026-10-21). `wikiCoords` defaults
-to false: exact yards from the wiki are an answer key for the "find things"
-rungs, and without them a model must read "in the inn at Goldshire", walk
+to false: exact yards from the wiki are an answer key for finding things,
+and without them a model must read "in the inn at Goldshire", walk
 there and look. Harder is the point; if the names-only ladder proves
 unclimbable the pull-back is a labeled coords tier, never a silent change.
 
@@ -412,8 +412,11 @@ roster entry, denominated in runs, and the only thing that sets a run count:
 only where the roster entry opts in as well, because it needs five sessions on
 one credential at once, which is a fact about the lane and not the model
 (operator, 2026-11-14). Promotion is a threshold applied to every model alike — one counted
-`e90` reaching level 5 climbs `t1` to `t2` — never a judgement. Billing buys no
-runs and costs none; it decides only where a run may execute.
+`e90` reaching level 5 climbs `t1` to `t2` — never a judgement, and so is the
+door to the Deadmines evals: the attempts `t2` buys are spent only once a
+counted `e360` reaches level 8, and no tier stands in for that (operator,
+2026-11-15). The model is told neither. Billing buys no runs and costs none;
+it decides only where a run may execute.
 
 ## Scoring
 
@@ -436,13 +439,21 @@ Since v1 the recording is the stack's session record and the scorer reads it
 (operator, 2026-11-11): the level curve, XP, money, quests and position are
 read from the trace's key and delta rows, and the milestones from its events,
 with no separate 60-second state table; a 0.5 run is still read from the state
-table it recorded. The ladder orders on three separate numbers — highest rung, the `(level, xp)`
-pair, gold — and no aggregate score.
+table it recorded. The `e90` and `e360` ladders order on the `(level, xp)`
+pair, then gold, and no aggregate score (operator, 2026-11-15).
+
+**The rungs are freeplay milestones** (operator, 2026-11-15): WrathBench's own
+achievements, measured on freeplay characters. Each freeplay character shows
+which rungs it has reached and the cumulative active playtime it reached each
+at; no ladder orders on them, and they are never told to the model, so
+nothing it sees changes. A rung is a derivation like any other: it prints the
+rule it applies, and one nothing recorded can answer reads "not instrumented",
+never approximated by another reading.
 
 **The ladder shows its dispersion, and one reference line: a scripted run
 through the SDK** (2026-09-16, 2026-09-18; operator, 2026-10-19). A row's
-maxima are over runs already paid for, so the row also says how many reached
-each rung and the range of levels they spanned. An empirical ceiling and a
+maxima are over runs already paid for, so the row also says the range of
+levels they spanned. An empirical ceiling and a
 human speedrun band were withdrawn because one human entry per category is not
 enough data to earn the space; the figures stay in `docs/PUBLIC-DASHBOARD.md`
 ("The human reference") and return when there are several runs to state a
@@ -469,20 +480,22 @@ each model at each effort and window shows its newest condition with counted run
 moves with its evidence and two conditions never pool; no chart holds
 conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a
 leaderboard (2026-08-29): the whole active field, paused and in-progress
-characters included, one row per character across attempts, with the reader's
-filters applied — except the series, because a character is durable across
+characters included, one row per character across attempts with its
+milestones, with the reader's filters applied — except the series, because a character is durable across
 series and cutting its older attempts would misreport its age.
 
-**The dungeon board, and rung 6** (operator, 2026-11-14). The Deadmines
-episodes are read on a board of their own, one table per id side by side, a
-row per model condition on its best attempt with "k of n cleared" printed and
-a row shown from n = 1. Cleared rows come first, by time to clear from launch;
+**The Deadmines evals, and rung 6** (operator, 2026-11-14). The Deadmines
+episodes are shown like the other evals, each id its own ladder tab with a
+chart, never pooled or ranked against the other (operator, 2026-11-15): a row
+per model condition on its best attempt with "k of n cleared" printed and a
+row shown from n = 1. Cleared rows come first, by time to clear from launch;
 the rest by distinct bosses killed, all eight counted alike, Cookie included.
-Deaths and wipes are shown and never order a row. On the solo ladder, rung 6
-("a 5-man dungeon cleared by agents of one model") is a labelled cell filled
-from the board for the same condition, passed by a clear on either id. It
-never counts toward the row's highest rung or its order: a staged dungeon is a
-different measurement from the climb.
+Deaths and wipes are shown and never order a row. Rung 6 is a 5-man dungeon
+done with others in freeplay, a group of agents in a dungeon, and is not read
+from these evals: a staged dungeon is a different measurement from the climb
+(operator, 2026-11-15). More agents in the freeplay world come after v1; until
+the recording can tell a party of agents killing a dungeon's final boss inside
+its instance, the rung reads "not instrumented".
 
 **The character is the universal unit, and a scored run is a character of one
 attempt** (2026-09-16). Every run belongs to a character, so the scored case is
@@ -532,8 +545,8 @@ pay for today, expected to rise as episodes get cheaper (2026-09-19).
 **There is no floor.** The scripted reference run is a ceiling; no scripted
 floor or baseline has run through this harness, so nothing distinguishes a
 model that planned well from one that remembered a guide or simply held the
-SDK correctly. Until one does, a rung means "a model got here", never "this is
-hard".
+SDK correctly. Until one does, a level or a milestone means "a model got
+here", never "this is hard".
 
 **Provenance is stamped, and partial.** Every run carries the harness build
 and the comparability tuple — series, prompt hash of the rendered bytes,

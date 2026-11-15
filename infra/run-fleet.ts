@@ -239,6 +239,7 @@ import { resolveStoreSecrets } from "../runner/src/store-secrets";
 import { CODEX_LOGIN_POLL_MS, CodexLogins } from "../runner/src/codex-login";
 import { GROUPS_ENV, groupsEnvValue, groupsFromEnv } from "../runner/viewer/groups";
 import {
+  ineligibleWhy,
   liveCredentials,
   MODELS_SIDECAR,
   modelStates,
@@ -1293,7 +1294,7 @@ async function main(): Promise<void> {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
-        pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)` });
+        pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode)})` });
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }

@@ -6,7 +6,7 @@
  * disagree with the ladder about what a shared link means.
  *
  * Three ids are offered. There is no `all` and no "+ overridden":
- * a rung reached in six hours is not the same claim as one reached in ninety
+ * a level reached in six hours is not the same claim as one reached in ninety
  * minutes, and a run whose leash was overridden is not a member of the tier
  * it is stamped with — so neither can share a chart, and a choice the chart
  * cannot honour is not a choice.

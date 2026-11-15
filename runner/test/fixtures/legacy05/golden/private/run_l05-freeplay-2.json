@@ -109,6 +109,7 @@
    "harnessVersion": "harness-0.5-912-gf61e391d",
    "name": "Quillfeather",
    "characterLabel": "Night Elf Druid",
+   "episode": "freeplay",
    "attempt": 2,
    "attempts": 2,
    "previous": "l05-freeplay-1",
@@ -132,7 +133,8 @@
      "deaths": 0,
      "flights": null,
      "levels": [{"level":1,"ts":1759827332000,"turn":1,"playtimeMs":2000},{"level":2,"ts":1759827572000,"turn":3,"playtimeMs":242000}],
-     "sessions": [{"start":1759827330000,"end":1759827870000}]
+     "sessions": [{"start":1759827330000,"end":1759827870000}],
+     "milestoneAt": {"areas":true,"flights":false,"leftStartArea":null,"capitalZone":null,"flight":null,"expansion":null}
     },
     {
      "runId": "l05-freeplay-2",
@@ -151,7 +153,8 @@
      "deaths": 0,
      "flights": null,
      "levels": [{"level":2,"ts":1760086520000,"turn":1,"playtimeMs":20000}],
-     "sessions": [{"start":1760086500000,"end":null}]
+     "sessions": [{"start":1760086500000,"end":null}],
+     "milestoneAt": {"areas":true,"flights":false,"leftStartArea":null,"capitalZone":null,"flight":null,"expansion":null}
     }
    ],
    "totals": {
