@@ -142,6 +142,7 @@ import {
   scoredHold,
   implicitPauses,
   planResumes,
+  withResumesPlaying,
   planStaleRuns,
   episodeSessions,
   evalPoolDraw,
@@ -150,6 +151,7 @@ import {
   policyJobDropped,
   type QueuePlan,
   type QueueSkip,
+  type ResumePlan,
   resumesInPlace,
   runnableRefs,
   serverIdentity,
@@ -1278,6 +1280,11 @@ async function main(): Promise<void> {
       campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
       hasImageRecord: (id) => runHasImageRecord(id),
       credentialHold: (f) => resumeHoldOf(f, cfg, credGate),
+      // What each live process plays, before its run reads live.
+      inFlight: [...sets.running].flatMap((name) => {
+        const job = liveJobs.get(name) ?? [...pinnedJobs(cfg), ...campaignJobs].find((j) => j.name === name);
+        return job === undefined ? [] : [{ name, refs: job.refs, episode: job.episode }];
+      }),
     });
     lastPaused = resumes.listed;
     const resumingNames = new Set(resumes.resume.filter((r) => !sets.running.has(r.job.name)).map((r) => r.job.name));
@@ -1446,6 +1453,8 @@ async function main(): Promise<void> {
       eligible = eligibleFrom(states);
     }
     const reserved = new Map<string, string>();
+    /** The resumes spawned this tick: what holds their models below. */
+    const resumedNow: ResumePlan[] = [];
     for (const r of resumes.resume) {
       const name = r.job.name;
       if (sets.running.has(name)) continue;
@@ -1479,6 +1488,7 @@ async function main(): Promise<void> {
         continue;
       }
       const resumed = placedResume.job;
+      resumedNow.push(r);
       const spawn = jobSpawn(resumed, cfg.roster, r.account, stampToday, undefined, cfg.campaigns, cfg.campaignDefs);
       if (r.job.account !== undefined) {
         pending.set(name, resumed);
@@ -1503,6 +1513,9 @@ async function main(): Promise<void> {
         record({ job: name, event: "resume", detail: `${r.runId} on ${r.account}: ${r.why}` });
       }
     }
+    // A character resuming this tick holds its model's scored episodes under
+    // every entry, as one playing does (`withResumesPlaying`).
+    states = withResumesPlaying(states, resumedNow, cfg.roster);
     const runningAndReserved = new Map([...assigned, ...reserved]);
     // Who holds each account this tick, for the character rule (`characterStanding`):
     // the live pool jobs, the pinned ones, and the resumes reserving theirs.

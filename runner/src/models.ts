@@ -862,11 +862,23 @@ export interface ModelState {
   /** Consecutive no-progress attempts on the ladder (0 when the last attempt progressed). */
   ladder: number;
   /**
-   * The model's newest paused run in this series: it holds the
-   * model — nothing new is scheduled for it — until the supervisor resumes
-   * the run or the run goes stale (`isStalePause`).
+   * The model's newest paused run in this series, under any entry of its
+   * identity. A paused run holds no session and plays nothing, so it holds
+   * only its own way back (`schedulability`): a freeplay one keeps a fresh
+   * freeplay session from starting over the character it will resume, a
+   * resumable probe keeps its entry's unscored work, and none holds a scored
+   * episode. It stands until the supervisor resumes the run or the run goes
+   * stale (`isStandingPause`).
    */
   paused?: { runId: string; episode: EpisodeId; reason: string; at: number; episodeElapsedMs: number | null; episodeMs: number | null };
+  /**
+   * The newest live freeplay or scored run of this model, under any entry of
+   * its identity, or a freeplay run the supervisor is resuming this tick
+   * (`resuming`, `withResumesPlaying`). One character per model: a freeplay
+   * character playing holds the model's scored episodes, and a scored run
+   * playing holds its freeplay. A probe is neither, as before.
+   */
+  playing?: { runId: string; episode: EpisodeId; resuming?: true };
 }
 
 export interface NextJob {
@@ -2477,8 +2489,9 @@ export function projectModel(
     perEpisode,
     ladder,
   };
-  // The newest-started standing pause holds the model — a freeplay one for as
-  // long as it sits, since it is never stale and is resumed, never rescheduled.
+  // The newest-started standing pause — a freeplay one for as long as it
+  // sits, since it is never stale and is resumed, never rescheduled. What it
+  // holds is `schedulability`'s to say.
   const pausedRun = newestStarted(mine.filter((f) => isStandingPause(f, opts.now)));
   if (pausedRun !== undefined && pausedRun.pause !== null) {
     state.paused = {
@@ -2490,6 +2503,9 @@ export function projectModel(
       episodeMs: pausedRun.episodeMs,
     };
   }
+  // Any series: a live run is a character playing whatever harness it runs.
+  const playingRun = newestStarted(all.filter((f) => f.live && f.episode !== "probing"));
+  if (playingRun !== undefined) state.playing = { runId: playingRun.runId, episode: playingRun.episode };
   if (opts.gone !== undefined) {
     state.gone = opts.gone;
     state.retired = { at: opts.gone.since, reason: goneReason(opts.gone) };
@@ -2579,8 +2595,9 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
  *   and the only state the viewer's `ok` field has ever meant.
  * - `free` — nothing blocking it, and nothing owed. Probe campaigns and idle
  *   work both draw from here, in that order.
- * - `blocked` — retired, cooling, already running, or holding a paused run. No
- *   lane may have it.
+ * - `blocked` — retired, cooling, already running, a resumable probe paused
+ *   (its unscored work only), or owing a scored run while a freeplay
+ *   character of the model plays. No lane may have it.
  *
  * Lane priority lives at the pick, not here: a model is never "a probe model",
  * it is a model that happens to owe nothing.
@@ -2614,17 +2631,34 @@ export function schedulability(
     return blocked(`cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})`);
   }
   if (running.has(s.name)) return blocked("running (one character per model)");
-  if (s.paused !== undefined) {
+  const v = ownVerdict(s);
+  // A paused run holds no session and plays nothing, so it holds only its own
+  // way back, never a scored episode of its model under any entry. A freeplay
+  // one holds the model's freeplay (`idleHold`, below). A resumable probe holds
+  // its entry's unscored work, so a campaign does not offer its square again
+  // over the paused run. A scored one is not coming back: it holds the model
+  // only until the next tick ends it as a failed attempt — the live tick ends
+  // it before it picks, so this is what `--status` and `--dry-run` say in the
+  // meantime — and the ladder then reads that attempt.
+  const scoredPause = s.paused !== undefined && EPISODES[s.paused.episode].scored;
+  if (s.paused !== undefined && s.paused.episode !== "freeplay" && (scoredPause || v.verdict !== "eval")) {
     const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
     const of = s.paused.episodeMs !== null ? ` of ${Math.round(s.paused.episodeMs / 60_000)}m` : "";
-    // A scored run that paused is not coming back: it holds the model only
-    // until the next tick ends it as a failed attempt, and the fresh attempt
-    // is scheduled the tick after. Unscored lanes still resume.
     const fate = resumesOnPause(s.paused.episode)
       ? "resumed by the supervisor, never rescheduled"
       : "ended as a failed attempt on the next tick, then reattempted fresh";
     return blocked(`paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — ${fate}`);
   }
+  // One character per model, across entries: a freeplay character playing (or
+  // resuming this tick) holds the model's scored episodes.
+  if (v.verdict === "eval" && s.playing?.episode === "freeplay") {
+    return blocked(`running (one character per model): ${s.playing.runId} ${s.playing.resuming === true ? "resumes" : "plays"} its freeplay character`);
+  }
+  return v;
+}
+
+/** The verdict from the entry's own state, before anything another run holds. */
+function ownVerdict(s: ModelState): Verdict {
   // Free, so a probe campaign may take it, and owing nothing, so nothing else does.
   if (s.campaignOnly === true) return { verdict: "free", why: "campaignOnly: it runs only as a probe campaign's assignment" };
   if (s.probeOnly === true) return { verdict: "free", why: probeOnlyRefusal(harnessDriver(s.harness)?.id ?? s.harness) };
@@ -2641,10 +2675,26 @@ export function schedulability(
     // One idle mode past `none`, so one thing to say. (The retired third,
     // `idle: "characters"`, is a probe campaign now — nothing here rolls a
     // start state, and nothing anywhere names a character.)
-    const how = s.idle === "none" ? "" : " — unlimited sessions while its account is idle";
+    const held = idleHold(s);
+    const how = s.idle === "none" ? "" : held !== undefined ? ` — no freeplay session: ${held}` : " — unlimited sessions while its account is idle";
     return { verdict: "free", why: `targets met on ${s.eligible.join(", ")}${how}` };
   }
   return { verdict: "eval", why: `schedulable on ${open.join(", ")}` };
+}
+
+/**
+ * Why the model may not start a fresh freeplay session now, or undefined. Its
+ * paused freeplay run is resumed, never started over, and one character per
+ * model keeps a session from starting beside a live scored or freeplay run of
+ * it under another entry.
+ */
+function idleHold(s: ModelState): string | undefined {
+  if (s.paused !== undefined && s.paused.episode === "freeplay") {
+    const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
+    return `paused run ${s.paused.runId} (${s.paused.reason}, ${spent} elapsed) is resumed, never started over`;
+  }
+  if (s.playing !== undefined) return `${s.playing.runId} ${s.playing.resuming === true ? "resumes" : "plays"} this model (one character per model)`;
+  return undefined;
 }
 
 /**
@@ -2653,7 +2703,7 @@ export function schedulability(
  * work" are two questions, and only the second is a property of the entry.
  */
 export function wantsIdle(v: Verdict, s: ModelState): boolean {
-  return v.verdict === "free" && s.idle !== "none" && s.probeOnly !== true;
+  return v.verdict === "free" && s.idle !== "none" && s.probeOnly !== true && idleHold(s) === undefined;
 }
 
 /**

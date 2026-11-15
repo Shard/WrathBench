@@ -52,6 +52,7 @@ import {
   pausesOnDrain,
   implicitPauses,
   planResumes,
+  withResumesPlaying,
   planStaleRuns,
   evalPoolDraw,
   evalPoolTaken,
@@ -1015,6 +1016,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
           campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
           hasImageRecord: (id) => runHasImageRecord(id),
           ...(credGate !== undefined ? { credentialHold: (f: RunFact) => resumeHoldOf(f, config, credGate) } : {}),
+          inFlight: [...aliveJobs].map(([name, j]) => ({ name, refs: j.ref.split("+"), episode: j.episode ?? null })),
         })
       : { resume: [], listed: [], end: [] };
   const jobRow = (name: string, j: StateJob): JobRow => {
@@ -1146,7 +1148,8 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
       ...runningRefsOf(aliveJobs),
       ...unownedLiveRuns({ runs: runFacts, roster: config.roster, campaigns: config.campaigns, running: aliveRunIds, busyAccounts: aliveAccounts }).flatMap((u) => u.refs),
     ]);
-    const states = projected;
+    // A resume the tick would make holds its model's scored episodes, as on the tick.
+    const states = withResumesPlaying(projected, resumePlan.resume, config.roster);
     const excluded = new Map<string, string>();
     for (const name of Object.keys(config.roster)) {
       const why = policyExclusion(config, name);
@@ -1358,6 +1361,7 @@ export function planDryRun(opts: {
     ...(opts.campaignFileOf !== undefined ? { campaignFileOf: opts.campaignFileOf } : {}),
     ...(opts.hasImageRecord !== undefined ? { hasImageRecord: opts.hasImageRecord } : {}),
     ...(gate !== undefined ? { credentialHold: (f: RunFact) => resumeHoldOf(f, config, gate) } : {}),
+    inFlight: inFlight.filter((r) => r.owned),
   });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.

@@ -329,7 +329,7 @@ describe("the ladder", () => {
     for (const fact of cases) expect(isCounted(fact)).toBe(false);
   });
 
-  test("a freeplay pause never goes stale: it holds its model however long it sits, so nothing is started over it", () => {
+  test("a freeplay pause never goes stale: it holds its model's freeplay however long it sits, so no session is started over it, and never its scored episodes", () => {
     const old: RunFact = {
       ...fail(9, NOW - 30 * HOUR, null, 30),
       episode: "freeplay",
@@ -348,10 +348,20 @@ describe("the ladder", () => {
     expect(isStandingPause({ ...old, episode: "e90" }, NOW)).toBe(false);
     const s = projectModel({ ...m, idle: "unlimited" }, [old], DEFAULT_POLICY, { now: NOW });
     expect(s.paused).toMatchObject({ runId: "f-9", episode: "freeplay", reason: "quota-exhausted" });
-    const v = schedulability(s);
-    expect(v.verdict).toBe("blocked");
-    expect(v.why).toContain("resumed by the supervisor, never rescheduled");
-    expect(nextJobs([s], ["A"])).toEqual([]);
+    // It owes e90s, and the paused run plays nothing: the e90 is picked.
+    expect(schedulability(s)).toEqual({ verdict: "eval", why: "schedulable on e90" });
+    expect(nextJobs([s], ["A"]).map((j) => [j.name, j.episode])).toEqual([["m", "e90"]]);
+    // Targets met: free, but no fresh freeplay session over the paused character.
+    const counted = [1, 2, 3].map((n) => fail(n, NOW - (10 - n) * HOUR, "episode-limit", 90));
+    const met = projectModel({ ...m, idle: "unlimited" }, [...counted, old], DEFAULT_POLICY, { now: NOW });
+    const v = schedulability(met);
+    expect(v.verdict).toBe("free");
+    expect(v.why).toBe("targets met on e90 — no freeplay session: paused run f-9 (quota-exhausted, ?m elapsed) is resumed, never started over");
+    expect(wantsIdle(v, met)).toBe(false);
+    expect(nextJobs([met], ["A"])).toEqual([]);
+    // Without the pause the same entry takes its unlimited session.
+    const free = projectModel({ ...m, idle: "unlimited" }, counted, DEFAULT_POLICY, { now: NOW });
+    expect(nextJobs([free], ["A"]).map((j) => [j.name, j.episode])).toEqual([["m", "freeplay"]]);
   });
 
   test("a stale pause (older than its own budget) no longer holds the model", () => {

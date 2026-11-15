@@ -1547,6 +1547,13 @@ export function planResumes(opts: {
    * recorded (`placeResume`).
    */
   credentialHold?: (f: RunFact) => ResumeHold | undefined;
+  /**
+   * The jobs with a live process, with their refs and episode. A freeplay
+   * resume waits while one of them plays its model on a scored episode or
+   * another freeplay session: one character per model, before the run it
+   * spawned reads live. Absent: only the live runs are asked.
+   */
+  inFlight?: readonly { name: string; refs: readonly string[]; episode?: EpisodeId | null | undefined }[];
 }): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
   const ownCampaignFile = opts.campaignFileOf ?? ((): CampaignFile | null => null);
@@ -1626,8 +1633,7 @@ export function planResumes(opts: {
     // is still one entry's two paused runs.
     const armWindow = file !== null && armArg(file.arm, "compact-window") !== undefined;
     const windowKey = armWindow ? "" : rosterWindowKey(f);
-    // A probe-only driver's run is never another entry's (`entryOwnsRun`).
-    const modelKey = `${f.model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
+    const modelKey = resumeModelKey(f, windowKey);
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
     if (launchedUnder !== undefined && current !== undefined && !entryOwnsRun(current, f)) {
@@ -1899,6 +1905,25 @@ export function planResumes(opts: {
       list(gated.text, null, true, gated.code ?? undefined);
       continue;
     }
+    // One character per model: a paused freeplay run holds none of its model's
+    // scored episodes (`schedulability`), so one may be playing when the
+    // resume comes due, under this entry or another of the model's. The
+    // resume waits for it, as for a busy account. A pinned job is outside the
+    // policy's rule, as a pinned campaign is.
+    if (f.episode === "freeplay" && job.account === undefined) {
+      const playing = opts.runs.find((g) => g.live && g.runId !== f.runId && g.episode !== "probing" && resumeModelKey(g, rosterWindowKey(g)) === modelKey);
+      if (playing !== undefined) {
+        list(`waiting: ${playing.runId} plays ${f.model} (${playing.episode}) — one character per model`);
+        continue;
+      }
+      const owner = opts.inFlight?.find(
+        (j) => j.name !== job.name && j.episode !== "probing" && j.refs.some((r) => config.roster[r] !== undefined && entryOwnsRun(config.roster[r]!, f)),
+      );
+      if (owner !== undefined) {
+        list(`waiting: job ${owner.name} plays ${f.model}${owner.episode != null ? ` (${owner.episode})` : ""} — one character per model`);
+        continue;
+      }
+    }
     // Every account or none: a fan-out run never comes back on part of its grant.
     const busyOne = holds.find((a) => takenAccounts.has(a.toUpperCase()));
     if (busyOne !== undefined) {
@@ -1955,6 +1980,36 @@ export function planResumes(opts: {
     resume.push(plan.resume);
   }
   return { resume, listed, end };
+}
+
+/**
+ * The key one character per model groups a run under when resuming: model,
+ * effort and the entry's window (`rosterWindowKey`, or "" for an arm's own).
+ * A probe-only driver's run is never another entry's (`entryOwnsRun`).
+ */
+function resumeModelKey(f: Pick<RunFact, "model" | "effort" | "driver">, windowKey: string): string {
+  return `${f.model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
+}
+
+/**
+ * The projection as a tick that resumes freeplay runs reads it: every entry
+ * of a resumed run's model reads that run as playing (`ModelState.playing`),
+ * so the policy picks none of the model's scored episodes on the tick the
+ * character comes back, as it picks none while it plays. Pure.
+ */
+export function withResumesPlaying(
+  states: readonly ModelState[],
+  resumes: readonly Pick<ResumePlan, "job" | "runId">[],
+  roster: Readonly<Record<string, FleetRosterEntry>>,
+): ModelState[] {
+  const back = resumes.filter((r) => r.job.episode === "freeplay" && r.job.resume !== undefined);
+  if (back.length === 0) return [...states];
+  return states.map((s) => {
+    const entry = roster[s.name];
+    if (entry === undefined || s.playing?.episode === "freeplay") return s;
+    const r = back.find((x) => entryOwnsRun(entry, x.job.resume!));
+    return r === undefined ? s : { ...s, playing: { runId: r.runId, episode: "freeplay", resuming: true } };
+  });
 }
 
 /**
@@ -2925,6 +2980,8 @@ export function planTick(
   /** Picks the policy wanted but held back (no credential with room, the driver cap), with why. */
   heldPicks: HeldPick[];
 } {
+  // A character resuming this tick holds its model's scored episodes, as one playing does.
+  states = withResumesPlaying(states, resumes, config.roster);
   const eligible = eligibleFrom(states);
   const counted = countedFrom(states);
   const resumed = new Set(resumes.map((r) => r.job.name));
