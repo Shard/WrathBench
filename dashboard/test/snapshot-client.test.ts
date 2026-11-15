@@ -811,6 +811,14 @@ describe("what a bucket cannot serve", () => {
   test("there is no stream URL, so nothing can open one by accident", () => {
     expect(createSnapshotClient(BASE).streamUrl("r1")).toBe("");
   });
+
+  test("there is no live camera frame, and nothing is asked of the bucket for one", async () => {
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect(await c.cameraLatest("r1")).toBeNull();
+    expect(c.cameraFrameUrl("r1", 3)).toBe("");
+    expect(b.urls).toEqual([]);
+  });
 });
 
 /*
@@ -865,6 +873,15 @@ describe("the public build's call sites", () => {
       expect(loader).toContain("e.status === 404");
       expect(loader).not.toContain("setError");
     }
+  });
+
+  test("the live camera still is mounted only in the private build, and only while live", () => {
+    // Live viewing is the private viewer's alone: the public build never mounts
+    // the poll, and its client (above) would answer nothing if it did.
+    expect(read("../src/pages/RunDetail.tsx")).toMatch(/<Show when=\{!SNAPSHOT_MODE && live\(\)\}>\s*<LiveFrame /);
+    expect(read("../src/pages/MapPage.tsx")).toMatch(
+      /<Show when=\{SNAPSHOT_MODE \|\| track\(\) !== undefined \? undefined : p\(\)\.runId\} keyed>\s*\{\(id\) => <LiveFrame /,
+    );
   });
 
   test("the map asks lib/tiles for a URL rather than hard-coding the path", () => {

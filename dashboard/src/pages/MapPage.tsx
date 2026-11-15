@@ -51,7 +51,8 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../api/client";
+import { LiveFrame } from "../components/Replay";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "@wrathbench/inspector/views";
@@ -2598,6 +2599,10 @@ export default function MapPage() {
                     <div class="v mono">{n().count}</div>
                   </>
                 )}
+              </Show>
+              {/* The camera's newest still of a live run, private only; keyed so a new pick starts afresh. */}
+              <Show when={SNAPSHOT_MODE || track() !== undefined ? undefined : p().runId} keyed>
+                {(id) => <LiveFrame runId={id} now={ageTick()} kv />}
               </Show>
               <div class="k">last update</div>
               {/*

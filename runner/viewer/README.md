@@ -658,7 +658,7 @@ the clips, `camera/clips.json`, and serves three routes off it (`camera.ts`):
   listed run (the newest timelapse when there is none), on a 15 s window.
 
 What is served is only what the list names, and only `clips/<file>` with a
-plain file name: the frames under `camera/frames/` are never reachable, by
+plain file name: no clip route reaches the frames under `camera/frames/`, by
 name or by any path. Every step is checked with `lstat`, so a symbolic link
 anywhere on the way (the run, `camera/`, `clips/`, the list, the file) is a
 404 rather than a file outside the run. A run's detail carries `camera: true`
@@ -671,6 +671,31 @@ shapes masked, the container prefix made relative, the session token struck
 by value at the route), clipped to one line. The media routes serve in public
 mode too, since the snapshot publishes the same files, and a run that is never
 published is a 404 on all three like on every other per-run route.
+
+### The live still
+
+While a run plays, the camera writes stills to `camera/frames/<seq>.jpg` and a
+line each to `camera/frames.jsonl`. A private handle serves the newest one, for
+the run page's live block and the map sidebar (`camera-live.ts`):
+
+- `/api/run/<id>/camera/latest`: `{runId, seq, t}`.
+- `/api/run/<id>/camera/latest.jpg`: that frame, with `x-camera-seq` and
+  `x-camera-time`. Any query string is ignored; the page adds `?seq=` so the
+  browser sees a new picture, which may be a frame newer than the `t` it read.
+
+Both answer `Cache-Control: no-store`, and both are a 404 when there is no
+frame. Only the last 16 KiB of the index is read, since it grows by a line
+every few seconds for the whole run. The newest line that reads (one cut short
+mid-write does not) names the frame, by `seq` alone; a line's `file` must be
+that frame's own or the line is skipped. When that line's frame is not on disk,
+the line before it is used.
+The checks are the clips' (`lstat` at each step, and opening without following
+a link), and no other frame is reachable.
+
+Live viewing is the private viewer's alone (operator, 2026-11-15). A public
+handle has neither route, a 404 before anything is read. The publisher never
+requests them and publishes no frame. The public build's client never asks for
+a frame.
 
 ## How it handles big files
 

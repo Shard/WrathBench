@@ -46,7 +46,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   SEGMENT_MS as TRACE_WINDOW_MS,
@@ -561,8 +561,8 @@ export const LIVE_RUN_4 = "fixture-live-4";
  * A camera's output for a run, in the contract's layout: `camera/clips.json`
  * naming a timelapse and one level clip, both the same two-second synthetic
  * test pattern (ffmpeg's `testsrc`, `runner/test/fixtures/camera/`) and never
- * a game image, with `meta.json` labelled `camera`. A frame on disk too, which
- * nothing may ever serve.
+ * a game image, with `meta.json` labelled `camera`. A frame on disk too, with
+ * no index, which nothing may ever serve.
  */
 function writeCamera(runsDir: string, runId: string, from: number, to: number, model: string): void {
   const media = join(import.meta.dir, "..", "..", "runner", "test", "fixtures", "camera");
@@ -594,6 +594,34 @@ function writeCamera(runsDir: string, runId: string, from: number, to: number, m
   );
   const metaPath = join(runsDir, runId, "meta.json");
   writeFileSync(metaPath, JSON.stringify({ ...(JSON.parse(readFileSync(metaPath, "utf8")) as object), camera: true }));
+}
+
+/** How often the fixture's live camera takes a still, like the camera's own interval. */
+const LIVE_FRAME_MS = 10_000;
+
+/**
+ * A camera's stills while a run plays: `camera/frames/<seq>.jpg` and a line
+ * each in `camera/frames.jsonl`, the last few up to `now`, each the synthetic
+ * test pattern (`runner/test/fixtures/camera/poster.jpg`). Only the private
+ * viewer serves the newest of them, so `meta.json` is left alone and the
+ * public snapshot stays what it was. Returns the ticker that keeps taking them.
+ */
+function writeLiveFrames(runsDir: string, runId: string, now: number): (t: number) => void {
+  const still = join(import.meta.dir, "..", "..", "runner", "test", "fixtures", "camera", "poster.jpg");
+  const dir = join(runsDir, runId, "camera");
+  mkdirSync(join(dir, "frames"), { recursive: true });
+  let seq = 0;
+  let last = 0;
+  const take = (t: number): void => {
+    seq += 1;
+    last = t;
+    copyFileSync(still, join(dir, "frames", `${seq}.jpg`));
+    appendFileSync(join(dir, "frames.jsonl"), `${JSON.stringify({ seq, t: new Date(t).toISOString(), file: `frames/${seq}.jpg`, kind: "interval" })}\n`);
+  };
+  for (let t = now - 3 * LIVE_FRAME_MS; t <= now - LIVE_FRAME_MS / 2; t += LIVE_FRAME_MS) take(t);
+  return (t) => {
+    if (t - last >= LIVE_FRAME_MS) take(t);
+  };
 }
 
 /** Write the runs into `runsDir` relative to `now`, and hand back the live runs' ticker. */
@@ -851,6 +879,8 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   };
   beat(now);
   const ring = writeRing(liveSpec, lives[0]!.session, now, 14 * 60_000);
+  // The live run's camera stills, which only the private run page shows.
+  const frames = writeLiveFrames(runsDir, LIVE_RUN, now);
   return {
     runsDir,
     live: LIVE_RUN,
@@ -860,6 +890,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     ready,
     tick(t = Date.now()) {
       ring.tick(t);
+      frames(t);
       const to = at(t);
       for (const l of ticking) {
         if (to > l.last) {

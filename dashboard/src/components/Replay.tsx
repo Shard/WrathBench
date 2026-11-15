@@ -6,13 +6,15 @@
  * "metadata"` fetches only the head of the file until someone presses play,
  * and `playsinline` keeps a phone from going full screen on its own. The
  * caption is text from `clips.json`, drawn as a text node, never burned into
- * the picture. `HighlightClip` is the home page's single small player.
+ * the picture. `HighlightClip` is the home page's single small player, and
+ * `LiveFrame` the private run page's newest still while the run plays.
  */
 
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
 import { A } from "@solidjs/router";
 import { api, type ClipView, type ClipsResponse } from "../api/client";
-import { modelDisplay } from "../lib/format";
+import { fmtAge, modelDisplay } from "../lib/format";
+import { poll } from "../lib/poll";
 
 /** The timelapse first, then the event clips in the order they happened. */
 export function orderClips(clips: readonly ClipView[]): ClipView[] {
@@ -113,5 +115,53 @@ export function HighlightClip(props: { runId: string; model: string | null; clip
         </Show>
       </div>
     </div>
+  );
+}
+
+/** How often the live still is re-read: about the camera's own interval. */
+export const LIVE_FRAME_POLL_MS = 10_000;
+/** Past this a still reads stale: three missed reads. */
+export const LIVE_FRAME_STALE_MS = 3 * LIVE_FRAME_POLL_MS;
+
+/**
+ * The newest camera frame of a run that is still playing, with its age, on the
+ * private viewer only: the run page and the live map mount it while the run is
+ * live and the build is not the public one, whose client never asks for a
+ * frame. Nothing is drawn until there is a frame, so a run with no camera shows
+ * nothing. `kv` draws it as a row of the map sidebar's key/value list.
+ */
+export function LiveFrame(props: { runId: string; now: number; kv?: boolean }) {
+  const feed = poll(() => api.cameraLatest(props.runId), LIVE_FRAME_POLL_MS);
+  return (
+    <Show when={feed.latest}>
+      {(f) => {
+        const age = (): number => props.now - Date.parse(f().t);
+        const taken = (): string => `frame ${f().seq} · ${new Date(f().t).toISOString().slice(0, 19).replace("T", " ")} UTC`;
+        const ageClass = (): string => (age() > LIVE_FRAME_STALE_MS ? "warn" : "dim");
+        const still = (): JSX.Element => <img src={api.cameraFrameUrl(props.runId, f().seq)} alt="" title={taken()} />;
+        return (
+          <Show
+            when={props.kv === true}
+            fallback={
+              <>
+                <h2 class="section">live</h2>
+                {still()}
+                <p class={ageClass()} title={taken()}>
+                  {fmtAge(age())}
+                </p>
+              </>
+            }
+          >
+            <div class="k">camera</div>
+            <div class="v">
+              {still()}
+              <span class={ageClass()} title={taken()}>
+                {fmtAge(age())}
+              </span>
+            </div>
+          </Show>
+        );
+      }}
+    </Show>
   );
 }

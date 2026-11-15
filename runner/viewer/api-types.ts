@@ -1032,6 +1032,17 @@ export interface ClipsResponse {
   clips: ClipView[];
 }
 
+/**
+ * `/api/run/<id>/camera/latest`: the run's newest camera frame, private only
+ * (`runner/viewer/camera-live.ts`). The picture is `/camera/latest.jpg`.
+ */
+export interface LatestFrameResponse {
+  runId: string;
+  seq: number;
+  /** When the camera took it, ISO. */
+  t: string;
+}
+
 /** `/api/highlight`: the home page's one clip, or none. */
 export interface HighlightResponse {
   highlight: { runId: string; model: string | null; clip: ClipView } | null;
