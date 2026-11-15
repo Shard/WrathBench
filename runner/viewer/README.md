@@ -677,7 +677,7 @@ the run page's live block and the map sidebar (`camera-live.ts`):
 - `/api/run/<id>/camera/latest`: `{runId, seq, t}`.
 - `/api/run/<id>/camera/latest.jpg`: that frame, with `x-camera-seq` and
   `x-camera-time`. Any query string is ignored; the page adds `?seq=` so the
-  browser sees a new picture.
+  browser sees a new picture, which may be a frame newer than the `t` it read.
 
 Both answer `Cache-Control: no-store`, and both are a 404 when there is no
 frame. Only the last 16 KiB of the index is read, since it grows by a line

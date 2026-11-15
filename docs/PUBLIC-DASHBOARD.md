@@ -654,9 +654,9 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   The still frames under a run's `camera/frames/` are never published, and a
   public handle serves none of them. Only the clips `camera/clips.json` names
   are published, and only their `clips/` files. Live viewing is a private
-  viewer's alone (operator, 2026-11-15): it serves a live run's newest frame on
-  the run page, and nothing on the public site acts as a live view of the
-  world (`runner/viewer/README.md`, "The live still"). `projectClips` rebuilds each clip field by field: name,
+  viewer's alone (operator, 2026-11-15): it shows a live run's newest frame on
+  the run page and in the map's sidebar, and nothing on the public site acts as
+  a live view of the world (`runner/viewer/README.md`, "The live still"). `projectClips` rebuilds each clip field by field: name,
   kind, event type and detail, moment, length, caption, and the video and
   poster as this clip's bucket key and nothing else. The caption is the
   model's own words as the director quoted them, with the benchmark's and the
