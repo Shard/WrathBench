@@ -561,8 +561,9 @@ evidence"):
 A failed attempt is an **attempt spent**: it numbers a run id, it shows on the
 runs page with its reason, and it is never a recorded episode — the ladder, the
 episodes grain and every chart drop it, the same way they drop a freeplay run.
-Only a provider's refusal (`quota-exhausted`, `rate-limited`) is a rung of the
-model's cooling ladder; a fleet stop and an offline gap are the harness's doing.
+Only a provider's pause (`quota-exhausted`, `rate-limited`, and
+`provider-unresponsive`, a provider that answered nothing, which was counted as
+`rate-limited` before it had its own name) is a rung of the model's cooling ladder; a fleet stop and an offline gap are the harness's doing.
 
 ## Runs launched without an episode
 

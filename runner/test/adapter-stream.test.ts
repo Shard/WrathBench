@@ -490,6 +490,8 @@ describe("OpenAiChatAdapter request clock", () => {
     );
     const out = await adapter.complete(req);
     expect(out.kind === "pause" && out.detail).toContain("network error: no data from the model API for 0.04 s");
+    // A provider that answered nothing is labelled as that, not as a refusal it never made.
+    expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
   });
 
   test("a stream that trickles forever ends at the ceiling", async () => {

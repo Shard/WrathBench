@@ -14,8 +14,10 @@
  *
  *  - from the program (`ProgramFact`, the stack's): a routine ending, the
  *    first error of each signature since the last load, the first refusal of
- *    each signature in the run (`Waker`), a `wake(reason)` call, and a
- *    sandbox restart the program came back from;
+ *    each character, action and status in the run whatever routine made it
+ *    (`Waker`), a `wake(reason)` call, and a sandbox restart the program came
+ *    back from; a refusal a death caused is not named in the wake that
+ *    carries the death (`withoutDeathRefusals`);
  *  - from the runner: a death (the session record's `death` row), the event
  *    stream closing (the state sample), and a harness notice.
  *
@@ -45,7 +47,7 @@
  * from the trajectory alone.
  */
 
-import { renderRoutines, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
+import { renderRoutines, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
 import { renderNotices } from "./context";
 import type { HarnessNotice } from "./sandbox/host";
 
@@ -110,8 +112,35 @@ export interface WakeReason {
    * routine's end, the run that ended, by its start (`routinesShown`).
    */
   routine?: { name: string; character?: string | undefined; startedAt?: number | undefined } | undefined;
-  /** At fan-out, the character a death or a closed stream is one of. */
+  /** At fan-out, the character a death or a closed stream is one of; a death's refusal, the character refused. */
   character?: string | undefined;
+  /** A refusal a death caused (`dead`, or a move `interrupted` because the character died): a wake that carries the death does not name it. */
+  byDeath?: true | undefined;
+}
+
+/**
+ * The part of a refusal signature (`routine|character|action|status`) a
+ * refusal is told once per run by: the character, the action and the status.
+ * The routine is left out, so the same refusal from a routine started under
+ * a new name is not news again.
+ */
+export function refusalPairOf(signature: string): string {
+  const at = signature.indexOf("|");
+  return at < 0 ? signature : signature.slice(at + 1);
+}
+
+/** The hint the SDK gives a move `interrupted` by the character's death. */
+const DIED_INTERRUPT = "because the character died";
+
+/**
+ * The reasons a wake names: a refusal a death caused is left out of a wake
+ * that carries that death (at fan-out, the same character's), since the
+ * death says it. It still shows, counted, among the wake's refusals. Pure.
+ */
+export function withoutDeathRefusals(reasons: readonly WakeReason[]): WakeReason[] {
+  const died = reasons.filter((r) => r.key === "died");
+  if (died.length === 0) return [...reasons];
+  return reasons.filter((r) => r.byDeath !== true || !died.some((d) => d.character === undefined || d.character === r.character));
 }
 
 /** A routine's name and character as one key. */
@@ -149,8 +178,18 @@ export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
       };
     case "error":
       return { key: "error", ts: fact.ts, text: `new error (${label(fact)}: ${fact.error.name})`, inContext: false };
-    case "refusal":
-      return { key: "refusal", ts: fact.ts, text: `new refusal (${label(fact)}: ${fact.action} ${fact.status}${seatTag(fact.seat)})`, inContext: false, signature: fact.signature };
+    case "refusal": {
+      const byDeath = fact.status === "dead" || (fact.status === "interrupted" && fact.hint.includes(DIED_INTERRUPT));
+      const character = fact.seat ?? fact.character;
+      return {
+        key: "refusal",
+        ts: fact.ts,
+        text: `new refusal (${label(fact)}: ${fact.action} ${fact.status}${seatTag(fact.seat)})`,
+        inContext: false,
+        signature: fact.signature,
+        ...(byDeath ? { byDeath: true as const, ...(character !== undefined ? { character } : {}) } : {}),
+      };
+    }
     case "wake":
       return {
         key: "wake",
@@ -175,12 +214,15 @@ export class Waker {
   /** Per key (and character, `seenKey`), the newest moment the model has been shown its reasons up to (`forget`). */
   private readonly seenUntil = new Map<string, number>();
   /**
-   * Refusal signatures the model has been told of this run: one that woke
-   * it, or was pending when it woke, and one whose hint a tool result
-   * carried (`deliver`). A signature wakes once per run, not once per load:
-   * an edit reloads the program, and a combat routine's ordinary refusals
-   * (`not_ready`, `out_of_range`) would otherwise each wake it again after
-   * every save. Later ones still show, counted, in the next wake.
+   * Refusals the model has been told of this run, by character, action and
+   * status (`refusalPairOf`): one that woke it, or was pending when it woke,
+   * and one whose hint a tool result carried (`deliver`). A refusal wakes
+   * once per run, not once per load and not once per routine name: an edit
+   * reloads the program, a model that starts a routine per task names a new
+   * one every few minutes, and a combat routine's ordinary refusals
+   * (`not_ready`, `out_of_range`) would otherwise each wake it again. Later
+   * ones still show, counted, in the next wake. A resumed process starts a
+   * new conversation, and this with it.
    */
   private readonly known = new Set<string>();
 
@@ -190,8 +232,9 @@ export class Waker {
     if (reason.character !== undefined && reason.ts <= (this.seenUntil.get(seenKey(reason.key, reason.character)) ?? -Infinity)) return;
     // Nor a refusal of a signature the model was already told of this run, however late its fact arrives.
     if (reason.signature !== undefined) {
-      if (this.known.has(reason.signature)) return;
-      this.remember(reason.signature);
+      const pair = refusalPairOf(reason.signature);
+      if (this.known.has(pair)) return;
+      this.remember(pair);
     }
     this.pending.push(reason);
     // A program that throws on a tight loop must not grow this without bound.
@@ -227,13 +270,14 @@ export class Waker {
 
   /** A tool result carried the hint of this refusal signature: it is no reason to wake, now or when its fact lands, for the rest of the run. */
   deliver(signature: string): void {
-    this.remember(signature);
-    this.pending = this.pending.filter((r) => r.signature !== signature);
+    const pair = refusalPairOf(signature);
+    this.remember(pair);
+    this.pending = this.pending.filter((r) => r.signature === undefined || refusalPairOf(r.signature) !== pair);
   }
 
-  /** Keep `signature` as told; past the cap the oldest is forgotten, so a program minting signatures cannot grow this without bound. */
-  private remember(signature: string): void {
-    this.known.add(signature);
+  /** Keep a refusal (`refusalPairOf`) as told; past the cap the oldest is forgotten, so a program minting signatures cannot grow this without bound. */
+  private remember(pair: string): void {
+    this.known.add(pair);
     if (this.known.size > KNOWN_SIGNATURES_KEPT) this.known.delete(this.known.values().next().value as string);
   }
 
@@ -734,7 +778,9 @@ export class ProgramWake {
    * replaced. A still-running routine's call stays pending. Both are still
    * in the next wake's lines.
    */
-  routinesShown(rows: readonly RoutineRow[]): void {
+  routinesShown(all: readonly RoutineRow[]): void {
+    // What the lines showed: the older ended routines they count but do not show are not news the model has.
+    const rows = routinesInView(all).rows;
     for (const r of rows) this.rowsShown.set(runKey(r.name, r.character), r);
     this.waker.forgetWhere((r) => {
       if (r.routine === undefined) return false;
@@ -834,7 +880,7 @@ export class ProgramWake {
     }
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
-    const reasons = this.waker.take();
+    const reasons = withoutDeathRefusals(this.waker.take());
     this.n++;
     const after = this.reading();
     const now = this.now();
