@@ -81,8 +81,8 @@
  *   failed read after the headers — a stall mid-stream, either timer firing
  *   there, a cut or malformed stream — end as `adapter-error`, as a failed
  *   body read always has.
- * - A 2xx whose body is an empty answer — no `choices`, an empty `choices`, or
- *   a first choice with no `message`, and no error object — is retried like a
+ * - A 2xx whose body is an empty answer — a null or empty `choices`, or a
+ *   first choice with no `message`, and no error object — is retried like a
  *   5xx: the provider served nothing, which is its fault, not the model's
  *   (observed: OpenCode Go answering `choices: []`, which ended a scored
  *   attempt as `adapter-error`). Attempts exhausted on it PAUSE as
@@ -376,7 +376,7 @@ export type AdapterRetryCause =
   | "body_read"
   /** A 2xx stream that ended before the model finished. */
   | "stream_cut"
-  /** A 2xx whose body answered nothing: no choice, or a choice with no message (`isEmptyAnswer`). */
+  /** A 2xx whose body answered nothing: a null or empty `choices`, or a choice with no message (`isEmptyAnswer`). */
   | "empty_answer";
 
 /** One retry, as `onRetry` hears it: the attempt about to start (from 2), of how many, the wait before it, and why. */
@@ -586,14 +586,16 @@ export function statedResetOf(headers: Headers, body: unknown): number | null {
 /** A body as JSON, or null: a refusal's body is often plain text ("slow down"). */
 /**
  * A 2xx body that answered nothing rather than something malformed: an
- * object with no `choices`, an empty `choices`, or a first choice that is an
- * object with no `message`. Retried and paused, never fatal (the retry
- * policy above). Anything else the schema refuses stays a schema mismatch.
+ * object whose `choices` is null or empty, or whose first choice is an object
+ * with no `message`. Retried and paused, never fatal (the retry policy
+ * above). Anything else the schema refuses stays a schema mismatch, a body
+ * with no `choices` key at all included: that is some other shape (an error
+ * envelope the 2xx-error path does not know), not an empty answer.
  */
 function isEmptyAnswer(json: unknown): boolean {
   if (typeof json !== "object" || json === null || Array.isArray(json)) return false;
   const choices = (json as { choices?: unknown }).choices;
-  if (choices === undefined || choices === null) return true;
+  if (choices === null) return true;
   if (!Array.isArray(choices)) return false;
   if (choices.length === 0) return true;
   const first: unknown = choices[0];
@@ -746,7 +748,7 @@ export class StreamAssembler {
     if (this.error !== undefined) return { body: { ...this.top, error: this.error }, finished };
     if (!this.sawChoice) {
       // No choice at all: the non-streaming equivalent is an empty `choices`,
-      // which the schema refuses, so it is refused the same way here.
+      // an empty answer (`isEmptyAnswer`), so it is retried and paused the same way.
       return { body: { ...this.top, choices: [], ...(this.usage !== undefined ? { usage: this.usage } : {}) }, finished };
     }
     // No text is `null`, as a non-streaming body spells it: OpenRouter opens

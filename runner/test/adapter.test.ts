@@ -797,7 +797,7 @@ describe("OpenAiChatAdapter budget pauses", () => {
   });
 
   test("an empty answer that persists pauses as provider-unresponsive, never adapter-error", async () => {
-    for (const empty of [{ choices: [] }, {}, { choices: null }, { choices: [{ finish_reason: "stop" }] }]) {
+    for (const empty of [{ choices: [] }, { choices: null }, { choices: [{ finish_reason: "stop" }] }]) {
       const body = JSON.stringify(empty);
       const out = await adapterPlaying([status(200, body), status(200, body)]).complete(req);
       expect(out.kind).toBe("pause");
@@ -809,6 +809,7 @@ describe("OpenAiChatAdapter budget pauses", () => {
   test("a 2xx body that is malformed rather than empty is still a fatal schema mismatch", async () => {
     let calls = 0;
     for (const bad of [
+      { object: "error", message: "model not found" },
       { choices: "nope" },
       { choices: [{ message: { content: 7 } }] },
       { choices: [{ message: { tool_calls: [{ function: { name: "f" } }] } }] },
@@ -829,7 +830,7 @@ describe("OpenAiChatAdapter budget pauses", () => {
       });
       await expect(adapter.complete(req)).rejects.toThrow(/did not match schema/);
     }
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
   });
 
   test("a 2xx error body without any status shape still hard-errors", async () => {
