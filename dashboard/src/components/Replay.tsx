@@ -200,14 +200,24 @@ export function RunVideo(props: RunVideoProps) {
       },
     ),
   );
-  // A new body (a part re-encoded, one more part) keeps the place on the timeline.
+  /*
+   * A new body (the open part re-encoded, one more part) keeps the place on
+   * the timeline: an element whose part's file is unchanged is left alone,
+   * one whose file moved is loaded again at the same time, playing if it was.
+   */
+  let refs: (string | undefined)[] = [];
   createEffect(
     on(
       () => props.clips,
       () => {
-        held[0] = held[1] = -1;
-        load(active(), partAt(parts(), v())?.index ?? 0);
-        stageNext();
+        const now = parts().map((p) => p.video);
+        for (const slot of [0, 1]) {
+          const i = held[slot]!;
+          if (i >= 0 && refs[i] !== now[i]) held[slot] = -1;
+        }
+        refs = now;
+        if (held[active()] === -1) seek(v(), false);
+        else stageNext();
       },
       { defer: true },
     ),
@@ -236,7 +246,10 @@ export function RunVideo(props: RunVideoProps) {
     <video
       ref={(el) => {
         els[slot] = el;
-        if (slot === 0) load(0, 0);
+        if (slot === 0) {
+          refs = parts().map((p) => p.video);
+          load(0, 0);
+        } else stageNext();
       }}
       hidden={active() !== slot}
       preload="metadata"
