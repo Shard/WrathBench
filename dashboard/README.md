@@ -132,6 +132,17 @@ predicate, over both the table and the graph. The one exemption that stands is
 the harness series, because a character is durable across series and cutting
 its older attempts would report a long-lived character as attempt 1.
 
+The two Deadmines ids are tabs of the ladder page (`?episode=deadmines`,
+`?episode=deadmines-solo`), not tiers: their runs are read on the dungeon
+board (`/api/dungeons`, derived in `runner/viewer/dungeons.ts`), one table per
+id, and `/api/ladder` refuses them. A tab shows its id's table as the viewer
+ordered it, under the shell's series and none of the tier's other controls,
+and above it the scatter's idiom for an attempt: one point per row at its
+best attempt, time from launch (to the clear, or to the last boss) against
+bosses killed, sharing the table's hover. The one-agent tab is offered only
+where its table is served, which a public handle never does. The old
+`/dungeons` page redirects to the five-agent tab.
+
 ## The map's player
 
 A run the trace recorder drove (`@wrathbench/inspector/codec/trace`) is drawn by one
