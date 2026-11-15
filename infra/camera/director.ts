@@ -3,7 +3,7 @@
  * "Camera"). One per camera client, in the same pod: it logs the client in,
  * checks it is invisible, picks a subject on this world, keeps the client on
  * it with GM movement commands, and keeps frames per the layout in
- * `layout.ts`; when the subject's run ends it assembles the clips.
+ * `layout.ts`; when the subject's run ends it assembles the run's video.
  *
  * What it may do in the world is fixed here and nowhere else: `.appear
  * <subject>` to move to the subject, `.morph target 11686` to hide the
@@ -299,7 +299,7 @@ export class Director {
   assemble(subject: Subject): void {
     try {
       const doc = assembleRun(subject.runDir, { intervalMs: this.o.intervalMs, log: (l) => this.log(l) });
-      this.log(`${subject.runId}: ${doc?.clips.length ?? 0} clip(s)`);
+      this.log(`${subject.runId}: ${doc?.parts.length ?? 0} part(s), ${doc?.chapters.length ?? 0} chapter(s)`);
     } catch (e) {
       this.log(`${subject.runId}: assembly failed: ${e instanceof Error ? e.message : String(e)}`);
     }

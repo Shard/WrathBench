@@ -682,12 +682,12 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     scratchpad: async (id: string): Promise<ScratchpadResponse> =>
       await held<ScratchpadResponse>(await pointer(id, "scratchpad")),
     /*
-     * The clips the listing names for the run's current version; a run with
+     * The video the listing names for the run's current version; a run with
      * none has no pointer and is a 404 before anything is requested.
      */
     clips: async (id: string): Promise<ClipsResponse> => await held<ClipsResponse>(await pointer(id, "clips")),
     /*
-     * Published only when some run has a clip: a manifest without it is none,
+     * Published only when some run has a video: a manifest without it is none,
      * and nothing is asked of the bucket for it.
      */
     highlight: async (): Promise<HighlightResponse> => {
@@ -695,7 +695,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
       if (m.artifacts?.["highlight.json"] === undefined) return { highlight: null };
       return await snap<HighlightResponse>("highlight.json");
     },
-    /** A clip's video or poster is a bucket key, like every pointer. */
+    /** A part's video or poster is a bucket key, like every pointer. */
     mediaUrl: (ref: string): string => artifactUrl(ref),
     /*
      * Raw trajectory lines are the unprojected record — the run config, the

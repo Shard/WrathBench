@@ -3,7 +3,7 @@
  *
  * The camera writes stills while a run plays (`camera/frames/<seq>.jpg`) and
  * appends a line per still to `camera/frames.jsonl`. Frames are never
- * published (`docs/PUBLIC-DASHBOARD.md`, "Camera clips ship; frames never
+ * published (`docs/PUBLIC-DASHBOARD.md`, "Camera video ships; frames never
  * do"): this file is the only reader of either, a private handle serves the
  * newest frame and nothing else, and a public handle has no such route at all.
  *

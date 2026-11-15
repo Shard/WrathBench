@@ -1,8 +1,9 @@
 /**
  * The camera's sweep (infra/camera/sweep.ts) over a runs tree: runs a camera
- * no longer follows are labelled and assembled, live ones are left alone,
- * frames are pruned only past the window and only once the clips are up to
- * date, and a pruned run is never assembled again.
+ * no longer follows are labelled and assembled, live ones at most hourly,
+ * frames are pruned only past the window, only once the video is up to date
+ * and never the open part's before the run has ended, a pruned run is never
+ * assembled again, and an older layout's clips.json is assembled anew.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
@@ -14,6 +15,16 @@ import type { ClipsFile } from "./camera/layout";
 const tmp = tempDirs();
 const NOW = Date.parse("2026-11-20T00:00:00Z");
 const DAY = 86_400_000;
+
+/** A version-2 clips.json whose one part, the open one, starts at `openFrom`. */
+function doc(openFrom: number): ClipsFile {
+  return { version: 2, runId: "r", parts: [{ file: "clips/part-000.mp4", poster: "clips/part-000.jpg", from: new Date(openFrom).toISOString(), to: new Date(openFrom).toISOString(), seconds: 1 }], chapters: [], captions: [], timemap: [] };
+}
+
+function writeDoc(dir: string, at: number, openFrom: number = 0): void {
+  writeFileSync(join(dir, "camera", "clips.json"), JSON.stringify(doc(openFrom)));
+  utimesSync(join(dir, "camera", "clips.json"), at / 1000, at / 1000);
+}
 
 function run(runsDir: string, id: string, o: { live?: boolean; ended?: boolean; framesAgeMs?: number; clipsAfterIndex?: boolean }) {
   const dir = join(runsDir, id);
@@ -29,27 +40,24 @@ function run(runsDir: string, id: string, o: { live?: boolean; ended?: boolean; 
   }
   writeFileSync(join(dir, "camera", "frames.jsonl"), "");
   utimesSync(join(dir, "camera", "frames.jsonl"), t, t);
-  if (o.clipsAfterIndex) {
-    writeFileSync(join(dir, "camera", "clips.json"), "{}");
-    utimesSync(join(dir, "camera", "clips.json"), t + 1, t + 1);
-  }
+  if (o.clipsAfterIndex) writeDoc(dir, t * 1000 + 1000);
   return dir;
 }
 
 describe("the camera sweep", () => {
-  test("a live run: its frames are assembled twice a day and pruned once covered; its meta.json is never written", () => {
+  test("a live run: its frames are assembled hourly and pruned once covered; its meta.json is never written", () => {
     const runs = tmp("camera-sweep-live-");
     const dir = run(runs, "r-live-long", { live: true, framesAgeMs: 4 * DAY });
-    // Its clips are older than half a day and than its index: due.
+    // Its video is older than an hour and than its index: due.
     const seen: string[] = [];
     const meta = readFileSync(join(dir, "meta.json"), "utf8");
     const r = sweepCameraRuns(runs, NOW, {
       intervalMs: 10_000,
       assemble: (d) => {
         seen.push(d);
-        writeFileSync(join(d, "camera", "clips.json"), "{}");
-        utimesSync(join(d, "camera", "clips.json"), NOW / 1000, NOW / 1000);
-        return { version: 1, runId: "r", clips: [] } as ClipsFile;
+        // The open part began after the frames: they are all a closed part's.
+        writeDoc(d, NOW, NOW - DAY);
+        return doc(NOW - DAY);
       },
     });
     expect(seen).toEqual([dir]);
@@ -65,8 +73,7 @@ describe("the camera sweep", () => {
   test("old frames of a run assembled an hour ago stay a day longer: the window runs from the assembly", () => {
     const runs = tmp("camera-sweep-recent-assembly-");
     const dir = run(runs, "r-late", { ended: true, framesAgeMs: 4 * DAY });
-    writeFileSync(join(dir, "camera", "clips.json"), "{}");
-    utimesSync(join(dir, "camera", "clips.json"), (NOW - 3_600_000) / 1000, (NOW - 3_600_000) / 1000);
+    writeDoc(dir, NOW - 3_600_000);
     expect(sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: () => null }).prunedFrames).toBe(0);
     expect(sweepCameraRuns(runs, NOW + DAY, { intervalMs: 10_000, assemble: () => null }).prunedFrames).toBe(2);
   });
@@ -86,7 +93,7 @@ describe("the camera sweep", () => {
     const ended = run(runs, "r-ended", { ended: true });
     const live = run(runs, "r-live", { live: true, clipsAfterIndex: true });
     const seen: string[] = [];
-    const r = sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (seen.push(d), { version: 1, runId: "x", clips: [] } as ClipsFile) });
+    const r = sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (seen.push(d), doc(0)) });
     expect(r.assembled).toEqual(["r-ended"]);
     expect(r.labelled).toEqual(["r-ended"]);
     expect(seen).toEqual([ended]);
@@ -108,5 +115,31 @@ describe("the camera sweep", () => {
     const again: string[] = [];
     sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (again.push(d.split("/").at(-1)!), null) });
     expect(again).not.toContain("r-old");
+  });
+
+  test("the open part's frames are never pruned before the run has ended: the next assembly encodes them again", () => {
+    const runs = tmp("camera-sweep-open-");
+    // Paused four days in, its one part still open: nothing goes.
+    const paused = run(runs, "r-paused-open", { framesAgeMs: 4 * DAY });
+    writeDoc(paused, NOW - 2 * DAY, NOW - 5 * DAY);
+    // Live, its open part begun after these frames were taken: they go.
+    const live = run(runs, "r-live-closed", { live: true, framesAgeMs: 4 * DAY });
+    writeDoc(live, NOW - 30 * 60_000, NOW - 3 * DAY);
+    const r = sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: () => null });
+    expect(readdirSync(join(paused, "camera", "frames")).length).toBe(2);
+    expect(readdirSync(join(live, "camera", "frames"))).toEqual([]);
+    expect(r.prunedFrames).toBe(2);
+  });
+
+  test("a clips.json of an older layout is assembled anew, whatever its age", () => {
+    const runs = tmp("camera-sweep-v1-");
+    const dir = run(runs, "r-v1", { ended: true, framesAgeMs: 4 * DAY });
+    writeFileSync(join(dir, "camera", "clips.json"), JSON.stringify({ version: 1, runId: "r-v1", clips: [] }));
+    const seen: string[] = [];
+    sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (seen.push(d), (writeDoc(d, NOW), doc(0))) });
+    expect(seen).toEqual([dir]);
+    const again: string[] = [];
+    sweepCameraRuns(runs, NOW, { intervalMs: 10_000, assemble: (d) => (again.push(d), null) });
+    expect(again).toEqual([]);
   });
 });
