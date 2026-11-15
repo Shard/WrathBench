@@ -151,8 +151,8 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * without quota wording (free pools). Neither has anything to do with context
  * size — which is what the old name, `window-exhausted`, kept implying.
  * `provider-unresponsive` is the model API answering nothing at all through
- * every retry (each attempt ended by the silence timer or the ceiling): a
- * hung provider, not a refusal. It is a provider pause like `rate-limited`
+ * every retry (the last attempt ended by the silence timer or the ceiling, or
+ * answered 2xx with no choice in it): a hung provider, not a refusal. It is a provider pause like `rate-limited`
  * and handled as one everywhere (`PROVIDER_PAUSES`, the roster's ladder).
  * `auth-failed` is a credential that stopped working (codex: "Your access
  * token could not be refreshed" — a refresh token spent by another process on

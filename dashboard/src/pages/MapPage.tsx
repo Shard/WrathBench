@@ -50,9 +50,9 @@
  */
 
 import { A, useSearchParams } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../api/client";
-import { LiveFrame } from "../components/Replay";
+import { LiveFrame, RunVideo } from "../components/Replay";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "@wrathbench/inspector/views";
@@ -2113,6 +2113,27 @@ export default function MapPage() {
     setPlaying(false);
     seek(edge === "start" ? sp.from : sp.to);
   };
+  /*
+   * The run's camera video in a single run's replay, on the map's clock
+   * (`lib/video-sync.ts`): while it plays it drives the cursor, otherwise the
+   * cursor drives it, and starting either stops the other. None for a party's
+   * or a fan-out's replay, a run with no camera, or one the public site
+   * withholds (its `clips` is a 404 there). The cursor it sets is not
+   * remembered: only a deliberate move on the transport is.
+   */
+  const [replayClips] = createResource(
+    () => (partyId() === undefined ? runId() : undefined),
+    async (id) => await api.clips(id).catch(() => null),
+  );
+  const followVideo = (ms: number): void => {
+    if (playTrack() === undefined || fanout() !== undefined) return;
+    followStart = false;
+    setCursor(ms);
+    needsDraw = true;
+  };
+  const videoPlaying = (on: boolean): void => {
+    if (on && playing()) halt();
+  };
   /**
    * Play from the end starts over: a transport whose play button does nothing
    * because the cursor happens to be on the last sample reads as broken.
@@ -2603,6 +2624,17 @@ export default function MapPage() {
               {/* The camera's newest still of a live run, private only; keyed so a new pick starts afresh. */}
               <Show when={SNAPSHOT_MODE || track() !== undefined ? undefined : p().runId} keyed>
                 {(id) => <LiveFrame runId={id} now={ageTick()} kv />}
+              </Show>
+              {/* The run's video in its replay, on the map's clock, on both builds. */}
+              <Show when={track() !== undefined && fanout() === undefined && replayClips()?.runId === p().runId ? replayClips() : undefined}>
+                {(c) => (
+                  <>
+                    <div class="k">camera</div>
+                    <div class="v">
+                      <RunVideo compact clips={c()} follow={cursor()} hold={playing()} onRunTime={followVideo} onPlaying={videoPlaying} />
+                    </div>
+                  </>
+                )}
               </Show>
               <div class="k">last update</div>
               {/*

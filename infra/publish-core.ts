@@ -538,7 +538,7 @@ function settleRun(state: PublishState, runId: string, version: string): void {
 /**
  * Record a clip file a flip names as its slot's current version, shedding the
  * older ones once a second flip names the same file: `settleRun`'s rule, for
- * the same reader. A clip re-rendered under its name (a timelapse that grew)
+ * the same reader. A clip re-rendered under its name (the open part, grown)
  * keeps the previous file for one more flip and then loses it to the prune.
  */
 function settleClip(state: PublishState, path: string): void {

@@ -348,9 +348,16 @@ describe("OpenAiChatAdapter streaming", () => {
     );
   });
 
-  test("an empty stream with no choice fails as a schema mismatch, as an empty body would", async () => {
-    const { adapter } = adapterServing(() => Promise.resolve(streamed(["data: [DONE]\n\n"])), { maxAttempts: 1 });
-    await expect(adapter.complete(req)).rejects.toThrow(/did not match schema/);
+  test("an empty stream with no choice is an empty answer, as an empty body is: retried, then paused", async () => {
+    const empty = () => Promise.resolve(streamed(["data: [DONE]\n\n"]));
+    const { adapter: retried } = adapterServing((n) =>
+      n === 0 ? empty() : Promise.resolve(streamed([data(chunk({ content: "whole" }, "stop"))])),
+    );
+    expect(ok(await retried.complete(req)).content).toBe("whole");
+
+    const { adapter: never } = adapterServing(empty, { maxAttempts: 2 });
+    const out = await never.complete(req);
+    expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
   });
 
   test("an error status is read as text with its pause semantics unchanged", async () => {

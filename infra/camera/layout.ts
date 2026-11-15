@@ -6,10 +6,12 @@
  *   frames/<seq>.jpg   still frames, JPEG q75, 1280×720; kept for the logs'
  *                      retention window, never published
  *   frames.jsonl       one FrameLine per frame
- *   clips/<name>.mp4   H.264, yuv420p, faststart, 1280×720, silent:
- *                      `timelapse` and `event-<seq>-<type>`
- *   clips/<name>.jpg   a poster for each clip
- *   clips.json         the ClipsFile: the only file a reader opens to find clips
+ *   clips/part-<n>.mp4 the run's one video, in parts of at most six hours of
+ *                      run time each: H.264, yuv420p, faststart, 1280×720,
+ *                      silent; `<n>` zero-padded to three digits
+ *   clips/part-<n>.jpg a poster for each part
+ *   clips.json         the ClipsFile: the only file a reader opens to find the
+ *                      video, its chapters, captions and time map
  *
  * and `meta.json` gains `"camera": true` when a camera followed the run
  * (`label.ts`). Absent means no camera.
@@ -29,8 +31,8 @@ export const JPEG_QUALITY = 75;
 
 export const EVENT_TYPES = ["level", "quest", "death", "zone", "boss", "start", "end"] as const;
 export type CameraEventType = (typeof EVENT_TYPES)[number];
-/** The event kinds that earn a clip of their own; `start` and `end` only mark frames. */
-export const CLIP_EVENT_TYPES: readonly CameraEventType[] = ["level", "quest", "death", "zone", "boss"];
+/** The event kinds that make a chapter; `start` and `end` only mark frames. */
+export const CHAPTER_TYPES: readonly CameraEventType[] = ["level", "quest", "death", "zone", "boss"];
 
 export interface CameraEvent {
   type: CameraEventType;
@@ -47,22 +49,47 @@ export interface FrameLine {
   event?: CameraEvent;
 }
 
-export interface ClipEntry {
-  name: string;
-  kind: "timelapse" | "event";
+/** One part of the run's video. `from`/`to` are the run times of its first and last frame. */
+export interface VideoPart {
   file: string;
   poster: string;
-  event?: CameraEvent;
   from: string;
   to: string;
+  /** Its length as video. */
   seconds: number;
+}
+
+/** A moment worth a marker: `t` in seconds on the whole video's timeline, across parts. */
+export interface Chapter {
+  t: number;
+  /** The index in `parts` it falls in. */
+  part: number;
+  type: CameraEventType;
+  detail: string;
+  /** The model's own words at that moment, or "". */
   caption: string;
 }
 
+/** The model's words from `t` (video seconds, whole timeline) until the next cue. */
+export interface CaptionCue {
+  t: number;
+  text: string;
+}
+
+/**
+ * `[videoSeconds, runTimeMs]` keypoints over the whole timeline, in order:
+ * between two, run time is linear in video time. Compacted to where the rate
+ * changes (within `TIMEMAP_TOLERANCE_MS`), so a steady stretch is two points.
+ */
+export type TimemapPoint = [number, number];
+
 export interface ClipsFile {
-  version: 1;
+  version: 2;
   runId: string;
-  clips: ClipEntry[];
+  parts: VideoPart[];
+  chapters: Chapter[];
+  captions: CaptionCue[];
+  timemap: TimemapPoint[];
 }
 
 export function cameraDir(runDir: string): string {
@@ -89,4 +116,13 @@ export function parseFrames(text: string): FrameLine[] {
     }
   }
   return out;
+}
+
+/** The longest run time one part covers: a part closes when the next frame would take it past this. */
+export const PART_MS = 6 * 3_600_000;
+
+/** `clips/part-007.mp4` and its poster. */
+export function partFiles(index: number): { file: string; poster: string } {
+  const name = `part-${String(index).padStart(3, "0")}`;
+  return { file: `${CLIPS_DIR}/${name}.mp4`, poster: `${CLIPS_DIR}/${name}.jpg` };
 }
