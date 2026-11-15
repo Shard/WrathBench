@@ -175,7 +175,7 @@ export const EPISODES = {
       "is. A freeplay run neither qualifies nor disqualifies a model for anything.",
   },
   // The two Deadmines ids share everything but the number of agents: the
-  // clock (four hours for now, pending the operator's read of deadmines@5),
+  // clock (four hours, kept after the read of deadmines@5: operator delegated, 2026-11-15),
   // idle twenty minutes while awake, the no-XP watchdog off, and the 8000-call
   // runaway guard of deadmines@5. A change to any of it is a new id.
   deadmines: {

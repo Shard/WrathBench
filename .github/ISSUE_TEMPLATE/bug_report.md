@@ -4,7 +4,7 @@ about: Something in the harness, SDK, module or dashboard behaved wrong
 labels: bug
 ---
 
-**Harness build stamp** (`harness-0.5-<n>-g<sha>`, as the dashboard or the run
+**Harness build stamp** (`harness-1.0-<n>-g<sha>`, as the dashboard or the run
 record shows it):
 
 **Component**: module / sdk / runner / dashboard / infra / docs

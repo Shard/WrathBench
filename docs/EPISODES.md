@@ -118,9 +118,10 @@ other.
   block and bytes as a probe's objective, so the prompt is the one its
   rehearsal ran, with one sentence stating the clock. It is a directive
   (`RunConfig.directive`), never an objective, so the run is scored.
-- **Duration.** Four hours of wall clock from launch, sleeping included. This
-  is pending: the final clock waits on the operator's read of deadmines@5, and
-  a shorter one is a new id.
+- **Duration.** Four hours of wall clock from launch, sleeping included, on
+  both ids (operator delegated, 2026-11-15). The read of deadmines@5 kept the
+  clock and froze the objective's wording as @5's. A shorter clock is a new
+  id.
 - **Watchdogs.** Idle 20 minutes, which on the program loop counts only while
   the agent is awake; no-XP off. Tool-call guard 8000, deadmines@5's: one
   counter for the one agent, one per member for five.

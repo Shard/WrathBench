@@ -8,8 +8,8 @@ image:
   # REQUIRED. The registry (and any project path) the images were pushed to.
   registry: registry.example.com/wrathbench
   # REQUIRED. The immutable tag infra/build-images.sh produced — `git describe`
-  # of the source SHA, e.g. harness-0.5-N-g<sha>. "" and "latest" are refused.
-  tag: "harness-0.5-N-g0000000"
+  # of the source SHA, e.g. harness-1.0-N-g<sha>. "" and "latest" are refused.
+  tag: "harness-1.0-N-g0000000"
   pullPolicy: IfNotPresent
   names:
     worldserver: wrathbench-worldserver
