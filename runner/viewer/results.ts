@@ -434,7 +434,7 @@ export function resultRunOf(
   /**
    * Achievements and flights from the same pass. Their own
    * parameters for the same reason `areas` is one, and `null` in either means
-   * the run recorded none of that kind — the ladder's rung 4 must be able to
+   * the run recorded none of that kind — freeplay milestone 4 must be able to
    * tell that from "flew nowhere".
    */
   achievements: AchievementFacts | null = null,

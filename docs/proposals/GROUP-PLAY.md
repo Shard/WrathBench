@@ -1,4 +1,4 @@
-# Group play: the Deadmines eval (ladder rung 6)
+# Group play: the Deadmines eval
 
 Status: design, investigated against the code at the commit this file lands
 in, and built. Phases 1–2 (the module taps and their SDK surface) are in PR
@@ -634,10 +634,11 @@ and the five termination reasons. A wipe is derivable as five deaths with no
 `resurrect` between them. **What a later scored episode would read** is the
 same signals through a derivation the operator settles then (cleared or not,
 time to clear, deaths, wipes); nothing is scored now, and the recording
-above is designed so that nothing needs re-running when it is. The ladder's
-rung 6 (`dashboard/src/lib/ladder.ts`, `RUNGS` n 6, today `test: null`)
-becomes derivable from `instance entered 36` plus a `kill` of 639 across one
-party of one model, which is the operator's reading of "a party of agents".
+above is designed so that nothing needs re-running when it is. Milestone
+rung 6 (`dashboard/src/lib/ladder.ts`, `RUNGS` n 6) is no longer this: since
+2026-11-15 it is a 5-man dungeon done with a group of agents in freeplay, any
+dungeon, so it wants every dungeon's final boss and not only VanCleef, and it
+reads "not instrumented" until the recording can say which kill that is.
 
 ## 7. Budget and cost
 

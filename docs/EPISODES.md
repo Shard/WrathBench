@@ -48,9 +48,9 @@ everything else is derived from it — no list of names decides what counts.
   any attempt that made no progress is, and consecutive rungs cool and then
   retire the model until an operator clears it.
 - **Scoring.** Scored.
-- **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
-  climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
-  witness and stays. The rule, the budgets and what counts:
+- **Promotion.** A model on `t1` that reaches level 5 in one counted episode
+  climbs to `t2`, which is what buys an `e360` (operator, 2026-11-15); a model
+  on `t0` keeps the witness and stays. The rule, the budgets and what counts:
   `docs/METHODOLOGY.md` ("Episodes, lanes, and evidence", under *The tier is
   the evidence budget*).
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
@@ -71,7 +71,7 @@ because that would silently re-scope every score already carrying this label.
 - **Prompt.** The standing goal plus one sentence stating the clock. Nothing about levels: past the gate, breadth is the point.
 - **Watchdogs.** Idle only. **The no-XP watchdog is off.** Walking across a
   continent earns nothing for hours, and that is the behaviour this episode exists
-  to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
+  to permit — reaching a capital or another continent is travel. A no-XP watchdog here
   would end runs for doing the right thing. Tool-call ceiling **12000** — the
   runaway guard of 1000 calls per 30 minutes, sized so a
   fast model cannot touch it; it bounds the claude-code harness's inner loop,
@@ -80,10 +80,11 @@ because that would silently re-scope every score already carrying this label.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
   them on one axis would rank the schedule rather than the models.
-- **Promotion in.** Earned on `e90` per the tier rule: a `t1` model that reaches rung
-  1 climbs to `t2`, and `t2` is the tier that buys an `e360`. **Out:** none; a
-  model that stalls its `e360` runs meets its target and is simply not scheduled
-  here again. Every tier's budget is the same whoever is paying — billing says
+- **Promotion in.** Earned on `e90` per the tier rule: a `t1` model that reaches
+  level 5 climbs to `t2`, and `t2` is the tier that buys an `e360`. **Out:** a
+  counted `e360` that reaches level 8 opens the Deadmines evals `t2` buys
+  (operator, 2026-11-15); a model that stalls its `e360` runs meets its target
+  and is simply not scheduled here again. Every tier's budget is the same whoever is paying — billing says
   where a run may execute, never how many.
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
@@ -133,13 +134,16 @@ other.
   per attempt, however many members met it.
 - **Who runs it.** `t2` buys three `deadmines-solo` attempts per series, and
   three `deadmines` attempts where the roster entry also says `deadmines:
-  true`. The policy holds the five-agent id until `policy.rehearsed` names
+  true`, spent only once a counted `e360` of the model reached level 8
+  (`policy.deadminesAtLevel`, operator 2026-11-15): no tier opens them
+  without it, a hand-placed `t2` included. The policy holds the five-agent id until `policy.rehearsed` names
   `deadmines`, and a codex row on either id until it names `codex`: neither
   has run on the program loop yet. Both wait behind the scored-episode hold
   like every scored id. Run on the program loop, any harness that has one.
-- **Scoring.** Scored, each id its own group, on the dungeon board rather than
-  on rungs: a table per id, each its own tab on the ladder page; rung 6 of the
-  solo ladder reads it (METHODOLOGY, "The dungeon board, and rung 6").
+- **Scoring.** Scored, each id its own group: a table per id, each its own tab
+  on the ladder page with a chart, never pooled with the other (METHODOLOGY,
+  "The Deadmines evals, and rung 6"). No milestone rung reads it: rung 6 is a
+  group of agents in a dungeon in freeplay.
 - **Pins in the tuple.** The episode, its budget, `objective: false`,
   `agents` and `characters` (1 and 5, or 5 and 1) as keys, and `task`: the
   pinned definition's content hash and the hash of the staging fixtures, the

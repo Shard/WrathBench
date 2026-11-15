@@ -1193,7 +1193,7 @@ export interface AreaMark {
 
 /**
  * Zone and area ids for 3.3.5a capitals — the two factions' five each, plus the
- * two neutral hubs. Zone ids, so a `kind: "zone"` milestone answers rung 4.
+ * two neutral hubs. Zone ids, so a `kind: "zone"` milestone answers freeplay milestone 4.
  */
 export const CAPITAL_ZONES = new Set([
   1519, // Stormwind

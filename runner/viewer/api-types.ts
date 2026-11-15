@@ -2328,7 +2328,7 @@ export interface DungeonRowView {
   harness: HarnessView | null;
   compactWindow?: string | null;
   series: string | null;
-  /** The condition's public dimensions beside the ones above (`RunCondition` without its id), which rung 6 joins the ladder on. */
+  /** The condition's public dimensions beside the ones above (`RunCondition` without its id), which the tab's chart and table key a row on. */
   condition: { loop: "program" | "snippet"; yield: boolean; pinned: boolean; wiki: boolean };
   /** Counted attempts. */
   n: number;

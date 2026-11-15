@@ -213,8 +213,8 @@ export function isScoredEpisode(id: EpisodeId): id is ScoredEpisodeId {
 
 /**
  * The scored ids a level ladder ranks and promotion reads: every scored id
- * but the task episodes. A staged level-20 dungeon run would otherwise claim
- * the ladder's level rungs and witness a promotion it never climbed to.
+ * but the task episodes. A staged level-20 dungeon run would otherwise top a
+ * level ladder and witness a promotion it never climbed to.
  */
 export type LevelEpisodeId = Exclude<ScoredEpisodeId, TaskEpisodeId>;
 
