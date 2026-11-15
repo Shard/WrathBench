@@ -15,8 +15,9 @@ import type { EntriesResponse } from "../viewer/api-types";
 import { projectEntries } from "../viewer/public-projection";
 import { TrajectoryTail, scanRunTotals, type EntrySummary } from "../viewer/tail";
 import { replayFile } from "../src/replay";
+import { turnIndexOf } from "../src/run-reader";
 import { readTrajectory } from "../src/trajectory";
-import { SEGMENT_TURNS, legacyVariant, slimRun } from "./fixtures/slim-run";
+import { SEGMENT_TURNS, legacyVariant, restartedTurnsVariant, slimRun } from "./fixtures/slim-run";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -153,5 +154,39 @@ describe("the replay reads old, new and mixed", () => {
       full: SEGMENT_TURNS[0] + 1,
       segments: 1,
     });
+  });
+});
+
+describe("a run whose resume restarted its turns, as a build before the run's turns wrote it", () => {
+  test("reads as it always did: its turns joined at the offset, its windows walked, its totals the same", async () => {
+    const restarted = tempDir("wrathbench-readers-restarted-");
+    restartedTurnsVariant(variants.slim, restarted);
+    const n1 = SEGMENT_TURNS[0] + 1;
+    const n2 = SEGMENT_TURNS[1] + 1;
+    const requestTurns = (dir: string): unknown[] => readTrajectory(dir).filter((r) => r.t === "request").map((r) => r["turn"]);
+    // The two files: one numbering continued, the other restarted at the resume.
+    const run = Array.from({ length: n1 + n2 }, (_, k) => k + 1);
+    expect(requestTurns(variants.slim)).toEqual(run);
+    expect(requestTurns(restarted)).toEqual([...run.slice(0, n1), ...run.slice(0, n2)]);
+    // The turn index gives both the run's turn at every instant, never the offset twice.
+    const slimIndex = turnIndexOf(variants.slim);
+    const restartedIndex = turnIndexOf(restarted);
+    expect(restartedIndex.max).toBe(n1 + n2);
+    expect(slimIndex.max).toBe(n1 + n2);
+    for (const r of readTrajectory(variants.slim)) expect(restartedIndex.at(r.ts)).toBe(slimIndex.at(r.ts));
+    // The viewer walks each window back to the same records and rebuilds what was sent.
+    const slim = await tailOf(variants.slim);
+    const old = await tailOf(restarted);
+    const requestAt = slim.entries.filter((e) => e.t === "request").map((e) => e.i);
+    expect(requestAt.length).toBe(n1 + n2);
+    for (const i of requestAt) {
+      const want = JSON.parse((await slim.raw(i))!) as { messages: unknown; rebuilt: unknown };
+      const got = JSON.parse((await old.raw(i))!) as { messages: unknown; rebuilt: unknown };
+      expect(want.rebuilt).toEqual({ verified: true });
+      expect(got.rebuilt).toEqual({ verified: true });
+      expect(got.messages).toEqual(want.messages);
+    }
+    expect(await scanRunTotals(path(restarted))).toEqual(await scanRunTotals(path(variants.slim)));
+    expect(await replayFile(path(restarted))).toMatchObject({ slim: n1 + n2, verified: n1 + n2, failures: [] });
   });
 });

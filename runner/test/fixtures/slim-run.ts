@@ -192,3 +192,32 @@ export function legacyVariant(src: string, dst: string, expand: (segment: number
     });
   writeFileSync(join(dst, "trajectory.jsonl"), `${out.join("\n")}\n`);
 }
+
+/**
+ * Write `src`'s run into `dst` as a build before `turns: "run"` wrote it: each
+ * resumed segment's records count their turns from 1 again, the request
+ * window's opening turn with them, and its `resume` record states the offset
+ * without saying the turns are the run's. Every other field, line and file is
+ * copied as it is.
+ */
+export function restartedTurnsVariant(src: string, dst: string): void {
+  for (const name of readdirSync(src)) {
+    if (name !== "trajectory.jsonl") copyFileSync(join(src, name), join(dst, name));
+  }
+  let offset = 0;
+  const out: string[] = [];
+  for (const line of readFileSync(join(src, "trajectory.jsonl"), "utf8").split("\n")) {
+    if (line.length === 0) continue;
+    const rec = JSON.parse(line) as Record<string, unknown>;
+    if (rec["t"] === "resume") {
+      offset = rec["turnOffset"] as number;
+      delete rec["turns"];
+    } else if (offset > 0) {
+      if (typeof rec["turn"] === "number") rec["turn"] -= offset;
+      const w = rec["window"] as { fromTurn?: unknown } | undefined;
+      if (typeof w?.fromTurn === "number") w.fromTurn -= offset;
+    }
+    out.push(JSON.stringify(rec));
+  }
+  writeFileSync(join(dst, "trajectory.jsonl"), `${out.join("\n")}\n`);
+}
