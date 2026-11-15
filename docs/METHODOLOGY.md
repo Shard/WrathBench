@@ -71,7 +71,7 @@ snippet-loop run in the same series is history, never a copy (operator,
 or wiki other than the entry's, since the scheduler and the ladder read one
 key (operator, 2026-11-14). Scored episodes on the program loop waited until a long-clock
 program-loop run had been read; that read is done, and scored episodes are open
-(operator, 2026-11-14; read and opened under the operator's delegation, 2026-11-15). The 1.0 series begins at the v1 cutover, when the `v1` branches merge
+(operator, 2026-11-14; read and opened under the operator's delegation, 2026-11-15). The 1.0 series began at the v1 cutover, when the `v1` branches merged
 to master (operator, 2026-11-15): every eval re-arms in it, and the 0.5 rows
 stay readable as their own series. The SDK is versioned separately from the harness (operator,
 2026-10-28). Its model-facing surface is still part of the surface frozen per
