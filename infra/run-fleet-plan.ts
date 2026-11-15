@@ -3171,6 +3171,10 @@ export function planTick(snap: TickSnapshot): TickPlan {
     [...sup.assigned.values(), ...pinnedJobs(cfg).filter((j) => sup.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
   );
   const runs = implicitPauses({ runs: snap.facts, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts, now });
+  // The freeplay characters earlier harness series left standing: every fresh
+  // launch on the shared world keeps those on its account, pinned ones
+  // included (operator, 2026-11-15).
+  const former = formerCharactersFrom(runs, cfg.roster, cfg.policy.series);
   const project = (facts: readonly RunFact[]): ModelState[] =>
     modelStates({ runsDir: "", roster: rosterModels(cfg.roster), policy: cfg.policy, runs: facts, now, sidecar: snap.modelsSidecar, modelLists: snap.modelLists });
   // Both are re-derived below if this tick's sweep ends anything: a failed
@@ -3322,8 +3326,11 @@ export function planTick(snap: TickSnapshot): TickPlan {
       out.push({ ...spawnOf(owing, job.account!, eligible), enabled: false });
       continue;
     }
-    const spawn = spawnOf(placed.job, job.account!, eligible);
-    pinned.push({ job: placed.job, spawn });
+    // An earlier series' character on the pinned account stays standing too.
+    const keep = worldUsedBy(cfg.policy.worlds, job.episode) ? [] : keepFor(job.account!, new Map(), undefined, former);
+    const launching = keep.length > 0 ? { ...placed.job, keepCharacters: keep } : placed.job;
+    const spawn = spawnOf(launching, job.account!, eligible);
+    pinned.push({ job: launching, spawn });
     out.push(spawn);
     for (const r of job.refs) runningRefs.add(r);
   }
@@ -3504,7 +3511,6 @@ export function planTick(snap: TickSnapshot): TickPlan {
   // freeplay pick goes back to that account, every fresh launch keeps those
   // characters and every earlier series' (operator, 2026-11-15).
   const characters = charactersFrom(runs, cfg.roster, cfg.policy.series);
-  const former = formerCharactersFrom(runs, cfg.roster, cfg.policy.series);
   const affinity = characterAffinity(characters, affinityOf(affinityMap));
   const queue = planQueue({
     queue: poolJobs(cfg),

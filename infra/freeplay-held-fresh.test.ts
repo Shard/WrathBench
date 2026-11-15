@@ -177,6 +177,24 @@ describe("a freeplay character does not carry across a harness series", () => {
     }
   });
 
+  test("a pinned launch on an old account keeps the earlier series' character there", () => {
+    const cfg = parseFleet(
+      {
+        _notes: ["n"],
+        accounts: { pool: POOL },
+        credentials: CREDENTIALS,
+        roster: { ...ROSTER, fp: { tier: "t0", model: "z-ai/glm-5.3-flash:free" } },
+        queue: [{ ref: "fp", episode: "freeplay", repeat: "loop", enabled: true, account: "RUNNER2" }],
+      },
+      { env: {} },
+    );
+    const plan = planOf({ ...cfg, policy: { ...cfg.policy, series: "1.0" } }, { now: NOW, runs: [OLD] });
+    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account, p.spawn.entries[0]!.keepCharacters])).toEqual([["fp-freeplay", "RUNNER2", ["Brannagh"]]]);
+    // On the old series nothing is former, so nothing is kept: as before.
+    const same = planOf({ ...cfg, policy: { ...cfg.policy, series: "0.5" } }, { now: NOW, runs: [OLD] });
+    expect(same.pinned[0]!.spawn.entries[0]!.keepCharacters).toBeUndefined();
+  });
+
   test("within the series the head is continued as before, the older series' character beside it kept", () => {
     // On the pool's last account, so the other held entry's fresh pick (first free) does not take it.
     const cur = freeplay("fleet-opus-freeplay-z-ai-glm-5-2-free-20261115", "1.0", { account: "RUNNER6", character: "Durgan", startedAt: NOW - 5 * H, endedAt: NOW - H });

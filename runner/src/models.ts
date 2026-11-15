@@ -507,7 +507,7 @@ export interface RosterModel {
   idle?: IdleMode;
   /** Operator override of the billing verdict (`model-cost.ts`). */
   billing?: Billing;
-  /** Runs only as a probe campaign's assignment (`FleetRosterEntry.campaignOnly`): projected like a probe-only driver's entry. */
+  /** Held from the scored lane (`FleetRosterEntry.campaignOnly`): projected like a probe-only driver's entry, except that its `idle` stands. */
   campaignOnly?: true;
   /** Opts into the five-agent Deadmines episode (`FleetRosterEntry.deadmines`), which its tier then buys like the one-agent one. */
   deadmines?: true;
