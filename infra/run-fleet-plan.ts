@@ -48,6 +48,8 @@ import { isEvalPoolAccountName } from "../runner/src/account-pool";
 import { scoredWaitFor, stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { EPISODES, isScoredEpisode, isTaskEpisode } from "../runner/src/episodes";
+import { canonicalModelId } from "./model-catalogue";
+import { asProvider, optionOf } from "../runner/src/provider-options";
 import { taskDefinition } from "../runner/src/task-episodes";
 import { taskLaunchFile } from "./task-launch";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
@@ -91,7 +93,9 @@ import {
   ineligibleWhy,
   liveCredentials,
   type ModelsSidecar,
+  modelSiblings,
   modelStates,
+  sameModel,
   TIER_TABLE,
   type UnstampedRun,
 } from "../runner/src/models";
@@ -300,6 +304,12 @@ export function planQueue(opts: {
   /** Roster names with a run in flight outside `queue` (policy and pinned jobs). */
   runningRefs?: ReadonlySet<string>;
   /**
+   * Those of `runningRefs` whose run in flight holds the model's other
+   * entries: a scored or freeplay one, never a probe (`siblingHolding`).
+   * Absent reads every running ref as holding.
+   */
+  holdingRefs?: ReadonlySet<string>;
+  /**
    * The account a job's model would rather have (`affinityOf`): the
    * one its last run left its character on. A preference only — a job whose
    * account is busy takes the next free one, as before.
@@ -317,6 +327,9 @@ export function planQueue(opts: {
   const free = freePoolAccounts({ pool: opts.pool, maxLive: opts.maxLive, taken, held: opts.held });
   const runningRefs = new Set<string>(opts.runningRefs ?? []);
   for (const job of opts.queue) if (opts.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
+  const holdingRefs = new Set<string>(opts.holdingRefs ?? runningRefs);
+  for (const job of opts.queue) if (opts.running.has(job.name) && job.episode !== "probing") for (const r of job.refs) holdingRefs.add(r);
+  const siblings = modelSiblings(Object.entries(opts.roster).map(([name, e]) => ({ name, ...e })));
   for (const job of opts.queue) {
     if (job.account !== undefined) continue;
     if (!job.enabled || opts.running.has(job.name) || opts.finished.has(job.name)) continue;
@@ -347,6 +360,12 @@ export function planQueue(opts: {
       plan.skipped.push({ job, reason: `${clash} is already running under another job — one character per model` });
       continue;
     }
+    // The same model on another provider is the same model (operator, 2026-11-16).
+    const sibling = job.episode === "probing" ? undefined : refs.flatMap((r) => siblings.get(r) ?? []).find((r) => holdingRefs.has(r));
+    if (sibling !== undefined) {
+      plan.skipped.push({ job, reason: `${sibling} runs the same model under another job — one character per model` });
+      continue;
+    }
     const cool = opts.cooling?.(job);
     if (cool !== undefined) {
       plan.skipped.push({ job, reason: cool });
@@ -364,6 +383,7 @@ export function planQueue(opts: {
       continue;
     }
     for (const r of refs) runningRefs.add(r);
+    if (job.episode !== "probing") for (const r of refs) holdingRefs.add(r);
     const out = placed.job.placed !== undefined ? { ...job, placed: placed.job.placed } : job;
     plan.assign.push({ job: owed === undefined ? out : { ...out, owed: { copies: owed, taken: opts.takenRunIds ?? new Set() } }, account });
   }
@@ -477,6 +497,8 @@ export interface PolicyPlanOptions {
   held: (account: string) => string | undefined;
   queuePlan: QueuePlan;
   runningRefs: ReadonlySet<string>;
+  /** Those of `runningRefs` that hold their model's other entries (`PolicyPlanOptions` of `planQueue`); absent, every one does. */
+  holdingRefs?: ReadonlySet<string>;
   place?: (name: string, episode: EpisodeId) => PlaceOutcome;
   take?: (keys: readonly string[]) => void;
   policy?: SchedulingPolicy;
@@ -530,6 +552,9 @@ export function planPolicyHeld(opts: PolicyPlanOptions): { picks: PolicyPick[]; 
   if (free.length === 0 && reserved === undefined) return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
+  // What holds a model's other entries: a scored or freeplay run in flight, never a probe.
+  const holding = new Set(opts.holdingRefs ?? opts.runningRefs);
+  for (const a of opts.queuePlan.assign) if (a.job.episode !== "probing") for (const r of a.job.refs) holding.add(r);
   // The credential each pick was placed on, decided by the loop below and
   // carried onto the job it spawns.
   const chosen = new Map<string, PlacedCredential | null>();
@@ -549,6 +574,7 @@ export function planPolicyHeld(opts: PolicyPlanOptions): { picks: PolicyPick[]; 
   };
   const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
     planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
+      holding: new Set([...holding, ...also.filter((p) => p.episode !== "probing").map((p) => p.name)]),
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
       ...(reserved !== undefined ? { poolHeld: reserved } : {}),
       ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
@@ -888,7 +914,10 @@ export function jobSpawn(
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
     const copies = copiesOf(r);
     if (copies <= 0) continue;
-    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, deadmines: _deadmines, ...entry } = roster[r]!;
+    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, deadmines: _deadmines, ...listed } = roster[r]!;
+    // An entry with providers launches as the one it was placed on (the
+    // credential `placeRef` chose, or a paused run's own), else its first.
+    const entry = listed.providers === undefined ? listed : asProvider(listed, optionOf(listed.providers, job.placed?.[r]?.id) ?? listed.providers[0]!);
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
     const isProbe = probeFile !== undefined;
@@ -1940,14 +1969,26 @@ export function planResumes(opts: {
     // resume comes due, under this entry or another of the model's. The
     // resume waits for it, as for a busy account. A pinned job is outside the
     // policy's rule, as a pinned campaign is.
+    // Under another entry of the model (the same model on another provider,
+    // operator 2026-11-16), only a scored run holds it: that entry's freeplay
+    // character is its own.
     if (f.episode === "freeplay" && job.account === undefined) {
-      const playing = opts.runs.find((g) => g.live && g.runId !== f.runId && g.episode !== "probing" && resumeModelKey(g, rosterWindowKey(g)) === modelKey);
+      const anyProvider = resumeModelKey(f, windowKey, true);
+      const ofThisModel = (g: RunFact): boolean =>
+        resumeModelKey(g, rosterWindowKey(g)) === modelKey || (EPISODES[g.episode].scored && resumeModelKey(g, rosterWindowKey(g), true) === anyProvider);
+      const playing = opts.runs.find((g) => g.live && g.runId !== f.runId && g.episode !== "probing" && ofThisModel(g));
       if (playing !== undefined) {
         list(`waiting: ${playing.runId} plays ${f.model} (${playing.episode}) — one character per model`);
         continue;
       }
       const owner = opts.inFlight?.find(
-        (j) => j.name !== job.name && j.episode !== "probing" && j.refs.some((r) => config.roster[r] !== undefined && entryOwnsRun(config.roster[r]!, f)),
+        (j) =>
+          j.name !== job.name &&
+          j.episode !== "probing" &&
+          j.refs.some((r) => {
+            const e = config.roster[r];
+            return e !== undefined && (entryOwnsRun(e, f) || (j.episode != null && EPISODES[j.episode].scored && sameModel(e, f)));
+          }),
       );
       if (owner !== undefined) {
         list(`waiting: job ${owner.name} plays ${f.model}${owner.episode != null ? ` (${owner.episode})` : ""} — one character per model`);
@@ -2016,9 +2057,12 @@ export function planResumes(opts: {
  * The key one character per model groups a run under when resuming: model,
  * effort and the entry's window (`rosterWindowKey`, or "" for an arm's own).
  * A probe-only driver's run is never another entry's (`entryOwnsRun`).
+ * `anyProvider` keys the model by its identity across providers
+ * (`canonicalModelId`) rather than the id the run recorded.
  */
-function resumeModelKey(f: Pick<RunFact, "model" | "effort" | "driver">, windowKey: string): string {
-  return `${f.model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
+function resumeModelKey(f: Pick<RunFact, "model" | "effort" | "driver">, windowKey: string, anyProvider = false): string {
+  const model = anyProvider && f.model !== null ? canonicalModelId(f.model) : f.model;
+  return `${model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
 }
 
 /**
@@ -2038,7 +2082,10 @@ export function withResumesPlaying(
     const entry = roster[s.name];
     if (entry === undefined || s.playing?.episode === "freeplay") return s;
     const r = back.find((x) => entryOwnsRun(entry, x.job.resume!));
-    return r === undefined ? s : { ...s, playing: { runId: r.runId, episode: "freeplay", resuming: true } };
+    if (r !== undefined) return { ...s, playing: { runId: r.runId, episode: "freeplay", resuming: true } };
+    // Another entry of the model's character coming back holds this one's scored episodes too.
+    const sib = back.find((x) => sameModel(entry, x.job.resume!));
+    return sib === undefined || s.siblingPlaying !== undefined ? s : { ...s, siblingPlaying: { runId: sib.runId, episode: "freeplay", resuming: true } };
   });
 }
 
@@ -3192,6 +3239,18 @@ export function planTick(snap: TickSnapshot): TickPlan {
   const book = new SlotBook(cfg.credentials, cfg.policy.maxSessions, snap.runPods, snap.worlds);
   const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
   const runningRefs = new Set<string>();
+  /**
+   * Those of `runningRefs` whose run in flight holds the model's other
+   * entries (operator, 2026-11-16): a scored or freeplay one, or one whose
+   * episode is not known. A probe holds only its own entry, as it always has.
+   */
+  const holdingRefs = new Set<string>();
+  const holdRefs = (refs: readonly string[], episode: EpisodeId | null | undefined): void => {
+    for (const r of refs) {
+      runningRefs.add(r);
+      if (episode !== "probing") holdingRefs.add(r);
+    }
+  };
   const pinnedSkips: QueueSkip[] = [];
   /**
    * The credential each roster entry's live-or-paused run is on, read back
@@ -3307,14 +3366,14 @@ export function planTick(snap: TickSnapshot): TickPlan {
     if (sup.running.has(job.name) || !job.enabled) {
       // Live (counted above), or disabled and so a drain or a park.
       out.push(spawnOf(withPlaced(owing), job.account!, eligible));
-      if (sup.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
+      if (sup.running.has(job.name)) holdRefs(job.refs, job.episode);
       continue;
     }
     // A pinned job about to resume a paused run is placed with the resume,
     // on the credential that run is on.
     if (resumingNames.has(job.name)) {
       out.push({ ...spawnOf(owing, job.account!, eligible), enabled: false });
-      for (const r of job.refs) runningRefs.add(r);
+      holdRefs(job.refs, job.episode);
       continue;
     }
     // A slot on a credential with room, and a session under the driver's
@@ -3332,7 +3391,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
     const spawn = spawnOf(launching, job.account!, eligible);
     pinned.push({ job: launching, spawn });
     out.push(spawn);
-    for (const r of job.refs) runningRefs.add(r);
+    holdRefs(job.refs, job.episode);
   }
   // Pool jobs with a live process: keep running whatever the file now says,
   // drain if the file dropped them or their refs. Their sessions are on the
@@ -3352,10 +3411,10 @@ export function planTick(snap: TickSnapshot): TickPlan {
         // why it was counted above with the rest.
         drainReasons.set(name, dropped);
         out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
-        runningRefs.add(running.ref);
+        holdRefs([running.ref], running.episode);
       } else {
         out.push(spawnOf(withPlaced(running), account, undefined));
-        runningRefs.add(running.ref);
+        holdRefs([running.ref], running.episode);
       }
       continue;
     }
@@ -3366,7 +3425,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
       continue;
     }
     out.push(spawnOf(withPlaced(running ?? fromFile), account, eligible));
-    for (const r of fromFile.refs) runningRefs.add(r);
+    holdRefs(fromFile.refs, (running ?? fromFile).episode);
   }
   // Live processes the file no longer YIELDS — a completed campaign cell
   // draining to its episode boundary, a job whose config entry vanished —
@@ -3380,7 +3439,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
       if (job === undefined) continue;
       // Words only: what the drain line says about a job nothing yields.
       drainReasons.set(name, unyieldedDrainReason(job, cfg.campaigns, Object.keys(cfg.roster), probes));
-      for (const r of job.refs) runningRefs.add(r);
+      holdRefs(job.refs, job.episode);
     }
   }
   // A live fleet run none of this supervisor's jobs is playing — the two
@@ -3396,7 +3455,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
   for (const u of unowned) {
     const refs = u.refs.filter((r) => !runningRefs.has(r));
     if (refs.length === 0) continue;
-    for (const r of refs) runningRefs.add(r);
+    holdRefs(refs, u.episode);
     unownedRefs.push(...refs);
     steps.push({ kind: "say", key: `unowned:${u.runId}`, line: `hold ${refs.join("+")}: ${u.runId} is live on ${u.account} and no job of this supervisor owns it — nothing new is planned for it until the run stops or reads cold` });
   }
@@ -3473,7 +3532,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
       unfinished.push(name);
       reserved.set(name, r.account);
       out.push(spawn);
-      for (const ref of r.job.refs) runningRefs.add(ref);
+      holdRefs(r.job.refs, r.job.episode);
     }
     // Once per pause, named by its instant: the streak starts over at 1
     // after every segment that made a turn, so it cannot tell two pauses of
@@ -3525,6 +3584,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
     place: placeFresh,
     eligible,
     runningRefs,
+    holdingRefs,
     affinity,
     counted: countedFrom(states),
     takenRunIds,
@@ -3561,6 +3621,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
       held,
       queuePlan: queue,
       runningRefs,
+      holdingRefs: new Set([...holdingRefs, ...queue.assign.filter((a) => a.job.episode !== "probing").flatMap((a) => a.job.refs)]),
       place: (n, ep) => {
         const r = placeRef(cfg.roster[n], ep, { ...placing, pin: cfg.roster[n]?.credential, sessions: episodeSessions(ep) });
         return r.ok ? { ok: true, credential: r.placement.credential, keys: r.placement.keys } : r;

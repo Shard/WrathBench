@@ -131,6 +131,16 @@ export class Shutter {
     this.events.push(e);
   }
 
+  /**
+   * No event's frames are being kept: no event (other than `start` and `end`)
+   * whose tail ends within the ring's span of `now`, so nothing in the ring,
+   * or still to be captured, falls in a burst. A late-reported event can still
+   * land after; the ring's span is the session writer's lag with room.
+   */
+  quiet(now: number): boolean {
+    return !this.events.some((e) => this.window(e.type).lead > 0 && e.ts + this.tailMs + this.ringMs > now);
+  }
+
   /** How many frames wait in the ring. */
   get pending(): number {
     return this.ring.length;

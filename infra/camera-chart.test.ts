@@ -95,6 +95,9 @@ describe.skipIf(helm === null)("the chart's camera block", () => {
       expect(dir.command).toEqual(["/usr/bin/tini", "--", "bun", "infra/camera/director.ts"]);
       expect(envOf(dir)["CAMERA_WORLD"]?.value).toBe("");
       expect(envOf(dir)["CAMERA_INTERVAL_SECONDS"]?.value).toBe("10");
+      // The client's memory: few malloc arenas, and a restart after an hour in the world.
+      expect(ce["MALLOC_ARENA_MAX"]?.value).toBe("2");
+      expect(envOf(dir)["CAMERA_RESTART_MINUTES"]?.value).toBe("60");
       expect(dir.volumeMounts?.find((m) => m.mountPath === "/wrathbench/data/runs")?.subPath).toBe("runs");
       const cron = find(docs, "CronJob", "wrathbench-camera-sweep") as unknown as CronJob;
       expect(cron.spec.schedule).toBe("*/10 * * * *");
@@ -102,6 +105,20 @@ describe.skipIf(helm === null)("the chart's camera block", () => {
       const sweep = cron.spec.jobTemplate.spec.template.spec.containers[0]!;
       expect(sweep.command).toEqual(["nice", "-n", "19", "bun", "infra/camera/sweep.ts", "/wrathbench/data/runs", "--interval-seconds", "10", "--keep-hours", "24"]);
       expect(sweep.volumeMounts?.map((m) => m.subPath)).toEqual(["runs"]);
+    },
+    HELM_TEST_MS,
+  );
+
+  test(
+    "the client's memory settings are the values': no arena cap at 0, no scheduled restart at 0",
+    () => {
+      const { docs } = render([...ON, "--set", "camera.mallocArenaMax=0", "--set", "camera.restartMinutes=0"]);
+      const pod = cameraPod(docs)!;
+      expect(envOf(byName(pod.spec, "camera")!)["MALLOC_ARENA_MAX"]).toBeUndefined();
+      expect(envOf(byName(pod.spec, "camera-director")!)["CAMERA_RESTART_MINUTES"]?.value).toBe("0");
+      const other = cameraPod(render([...ON, "--set", "camera.mallocArenaMax=4", "--set", "camera.restartMinutes=120"]).docs)!;
+      expect(envOf(byName(other.spec, "camera")!)["MALLOC_ARENA_MAX"]?.value).toBe("4");
+      expect(envOf(byName(other.spec, "camera-director")!)["CAMERA_RESTART_MINUTES"]?.value).toBe("120");
     },
     HELM_TEST_MS,
   );

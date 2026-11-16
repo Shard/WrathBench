@@ -456,6 +456,25 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             `credential` — optional: pin this entry's runs to one credential, by id. They take that
               one or wait for it, never another. Normally absent. A pin that cannot carry the entry
               (not configured, another provider's, the other billing side) refuses the entry by name.
+            `providers` — optional: the providers one model may run on, in preference order, in
+              place of the entry's own `apiBase`, `credential` and `routing` (which are refused
+              beside it): `[{ "credential": "opencodego", "apiBase": "https://opencode.ai/inference/go/openai/v1" },
+              { "credential": "openrouter-1", "model": "deepseek/deepseek-v4.1-flash", "routing": "GMICloud" }]`.
+              Each names the credential that pays for it (required, once per list), and may state
+              its `apiBase`, the `model` id that provider knows it by (absent: the entry's `model`)
+              and, on OpenRouter, its `routing` (absent: the fleet's default). The entry's own
+              `model`, `apiBase` and `routing` read as its first provider's. A launch takes the first
+              provider whose credential is enabled, under its usage gate and with a slot, and runs
+              as that provider; a run records the one it used (credential, base, the model id it
+              reported, routing) as every run does. A paused run comes back only on the provider it
+              started on: while that credential has no room it waits, as any paused run waits for
+              its credential, and once the provider is dropped from the list the run is ended, as a
+              run whose ref no longer names its model is; a freeplay character carries on in its
+              next session. Targets, one character per model and the freeplay character are the
+              entry's, whichever provider ran it. Each provider is checked as the entry it launches
+              as, and one that cannot be refuses the entry, named by its credential. The config page
+              shows the list read-only; edit it with `bun wb config set roster/<name>` (operator,
+              2026-11-16).
             `campaignOnly` — `true` or absent. The entry is held from the scored lane, as a
               probe-only driver's entry is: its tier buys no scored run and a queue job naming it
               for a scored or freeplay episode is gated. A probe campaign may assign it, and
@@ -479,9 +498,11 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             sandbox): the one cap that is not a credential's. Absent: none beyond the slots.
             Billing is derived per model (free slug / LAN apiBase / subscription CLI -> free, else
             paid); `roster.<name>.billing: "free"|"paid"` overrides it. To the scheduler, billing
-            says only which credential may carry a run. An openai entry's override is also
-            recorded on each run it launches: the ladders' "exclude free" follows it, and a
-            recorded free needs no price.
+            says only which credential may carry a run. Readers get their own verdict, where a
+            subscription (claude-code, codex, OpenCode Go) is paid and only a literally free
+            endpoint or local hardware is free (docs/METHODOLOGY.md); `fleet status` prints the
+            scheduler's. An openai entry's override is also recorded on each run it launches:
+            the ladders' "exclude free" follows it, and a recorded free needs no price.
             `routing` — the fleet-wide default for OpenRouter entries, same shape as an entry's.
             An entry that states its own keeps it WHOLE: the two are never merged. Absent means
             the built-in default (the model author's own provider, fallbacks off).
@@ -630,7 +651,12 @@ itself: its own user agent, `x-opencode-session` set to the run id, and never
 the headers of OpenCode's own client. Go picks the backend and the request
 cannot name one, so a Go run stamps unpinned routing, keyed apart in the
 tuple from a pinned run of the same model, though the ladder shows both in one
-row. Go no longer names the backend in its response
+row. Go records a model under its bare id (`deepseek-v4.1-flash`) where
+OpenRouter prefixes the vendor (`deepseek/deepseek-v4.1-flash`); the two are
+one model (`canonicalModelId`, infra/model-catalogue.ts; docs/METHODOLOGY.md,
+"A model served by different providers is one model"), so a Go entry and an
+OpenRouter entry of it fill one target ("The scheduling policy"). A `-free`
+Go slug, like an OpenRouter `:free` id, stays a free model of its own. Go no longer names the backend in its response
 headers, so the run records the slug only. A `-free` Go slug derives free and
 runs on a free `opencode-go` credential; any other derives paid, runs on the
 paid one with its usage budget, and is priced by an `opencode-go` endpoint
@@ -989,7 +1015,11 @@ last. What the supervisor does with it, per tick:
     that session ends having named a character it is the head, and the next
     fresh launch on the old account wipes the orphan in ordinary hygiene.
 - **One character per model+effort.** An `unlimited` ref has exactly one
-  character at a time. The older ended sessions of a character are parked
+  character at a time. Two refs of one model on two providers (`deepseek-v4.1-flash`
+  on Go, `deepseek/deepseek-v4.1-flash` on OpenRouter) keep a character each:
+  the character is the ref's, resumed on the credential its run recorded, and
+  one's freeplay holds the other's scored episodes but not its freeplay
+  ("The scheduling policy"). The older ended sessions of a character are parked
   with `archive.ts --run-ids` ("Archiving runs"), which is a decision about
   listings and nothing else: the character is untouched and the scheduler
   still reads the archived runs.
@@ -1640,7 +1670,22 @@ pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
 models with no counted run yet first, then shorter episode first, fewest
 counted runs first and roster order, one character per model, each pick on
-the first credential with room ("Credentials"). Scored episodes can be held
+the first credential with room ("Credentials"), or for an entry with `providers` on
+the first provider whose credential has room ("Config reference"). A model is one model whichever
+provider serves it (operator, 2026-11-16): roster entries that name it in two
+providers' spellings, at one effort and window (`modelSiblings`,
+`runner/src/models.ts`), count each other's runs toward their targets, each
+under its own tier, and launch one scored episode toward them at a time. Of
+two such entries that both owe, the pick goes to the first in priority and
+roster order; when its credential has no room it is held, with why, and the
+next entry of the model takes the pick on that tick. While one entry plays
+the model, scored or freeplay, the other launches no scored episode beside
+it; a probe holds only its own entry, as before. What stays per entry: the attempt numbers in its run ids, its defer
+ladder (a refusal is evidence about its endpoint, not the model), its paused
+runs and its freeplay character, which is resumed only on the entry and
+credential it recorded. A sibling's freeplay holds no other entry's freeplay.
+`--status` and `--dry-run` print such a model as one row, its first entry
+with the counts, and a `└` line per other entry with what is its own. Scored episodes can be held
 by one line, `SCORED_EPISODES_WAIT` in `runner/src/config.ts`, set to the
 reason (none today: the wait for a long-clock program-loop run to be read
 ended once it was, docs/METHODOLOGY.md). While they are held, no scored
@@ -1696,11 +1741,10 @@ will not be scheduled until cleared; `pinned` is outside the policy (a pinned
 ref or a probe). A launch that produced no model response never counts toward
 a target but does climb the ladder, so a dead provider costs at most ten
 launches over about 11 hours before it is retired. Nor does a run of another condition than the one its entry
-launches now count: another loop or `yield`, another routing (the entry's own
-block, or the fleet's default folded into it) or another wiki
-(`countsTowardTarget`). So editing an entry's routing, or the fleet's routing
-default, starts the target over for the runs under it, and the older runs stay
-on the ladder as their own condition.
+launches now count: another loop or `yield`, or another wiki
+(`countsTowardTarget`). The routing is not compared: a run counts whichever
+provider served it (operator, 2026-11-16), so editing an entry's routing, or
+the fleet's routing default, keeps its target where it was.
 
 `retired` has a second cause that needs no launch at all: the model's
 provider no longer lists it. The supervisor reads the model list of every
@@ -3040,6 +3084,8 @@ camera:
   renderer: gpu
   maxConcurrent: 2
   frameKeepHours: 24
+  restartMinutes: 60
+  mallocArenaMax: 2
   clientData:
     claimName: <the PVC>
 ```
@@ -3085,6 +3131,27 @@ hour of play). Size `maxConcurrent` against the PVC's free space.
 **Quota.** Each camera pod requests about 3.25 GiB of memory and 0.3 CPU
 (`gpu`); the sweep's pod 256 MiB while it runs. A camera that does not fit is
 not started, and the shared one is retried every minute.
+
+**Memory.** The client's heap grows with the ground it streams and is not given
+back: about 0.6 to 1.4 GiB an hour on the move, flat while idle or over ground
+it has already loaded, on top of about 1.3 GiB of GPU buffers the cgroup also
+counts. Left alone it reaches the 5 GiB limit in 1.3 to 1.9 hours and the
+`camera` container is OOMKilled (the director survives and takes the client
+back in). Two settings work against it:
+
+- `camera.restartMinutes` (60; 0 is off): after that long in the world the
+  director restarts the client itself, at a moment no event is being filmed
+  (no event's burst still in its ring) or while idle. It logs
+  `scheduled restart: the client has been in the world N min …`, then the
+  usual way back in; one costs about 40 s of footage. A restart with that
+  line before it is this, not a crash; an OOM shows as the `camera`
+  container's `OOMKilled` last state and no such line.
+- `camera.mallocArenaMax` (2; 0 leaves glibc's default): most of the heap sits
+  in glibc's per-thread malloc arenas, which keep what they free.
+
+Whether the arena cap alone flattens the growth is to be measured on the fleet
+(`kubectl top pod … --containers` on a camera following a moving run, over a
+few hours); if it does, the restart interval can be lengthened.
 
 **Disable.** `camera.enabled: false` and a release. The fleet then starts no
 camera and, within a minute of reading the template without one, deletes

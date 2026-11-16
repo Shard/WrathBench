@@ -19,11 +19,20 @@
  * same login and the same invisibility check. A client that cannot get back
  * in says so: `STUCK:` every few minutes while it is out, with where it is.
  *
+ * It restarts the client on a schedule (`CAMERA_RESTART_MINUTES`, 60; 0 is
+ * off): the client's heap grows with the ground it streams and is not given
+ * back, and a cgroup OOM is otherwise what restarts it. After that long in the
+ * world, at a moment no event's frames are being kept (or while idle), it
+ * quits the client, which its container starts again; the same recovery then
+ * takes it back in. Each one logs `scheduled restart:`, so it never reads as a
+ * crash or an OOM.
+ *
  *   bun infra/camera/director.ts [--run <id>] [--create-only] [--forward-world host:port [--forward-only]]
  *
  * Environment: CAMERA_WORLD (a world id, or `shared`), CAMERA_INTERVAL_SECONDS
  * (10), CAMERA_PORT (17980), CAMERA_RUN_DIR (/run/camera: the client's token),
- * CAMERA_RUNS_DIR (data/runs), CAMERA_RACE (1, Human).
+ * CAMERA_RUNS_DIR (data/runs), CAMERA_RACE (1, Human), CAMERA_RESTART_MINUTES
+ * (60; 0 is off).
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -55,6 +64,10 @@ export const IDLE_LOG_MS = 30 * 60_000;
 export const STUCK_MS = 5 * 60_000;
 /** Between a left `run()` and the next login attempt. */
 export const RETRY_MS = 15_000;
+/** The default for `CAMERA_RESTART_MINUTES`: the shortest OOM seen on the reference node was 76 min after a client start. */
+export const DEFAULT_RESTART_MINUTES = 60;
+/** After `Quit()`, how long the client gets to log out and exit before `ForceQuit()`. */
+export const QUIT_WAIT_MS = 30_000;
 /**
  * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
@@ -89,6 +102,8 @@ export interface DirectorOptions {
   race: number;
   pinnedRun?: string;
   createOnly: boolean;
+  /** Restart the client after this long in the world, at a quiet moment; 0 or absent is never. */
+  restartAfterMs?: number;
   /** Set when the process is asked to stop: the follow loop keeps what the ring holds and returns. */
   stopping?: () => boolean;
   log: (line: string) => void;
@@ -116,6 +131,8 @@ export class Director {
   /** Since when the client has been out of the world while the director wanted it in; null while it is in. */
   private outSince: number | null = null;
   private lastStuckLog = 0;
+  /** Since when the client has been in the world, for the scheduled restart; null while it is out. */
+  private inWorldSince: number | null = null;
 
   constructor(o: DirectorOptions) {
     this.o = o;
@@ -225,6 +242,7 @@ export class Director {
     if (this.outSince !== null) this.log(`in the world, invisible, after ${Math.round((this.now() - this.outSince) / 1000)} s out`);
     else this.log("in the world, invisible");
     this.outSince = null;
+    this.inWorldSince = this.now();
     return true;
   }
 
@@ -239,6 +257,39 @@ export class Director {
   /** True once the camera has refused to act: it stays logged out for the life of the process. */
   get refusedForGood(): boolean {
     return this.refused;
+  }
+
+  /** The client has been in the world for its scheduled restart's interval. */
+  private restartDue(): boolean {
+    const after = this.o.restartAfterMs ?? 0;
+    return after > 0 && this.inWorldSince !== null && this.now() - this.inWorldSince >= after;
+  }
+
+  /**
+   * The scheduled restart: `Quit()` (a GM logs out at once, then the client
+   * exits), `ForceQuit()` should it still answer after `QUIT_WAIT_MS`. Its
+   * container starts it again; the caller returns and the recovery logs it
+   * back in.
+   */
+  private async restartClient(): Promise<void> {
+    const c = this.o.client;
+    const mins = Math.round((this.now() - (this.inWorldSince ?? this.now())) / 60_000);
+    this.log(`scheduled restart: the client has been in the world ${mins} min; quitting it to give its memory back (not a crash or an OOM)`);
+    this.inWorldSince = null;
+    await c.lua("Quit() return true");
+    let gone = false;
+    for (let waited = 0; waited < QUIT_WAIT_MS; waited += 2_000) {
+      await this.sleep(2_000);
+      if ((await c.status()) === null) {
+        gone = true;
+        break;
+      }
+    }
+    if (!gone) {
+      this.log("scheduled restart: the client did not exit on Quit(); ForceQuit()");
+      await c.lua("ForceQuit() return true");
+    }
+    this.markLost();
   }
 
   /** Skips a cinematic that is playing; true when there was one. */
@@ -341,6 +392,11 @@ export class Director {
         }
       } catch (e) {
         this.log(`events: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      // The scheduled restart, only while no event's frames are being kept; the ring's frames are kept below.
+      if (this.restartDue() && shutter.quiet(tick)) {
+        await this.restartClient();
+        break;
       }
       // Stay on the subject.
       const map = this.subjectMap(subject);
@@ -448,6 +504,10 @@ export class Director {
           lastIdleLog = now;
         }
         await this.sleep(IDLE_CHECK_MS);
+        if (this.restartDue()) {
+          await this.restartClient();
+          return;
+        }
         // Nothing else looks at the client while there is no subject: a client
         // that left the world (a crash and restart, a world restart) would sit
         // at character select until a subject came.
@@ -519,6 +579,7 @@ if (import.meta.main) {
     if (args.includes("--forward-only")) await new Promise(() => {});
   }
   const intervalS = Number(env["CAMERA_INTERVAL_SECONDS"] ?? 10);
+  const restartMin = Number(env["CAMERA_RESTART_MINUTES"] ?? DEFAULT_RESTART_MINUTES);
   let stopping = false;
   // A parked world's pod gets its grace: keep what the ring holds, then go.
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => (stopping = true));
@@ -532,6 +593,7 @@ if (import.meta.main) {
     race: Number(env["CAMERA_RACE"] ?? 1),
     ...(flag(args, "--run") !== undefined ? { pinnedRun: flag(args, "--run")! } : {}),
     createOnly: args.includes("--create-only"),
+    restartAfterMs: (Number.isFinite(restartMin) && restartMin > 0 ? restartMin : 0) * 60_000,
     stopping: () => stopping,
     log,
   });

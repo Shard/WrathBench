@@ -17,7 +17,8 @@
  *                  hours of trace to replay
  *   fixture-e90, fixture-e90-go, fixture-e90-closed, fixture-reference
  *                  four finished `e90` runs, two models' rows (the first
- *                  model's on two routings, one row) and the scripted
+ *                  model's on two providers, recorded under OpenRouter's
+ *                  vendor-prefixed id and OpenCode Go's bare one, one row) and the scripted
  *                  reference's line, for the ladder (`writeLadderRun`)
  *   fixture-fanout terminated a quarter of an hour ago: one agent driving two
  *                  characters, Oakhart and Pellira, a session record each in
@@ -1019,8 +1020,10 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   ];
   const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now)), ...freeplay]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
-  // The same model through OpenCode Go, which stamps unpinned routing: the same row, on the same chart (operator, 2026-11-16).
-  writeLadderRun(runsDir, E90_GO_RUN, { driver: "openai", model: "fixture/e90-model", apiBase: "https://opencode.ai/inference/go/openai/v1", character: "Ladderine" }, 5, at(now - 8 * 3_600_000));
+  // The same model through OpenCode Go, which stamps unpinned routing and
+  // records the bare id where OpenRouter prefixes the vendor: one model, so
+  // the same row, on the same chart (operator, 2026-11-16).
+  writeLadderRun(runsDir, E90_GO_RUN, { driver: "openai", model: "e90-model", apiBase: "https://opencode.ai/inference/go/openai/v1", character: "Ladderine" }, 5, at(now - 8 * 3_600_000));
   // A second row, under an invented id a family's weights rules still answer
   // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter
   // has two buckets to offer; `fixture/e90-model` reads `unknown`.
