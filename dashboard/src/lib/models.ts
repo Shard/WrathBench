@@ -12,6 +12,7 @@
 import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
 import type { CharacterRow } from "./ladder";
 import { AUTO_WINDOW } from "./runs";
+import { canonicalModelId } from "../../../infra/model-catalogue";
 
 /**
  * The table, left to right, as the header prints it — these are labels, not
@@ -66,6 +67,46 @@ export function highestTierOf(row: Pick<ModelRowView, "tier" | "declaredTier">):
 export function compareModelRows(a: ModelRowView, b: ModelRowView): number {
   const byTier = TIER_RANK[highestTierOf(b)] - TIER_RANK[highestTierOf(a)];
   return byTier !== 0 ? byTier : a.name.localeCompare(b.name);
+}
+
+/** One row of the table: a model, as its first entry in table order, and its other entries. */
+export interface ModelTableRow {
+  /** The first entry's row, with the runs and the last error of every entry of the model. */
+  row: ModelRowView;
+  /** The model's other entries (`ModelRowView.siblings`): the same model on another provider. */
+  also: ModelRowView[];
+}
+
+/**
+ * The table's rows, one per model (operator, 2026-11-16): an entry's
+ * siblings fold into the row of the first of them in table order
+ * (`compareModelRows`), which keeps its own cells. Its counts are already the
+ * model's, so its run list is too: every entry's runs, newest first. An entry
+ * alone on its model is a row as before.
+ */
+export function modelTableRows(rows: readonly ModelRowView[]): ModelTableRow[] {
+  const sorted = [...rows].sort(compareModelRows);
+  const byName = new Map(sorted.map((r) => [r.name, r]));
+  const taken = new Set<string>();
+  const out: ModelTableRow[] = [];
+  for (const r of sorted) {
+    if (taken.has(r.name)) continue;
+    taken.add(r.name);
+    const also = (r.siblings ?? []).flatMap((n) => {
+      const sib = byName.get(n);
+      return sib === undefined || taken.has(n) ? [] : [sib];
+    });
+    for (const a of also) taken.add(a.name);
+    if (also.length === 0) {
+      out.push({ row: r, also });
+      continue;
+    }
+    const all = [r, ...also];
+    const runs = all.flatMap((x) => x.runs).sort((a, b) => b.startedAt - a.startedAt);
+    const lastError = all.map((x) => x.lastError).reduce((a, b) => (b !== null && (a === null || (b.at ?? 0) > (a.at ?? 0)) ? b : a), null);
+    out.push({ row: { ...r, runs, newestRunId: runs[0]?.runId ?? r.newestRunId, lastError }, also });
+  }
+  return out;
 }
 
 /** A status the CSS has a badge colour for; anything else falls back to plain. */
@@ -188,9 +229,16 @@ export function resolvedSummary(
   model: string | null,
   ids: readonly string[] | undefined,
 ): { ids: string[]; mixed: boolean } | null {
-  const seen = [...new Set((ids ?? []).filter((id) => id.length > 0))].sort();
+  // Two providers' spellings of one model are one id (`canonicalModelId`,
+  // operator 2026-11-16): never drift, and never news beside the row's own.
+  const byModel = new Map<string, string>();
+  for (const id of [...new Set((ids ?? []).filter((id) => id.length > 0))].sort()) {
+    const key = canonicalModelId(id);
+    if (!byModel.has(key)) byModel.set(key, id);
+  }
+  const seen = [...byModel.values()];
   if (seen.length === 0) return null;
-  if (seen.length === 1 && seen[0] === model) return null;
+  if (seen.length === 1 && model !== null && (seen[0] === model || canonicalModelId(seen[0]!) === canonicalModelId(model))) return null;
   return { ids: seen, mixed: seen.length > 1 };
 }
 

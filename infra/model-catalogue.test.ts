@@ -18,6 +18,7 @@ import {
   OPENROUTER_DELISTED,
   OPENROUTER_PRICES,
   WEIGHTS,
+  canonicalModelId,
   catalogueKeyOf,
   familyOf,
   formatCatalogue,
@@ -215,6 +216,51 @@ describe("lookup", () => {
   });
 });
 
+describe("canonicalModelId — one model whichever provider served it (operator, 2026-11-16)", () => {
+  test("OpenCode Go's bare id and OpenRouter's vendor-prefixed id are one model", () => {
+    expect(canonicalModelId("deepseek-v4.1-flash")).toBe("deepseek/deepseek-v4.1-flash");
+    expect(canonicalModelId("deepseek/deepseek-v4.1-flash")).toBe("deepseek/deepseek-v4.1-flash");
+  });
+
+  test("the general rule needs no alias: either form finds the entry by its bare id", () => {
+    // Listed under its prefixed key only, with no bare alias.
+    expect(CATALOGUE.models["cohere/north-mini-code"]!.aliases).toBeUndefined();
+    expect(canonicalModelId("north-mini-code")).toBe("cohere/north-mini-code");
+    // Listed under its bare key, with the prefixed spelling an alias.
+    expect(canonicalModelId("xiaomi/mimo-v2.5")).toBe("mimo-v2.5");
+    expect(canonicalModelId("mimo-v2.5")).toBe("mimo-v2.5");
+  });
+
+  test("the aliases are the explicit entries, for what the rule cannot decide", () => {
+    expect(canonicalModelId("qwen-3.8-27b")).toBe("qwen/qwen3.8-27b");
+    expect(canonicalModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
+    expect(canonicalModelId("laguna-s-2.1-free")).toBe("poolside/laguna-s-2.1");
+  });
+
+  test("compared as the catalogue compares: trimmed, lowercased, and an OpenRouter `:free` endpoint is the same model", () => {
+    expect(canonicalModelId(" DeepSeek-V4.1-Flash ")).toBe("deepseek/deepseek-v4.1-flash");
+    expect(canonicalModelId("deepseek/deepseek-v4.1-flash:free")).toBe("deepseek/deepseek-v4.1-flash");
+  });
+
+  test("an uncatalogued model's bare and prefixed runs still meet, on the bare form", () => {
+    expect(canonicalModelId("fixture/some-model")).toBe("some-model");
+    expect(canonicalModelId("some-model")).toBe("some-model");
+    expect(canonicalModelId("")).toBe("");
+  });
+
+  test("every entry is its own canonical id, and no two entries share one", () => {
+    const seen = new Map<string, string>();
+    for (const [key, e] of Object.entries(CATALOGUE.models)) {
+      expect({ key, canonical: canonicalModelId(key) }).toEqual({ key, canonical: key });
+      for (const alias of e.aliases ?? []) expect({ alias, canonical: canonicalModelId(alias) }).toEqual({ alias, canonical: key });
+      const bare = key.slice(key.lastIndexOf("/") + 1);
+      expect({ bare, canonical: canonicalModelId(bare) }).toEqual({ bare, canonical: key });
+      expect(seen.get(canonicalModelId(key))).toBeUndefined();
+      seen.set(canonicalModelId(key), key);
+    }
+  });
+});
+
 describe("weights", () => {
   test("a closed model in a family with open siblings is closed, and the open sibling is open", () => {
     expect(weightsOf("openai/gpt-oss-120b")).toBe("open");
@@ -340,6 +386,8 @@ describe("parseCatalogue", () => {
   test("an id is written as the catalogue compares it, and names one entry only", () => {
     expect(() => parseCatalogue(mutate((d) => (d.models["Acme-Labs/Acme-2"] = { family: "acme", name: "x", weights: "open" })))).toThrow(/must be written as the catalogue compares it \("acme-labs\/acme-2"\)/);
     expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-0"].aliases = ["acme-1"])))).toThrow(/"acme-1" names two entries/);
+    // A bare form two entries share: a Go-served and an OpenRouter-served run would land on two models.
+    expect(() => parseCatalogue(mutate((d) => (d.models["other-host/acme-1"] = { family: "acme", name: "x", weights: "open" })))).toThrow(/the bare id "acme-1" names two entries/);
   });
 
   test("a price names only its own entry's ids, and a provider prices an id once", () => {

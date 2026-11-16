@@ -10,7 +10,9 @@
  *
  * What it is not: the config store's roster. A roster entry
  * (`roster/<name>`: tier, idle, apiBase, effort, …) is operator config and
- * names a catalogue model by its id; scheduling never reads this file.
+ * names a catalogue model by its id. Scheduling reads one thing here, a
+ * model's identity across providers (`canonicalModelId`), so two entries of
+ * one model fill one target; nothing else it decides comes from this file.
  *
  * **Lookup.** An id is compared trimmed, lowercased and without a trailing
  * `:free` (OpenRouter's variant suffix: the same model, another endpoint). It
@@ -218,6 +220,65 @@ export function catalogueKeyOf(model: string | null | undefined): string | null 
   const id = normalizeModelId(model);
   if (id === "") return null;
   return INDEX.get(id) ?? null;
+}
+
+/** An id without its provider prefix: the part after the last slash, or the id itself when that would be empty. */
+function bareOf(id: string): string {
+  const slash = id.lastIndexOf("/");
+  const bare = slash === -1 ? id : id.slice(slash + 1);
+  return bare === "" ? id : bare;
+}
+
+/**
+ * The bare form of every key and alias -> its entry key, for the general rule
+ * of `canonicalModelId`. A bare form two entries would share is left out, so
+ * the rule never picks between them (`parseCatalogue` refuses such a file).
+ */
+function bareIndexOf(cat: ModelCatalogue): Map<string, string> {
+  const out = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const [key, entry] of Object.entries(cat.models)) {
+    for (const id of [key, ...(entry.aliases ?? [])]) {
+      const bare = bareOf(normalizeModelId(id));
+      const prior = out.get(bare);
+      if (prior !== undefined && prior !== key) ambiguous.add(bare);
+      else out.set(bare, key);
+    }
+  }
+  for (const bare of ambiguous) out.delete(bare);
+  return out;
+}
+
+const BARE_INDEX = bareIndexOf(CATALOGUE);
+
+/**
+ * A model's one identity, whichever provider served it (operator,
+ * 2026-11-16): OpenCode Go records DeepSeek V4.1 Flash as
+ * `deepseek-v4.1-flash` and OpenRouter as `deepseek/deepseek-v4.1-flash`, and
+ * both answer `deepseek/deepseek-v4.1-flash`. What a reader groups by (a
+ * ladder entry, a models row, a filter, an export cell) and what a target
+ * counts in are this, never the id a run recorded, which stays the record.
+ *
+ * Keyed on the provider's id, compared as the catalogue compares ids
+ * (`normalizeModelId`: so OpenRouter's `:free` endpoint is the same model):
+ *
+ * 1. An id the catalogue lists, as a key or an alias, is that entry's key.
+ *    The aliases are the explicit entries, for spellings no rule can decide (a
+ *    codex slug, a dated snapshot, a Zen `-free` id, `qwen-3.8-27b` beside
+ *    `qwen/qwen3.8-27b`).
+ * 2. Otherwise the general rule: a vendor-prefixed id and the bare id after
+ *    its slash are one model, so either form finds the entry whose key or
+ *    alias has that bare form (`north-mini-code` is `cohere/north-mini-code`).
+ * 3. An id nothing lists is its bare form, so a bare and a prefixed run of an
+ *    uncatalogued model still meet.
+ *
+ * Pure and total; an empty id is handed back as it came.
+ */
+export function canonicalModelId(model: string): string {
+  const id = normalizeModelId(model);
+  if (id === "") return model;
+  const bare = bareOf(id);
+  return INDEX.get(id) ?? BARE_INDEX.get(bare) ?? bare;
 }
 
 /** The first family whose glob claims the id: the fallback for an id no entry lists. */
@@ -489,8 +550,9 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
     if (prior !== undefined) throw new Error(`${where}: "${id}" names two entries (${prior} and ${key})`);
     seen.set(n, key);
   };
+  const bares = new Map<string, string>();
   const billed = new Map<string, string>();
-  const bill = (ns: string, id: string, key: string): void => {
+  const bill =(ns: string, id: string, key: string): void => {
     const k = `${ns} ${id}`;
     if (billed.has(k)) throw new Error(`${where}: ${ns} prices "${id}" twice (${billed.get(k)} and ${key})`);
     billed.set(k, key);
@@ -501,6 +563,14 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
     only(e, ["family", "name", "weights", "source", "aliases", "note", "prices"], at);
     claim(key, key, "the key");
     for (const a of e["aliases"] === undefined ? [] : idList(e["aliases"], `${at} aliases`)) claim(a, key, "alias");
+    // `canonicalModelId`'s general rule: a bare form names one entry, or a
+    // Go-served and an OpenRouter-served run could land on two models.
+    for (const id of [key, ...((e["aliases"] as string[] | undefined) ?? [])]) {
+      const bare = bareOf(normalizeModelId(id));
+      const prior = bares.get(bare);
+      if (prior !== undefined && prior !== key) throw new Error(`${where}: the bare id "${bare}" names two entries (${prior} and ${key}): a bare id and its vendor-prefixed form are one model (canonicalModelId)`);
+      bares.set(bare, key);
+    }
     if (e["family"] !== null && !familyIds.has(e["family"] as string)) throw new Error(`${at}: family must be a family id or null`);
     str(e["name"], `${at} name`);
     if (e["weights"] === undefined) {

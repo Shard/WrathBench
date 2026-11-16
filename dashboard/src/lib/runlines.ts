@@ -33,6 +33,7 @@ import {
   characterSeriesLabel,
   chartCue,
   entryKeyOf,
+  modelOfRun,
   puckRect,
   scored,
   timeTicks,
@@ -104,7 +105,7 @@ export function runLines(runs: readonly ResultRun[]): RunLinesModel {
     const endX = Math.max(last.x, end);
     const endY = Math.max(last.y, xp);
     points.push({ x: endX, y: endY });
-    const model = r.model ?? "(unnamed)";
+    const model = modelOfRun(r);
     lines.push({
       runId: r.runId,
       model,

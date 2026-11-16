@@ -41,7 +41,7 @@ export { weightsOf };
 import type { ChartGroup, ResultRun } from "@viewer/api-types";
 import { chartGroupOf, currentChartGroupId } from "@viewer/condition";
 import { COST, XP } from "./axes";
-import { conditionOfRun, entryKeyOf, ladderPoints, scored } from "./ladder";
+import { conditionOfRun, entryKeyOf, ladderPoints, modelOfRun, scored } from "./ladder";
 import { paretoFront } from "./pareto";
 
 /* ------------------------------------------------------------ the two keys */
@@ -334,7 +334,7 @@ export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
  * not, and a model with no scored run keeps everything, since it has no row.
  */
 export function newestConditions(runs: readonly ResultRun[]): ResultRun[] {
-  const rowOf = (r: ResultRun): string => `${r.model ?? "(unnamed)"}\n${r.effort ?? ""}\n${r.compactWindow ?? ""}`;
+  const rowOf = (r: ResultRun): string => `${modelOfRun(r)}\n${r.effort ?? ""}\n${r.compactWindow ?? ""}`;
   const newest = new Map<string, { id: string; at: number }>();
   for (const r of scored(runs)) {
     const row = rowOf(r);

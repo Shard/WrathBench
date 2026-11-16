@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { launchRouting } from "./fixtures/launch-routing";
+import { OPENCODE_GO_ROUTING } from "../src/routing";
 import { countedFact } from "./fixtures/counted-fact";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -40,6 +41,9 @@ import {
   ownedWindows,
   rosterWindowKey,
   ineligibleWhy,
+  matchesRoster,
+  modelSiblings,
+  sameModel,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
 import { parseCredentials } from "../src/credential-slots";
@@ -995,9 +999,10 @@ describe("probe campaigns in the schedule", () => {
       ["ds-program", "probing", "program", "R2"],
       ["ds-yield", "probing", "program-yield", "R3"],
     ]);
-    // The same entries without the flag owe their t0 e90 first.
+    // The same entries without the flag owe their t0 e90 first: one model, so
+    // one e90 toward its one target, by the first entry (operator, 2026-11-16).
     const scored = ["ds-snippet", "ds-program", "ds-yield"].map((name) => projectModel({ name, model: "deepseek/deepseek-v4.1-flash", tier: "t0" }, [], DEFAULT_POLICY, { now: NOW2 }));
-    expect(planNextJobs(scored, ["R1", "R2", "R3"], new Set(), { campaigns: [probe] }).jobs.map((j) => j.episode)).toEqual(["e90", "e90", "e90"]);
+    expect(planNextJobs(scored, ["R1", "R2", "R3"], new Set(), { campaigns: [probe] }).jobs.map((j) => [j.name, j.episode])).toEqual([["ds-snippet", "e90"]]);
   });
 
   test("a campaignOnly entry with idle unlimited plays freeplay and nothing scored; a probe-only driver's still plays nothing", () => {
@@ -1415,30 +1420,18 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
     expect(countsTowardTarget({ loop: "program", yield: true }, {})).toBe(true);
   });
 
-  test("routing and wiki are the entry's condition too: a run routed or wikied otherwise is history, never a copy (operator, 2026-11-14)", () => {
+  test("the wiki is the entry's condition too, and the routing is not: whichever provider ran it counts (operator, 2026-11-16)", () => {
     const program = { loop: "program" as const, yield: true as const };
-    const glm = { driver: "openai", model: "z-ai/glm-5.3" };
-    const pinned = launchRouting("z-ai/glm-5.3").routing!;
-    // Routing: the run must carry what a launch of the entry stamps now.
-    expect(countsTowardTarget({ ...program, routing: pinned }, glm)).toBe(true);
-    expect(countsTowardTarget({ ...program, routing: { ...pinned } }, glm)).toBe(true);
-    expect(countsTowardTarget(program, glm)).toBe(false); // stamped before routing was a key
-    expect(countsTowardTarget({ ...program, routing: { allowFallbacks: true } }, glm)).toBe(false);
-    // The entry's own routing block, or a fleet default folded into it, is what is expected.
-    const elsewhere = { order: ["Together"], allowFallbacks: false };
-    expect(countsTowardTarget({ ...program, routing: elsewhere }, { ...glm, routing: elsewhere })).toBe(true);
-    expect(countsTowardTarget({ ...program, routing: pinned }, { ...glm, routing: elsewhere })).toBe(false);
-    // Effort can change what a launch sends (requireParameters), and the target follows it.
-    const high = launchRouting("z-ai/glm-5.3", "high").routing!;
-    expect(countsTowardTarget({ ...program, routing: high }, { ...glm, effort: "high" })).toBe(true);
-    // A base with no routing to state expects none: a CLI, a single-backend endpoint.
-    expect(countsTowardTarget(program, { driver: "claude-code", model: "sonnet" })).toBe(true);
-    expect(countsTowardTarget({ ...program, routing: pinned }, { driver: "claude-code", model: "sonnet" })).toBe(false);
-    expect(countsTowardTarget(program, { ...glm, apiBase: "https://api.cerebras.ai/v1" })).toBe(true);
+    const glm = { driver: "openai" };
     // Wiki: a run without the reference wiki fills only an entry without it, and the reverse.
-    expect(countsTowardTarget({ ...program, routing: pinned, wiki: false }, glm)).toBe(false);
-    expect(countsTowardTarget({ ...program, routing: pinned, wiki: false }, { ...glm, wiki: false })).toBe(true);
-    expect(countsTowardTarget({ ...program, routing: pinned }, { ...glm, wiki: false })).toBe(false);
+    expect(countsTowardTarget({ ...program, wiki: false }, glm)).toBe(false);
+    expect(countsTowardTarget({ ...program, wiki: false }, { ...glm, wiki: false })).toBe(true);
+    expect(countsTowardTarget(program, { ...glm, wiki: false })).toBe(false);
+    // Routing: a pinned run, a Go run and a run stamped before routing was a key all count.
+    const routed = (routing: object | undefined): Parameters<typeof countsTowardTarget>[0] => ({ ...program, ...(routing === undefined ? {} : { routing }) }) as Parameters<typeof countsTowardTarget>[0];
+    expect(countsTowardTarget(routed(launchRouting("z-ai/glm-5.3").routing), glm)).toBe(true);
+    expect(countsTowardTarget(routed({ ...OPENCODE_GO_ROUTING }), glm)).toBe(true);
+    expect(countsTowardTarget(routed(undefined), glm)).toBe(true);
   });
 
   test("snippet-loop runs in the same series are attempts and history, never a copy of a program-loop run", () => {
@@ -1521,5 +1514,92 @@ describe("promotion and the Deadmines witness", () => {
     expect(ineligibleWhy("e360")).toBe("its tier buys no e360 runs — earn it with a level-5 e90, or set a tier that includes it");
     expect(ineligibleWhy("deadmines-solo")).toBe("the Deadmines evals open on level 8 in a counted e360, on a tier that buys them");
     expect(ineligibleWhy("deadmines")).toContain("deadmines: true");
+  });
+});
+
+describe("one model served by two providers fills one target (operator, 2026-11-16)", () => {
+  const NOW6 = Date.UTC(2026, 10, 16, 12);
+  const policy = { ...DEFAULT_POLICY, series: "0.5" };
+  // OpenCode Go records the bare id, OpenRouter the vendor-prefixed one.
+  const go: RosterModel = { name: "ds-go", model: "deepseek-v4.1-flash", apiBase: "https://opencode.ai/inference/go/openai/v1", tier: "t1" };
+  const or: RosterModel = { name: "ds-or", model: "deepseek/deepseek-v4.1-flash", tier: "t1" };
+  const goRun = (i: number, over: Partial<RunFact> = {}): RunFact => ({ ...countedFact(go, "e90", 3, { i, now: NOW6 }), runId: `go-${i}`, routing: { ...OPENCODE_GO_ROUTING }, credential: "opencodego", ...over });
+  const orRun = (i: number, over: Partial<RunFact> = {}): RunFact => ({ ...countedFact(or, "e90", 2, { i, now: NOW6 }), runId: `or-${i}`, credential: "openrouter-1", ...over });
+  const statesOf = (runs: RunFact[], roster: RosterModel[] = [go, or]): ModelState[] =>
+    modelStates({ runsDir: "/nonexistent", roster, runs, sidecar: { version: 1, cleared: {} }, policy, now: NOW6 });
+
+  test("the two entries are one model: siblings, and each counts the other's runs", () => {
+    expect(modelSiblings([go, or])).toEqual(new Map([["ds-go", ["ds-or"]], ["ds-or", ["ds-go"]]]));
+    expect(sameModel(or, goRun(1))).toBe(true);
+    // Another effort is another model, as before.
+    expect(modelSiblings([go, { ...or, effort: "high" }]).size).toBe(0);
+    // Owning a run is unchanged: a Go run is resumed, its credential read and its character kept only under the Go entry.
+    expect(entryOwnsRun(or, goRun(1))).toBe(false);
+    expect(matchesRoster(goRun(1), or)).toBe(false);
+  });
+
+  test("a Go run counts toward the model's quota, so the OpenRouter entry does not launch a 4th e90", () => {
+    const states = statesOf([goRun(1), goRun(2), goRun(3)]);
+    expect(states.map((st) => [st.name, st.perEpisode.e90!.counted, st.perEpisode.e90!.target, st.perEpisode.e90!.attempts])).toEqual([
+      ["ds-go", 3, 3, 3],
+      ["ds-or", 3, 3, 0],
+    ]);
+    expect(schedulability(states[1]!).verdict).toBe("free");
+    expect(planNextJobs(states, ["A1", "A2"]).jobs).toEqual([]);
+    // Two runs on each side are past the target too, and a promotion witness on either side is the model's.
+    const mixed = statesOf([goRun(1), orRun(2, { bestLevel: 5 })]);
+    expect(mixed.map((st) => [st.perEpisode.e90!.counted, st.earnedPromotion])).toEqual([
+      [2, true],
+      [2, true],
+    ]);
+  });
+
+  test("two entries owing one target launch one e90 between them, the first in roster order", () => {
+    const states = statesOf([goRun(1), orRun(2)]);
+    const plan = planNextJobs(states, ["A1", "A2"]);
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.why])).toEqual([["ds-go", "e90", "2/3 on e90"]]);
+    // Roster order decides it, not the provider: reversed, OpenRouter goes first.
+    expect(planNextJobs(statesOf([goRun(1), orRun(2)], [or, go]), ["A1", "A2"]).jobs.map((j) => j.name)).toEqual(["ds-or"]);
+    // The entry passed over (its credential full, say: `planPolicyHeld` drops it and asks again) leaves the pick to the other.
+    expect(planNextJobs(states.filter((st) => st.name !== "ds-go"), ["A1"]).jobs.map((j) => j.name)).toEqual(["ds-or"]);
+  });
+
+  test("while one entry runs the model, the other launches no scored episode beside it", () => {
+    const states = statesOf([goRun(1)]);
+    // In flight under the supervisor, before its run reads live.
+    expect(schedulability(states[1]!, new Set(["ds-go"]))).toEqual({ verdict: "blocked", why: "running (one character per model): ds-go runs it" });
+    expect(planNextJobs(states, ["A1", "A2"], new Set(["ds-go"])).jobs).toEqual([]);
+    // Live on disk.
+    const live = statesOf([goRun(1), goRun(2, { live: true, endedAt: null, terminationReason: null })]);
+    expect(live[1]!.siblingPlaying).toEqual({ runId: "go-2", episode: "e90" });
+    expect(schedulability(live[1]!).why).toBe("running (one character per model): go-2 plays it under another entry");
+  });
+
+  test("freeplay stays one character per entry: a sibling's freeplay holds this entry's scored episodes, never its freeplay", () => {
+    const idle = (r: RosterModel): RosterModel => ({ ...r, idle: "unlimited" });
+    const met = [goRun(1), goRun(2), goRun(3)];
+    const fp = goRun(4, { episode: "freeplay", extra: true, live: true, endedAt: null, terminationReason: null });
+    const states = statesOf([...met, fp], [idle(go), idle(or)]);
+    expect(states[1]!.siblingPlaying).toEqual({ runId: "go-4", episode: "freeplay" });
+    expect(wantsIdle(schedulability(states[1]!), states[1]!)).toBe(true);
+    expect(planNextJobs(states, ["A1"]).jobs.map((j) => [j.name, j.episode])).toEqual([["ds-or", "freeplay"]]);
+    // A sibling's scored run does hold it.
+    const scored = statesOf([goRun(1), goRun(2, { live: true, endedAt: null, terminationReason: null })], [idle(go), idle(or)]);
+    expect(wantsIdle(schedulability(scored[1]!), scored[1]!)).toBe(false);
+  });
+
+  test("the outstanding figure owes the model's runs once, not once per entry", () => {
+    const states = statesOf([goRun(1)]);
+    expect(outstandingWork({ states, accounts: 2 })).toMatchObject({ lower: 2 });
+    expect(outstandingWork({ states: [states[0]!], accounts: 2 })).toMatchObject({ lower: 2 });
+  });
+
+  test("the viewer's row lists the model's counted runs whichever entry ran them, and names its sibling", () => {
+    const runs = [goRun(1), orRun(2)];
+    const states = statesOf(runs);
+    const row = rowOf(states[1]!, runs, "/nowhere");
+    expect(row.perEpisode.e90!.runIds).toEqual(["or-2", "go-1"]);
+    expect(row.runs.map((r) => r.runId)).toEqual(["or-2"]);
+    expect(row.siblings).toEqual(["ds-go"]);
   });
 });

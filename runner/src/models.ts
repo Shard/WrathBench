@@ -69,8 +69,8 @@ import { parseSubscriptionUsage, type SubscriptionUsage } from "./subscription-u
 import { billingOf, type Billing } from "./model-cost";
 import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
-import { parseRouting, routingForRun, routingSchema, type RoutingSpec } from "./routing";
-import { DEFAULT_API_BASE } from "./providers";
+import { parseRouting, routingSchema, type RoutingSpec } from "./routing";
+import { canonicalModelId } from "../../infra/model-catalogue";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
@@ -918,6 +918,22 @@ export interface ModelState {
    * playing holds its freeplay. A probe is neither, as before.
    */
   playing?: { runId: string; episode: EpisodeId; resuming?: true };
+  /**
+   * The other roster entries of this model (`modelSiblings`): the same model on
+   * another provider, which fills the same target (operator, 2026-11-16).
+   * Absent when the entry is alone on its model, or the caller projected one
+   * entry without its roster.
+   */
+  siblings?: readonly string[];
+  /**
+   * The newest live freeplay or scored run of this model under one of its
+   * other entries (`sameModel`, not owned by this one), or a sibling's
+   * freeplay run the supervisor is resuming this tick. It holds this entry's
+   * scored episodes, so two providers never launch toward one target at once,
+   * and a scored one holds its freeplay; a sibling's freeplay does not hold
+   * this entry's own freeplay character.
+   */
+  siblingPlaying?: { runId: string; episode: EpisodeId; resuming?: true };
 }
 
 export interface NextJob {
@@ -2069,47 +2085,30 @@ function routingOfMeta(raw: unknown): RoutingSpec | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** Keys sorted, so two equal routing blocks compare equal however they were spelled. */
-function routingKey(r: RoutingSpec | null | undefined): string {
-  if (r == null) return "";
-  return JSON.stringify(Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined).sort(([a], [b]) => (a < b ? -1 : 1))));
-}
-
 /** What an entry launches a run as, for `countsTowardTarget`. Absent fields are the defaults. */
 export interface TargetEntry {
   driver?: string | undefined;
-  model?: string | undefined;
-  effort?: string | null | undefined;
-  apiBase?: string | undefined;
-  routing?: RoutingSpec | undefined;
   wiki?: boolean | undefined;
 }
 
 /**
- * Whether a counted run counts toward its roster entry's target: it is the
+ * Whether a counted run counts toward a roster entry's target: it is the
  * condition the entry launches now (operator, 2026-11-14) — the loop and
- * `yield` its driver defaults to (`defaultLoopOf`), the routing a launch of it
- * would stamp (`routingForRun`, the fleet's default already folded into the
- * entry), and its wiki — as its tuple stamped them. Effort, window and a local
- * build are the entry's identity already (`entryOwnsRun`), and the series is
- * `inSeries`'s. A run of another condition is not a copy of this one, so it
- * neither fills a target nor is owed a rerun; the prompt hash is not compared,
- * since a patch within the series moves it. Pure.
+ * `yield` its driver defaults to (`defaultLoopOf`) and its wiki — as its
+ * tuple stamped them. Effort, window and a local build are the model's
+ * identity already (`sameModel`), and the series is `inSeries`'s. A run of
+ * another condition is not a copy of this one, so it neither fills a target
+ * nor is owed a rerun; the prompt hash is not compared, since a patch within
+ * the series moves it. Nor is the routing: a model served by different
+ * providers is one model, and whichever provider ran it counts (operator,
+ * 2026-11-16). Pure.
  */
-export function countsTowardTarget(f: Pick<RunFact, "loop" | "yield" | "routing" | "wiki">, entry: TargetEntry): boolean {
+export function countsTowardTarget(f: Pick<RunFact, "loop" | "yield" | "wiki">, entry: TargetEntry): boolean {
   const driver = entry.driver !== undefined && isDriver(entry.driver) ? entry.driver : DEFAULT_DRIVER;
   const d = defaultLoopOf({ driver });
   const program = d.loop === "program";
   if ((f.loop === "program") !== program || (f.yield === true) !== (program && d.yield)) return false;
-  if ((f.wiki !== false) !== (entry.wiki !== false)) return false;
-  const apiBase = entry.apiBase ?? (driverEntry(driver)?.endpoint === true ? DEFAULT_API_BASE : undefined);
-  const expected = routingForRun({
-    apiBase,
-    ...(entry.model !== undefined ? { model: entry.model } : {}),
-    ...(entry.effort != null ? { effort: entry.effort } : {}),
-    ...(entry.routing !== undefined ? { routing: entry.routing } : {}),
-  });
-  return routingKey(f.routing) === routingKey(expected);
+  return (f.wiki !== false) === (entry.wiki !== false);
 }
 
 export function isCounted(f: RunFact): boolean {
@@ -2251,6 +2250,64 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
 }
 
 /**
+ * Whether a run is of an entry's model, whichever provider served it:
+ * `entryOwnsRun` with the model compared by its identity across providers
+ * (`canonicalModelId`), so an OpenCode Go run recorded as
+ * `deepseek-v4.1-flash` is the model of an entry that names
+ * `deepseek/deepseek-v4.1-flash` (operator, 2026-11-16). Effort, window, a
+ * local build and the probe-only bit are compared as `entryOwnsRun` compares
+ * them.
+ *
+ * What a target counts and what one character per model holds, never what
+ * owns a run: a run is resumed, its credential read and its account and
+ * character kept only under the entry whose model id it recorded
+ * (`entryOwnsRun`), since another provider cannot serve that id.
+ */
+export function sameModel(entry: RosterIdentity, run: RosterIdentity): boolean {
+  return (
+    (entry.model === run.model || (entry.model !== null && run.model !== null && canonicalModelId(entry.model) === canonicalModelId(run.model))) &&
+    entryOwnsRun({ ...entry, model: run.model }, run)
+  );
+}
+
+/**
+ * An entry's model identity as one string, for grouping entries rather than
+ * matching a run (`sameModel`): its canonical model, effort, the windows it
+ * owns, its local build and the probe-only bit. Two entries with one key are
+ * one model on two providers, and fill one target.
+ */
+export function modelIdentityOf(entry: RosterIdentity): string {
+  const s = entry.serving;
+  return [
+    entry.model === null ? "" : canonicalModelId(entry.model),
+    entry.effort ?? "",
+    ownedWindows(entry).join(","),
+    s == null ? "" : `${s.weights}\n${s.quant}\n${s.runtime}`,
+    probeOnlyIdentity(entry) ? "probe-only" : "",
+  ].join("@");
+}
+
+/**
+ * The other roster entries of each entry's model (`modelIdentityOf`), by name,
+ * in roster order; an entry alone on its model has none. Pure.
+ */
+export function modelSiblings(roster: readonly (RosterIdentity & { name: string })[]): Map<string, string[]> {
+  const byKey = new Map<string, string[]>();
+  for (const r of roster) {
+    const key = modelIdentityOf(r);
+    const list = byKey.get(key);
+    if (list === undefined) byKey.set(key, [r.name]);
+    else list.push(r.name);
+  }
+  const out = new Map<string, string[]>();
+  for (const r of roster) {
+    const others = byKey.get(modelIdentityOf(r))!.filter((n) => n !== r.name);
+    if (others.length > 0) out.set(r.name, others);
+  }
+  return out;
+}
+
+/**
  * Whether a run is this entry's. A fleet probe names the entry it ran as
  * (`config.ref`), and that stamp is the authority, as it is for the square
  * the probe counts in (`campaignSquares`): the probe is the named entry's
@@ -2346,9 +2403,10 @@ export function partyAttempts(facts: readonly RunFact[]): RunFact[][] {
  * next, and neither counts nor cools. Levels and last verdicts read the
  * member runs as they are.
  */
-function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], entry: TargetEntry, policy: SchedulingPolicy): void {
+function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readonly RunFact[], ofModel: readonly RunFact[], entry: TargetEntry): void {
   stats.attempts = partyAttempts(all).length;
-  for (const members of partyAttempts(mine)) {
+  // What counts is the model's, under any entry of it (`sameModel`); the rest is the entry's own.
+  for (const members of partyAttempts(ofModel)) {
     const verdict = partyAttempt(
       members.map((f) => ({
         campaign: null,
@@ -2366,9 +2424,11 @@ function tallyParties(stats: EpisodeStats, all: readonly RunFact[], mine: readon
       stats.counted++;
       for (const f of members) stats.countedLevel = maxLevelOf(stats.countedLevel, f.bestLevel);
     }
+    for (const f of members) if (f.bestLevel !== null && (stats.bestLevel === null || f.bestLevel > stats.bestLevel)) stats.bestLevel = f.bestLevel;
+  }
+  for (const members of partyAttempts(mine)) {
     if (members.every((f) => stillbornOf(f) === true)) stats.stillborn++;
     for (const f of members) {
-      if (f.bestLevel !== null && (stats.bestLevel === null || f.bestLevel > stats.bestLevel)) stats.bestLevel = f.bestLevel;
       if (f.endedAt !== null && (stats.lastEnded === null || f.endedAt >= stats.lastEnded)) {
         stats.lastEnded = f.endedAt;
         stats.lastReason = stillbornOf(f) === true ? "stillborn" : f.terminationReason;
@@ -2420,6 +2480,12 @@ export function projectModel(
   // what keeps run ids unique on disk, and a series bump must not make the
   // next run id collide with an older directory (2026-08-23, harness-0.4).
   const mine = all.filter((f) => inSeries(f, policy));
+  // The model's runs under any entry of it, whichever provider served them
+  // (operator, 2026-11-16): what its targets count and its witnesses read,
+  // and the best level it reached. Attempts, the ladder and a pause stay the
+  // entry's own: they number its run ids and are evidence about its endpoint.
+  const ofModelAll = runs.filter((f) => sameModel(r, f) && !isUnscoredDriverName(f.driver));
+  const ofModel = ofModelAll.filter((f) => inSeries(f, policy));
   const perEpisode: Partial<Record<EpisodeId, EpisodeStats>> = {};
   for (const ep of STATS_EPISODES) {
     const stats: EpisodeStats = {
@@ -2441,7 +2507,7 @@ export function projectModel(
     // 2026-11-14): five members are one attempt and one count, and the
     // cooling walk takes one rung for it, however many met a refusal.
     if (isPartyEpisode(ep)) {
-      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), r, policy);
+      tallyParties(stats, all.filter((f) => f.episode === ep), mine.filter((f) => f.episode === ep), ofModel.filter((f) => f.episode === ep), r);
       perEpisode[ep] = stats;
       continue;
     }
@@ -2450,15 +2516,18 @@ export function projectModel(
       if (f.episode !== ep) continue;
       if (f.extra) stats.extras++;
       if (stillbornOf(f) === true) stats.stillborn++;
+      if (f.endedAt !== null && (stats.lastEnded === null || f.endedAt >= stats.lastEnded)) {
+        stats.lastEnded = f.endedAt;
+        stats.lastReason = stillbornOf(f) === true ? "stillborn" : f.terminationReason;
+      }
+    }
+    for (const f of ofModel) {
+      if (f.episode !== ep) continue;
       if (isCounted(f) && countsTowardTarget(f, r)) {
         stats.counted++;
         stats.countedLevel = maxLevelOf(stats.countedLevel, f.bestLevel);
       }
       if (f.bestLevel !== null && (stats.bestLevel === null || f.bestLevel > stats.bestLevel)) stats.bestLevel = f.bestLevel;
-      if (f.endedAt !== null && (stats.lastEnded === null || f.endedAt >= stats.lastEnded)) {
-        stats.lastEnded = f.endedAt;
-        stats.lastReason = stillbornOf(f) === true ? "stillborn" : f.terminationReason;
-      }
     }
     perEpisode[ep] = stats;
   }
@@ -2565,6 +2634,10 @@ export function projectModel(
   // Any series: a live run is a character playing whatever harness it runs.
   const playingRun = newestStarted(all.filter((f) => f.live && f.episode !== "probing"));
   if (playingRun !== undefined) state.playing = { runId: playingRun.runId, episode: playingRun.episode };
+  // The model playing under another of its entries (`siblingPlaying`).
+  const own = new Set(all.map((f) => f.runId));
+  const elsewhere = newestStarted(ofModelAll.filter((f) => f.live && f.episode !== "probing" && !own.has(f.runId)));
+  if (elsewhere !== undefined) state.siblingPlaying = { runId: elsewhere.runId, episode: elsewhere.episode };
   if (opts.gone !== undefined) {
     state.gone = opts.gone;
     state.retired = { at: opts.gone.since, reason: goneReason(opts.gone) };
@@ -2633,9 +2706,12 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
   const runs = input.runs ?? readRunFacts(input.runsDir, now, { includeArchived: true });
   const sidecar = input.sidecar ?? readModelsSidecar(input.runsDir);
   const lists = input.modelLists ?? readModelListsSidecar(input.runsDir);
+  const siblings = modelSiblings(input.roster);
   return input.roster.map((r) => {
     const gone = modelGoneOf(lists, r);
-    return projectModel(r, runs, policy, { now, clearedAt: sidecar.cleared[r.name], ...(gone !== undefined ? { gone } : {}) });
+    const state = projectModel(r, runs, policy, { now, clearedAt: sidecar.cleared[r.name], ...(gone !== undefined ? { gone } : {}) });
+    const others = siblings.get(r.name);
+    return others === undefined ? state : { ...state, siblings: others };
   });
 }
 
@@ -2713,6 +2789,16 @@ export function schedulability(
   if (v.verdict === "eval" && s.playing?.episode === "freeplay") {
     return blocked(`running (one character per model): ${s.playing.runId} ${s.playing.resuming === true ? "resumes" : "plays"} its freeplay character`);
   }
+  // Its other entries are the same model on another provider, filling the
+  // same target (operator, 2026-11-16): while one plays, or was picked this
+  // tick, none launches a scored episode beside it.
+  if (v.verdict === "eval") {
+    const busy = s.siblings?.find((n) => running.has(n));
+    if (busy !== undefined) return blocked(`running (one character per model): ${busy} runs it`);
+    if (s.siblingPlaying !== undefined) {
+      return blocked(`running (one character per model): ${s.siblingPlaying.runId} ${s.siblingPlaying.resuming === true ? "resumes" : "plays"} it under another entry`);
+    }
+  }
   return v;
 }
 
@@ -2770,6 +2856,10 @@ function idleHold(s: ModelState): string | undefined {
     return `paused run ${s.paused.runId} (${s.paused.reason}, ${spent} elapsed) is resumed, never started over`;
   }
   if (s.playing !== undefined) return `${s.playing.runId} ${s.playing.resuming === true ? "resumes" : "plays"} this model (one character per model)`;
+  // Another entry's scored run holds it; another entry's freeplay character does not, being its own.
+  if (s.siblingPlaying !== undefined && EPISODES[s.siblingPlaying.episode].scored) {
+    return `${s.siblingPlaying.runId} plays this model under another entry (one character per model)`;
+  }
   return undefined;
 }
 
@@ -2930,10 +3020,17 @@ export function planNextJobs(
   const jobs: NextJob[] = [];
   const held: HeldPick[] = [...gated, ...rehearsalHeld];
   const taken = new Set<string>();
+  // One scored pick per model, whichever of its entries (`modelIdentityOf`):
+  // two entries of one model on two providers fill one target, so the first
+  // in priority order, roster order breaking a tie, takes it. When its
+  // credential has no room the caller passes over it and asks again
+  // (`planPolicyHeld`), and the next entry of the model gets the pick.
+  const takenModels = new Set<string>();
   const accounts = [...freeAccounts];
   for (const c of cands) {
-    if (taken.has(c.s.name)) continue;
+    if (taken.has(c.s.name) || takenModels.has(modelIdentityOf(c.s))) continue;
     taken.add(c.s.name);
+    takenModels.add(modelIdentityOf(c.s));
     if (accounts.length === 0) {
       // Only said when the caller knows why the pool is empty. An ordinarily
       // busy pool stays silent.
@@ -2987,7 +3084,8 @@ export function planNextJobs(
   // unlimited session never takes an account a counted run could have used.
   for (const c of extraCands) {
     if (accounts.length === 0) break;
-    if (taken.has(c.s.name)) continue;
+    // A scored pick of the model this tick holds its freeplay, as a scored run playing does.
+    if (taken.has(c.s.name) || takenModels.has(modelIdentityOf(c.s))) continue;
     taken.add(c.s.name);
     const st = c.s.perEpisode[c.ep]!;
     const n = extrasSoFar(c.s);
@@ -3126,8 +3224,18 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
     return g;
   };
 
+  // One model's entries on two providers owe one target between them
+  // (operator, 2026-11-16): each model is counted once, as whichever of its
+  // entries owes the most, so the figure never owes a run twice.
+  const owedBy = (s: ModelState): number => POLICY_EPISODES.reduce((n, ep) => n + Math.max(0, (s.perEpisode[ep]?.target ?? 0) - (s.perEpisode[ep]?.counted ?? 0)), 0);
+  const counted = new Map<string, ModelState>();
   for (const s of input.states) {
     if (excluded.has(s.name) || s.retired !== undefined) continue;
+    const key = modelIdentityOf(s);
+    const prior = counted.get(key);
+    if (prior === undefined || owedBy(s) > owedBy(prior)) counted.set(key, s);
+  }
+  for (const s of counted.values()) {
     const g = groupFor(s);
     // The upper bound's bet is that the model climbs: what its tier would buy
     // if it earned promotion. For a `t0` model the bet is off — the ladder is

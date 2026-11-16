@@ -97,7 +97,7 @@ import {
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy, accountHolders } from "./run-roster";
-import { EPISODE_LIST } from "../runner/src/episodes";
+import { EPISODE_LIST, EPISODES } from "../runner/src/episodes";
 import { className as classNameOf, raceName as raceNameOf } from "../runner/viewer/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
 import { runCampaignFile } from "../runner/src/campaign-file";
@@ -613,7 +613,26 @@ export function formatModels(
   /** What the tick does with each model this time (`plannedVerdicts`), said after its verdict. */
   planned: ReadonlyMap<string, PlannedVerdict> = new Map(),
 ): string[] {
-  const w = Math.max(12, ...states.map((s) => s.name.length));
+  // One model, one row (operator, 2026-11-16): an entry's siblings — the
+  // same model on another provider (`ModelState.siblings`) — follow it as
+  // `└` lines carrying only what is the entry's own, since the counts are the
+  // model's and the first line already says them.
+  const byName = new Map(states.map((s) => [s.name, s]));
+  const placed = new Set<string>();
+  const rows: { s: ModelState; sibling: boolean }[] = [];
+  for (const s of states) {
+    if (placed.has(s.name)) continue;
+    placed.add(s.name);
+    rows.push({ s, sibling: false });
+    for (const n of s.siblings ?? []) {
+      const sib = byName.get(n);
+      if (sib === undefined || placed.has(n)) continue;
+      placed.add(n);
+      rows.push({ s: sib, sibling: true });
+    }
+  }
+  const SIB = "└ ";
+  const w = Math.max(12, ...rows.map((r) => r.s.name.length + (r.sibling ? SIB.length : 0)));
   const series = policy.series ?? "any";
   const out: string[] = [
     `models: ${states.length} in roster (policy: tier budgets; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
@@ -636,7 +655,7 @@ export function formatModels(
     if (!s.eligible.includes(ep)) return "-";
     return `${st.counted}/${st.target}${st.stillborn > 0 ? `+${st.stillborn}sb` : ""}${st.bestLevel !== null ? ` L${st.bestLevel}` : ""}`;
   };
-  for (const s of states) {
+  for (const { s, sibling } of rows) {
     const ex = excluded.get(s.name);
     // Freeplay is in the walk: a local model past its targets has nothing but
     // freeplay extras, and "last ... never" would be wrong about it.
@@ -653,11 +672,14 @@ export function formatModels(
     const sched = ex !== undefined ? `no: ${ex}` : `${word}: ${verdict.why}${decided !== undefined ? ` — ${decided.text}` : ""}`;
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
+    const shared = (ep: "e90" | "e360"): string => (sibling ? (s.eligible.includes(ep) ? "↑" : "-") : cell(s, ep));
+    const lead = !sibling && (s.siblings ?? []).some((n) => byName.has(n));
     out.push(
-      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${tierCell(s).padEnd(9)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
+      `  ${(sibling ? SIB + s.name : s.name).padEnd(w)} ${s.billing.padEnd(7)} ${tierCell(s).padEnd(9)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${shared("e90").padEnd(12)} ${shared("e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
         (last !== undefined && ex === undefined ? ` — last ${last.lastReason ?? "unterminated"} ${ago(last.lastEnded)}` : "") +
         (s.ladder > 0 ? ` — ladder ${s.ladder}` : "") +
-        (other > 0 ? ` — ${other} run(s) from other series not counted` : ""),
+        (other > 0 ? ` — ${other} run(s) from other series not counted` : "") +
+        (lead ? ` — one model, also run as ${s.siblings!.filter((n) => byName.has(n)).join(", ")}: counted runs under any fill its targets` : ""),
     );
   }
   // A steered entry carries no tier and so has no row: it is not evidence, and
@@ -692,6 +714,14 @@ export function plannedVerdicts(plan: TickPlan): Map<string, PlannedVerdict> {
   for (const a of plan.queue.assign) if (launches.has(a.job.name)) say(a.job.refs, `next tick: ${a.job.name} on ${a.account}`);
   for (const p of plan.picks) if (launches.has(p.job.name)) say(p.job.refs, `next tick: ${p.job.episode} on ${p.account}`);
   for (const h of plan.holds) say(h.refs, `${h.episode ?? "a launch"} held — ${h.why}`, true);
+  // The model's other entries: one scored launch toward its one target (operator, 2026-11-16).
+  for (const p of plan.picks) {
+    if (!launches.has(p.job.name) || !EPISODES[p.job.episode].scored) continue;
+    for (const ref of p.job.refs) {
+      const sibs = plan.states.find((st) => st.name === ref)?.siblings ?? [];
+      say(sibs, `${p.job.episode} launches under ${ref} next tick (one model)`, true);
+    }
+  }
   return out;
 }
 

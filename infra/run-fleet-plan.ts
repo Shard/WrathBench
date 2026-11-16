@@ -48,6 +48,7 @@ import { isEvalPoolAccountName } from "../runner/src/account-pool";
 import { scoredWaitFor, stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { EPISODES, isScoredEpisode, isTaskEpisode } from "../runner/src/episodes";
+import { canonicalModelId } from "./model-catalogue";
 import { taskDefinition } from "../runner/src/task-episodes";
 import { taskLaunchFile } from "./task-launch";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
@@ -91,7 +92,9 @@ import {
   ineligibleWhy,
   liveCredentials,
   type ModelsSidecar,
+  modelSiblings,
   modelStates,
+  sameModel,
   TIER_TABLE,
   type UnstampedRun,
 } from "../runner/src/models";
@@ -317,6 +320,7 @@ export function planQueue(opts: {
   const free = freePoolAccounts({ pool: opts.pool, maxLive: opts.maxLive, taken, held: opts.held });
   const runningRefs = new Set<string>(opts.runningRefs ?? []);
   for (const job of opts.queue) if (opts.running.has(job.name)) for (const r of job.refs) runningRefs.add(r);
+  const siblings = modelSiblings(Object.entries(opts.roster).map(([name, e]) => ({ name, ...e })));
   for (const job of opts.queue) {
     if (job.account !== undefined) continue;
     if (!job.enabled || opts.running.has(job.name) || opts.finished.has(job.name)) continue;
@@ -345,6 +349,12 @@ export function planQueue(opts: {
     const clash = refs.find((r) => runningRefs.has(r));
     if (clash !== undefined) {
       plan.skipped.push({ job, reason: `${clash} is already running under another job — one character per model` });
+      continue;
+    }
+    // The same model on another provider is the same model (operator, 2026-11-16).
+    const sibling = refs.flatMap((r) => siblings.get(r) ?? []).find((r) => runningRefs.has(r));
+    if (sibling !== undefined) {
+      plan.skipped.push({ job, reason: `${sibling} runs the same model under another job — one character per model` });
       continue;
     }
     const cool = opts.cooling?.(job);
@@ -1940,14 +1950,26 @@ export function planResumes(opts: {
     // resume comes due, under this entry or another of the model's. The
     // resume waits for it, as for a busy account. A pinned job is outside the
     // policy's rule, as a pinned campaign is.
+    // Under another entry of the model (the same model on another provider,
+    // operator 2026-11-16), only a scored run holds it: that entry's freeplay
+    // character is its own.
     if (f.episode === "freeplay" && job.account === undefined) {
-      const playing = opts.runs.find((g) => g.live && g.runId !== f.runId && g.episode !== "probing" && resumeModelKey(g, rosterWindowKey(g)) === modelKey);
+      const anyProvider = resumeModelKey(f, windowKey, true);
+      const ofThisModel = (g: RunFact): boolean =>
+        resumeModelKey(g, rosterWindowKey(g)) === modelKey || (EPISODES[g.episode].scored && resumeModelKey(g, rosterWindowKey(g), true) === anyProvider);
+      const playing = opts.runs.find((g) => g.live && g.runId !== f.runId && g.episode !== "probing" && ofThisModel(g));
       if (playing !== undefined) {
         list(`waiting: ${playing.runId} plays ${f.model} (${playing.episode}) — one character per model`);
         continue;
       }
       const owner = opts.inFlight?.find(
-        (j) => j.name !== job.name && j.episode !== "probing" && j.refs.some((r) => config.roster[r] !== undefined && entryOwnsRun(config.roster[r]!, f)),
+        (j) =>
+          j.name !== job.name &&
+          j.episode !== "probing" &&
+          j.refs.some((r) => {
+            const e = config.roster[r];
+            return e !== undefined && (entryOwnsRun(e, f) || (j.episode != null && EPISODES[j.episode].scored && sameModel(e, f)));
+          }),
       );
       if (owner !== undefined) {
         list(`waiting: job ${owner.name} plays ${f.model}${owner.episode != null ? ` (${owner.episode})` : ""} — one character per model`);
@@ -2016,9 +2038,12 @@ export function planResumes(opts: {
  * The key one character per model groups a run under when resuming: model,
  * effort and the entry's window (`rosterWindowKey`, or "" for an arm's own).
  * A probe-only driver's run is never another entry's (`entryOwnsRun`).
+ * `anyProvider` keys the model by its identity across providers
+ * (`canonicalModelId`) rather than the id the run recorded.
  */
-function resumeModelKey(f: Pick<RunFact, "model" | "effort" | "driver">, windowKey: string): string {
-  return `${f.model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
+function resumeModelKey(f: Pick<RunFact, "model" | "effort" | "driver">, windowKey: string, anyProvider = false): string {
+  const model = anyProvider && f.model !== null ? canonicalModelId(f.model) : f.model;
+  return `${model}@${f.effort ?? ""}@${windowKey}${isProbeOnlyDriver(f.driver) ? "@probe-only" : ""}`;
 }
 
 /**
@@ -2038,7 +2063,10 @@ export function withResumesPlaying(
     const entry = roster[s.name];
     if (entry === undefined || s.playing?.episode === "freeplay") return s;
     const r = back.find((x) => entryOwnsRun(entry, x.job.resume!));
-    return r === undefined ? s : { ...s, playing: { runId: r.runId, episode: "freeplay", resuming: true } };
+    if (r !== undefined) return { ...s, playing: { runId: r.runId, episode: "freeplay", resuming: true } };
+    // Another entry of the model's character coming back holds this one's scored episodes too.
+    const sib = back.find((x) => sameModel(entry, x.job.resume!));
+    return sib === undefined || s.siblingPlaying !== undefined ? s : { ...s, siblingPlaying: { runId: sib.runId, episode: "freeplay", resuming: true } };
   });
 }
 
