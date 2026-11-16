@@ -1,12 +1,14 @@
 /**
- * The map's one control strip, bottom centre of the stage, in both modes.
+ * The map's one strip, bottom centre of the stage, in both modes.
  *
  * On `/map` it is a live pill with the character count and, with a pip
  * selected, the way into that run's replay. On `/map?run=<id>` it is the
- * transport — step, play/pause, step, the clock, the scrubber, the speed — with
- * the run's identity above and the live link on the right; between the two it
- * says the replay is loading. Live→replay→live is this one element saying
- * something different, so the way back is always where it was.
+ * replay's identity — the run, its attempt steps, the live link on the right —
+ * and, before the track lands, that it is loading. Live→replay→live is this
+ * one element saying something different, so the way back is always where it
+ * was. The replay's transport is not here: the scrubber, the clock and the
+ * play button are the timeline's, fixed to the bottom of the viewport
+ * (`components/Timeline.tsx`).
  *
  * It is a component rather than a block of `MapPage` for one reason: the route
  * swap has to be renderable in a test. The swap that used to freeze the page
@@ -34,13 +36,11 @@
  */
 
 import { A } from "@solidjs/router";
-import { Show, createMemo } from "solid-js";
+import { Show } from "solid-js";
 import type { AgentPosition, TrackResponse } from "../api/client";
-import { playbackClock, shortRunId, stamp } from "../lib/format";
+import { shortRunId } from "../lib/format";
 import { replayHref, replayHrefFor } from "../lib/mapstate";
 import { colorOf, pipName } from "../lib/mapview";
-import { type Span, type Speed, prevSampleBefore, progressOf } from "@wrathbench/inspector/views/playback";
-import { nextSampleAfter, trackSpan } from "@wrathbench/inspector/views/replay";
 import { InfoHint } from "./InfoHint";
 import { partyHref } from "../lib/party";
 
@@ -65,38 +65,13 @@ export interface PlayBarProps {
   replayError: string | undefined;
   /** The live poll's failure, already rendered for display. */
   feedError: string | undefined;
-  cursor: number;
-  /**
-   * What the scrubber covers, when the page knows more than the track's
-   * points: the trace's span joins it (a short trace-era run can have one
-   * point and minutes of trace). Absent, the points' own span.
-   */
-  span?: Span | null;
-  playing: boolean;
-  speed: Speed;
   /** Live: how many characters the feed shows. */
   count: number;
   /** Live: the reading whose pip was clicked, for the way into its replay. */
   selected: AgentPosition | null;
-  /** A scrub: the page pauses and moves the cursor. */
-  onSeek: (ts: number) => void;
-  onTogglePlay: () => void;
-  onStepBack: () => void;
-  onStepForward: () => void;
-  onCycleSpeed: () => void;
 }
 
 export function PlayBar(props: PlayBarProps) {
-  const span = createMemo(() =>
-    props.span !== undefined ? props.span : props.track === undefined ? null : trackSpan(props.track.points),
-  );
-  /** A replay is scrubbable only where its samples span some time. */
-  const scrubbable = (): boolean => {
-    const sp = span();
-    return sp !== null && sp.to > sp.from;
-  };
-  const clock = createMemo(() => playbackClock(span(), props.cursor));
-
   return (
     <div class="playbar" classList={{ replay: props.replayId !== undefined }}>
       <Show
@@ -220,11 +195,6 @@ export function PlayBar(props: PlayBarProps) {
                   )}
                 </Show>
                 <span class="grow" />
-                <Show when={span() !== null}>
-                  <span class="dim mono playbar-stamp" title="the cursor's wall-clock time">
-                    {stamp(props.cursor)}
-                  </span>
-                </Show>
               </>
             )}
           </Show>
@@ -233,83 +203,6 @@ export function PlayBar(props: PlayBarProps) {
             live
           </A>
         </div>
-        <Show when={props.track}>
-          {(t) => (
-            <div class="playbar-row transport">
-              <Show when={span() !== null} fallback={<span class="dim">no recorded positions</span>}>
-                <button
-                  class="tbtn"
-                  title="previous sample (←)"
-                  aria-label="previous sample"
-                  disabled={!scrubbable() || prevSampleBefore(t().points, props.cursor) === undefined}
-                  onClick={() => props.onStepBack()}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M3 3h2v10H3zM13 3v10L6 8z" />
-                  </svg>
-                </button>
-                <button
-                  class="tbtn play"
-                  title={props.playing ? "pause (space)" : "play (space)"}
-                  aria-label={props.playing ? "pause" : "play"}
-                  disabled={!scrubbable()}
-                  onClick={() => props.onTogglePlay()}
-                >
-                  <Show
-                    when={props.playing}
-                    fallback={
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M4 2.5v11L13 8z" />
-                      </svg>
-                    }
-                  >
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z" />
-                    </svg>
-                  </Show>
-                </button>
-                <button
-                  class="tbtn"
-                  title="next sample (→)"
-                  aria-label="next sample"
-                  disabled={!scrubbable() || nextSampleAfter(t().points, props.cursor) === undefined}
-                  onClick={() => props.onStepForward()}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M11 3h2v10h-2zM3 3v10l7-5z" />
-                  </svg>
-                </button>
-                <span class="tclock mono">{clock().elapsed}</span>
-                {/*
-                  A track with one sample has nothing to scrub: min === max
-                  leaves a slider pinned at one end that answers no drag, which
-                  reads as broken rather than as "there is only one reading".
-                */}
-                <Show when={scrubbable()} fallback={<span class="dim grow center">one reading</span>}>
-                  <input
-                    type="range"
-                    class="scrubber"
-                    aria-label="replay position"
-                    min={span()?.from ?? 0}
-                    max={span()?.to ?? 0}
-                    value={props.cursor}
-                    style={{ "--p": String(progressOf(span(), props.cursor)) }}
-                    onInput={(e) => props.onSeek(Number(e.currentTarget.value))}
-                  />
-                </Show>
-                <span class="tclock mono">{clock().total}</span>
-                <button
-                  class="tbtn speed mono"
-                  title="playback speed, against the run's own clock; idle gaps are skipped"
-                  disabled={!scrubbable()}
-                  onClick={() => props.onCycleSpeed()}
-                >
-                  {props.speed}×
-                </button>
-              </Show>
-            </div>
-          )}
-        </Show>
       </Show>
     </div>
   );

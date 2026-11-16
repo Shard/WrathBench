@@ -90,9 +90,15 @@ export function createTimeline(opts: TimelineOptions): TimelineStore {
   /** Where playback started, on which clock. */
   let anchor: { cursor: number; at: number } | null = null;
 
+  /*
+   * Every method reads untracked: a page calls these from inside its own
+   * effects (the map's route swap zeroes the cursor in one), and a seek that
+   * subscribed its caller to the span would re-run that effect when the span
+   * next moved.
+   */
   const seek = (ts: number, by: Origin): void => {
-    const sp = span();
-    const next = sp === null ? (Number.isFinite(ts) ? ts : null) : seekTarget(sp, ts, live());
+    const sp = untrack(span);
+    const next = sp === null ? (Number.isFinite(ts) ? ts : null) : seekTarget(sp, ts, untrack(live));
     batch(() => {
       setOrigin(by);
       setFocus(next);
@@ -107,20 +113,21 @@ export function createTimeline(opts: TimelineOptions): TimelineStore {
       setOrigin(by);
       setFocus(null);
       setPlaying(false);
-      const sp = span();
+      const sp = untrack(span);
       if (sp !== null && untrack(view) !== null) setView(reveal(sp, untrack(view), sp.to));
     });
   };
-  const toggle = (): void => {
-    const sp = span();
-    if (sp === null || sp.to <= sp.from) return;
-    if (playing()) {
-      setPlaying(false);
-      return;
-    }
-    if (at() >= sp.to) seek(sp.from, "timeline");
-    setPlaying(true);
-  };
+  const toggle = (): void =>
+    untrack(() => {
+      const sp = span();
+      if (sp === null || sp.to <= sp.from) return;
+      if (playing()) {
+        setPlaying(false);
+        return;
+      }
+      if (at() >= sp.to) seek(sp.from, "timeline");
+      setPlaying(true);
+    });
 
   // A span that shrank under a zoomed view (never in practice) or stopped being zoomable drops the view.
   createEffect(() => {
@@ -173,25 +180,28 @@ export function createTimeline(opts: TimelineOptions): TimelineStore {
     toggle,
     speed,
     setSpeed: (s) => void setSpeed(s),
-    cycleSpeed: () => void setSpeed(nextSpeed(speed())),
+    cycleSpeed: () => void setSpeed(nextSpeed(untrack(speed))),
     view,
     shown: createMemo(() => {
       const sp = span();
       return sp === null ? null : viewOf(sp, view());
     }),
     zoomable: canZoom,
-    zoom: (a, factor) => {
-      const sp = span();
-      if (sp !== null && canZoom()) setView(zoomAt(sp, view(), a, factor));
-    },
-    pan: (d) => {
-      const sp = span();
-      if (sp !== null) setView(panBy(sp, view(), d));
-    },
-    centre: (ts) => {
-      const sp = span();
-      if (sp !== null) setView(centreOn(sp, view(), ts));
-    },
+    zoom: (a, factor) =>
+      untrack(() => {
+        const sp = span();
+        if (sp !== null && canZoom()) setView(zoomAt(sp, view(), a, factor));
+      }),
+    pan: (d) =>
+      untrack(() => {
+        const sp = span();
+        if (sp !== null) setView(panBy(sp, view(), d));
+      }),
+    centre: (ts) =>
+      untrack(() => {
+        const sp = span();
+        if (sp !== null) setView(centreOn(sp, view(), ts));
+      }),
     fit: () => void setView(null),
   };
 }

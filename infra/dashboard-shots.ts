@@ -102,7 +102,7 @@ export interface RigPage {
   page: Page;
   /** Go to a path on this page's site and wait for `selector`; false when it never matched. */
   open(path: string, selector?: string, settleMs?: number): Promise<boolean>;
-  /** A replay's playhead to a fraction of its span (the map's scrubber). */
+  /** The focused time to a fraction of what the timeline shows: a press on its bar, on the run page or a replay. */
   seek(fraction: number): Promise<boolean>;
   /**
    * Select `character` on the map: its row in the sidebar's live list, which
@@ -338,14 +338,12 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
           return ok;
         },
         async seek(fraction) {
-          return await page.eval<boolean>(`(() => {
-            const el = document.querySelector("input.scrubber");
-            if (!el) return false;
-            const min = Number(el.min), max = Number(el.max);
-            el.value = String(Math.round(min + (max - min) * ${Math.min(1, Math.max(0, fraction))}));
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            return true;
-          })()`);
+          const box = await page.eval<{ x: number; y: number; w: number } | null>(
+            `(() => { const el = document.querySelector(".timeline-track:not(.off) .timeline-bar"); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top + r.height / 2, w: r.width }; })()`,
+          );
+          if (box === null) return false;
+          await page.clickAt(box.x + box.w * Math.min(1, Math.max(0, fraction)), box.y);
+          return true;
         },
         async select(character) {
           const box = await page.eval<{ x: number; y: number; w: number; h: number } | null>(
@@ -429,7 +427,7 @@ export function defaultStates(live: string | null, ended: string | null, liveCha
     // Selected first, which frames the character; six notches on it is past the nearby layer's gate and its names'.
     states.push({ name: "map-live-nearby", path: "/map", wait: "canvas", zoom: 6, select: liveCharacter });
   }
-  if (ended !== null) states.push({ name: "map-replay", path: `/map?run=${encodeURIComponent(ended)}`, wait: "input.scrubber", seek: 0.5 });
+  if (ended !== null) states.push({ name: "map-replay", path: `/map?run=${encodeURIComponent(ended)}`, wait: ".timeline-track:not(.off)", seek: 0.5 });
   return states;
 }
 
@@ -563,7 +561,7 @@ async function main(argv: readonly string[]): Promise<number> {
         facts[name] = { path: st.path, found, ...(seeked !== undefined ? { seeked } : {}), ...(selected !== undefined ? { selected } : {}), ...p.page.facts };
         const trouble = [
           found ? null : `never saw ${st.wait}`,
-          seeked === false ? "no scrubber to seek" : null,
+          seeked === false ? "no timeline to seek" : null,
           zoomed === false ? "no map to zoom" : null,
           selected === false ? `no click selected ${st.select}` : null,
           p.page.facts.errors.length > 0 ? `${p.page.facts.errors.length} page error(s)` : null,

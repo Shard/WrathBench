@@ -188,6 +188,14 @@ holds there until the next arrival, which resumes it. The public horizon is
 the snapshot's `generatedAt`; the private feed carries no clock, so its
 horizon is the newest thing in it, never this browser's time.
 
+**A replay's scrubber is the timeline** ("The timeline", below): the bar fixed
+to the bottom of the viewport, on the page's cursor, with the run's levels and
+deaths on it; the strip in the stage keeps the replay's identity, its attempt
+steps and the way back to live. The cursor is the timeline's focused time, so
+it rides in `?t=`: written once it rests, never while it plays, and carried
+by the links to the run page and back. A replay reached with no `?t=` opens
+where it was last left (`lib/cursormemory.ts`), or at its start.
+
 **A replay plays on the run's own clock** at 1×, 10×, 60× (the default),
 600× or 3600×, so a 90-minute run takes 90 s at 60× and a nine-day character
 a few minutes at 3600×. A gap of more than 150 s in the track — two missed
@@ -467,16 +475,18 @@ the feed by.
 
 ## The timeline
 
-One bar is fixed to the bottom of the viewport on the run page
-(`components/Timeline.tsx`), across its whole width, and it is the page's only
-scrubber: the camera's video has a frame and a play button and no bar of its
-own. The shell is padded by the bar's height while it is mounted
+One bar is fixed to the bottom of the viewport on the run page and on the
+map's replay (`components/Timeline.tsx`), across its whole width, and it is
+the only scrubber either has: the camera's video has a frame and a play button
+and no bar of its own, and the map's strip no transport. The shell is padded by the bar's height while it is mounted
 (`.has-timeline`), so it covers nothing; on a phone it is two rows, the track
 over the controls.
 
 **One time is in focus**, held in one store (`lib/timelinestore.ts`), and
 everything that shows a moment of the run reads it: the feed, the video's
-frame, the XP chart's cursor, the live still. Whoever moves it says who they
+frame, the XP chart's cursor and the live still on the run page; the pip, the
+route, the unit frame and the sidebar on the map, whose frame loop places the
+pip every frame and tells the store a few times a second (`external`). Whoever moves it says who they
 are, and a follower skips a move that was its own (`Origin`,
 `lib/timeline.ts`):
 
@@ -485,7 +495,7 @@ are, and a follower skips a move that was its own (`Origin`,
 | the bar | a press, a drag, a key, a step to a mark | drawing the playhead |
 | the feed | the reader scrolls it (never a scroll the page made: `createScrollGuard`) | scrolling the last row at or before the time to the top, unless the move was its own |
 | the video | it plays | seeking, while it is still, to the frame at or before the time; a move from anywhere else stops it first |
-| playback | the bar's play button, on the run's own clock at the map's speeds, pauses hurried through | — |
+| playback | the bar's play button, on the run's own clock at the map's speeds, pauses and idle gaps hurried through | — |
 | a link | `?t=` on arrival, back and forward | the focus written back to `?t=` once it rests |
 
 The focus is null while the reader follows the run's newest moment: the live
@@ -509,8 +519,11 @@ shows which stretch of the run that is.
 page counts from the run's start, a replay from its first position and a
 party from five. The page replaces the entry rather than pushing one, a
 moment after the focus rests, so a scrub is not forty history entries;
-absent means "where the page opens by itself". The link to the map's replay
-carries it.
+absent means "where the page opens by itself", and a time the URL gave is not
+written back. "replay on map" and the map's "open run" both carry it, so the
+two pages are one place in the run; the clock reads the same on both, counted
+from the run's start (`zero`), though a replay's bar begins at its first
+recorded position.
 
 **What the bar marks** is one rule, `@viewer/timeline-marks`, shared with the
 chapter list and the camera: a level reached and a boss killed are chapters,
@@ -562,7 +575,7 @@ surprise, and nothing server-side may follow them into the browser bundle.
 `bun test` from the repo root runs them with everything else. They cover the
 pure layer — view maths and pip placement, the API client's paths, encoding and
 error mapping — plus a few focused component checks: the shared chart axis, the
-map's play bar across a route swap, the campaigns page across its routes, the
+map's strip across a route swap, the campaigns page across its routes, the
 run page's scratchpad panel against a hostile pad, its sidebar order, closed
 character and chapter panes and single cost card, its feed's collapsed runs
 and snippet cards and what they open to, the timeline's bar (its bands and

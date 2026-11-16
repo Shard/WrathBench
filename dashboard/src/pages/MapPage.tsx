@@ -55,6 +55,10 @@ import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../a
 import { LiveFrame, RunVideo } from "../components/Replay";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
+import { Timeline, type TimelineSteps } from "../components/Timeline";
+import { createTimeline } from "../lib/timelinestore";
+import { createUrlSync, parseT, withT, type Origin } from "../lib/timeline";
+import { runMarks, startLevelOf } from "@viewer/timeline-marks";
 import { UnitFrame } from "@wrathbench/inspector/views";
 import { InventoryPanel } from "@wrathbench/inspector/views";
 import { LiveList } from "../components/LiveList";
@@ -89,13 +93,8 @@ import {
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, shortRunId } from "../lib/format";
 import {
-  type Speed,
-  DEFAULT_SPEED,
   IDLE_GAP_MS,
   idleSpans,
-  keyBelongsToTarget,
-  nextSpeed,
-  playbackKey,
   prevSampleBefore,
   traceDrives as traceDrivesAt,
 } from "@wrathbench/inspector/views/playback";
@@ -196,6 +195,8 @@ const POLL_MS = 5000;
  * second for no visible gain.
  */
 const CURSOR_TICK_MS = 100;
+/** How long the cursor rests before it is written to `?t=`. */
+const URL_SETTLE_MS = 400;
 const PLAYHEAD_TICK_MS = 250;
 /** How often the page asks the trace store for the windows the playhead is about to reach. */
 const PUMP_MS = 1000;
@@ -307,12 +308,15 @@ export default function MapPage() {
   /*
    * The route is the page's mode, and the only mode it has: `/map` is live,
    * `/map?run=<id>` is that run's replay. Everything else the page holds —
-   * cursor, playback, the selection, pan and zoom — is per-frame state that
-   * would make the URL churn, so none of it goes here. The cursor is
-   * remembered per run beside the route instead, so coming back to a replay
-   * does not restart it: `lib/cursormemory.ts`.
+   * playback, the selection, pan and zoom — is per-frame state that would make
+   * the URL churn, so none of it goes here.
    *
-   * The one exception is the pinned map, `?map=<id>`: a chip click is a
+   * Two things ride beside the mode. The replay's cursor is `?t=`, the
+   * focused time the run page reads too (`lib/timeline.ts`): written by
+   * replacing the entry once the cursor rests, never while it plays, so the
+   * link to the run page and back keeps the place; a replay reached without
+   * one opens where it was last left (`lib/cursormemory.ts`). And the pinned
+   * map, `?map=<id>`: a chip click is a
    * deliberate choice, not a frame's worth of state, and a link that opens
    * Kalimdor has to carry it — chips exist only for maps with someone on
    * them, so on a quiet fleet the link is the only way to any other map.
@@ -335,11 +339,6 @@ export default function MapPage() {
   const [party, setParty] = createSignal<PartyView | undefined>(undefined);
   /** A fan-out run's replay (one agent, several characters): the run's id, once its characters' tracks are in. */
   const [fanout, setFanout] = createSignal<string | undefined>(undefined);
-  const [cursor, setCursor] = createSignal(0);
-  const [playing, setPlaying] = createSignal(false);
-  // Playback speed is a viewer preference, not replay state: it survives the
-  // swap on purpose, so it is not among the writables `clearReplayState` resets.
-  const [speed, setSpeed] = createSignal<Speed>(DEFAULT_SPEED);
   const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
@@ -483,6 +482,22 @@ export default function MapPage() {
     const t = playTrack();
     return t === undefined ? [] : idleSpans(t.points);
   });
+  /*
+   * The replay's cursor is the timeline's focused time (`lib/timelinestore.ts`):
+   * the bar at the bottom of the viewport scrubs it, the video follows it or
+   * moves it, and `?t=` carries it to the run page and back. The page keeps
+   * its own frame loop and anchor for playback (`external`), so the pip is
+   * placed every frame and the store hears of it a few times a second.
+   * Playback speed is a viewer preference, not replay state: it survives the
+   * swap on purpose, so it is not among the writables `clearReplayState` resets.
+   */
+  const tl = createTimeline({ span, external: true });
+  const cursor = tl.at;
+  const playing = tl.playing;
+  const speed = tl.speed;
+  const setPlaying = (on: boolean): void => tl.setPlaying(on);
+  /** Move the cursor: playback's own tick unless the caller says whose move it is. */
+  const setCursor = (ts: number, by: Origin = "clock"): void => tl.seek(ts, by);
   /** A replay is scrubbable only where its samples span some time. */
   const scrubbable = (): boolean => {
     const sp = span();
@@ -1610,7 +1625,7 @@ export default function MapPage() {
       const sp = span();
       if (sp !== null && t >= sp.to) {
         setPlaying(false);
-        seek(sp.to);
+        setCursor(sp.to);
         return;
       }
       if (p - lastCursorTick >= CURSOR_TICK_MS) {
@@ -1711,37 +1726,6 @@ export default function MapPage() {
       pumpNearby(false);
     }, PUMP_MS);
 
-    /*
-     * The transport's keyboard, on the document so it works with the canvas
-     * focused or nothing focused at all. A key that belongs to a focused
-     * control — space on a button — is left to it.
-     */
-    const onKey = (e: KeyboardEvent): void => {
-      if (track() === undefined || e.altKey || e.ctrlKey || e.metaKey) return;
-      if (keyBelongsToTarget((e.target as HTMLElement | null)?.tagName)) return;
-      const action = playbackKey(e.key);
-      if (action === null) return;
-      e.preventDefault();
-      switch (action) {
-        case "toggle":
-          togglePlay();
-          break;
-        case "back":
-          stepBack();
-          break;
-        case "forward":
-          stepForward();
-          break;
-        case "start":
-          jumpTo("start");
-          break;
-        case "end":
-          jumpTo("end");
-          break;
-      }
-    };
-    document.addEventListener("keydown", onKey);
-
     onCleanup(() => {
       cancelAnimationFrame(raf);
       stopPump();
@@ -1750,7 +1734,6 @@ export default function MapPage() {
       motionMq?.removeEventListener("change", readMotion);
       dprMq?.removeEventListener("change", onDpr);
       offLogo();
-      document.removeEventListener("keydown", onKey);
     });
   });
 
@@ -1853,15 +1836,17 @@ export default function MapPage() {
       stops.push(stop);
     };
     /**
-     * Where the loaded replay opens: where it was last left off, if it was —
-     * see cursormemory.ts. The route effect above has just cleared the cursor,
+     * Where the loaded replay opens: at the link's `?t=` when it has one, else
+     * where it was last left off, if it was — see cursormemory.ts. The route effect above has just cleared the cursor,
      * so this is the one place a loaded track's cursor is chosen. At the
      * start, it follows the start the trace reports (`followStart`).
      */
     const open = (play: TrackResponse): void => {
-      const resumed = cursorMemory.resume(play);
-      followStart = resumed === (trackSpan(play.points)?.from ?? 0);
-      setCursor(resumed);
+      // A link's time wins over where the replay was last left; the store holds it to the span.
+      const linked = parseT(untrack(() => params.t));
+      const resumed = linked ?? cursorMemory.resume(play);
+      followStart = linked === null && resumed === (trackSpan(play.points)?.from ?? 0);
+      setCursor(resumed, "url");
       mapFit.ask();
       needsDraw = true;
     };
@@ -2085,7 +2070,7 @@ export default function MapPage() {
     const t = playTrack();
     if (t === undefined) return;
     followStart = false;
-    setCursor(ts);
+    setCursor(ts, "timeline");
     cursorMemory.remember(t.runId, ts);
   };
   /** Stop where the playhead is now, not where the throttled cursor last said. */
@@ -2107,12 +2092,6 @@ export default function MapPage() {
     const next = nextSampleAfter(t.points, cursor());
     if (next !== undefined) seek(next.ts);
   };
-  const jumpTo = (edge: "start" | "end"): void => {
-    const sp = span();
-    if (sp === null) return;
-    setPlaying(false);
-    seek(edge === "start" ? sp.from : sp.to);
-  };
   /*
    * The run's camera video in a single run's replay, on the map's clock
    * (`lib/video-sync.ts`): while it plays it drives the cursor, otherwise the
@@ -2128,12 +2107,101 @@ export default function MapPage() {
   const followVideo = (ms: number): void => {
     if (playTrack() === undefined || fanout() !== undefined) return;
     followStart = false;
-    setCursor(ms);
+    setCursor(ms, "video");
     needsDraw = true;
   };
+  /* The video, while it plays: the bar's play button is then its pause. */
+  const [videoOn, setVideoOn] = createSignal(false);
+  let video: { pause(): void } | undefined;
   const videoPlaying = (on: boolean): void => {
+    setVideoOn(on);
     if (on && playing()) halt();
   };
+
+  /*
+   * What the bar marks on a single run's replay: the run's levels, boss kills
+   * and deaths and its pauses, off its detail. Until that lands, and where it
+   * does not (a party's replay has five), the levels the track's own points
+   * carry.
+   */
+  const [replayDetail] = createResource(
+    () => (partyId() === undefined ? runId() : undefined),
+    async (id) => await api.run(id).catch(() => null),
+  );
+  const marks = createMemo(() => {
+    const t = single();
+    const d = replayDetail();
+    if (t === undefined) return [];
+    return d !== null && d !== undefined && d.run.runId === t.runId ? runMarks({ leveling: d.leveling, states: d.states, deaths: d.deaths }) : runMarks({ states: t.points });
+  });
+  const startLevel = (): number | null => {
+    const t = single();
+    const d = replayDetail();
+    if (t === undefined) return null;
+    return d !== null && d !== undefined && d.run.runId === t.runId ? startLevelOf(d) : startLevelOf({ states: t.points });
+  };
+
+  /** The run's active stretches, for the pauses the bar draws as gaps. */
+  const pauses = (): readonly { start: number; end: number | null }[] | undefined => {
+    const d = replayDetail();
+    return d !== null && d !== undefined && d.run.runId === single()?.runId ? d.sessions : undefined;
+  };
+  /** When the run started, which is where its clock counts from on the run page, and so here. */
+  const runStart = (): number | null => {
+    const d = replayDetail();
+    return d !== null && d !== undefined && d.run.runId === single()?.runId ? d.run.startedAt : null;
+  };
+  /** The bar's steps: the track's samples, as the transport's always were. */
+  const steps: TimelineSteps = {
+    back: () => stepBack(),
+    forward: () => stepForward(),
+    get canBack() {
+      const t = playTrack();
+      return t !== undefined && prevSampleBefore(t.points, cursor()) !== undefined;
+    },
+    get canForward() {
+      const t = playTrack();
+      return t !== undefined && nextSampleAfter(t.points, cursor()) !== undefined;
+    },
+    noun: "sample",
+  };
+
+  /*
+   * `?t=`: written once the cursor rests on a loaded replay, never while it
+   * plays; a `t` that is not this page's own write (back, forward) is a seek.
+   */
+  const urlSync = createUrlSync(untrack(() => params.t));
+  let urlTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(urlTimer));
+  createEffect(
+    on(
+      () => [tl.focus(), playing(), playTrack()] as const,
+      () => {
+        clearTimeout(urlTimer);
+        if (playing() || playTrack() === undefined) return;
+        urlTimer = setTimeout(() => {
+          // A time the URL gave is already there, and where a replay opens by itself is not worth writing.
+          if (untrack(playTrack) === undefined || untrack(playing) || untrack(tl.origin) === "url") return;
+          const t = urlSync.toUrl(tl.focus());
+          if (t !== undefined) setParams({ t: t ?? undefined }, { replace: true });
+        }, URL_SETTLE_MS);
+      },
+      { defer: true },
+    ),
+  );
+  createEffect(
+    on(
+      () => params.t,
+      (raw) => {
+        const t = urlSync.fromUrl(raw);
+        if (typeof t !== "number" || playTrack() === undefined) return;
+        halt();
+        followStart = false;
+        setCursor(t, "url");
+      },
+      { defer: true },
+    ),
+  );
   /**
    * Play from the end starts over: a transport whose play button does nothing
    * because the cursor happens to be on the last sample reads as broken.
@@ -2473,20 +2541,8 @@ export default function MapPage() {
           fanout={fanout() === undefined ? undefined : { id: fanout()!, characters: replayed().length }}
           replayError={replayError()}
           feedError={feed.error === undefined ? undefined : displayError(feed.error)}
-          cursor={cursor()}
-          span={span()}
-          playing={playing()}
-          speed={speed()}
           count={count()}
           selected={selected()}
-          onSeek={(ts) => {
-            setPlaying(false);
-            seek(ts);
-          }}
-          onTogglePlay={togglePlay}
-          onStepBack={stepBack}
-          onStepForward={stepForward}
-          onCycleSpeed={() => setSpeed(nextSpeed(speed()))}
         />
       </div>
       <div class="side">
@@ -2631,7 +2687,16 @@ export default function MapPage() {
                   <>
                     <div class="k">camera</div>
                     <div class="v">
-                      <RunVideo compact clips={c()} follow={cursor()} hold={playing()} onRunTime={followVideo} onPlaying={videoPlaying} />
+                      <RunVideo
+                        compact
+                        clips={c()}
+                        follow={cursor()}
+                        foreign={tl.origin() === "timeline" || tl.origin() === "url"}
+                        hold={playing()}
+                        control={(v) => (video = v)}
+                        onRunTime={followVideo}
+                        onPlaying={videoPlaying}
+                      />
                     </div>
                   </>
                 )}
@@ -2681,7 +2746,8 @@ export default function MapPage() {
                 )}
               </Show>
               <div class="side-controls">
-                <A class="btn" href={runPageHref(p().runId)}>
+                {/* From a replay the run page opens at the cursor's time. */}
+                <A class="btn" href={withT(runPageHref(p().runId), track() === undefined ? null : tl.focus())}>
                   open run →
                 </A>
                 {/* In a party's replay the run's own replay is the way to one member alone. */}
@@ -2697,6 +2763,27 @@ export default function MapPage() {
           )}
         </Show>
       </div>
+      {/*
+        The replay's one scrubber: the timeline, fixed to the bottom of the
+        viewport, on the page's cursor. Live there is nothing to scrub, and
+        the strip in the stage is all there is.
+      */}
+      <Show when={replayId() !== undefined}>
+        <Timeline
+          store={tl}
+          marks={marks()}
+          startLevel={startLevel()}
+          sessions={pauses()}
+          zero={runStart()}
+          playing={playing() || videoOn()}
+          onSeek={(ts) => {
+            setPlaying(false);
+            seek(ts);
+          }}
+          onToggle={() => (videoOn() ? video?.pause() : togglePlay())}
+          steps={steps}
+        />
+      </Show>
     </div>
   );
 }
