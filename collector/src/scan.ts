@@ -27,6 +27,11 @@ export interface RunDirEntry {
    * unchanged mtime, and a gate on mtime alone would skip those bytes until
    * something else moved the file. The same rule the viewer's own read cache
    * states in `runner/viewer/runs.ts`.
+   *
+   * Where the run lives is part of it: archiving is a rename, which keeps
+   * every mtime, so without the location a run moved into or out of
+   * `archive/` would read as unchanged and keep its old `archived` flag
+   * until the service restarted.
    */
   sig: string;
 }
@@ -106,7 +111,7 @@ export function listRunDirs(
     const dir = join(runsDir, d.name);
     // A launch that never became a run leaves only its launch files; nothing to ingest.
     if (holdsOnlyLaunchFiles(dir)) continue;
-    out.push({ runId: d.name, dir, archived: false, sig: signature(dir) });
+    out.push({ runId: d.name, dir, archived: false, sig: `top|${signature(dir)}` });
   }
   // The whole top level first, then the archive: readdir order must not decide
   // which of two directories sharing an id this service ingests.
@@ -118,7 +123,7 @@ export function listRunDirs(
       continue;
     }
     seen.add(name);
-    out.push({ runId: name, dir, archived: true, sig: signature(dir) });
+    out.push({ runId: name, dir, archived: true, sig: `archive|${signature(dir)}` });
   }
   return out;
 }

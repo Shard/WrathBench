@@ -9,7 +9,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../../runner/src/trajectory";
@@ -613,6 +613,23 @@ describe("archived runs", () => {
     expect(JSON.parse(String(rowsOf(sink, "run_totals")[0]?.["fact_json"]))).toMatchObject({
       runId: "run-old",
     });
+  });
+
+  test("a run moved into the archive and back is re-flagged by a running collector", async () => {
+    // Archiving is a rename: every mtime survives it, so only the location says it moved.
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-moved");
+    const { collector, sink } = collectorOver(runsDir);
+    const flag = () => rowsOf(sink, "runs").filter((r) => r["run_id"] === "run-moved").at(-1)?.["archived"];
+    await collector.pass();
+    expect(flag()).toBe(0);
+    mkdirSync(join(runsDir, "archive"), { recursive: true });
+    renameSync(join(runsDir, "run-moved"), join(runsDir, "archive", "run-moved"));
+    await collector.pass();
+    expect(flag()).toBe(1);
+    renameSync(join(runsDir, "archive", "run-moved"), join(runsDir, "run-moved"));
+    await collector.pass();
+    expect(flag()).toBe(0);
   });
 });
 
