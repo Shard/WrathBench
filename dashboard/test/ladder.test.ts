@@ -27,7 +27,7 @@ import {
 import { paretoSteps } from "../src/lib/pareto";
 import { filterBySeries } from "../src/lib/harness";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
-import { chartGroups, defaultLadderRuns, modelEntries, newestConditions, pickChartGroup } from "../src/lib/ladderfilter";
+import { chartGroups, defaultLadderRuns, modelEntries, pickChartGroup } from "../src/lib/ladderfilter";
 import { conditionOf } from "../../runner/viewer/condition";
 import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
 import { fmtPlaytimeTick } from "../src/lib/format";
@@ -802,14 +802,16 @@ describe("ladderPoints over another pair of axes", () => {
 
   test("the views: default first, each x a resource and each y a distance, and `?view=` resolves or falls back", () => {
     expect(DEFAULT_VIEW.id).toBe("cost-xp");
-    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "turns-xp", "calls-xp"]);
+    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "calls-xp"]);
     for (const v of LADDER_VIEWS) {
       expect(v.x.better).toBe("lower");
       expect(v.y.better).toBe("higher");
       expect(v.title).toBe(`${v.x.label} × ${v.y.label}`);
     }
-    expect(viewParam("turns-xp").id).toBe("turns-xp");
-    expect(viewParam(["calls-xp", "turns-xp"]).id).toBe("calls-xp");
+    expect(viewParam("calls-xp").id).toBe("calls-xp");
+    expect(viewParam(["calls-xp", "tokens-xp"]).id).toBe("calls-xp");
+    // The withdrawn turns × xp view (operator, 2026-11-16): an old link lands on the default.
+    expect(viewParam("turns-xp")).toBe(DEFAULT_VIEW);
     expect(viewParam("playtime-level")).toBe(DEFAULT_VIEW);
     // The withdrawn cost × level view: an old link lands on the default, not a blank chart.
     expect(viewParam("cost-level")).toBe(DEFAULT_VIEW);
@@ -1222,7 +1224,6 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
     expect([go.condition!.pinned, pinned.condition!.pinned]).toEqual([false, true]);
     expect(entryKeyOf(go)).toBe(entryKeyOf(pinned));
     expect(chartGroups(runs).map((g) => [g.id, g.label, g.entries])).toEqual([["snippet", "snippet loop", 1]]);
-    expect(newestConditions(runs).map((r) => r.runId)).toEqual(["go", "pinned"]);
     expect(defaultLadderRuns(runs).map((r) => r.runId)).toEqual(["go", "pinned"]);
     expect(ladderRows(runs).map((r) => [r.model, r.runs, r.bestLevel, r.bestRunId])).toEqual([["glm", 2, 7, "pinned"]]);
     expect(modelEntries(runs)).toHaveLength(1);
