@@ -11,7 +11,7 @@
     "  prices.openrouter: OpenRouter id -> rate windows, written by infra/sync-prices.ts (bun wb data prices); an empty",
     "  list is an id OpenRouter stopped pricing, 'delisted' says why it never will again.",
     "  prices.anthropic: Anthropic list price by the served ids (ids, default the key), by hand, dated; or 'unpriced'.",
-    "  prices.endpoints: provider -> a metered endpoint's price, matched on the run's apiBase and the ids, by hand.",
+    "  prices.endpoints: provider -> a non-OpenRouter endpoint's price, matched on the run's apiBase and the ids, by hand.",
     "Rate windows are dollars per million tokens, oldest first; the first has no 'from', later ones the day they began.",
     "providers: who a price row is from; an endpoint provider's apiBase, on-screen label, source and default note;",
     "  subscription: true on one billed as a flat plan, whose rows are then as-if-metered and its usage.cost not the cost.",

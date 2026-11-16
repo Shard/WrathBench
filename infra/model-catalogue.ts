@@ -81,7 +81,7 @@ export interface CatalogueFamily {
   source?: string;
 }
 
-/** Who a price row is from: OpenRouter (synced), Anthropic (by hand), or a metered endpoint matched on its base. */
+/** Who a price row is from: OpenRouter (synced), Anthropic (by hand), or another endpoint matched on its base. */
 export interface CatalogueProvider {
   name: string;
   /** OpenRouter only: the day `infra/sync-prices.ts` last read the catalogue. */
@@ -119,7 +119,7 @@ export interface AnthropicPrice {
   unpriced?: string;
 }
 
-/** A metered endpoint's price for this model, matched on the run's base and id. */
+/** A non-OpenRouter endpoint's price for this model, matched on the run's base and id. */
 export interface EndpointPrice {
   /** The ids the endpoint serves this model under, exact; the entry's key when absent. */
   ids?: readonly string[];
@@ -460,7 +460,7 @@ export const OPENROUTER_DELISTED: Readonly<Record<string, string>> = /* @__PURE_
 export const ANTHROPIC_PRICES: readonly AnthropicRow[] = /* @__PURE__ */ table("anthropic");
 /** Claude models with no row on purpose, and why — a decided blank, not a missing one. */
 export const ANTHROPIC_UNPRICED: Readonly<Record<string, string>> = /* @__PURE__ */ table("anthropicUnpriced");
-/** Metered endpoints that are not OpenRouter, matched on the run's base and id. */
+/** Endpoints that are not OpenRouter (metered, or a subscription), matched on the run's base and id. */
 export const ENDPOINT_PRICES: readonly EndpointRow[] = /* @__PURE__ */ table("endpoints");
 
 // -------------------------------------------------------------- validation
