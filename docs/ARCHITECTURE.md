@@ -367,8 +367,9 @@ the SPA owns everything that is UI.
   freeplay character is one character across attempts, and everything the runner
   records is per attempt — so a reader could see only the session in front of
   them and the quest count was the last session's. The viewer aggregates the
-  chain at read time (`runner/viewer/character.ts`) and the run page leads with
-  it. The feed stays per attempt because a trajectory is one run's, with a link
+  chain at read time (`runner/viewer/character.ts`) and the run page carries
+  it in a pane under the milestones, closed until opened, so the run in front of the reader comes
+  first. The feed stays per attempt because a trajectory is one run's, with a link
   at each seam. The character is also a page of its own, `/character/<id>`. It is **universal, not freeplay-only**: a scored run's character
   is a chain of one attempt, so no page branches on "is this freeplay" to know a
   run has a character. Navigation stays freeplay-first — freeplay rows lead to

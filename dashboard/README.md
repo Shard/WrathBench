@@ -387,6 +387,24 @@ The art crossfade snaps its last two percent at either end (`snapBlend`). At
 those weights the art is invisible, but it was being fetched and blended over
 the whole map.
 
+## The run page
+
+`/run/:id` (`src/pages/RunDetail.tsx`), both builds. The title row holds the
+crumb and, to its right, the run's controls (replay on map, party replay,
+auto-scroll) with a live run's status line before them. The status clips to
+one line, its full text in the hover, so its words changing never move
+anything below. Under the row is a freeplay character's attempt strip, then the
+feed on the left and the sidebar on the right: the model, the character card,
+the camera's still or video, the XP chart, the token and playtime cards and one
+cost card, then the scratchpad and the milestones. After the milestones comes
+the character's totals across every attempt, a pane that stays closed until
+the reader opens it, then fan-out characters, comparability and the server
+footer. A card shows its value and a short line under it; the explanation (how
+tokens were counted, where each cost comes from, the full tok/s) sits behind
+the card's "i" (`components/InfoHint.tsx`). The cost card's headline is the
+provider's actual where there is one, else the list-price expected, with the
+other figure beside the label underneath (`components/CostCard.tsx`).
+
 ## Structure
 
 ```
@@ -424,7 +442,8 @@ surprise, and nothing server-side may follow them into the browser bundle.
 pure layer — view maths and pip placement, the API client's paths, encoding and
 error mapping — plus a few focused component checks: the shared chart axis, the
 map's play bar across a route swap, the campaigns page across its routes, the
-run page's scratchpad panel against a hostile pad, and the map's quest button
+run page's scratchpad panel against a hostile pad, its sidebar order, closed
+character pane and single cost card, and the map's quest button
 and its rows across a counter change.
 Those use the small `happy-dom` harness to mount the components through Vite;
 the rest of the suite does not need a DOM.

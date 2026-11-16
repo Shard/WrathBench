@@ -180,7 +180,8 @@ export function atBottom(
 }
 
 /**
- * How a token total was arrived at, in words — and the caveat behind it.
+ * How a token total was arrived at, in one word — and the caveat behind it
+ * (`sourceHint`), which sits behind the card's info hint rather than on it.
  *
  * Here rather than on a page because two pages print it: a run's own card and
  * a character's, whose source degrades to the weakest any attempt reported
@@ -188,9 +189,9 @@ export function atBottom(
  * moving between them is not told two different things about the same number.
  */
 export function sourceLabel(source: string | undefined): string {
-  if (source === "reported") return "provider-reported";
-  if (source === "snapshot") return "snapshot — under-read";
-  return "estimated (chars ÷ 4)";
+  if (source === "reported") return "reported";
+  if (source === "snapshot") return "under-read";
+  return "estimated";
 }
 
 /**
@@ -209,7 +210,7 @@ export function contextHint(
 
 export function sourceHint(source: string | undefined): string {
   if (source === "snapshot") {
-    return "claude-code opening usage snapshots: this run's turns never emitted a finished output count, so the completion total and the rate below are far too low";
+    return "claude-code opening usage snapshots: this run's turns never emitted a finished output count, so the completion total and the tok/s rate are far too low";
   }
   if (source === "reported") return "provider-reported token counts";
   return "no provider counted; characters ÷ 4";
