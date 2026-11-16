@@ -31,7 +31,7 @@ function stateText(): string {
   s.lastFlipAt = NOW - 120_000;
   s.traceSegs = { "run-a": [[T0, 3], [T0 + 10 * SEG_MS, 1]] };
   const withheld = Array.from({ length: 12 }, (_, i) => ({ path: `v1/run/run-${i === 0 ? "a" : `x${i}`}/v/detail.json`, findings: [{ rule: "known:session-token", count: 1 }] }));
-  return serializeState({ ...s, secretScan: { at: NOW - 60_000, scanned: 40, withheld } });
+  return serializeState({ ...s, secretScan: { at: NOW - 60_000, scanned: 40, withheld, heldBack: [{ runId: "run-a", version: "v3a", kept: "v2a" }] } });
 }
 
 const LOG = [
@@ -50,7 +50,8 @@ describe("the report", () => {
     expect(at("runs")).toContain("2 with a published version (1 version 1, 2 versions 1)");
     expect(at("runs")).toContain("5 objects uploaded, 4 under v1/run/");
     expect(at("traces")).toContain("1 run(s) with trace segments, 4 window(s)");
-    expect(at("scan")).toContain("40 bodies scanned, 12 withheld");
+    expect(at("scan")).toContain("40 bodies scanned, 12 withheld, 1 run(s) held back");
+    expect(out).toContain("           held back run-a: new version v3a withheld, kept v2a");
     expect(out.filter((l) => l.includes("withheld v1/run/")).length).toBe(10);
     expect(out.some((l) => l.includes("+2 more withheld"))).toBe(true);
     expect(out.some((l) => l.includes("known:session-token ×1"))).toBe(true);
@@ -66,6 +67,7 @@ describe("the report", () => {
     expect(at("objects")).toContain("3 under v1/run/run-a/, 2 of them the current version's");
     expect(at("trace")).toContain("4 window(s), 2030-01-02T10:00:00Z → 2030-01-02T10:55:00Z, in 2 run(s)");
     expect(at("withheld")).toContain("v/detail.json: known:session-token ×1");
+    expect(at("held back")).toContain("new version v3a withheld by the secret scan; the manifest keeps v2a");
     expect(report(stateText(), null, [], "run-none", NOW).some((l) => l.includes("nothing published"))).toBe(true);
   });
 

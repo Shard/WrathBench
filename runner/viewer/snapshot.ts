@@ -185,6 +185,15 @@ export interface SnapshotResult {
    * when the caller did not take them through a `RunStream`. Absent is none.
    */
   media?: MediaArtifact[];
+  /**
+   * Every per-run object and clip key a row of this pass names without the
+   * pass having rendered it: a cold run skipped whole (`coldFingerprint`),
+   * whose objects an earlier pass wrote. The publisher registers them with the
+   * flip as it does what was streamed — the keep windows are what stop the
+   * prune deleting them — and refuses to flip if one is not in the bucket.
+   * Sorted. Absent is none.
+   */
+  reused?: string[];
 }
 
 
@@ -306,7 +315,18 @@ const RUN_CONCURRENCY = 8;
  * reference to those bodies as soon as the sink resolves, which is the whole
  * point of the shape.
  */
-export type RunSink = (artifacts: SnapshotArtifact[], media: MediaArtifact[]) => Promise<void>;
+export type RunSink = (artifacts: SnapshotArtifact[], media: MediaArtifact[]) => Promise<readonly HeldBackRun[] | void>;
+
+/**
+ * A run whose new version the sink did not write: the publisher's secret scan
+ * held it back (`infra/publish-core.ts`, `HeldBackRun`). Its row points at
+ * `previous`, the version the bucket already holds, or at nothing.
+ */
+export interface HeldBackRun {
+  runId: string;
+  version: string;
+  previous: string | null;
+}
 
 /**
  * Render the per-run artifacts in bounded groups and hand each to `sink`,
@@ -718,6 +738,8 @@ export function createRenderer(
       stream === undefined || !Number.isFinite(stream.batch) ? Math.max(1, rows.length) : Math.max(1, Math.floor(stream.batch));
     const artifacts: SnapshotArtifact[] = [];
     const media: MediaArtifact[] = [];
+    /** Keys a cold row names that this pass did not render (`SnapshotResult.reused`). */
+    const reused: string[] = [];
     /** Each run's published clips this pass, rendered or cold: the home page's clip is picked from them. */
     const clipsOf = new Map<string, ClipsResponse>();
     /*
@@ -773,6 +795,7 @@ export function createRenderer(
             (cold.trace ?? []).every((t0) => published!.traceSegment(row.runId, t0))
           ) {
             row.snapshot = cold.snapshot;
+            reused.push(...Object.values(cold.snapshot), ...cold.media);
             if (cold.trace !== null) traceListed.set(row.runId, new Set(cold.trace));
             if (cold.clips !== null) clipsOf.set(row.runId, cold.clips);
             continue;
@@ -879,7 +902,35 @@ export function createRenderer(
         artifacts.push(...made);
         media.push(...madeMedia);
       } else {
-        await stream.sink(made, madeMedia);
+        const held = await stream.sink(made, madeMedia);
+        /*
+         * A run the sink held back keeps the version the bucket already has:
+         * its row points there (only at what the bucket holds of it), or at
+         * nothing for a run never published, which reads as "no published
+         * detail". Its new trace windows and clips were not written, so
+         * `live.json` and the highlight name none of them.
+         */
+        for (const h of held ?? []) {
+          const row = group.find((r) => r.runId === h.runId);
+          if (row === undefined) continue;
+          clipsOf.delete(h.runId);
+          coldRuns.delete(h.runId);
+          const listed = traceListed.get(h.runId);
+          if (listed !== undefined) traceListed.set(h.runId, new Set([...listed].filter((t0) => published?.traceSegment(h.runId, t0) === true)));
+          if (h.previous === null) {
+            delete row.snapshot;
+            continue;
+          }
+          const base = `v1/run/${h.runId}/${h.previous}`;
+          const has = (path: string): boolean => holds?.(path) === true;
+          row.snapshot = {
+            detail: `${base}/detail.json`,
+            track: `${base}/track.json`,
+            entries: `${base}/entries.json`,
+            ...(has(`${base}/scratchpad.json`) ? { scratchpad: `${base}/scratchpad.json` } : {}),
+            ...(has(`${base}/clips.json`) ? { clips: `${base}/clips.json` } : {}),
+          };
+        }
         // Only after the sink has taken them: until it returns, this pass may
         // still need the run it is holding.
         if (stream.release !== false && releaseRun !== undefined) {
@@ -989,7 +1040,7 @@ export function createRenderer(
       ...artifacts,
     ];
 
-    return { gen, snap: paths, artifacts: out, withdrawn, media };
+    return { gen, snap: paths, artifacts: out, withdrawn, media, ...(reused.length > 0 ? { reused: reused.sort() } : {}) };
   };
 }
 

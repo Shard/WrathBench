@@ -43,11 +43,16 @@
  * **A body that fails the secret scan is never written.** When the caller
  * passes `scan`, every body is scanned on its way to `put` (only the ones a
  * pass actually writes: an immutable key the bucket holds was scanned when it
- * was written), and a body with a finding is withheld exactly like a failed
- * upload: nothing else stops, and the manifest is not flipped, so the public
- * site stays on the last generation that passed. What was withheld, by path,
- * rule and count — never the matched text — is in the log and in the state
- * file's `secretScan`, until a pass comes through clean.
+ * was written). A streamed run's new version is scanned whole before any of
+ * it is written, and one with a finding is held back: none of its objects,
+ * windows or clips are written, the sink tells the renderer, whose row then
+ * points at the version the bucket last advertised for the run (or at nothing,
+ * for a run never published), and the rest of the pass flips as usual. Any
+ * other body with a finding is withheld exactly like a failed upload: the
+ * manifest is not flipped, so the public site stays on the last generation
+ * that passed. What was withheld, by path, rule and count — never the matched
+ * text — is in the log and in the state file's `secretScan`, until a pass
+ * comes through clean.
  *
  * `docs/PUBLIC-DASHBOARD.md` is the design this implements.
  */
@@ -119,6 +124,14 @@ export interface SnapshotResult {
    * uploaded in the run wave, before anything that names them. Absent is none.
    */
   media?: readonly MediaArtifact[];
+  /**
+   * Per-run object and clip keys the pass names without handing them over: a
+   * run the renderer skipped as unchanged, whose objects an earlier pass
+   * wrote. Registered with the flip like what was streamed, since the keep
+   * windows are all that keeps the prune off them, and every one must be in
+   * the bucket by the engine's record or the pass does not flip. Absent is none.
+   */
+  reused?: readonly string[];
 }
 
 /**
@@ -354,6 +367,11 @@ export interface SecretScanStatus {
   at: number;
   scanned: number;
   withheld: { path: string; findings: ScanFinding[] }[];
+  /**
+   * Runs whose new version this pass held back (`HeldBackRun`): the version
+   * withheld and the one the manifest kept, null for a run never published.
+   */
+  heldBack: { runId: string; version: string; kept: string | null }[];
 }
 
 export function emptyState(): PublishState {
@@ -781,6 +799,8 @@ export interface PublishReport {
   scanned?: number;
   /** With a delay: the passes still held after this one, its own included. */
   held?: number;
+  /** Runs whose new version the secret scan held back this pass (`HeldBackRun`). */
+  heldBack?: string[];
 }
 
 /**
@@ -889,7 +909,23 @@ function assertResult(result: SnapshotResult, seen: Set<string>): void {
  * a broken bucket still attempts everything it would have, exactly as one array
  * of artifacts always did.
  */
-export type RunSink = (artifacts: readonly SnapshotArtifact[], media?: readonly MediaArtifact[]) => Promise<void>;
+export type RunSink = (artifacts: readonly SnapshotArtifact[], media?: readonly MediaArtifact[]) => Promise<readonly HeldBackRun[]>;
+
+/**
+ * A run of a streamed batch whose new version the secret scan held back: none
+ * of that version's objects, trace windows or clips was written. The renderer
+ * points the run's row at `previous`, the version the bucket last advertised
+ * for it (which the engine keeps), or at nothing when it has none, and the
+ * pass flips with the run where it was. The engine refuses the flip if an
+ * aggregate or mutable body still names the held-back version.
+ */
+export interface HeldBackRun {
+  runId: string;
+  /** The version withheld this pass. */
+  version: string;
+  /** The version the manifest keeps naming; null for a run never published. */
+  previous: string | null;
+}
 
 /**
  * What the bucket already holds, as far as a renderer needs to know before it
@@ -971,10 +1007,23 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   const scan = opts.scan;
   let scanStatus: SecretScanStatus | undefined;
   if (scan !== undefined) {
-    scanStatus = { at: now(), scanned: 0, withheld: [] };
+    scanStatus = { at: now(), scanned: 0, withheld: [], heldBack: [] };
     state.secretScan = scanStatus;
     report.scanned = 0;
   }
+
+  // Bodies a run's hold-back check already scanned clean this pass: not read twice.
+  const cleared = new Set<string>();
+  /** Scan one body, counting it; its findings, empty when clean. */
+  const scanBody = (a: SnapshotArtifact): ScanFinding[] => {
+    if (scan === undefined || scanStatus === undefined) return [];
+    const findings = [...scan(a.body)];
+    scanStatus.scanned++;
+    report.scanned = scanStatus.scanned;
+    if (findings.length > 0) scanStatus.withheld.push({ path: a.path, findings });
+    else cleared.add(a.path);
+    return findings;
+  };
 
   /**
    * Upload what of `inWave` the bucket does not already hold, counting the
@@ -998,12 +1047,9 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
       todo,
       wave === "mutable" ? 1 : concurrency,
       async (a) => {
-        if (scan !== undefined && scanStatus !== undefined) {
-          const findings = [...scan(a.body)];
-          scanStatus.scanned++;
-          report.scanned = scanStatus.scanned;
+        if (!cleared.has(a.path)) {
+          const findings = scanBody(a);
           if (findings.length > 0) {
-            scanStatus.withheld.push({ path: a.path, findings });
             log(`publish: ${a.path} ${new SecretScanHit(findings).message}`);
             throw new SecretScanHit(findings);
           }
@@ -1058,12 +1104,13 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   };
   /** Every clip key this pass names, streamed or returned, in order: registered with the flip. */
   const passMedia: string[] = [];
-  const claimMedia = (media: readonly MediaArtifact[]): void => {
+  /** Validate clip keys and claim them; a held-back run's are claimed but not named (`passMedia`). */
+  const claimMedia = (media: readonly MediaArtifact[], name = true): void => {
     for (const m of media) {
       if (classifyPath(m.path).kind !== "clip") throw new Error(`publish: ${m.path} was handed over as a clip but is not a clip key`);
       if (seen.has(m.path)) throw new Error(`publish: two artifacts claim the key ${m.path}`);
       seen.add(m.path);
-      passMedia.push(m.path);
+      if (name) passMedia.push(m.path);
     }
   };
 
@@ -1079,11 +1126,54 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   // what the single-array run wave has always done.
   const streamedFailures: { path: string; error: unknown }[] = [];
 
+  /** Every run version held back this pass, as `v1/run/<id>/<version>/`: no body the flip writes may name one. */
+  const heldBackPrefixes: string[] = [];
+  const takePair = (runId: string, version: string): void => {
+    const pair = `${runId} ${version}`;
+    if (streamedRunKeys.has(pair)) return;
+    streamedRunKeys.add(pair);
+    streamedRuns.push([runId, version]);
+  };
+
+  /**
+   * Scan each run's new objects in the batch before any is written, and hold
+   * back every run with a finding (`HeldBackRun`). Only what the pass would
+   * write is read, as everywhere: an object an earlier pass wrote was scanned
+   * then. A held-back run's other objects are not written either, so a run
+   * that keeps tripping the scan costs a re-render and a re-scan each pass and
+   * no PUT, and what an earlier failed pass did write of that version is
+   * surplus to the next flip's prune.
+   */
+  const holdBack = (artifacts: readonly SnapshotArtifact[], versions: ReadonlyMap<string, string>): HeldBackRun[] => {
+    if (scan === undefined || scanStatus === undefined) return [];
+    const hits = new Map<string, { path: string; findings: ScanFinding[] }[]>();
+    for (const a of artifacts) {
+      const c = classifyPath(a.path);
+      if ((c.kind !== "run" && c.kind !== "trace") || !needsPut(a.path, () => hashOf(a), state, "")) continue;
+      const findings = scanBody(a);
+      if (findings.length > 0) hits.set(c.runId, [...(hits.get(c.runId) ?? []), { path: a.path, findings }]);
+    }
+    const out: HeldBackRun[] = [];
+    for (const [runId, withheld] of hits) {
+      const version = versions.get(runId) ?? "(trace windows only)";
+      const previous = previousVersion(state, runId);
+      out.push({ runId, version, previous });
+      scanStatus.heldBack.push({ runId, version, kept: previous });
+      (report.heldBack ??= []).push(runId);
+      // The version kept is in the bucket, and may well be named.
+      if (version !== previous) heldBackPrefixes.push(`${RUN_PREFIX}${runId}/${version}/`);
+      const what = withheld.map((w) => `${w.path.slice(w.path.lastIndexOf("/") + 1)}: ${describeFindings(w.findings)}`).join("; ");
+      log(
+        `publish: run ${runId} held back at ${previous ?? "nothing (never published)"} — its new version ${version} is withheld by the secret scan (${what}); the rest of the pass goes on`,
+      );
+    }
+    return out;
+  };
+
   const sink: RunSink = async (batch, media = []) => {
     const artifacts = [...batch];
-    // The clips first: the run objects beside them (its `clips.json`) name them.
-    claimMedia(media);
-    streamedFailures.push(...(await uploadMedia(media)));
+    // Each run's new version in the batch, by run.
+    const versions = new Map<string, string>();
     for (const a of artifacts) {
       const c = classifyPath(a.path);
       // A run's trace segments stream with it, and are no version of it.
@@ -1091,16 +1181,33 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
       // Anything else in the stream would be written before the flip decided it
       // should be — an aggregate out of its wave, or the manifest itself.
       if (c.kind !== "run") throw new Error(`publish: ${a.path} was streamed as a per-run artifact but is not one`);
-      const pair = `${c.runId} ${c.version}`;
-      if (streamedRunKeys.has(pair)) continue;
-      streamedRunKeys.add(pair);
-      streamedRuns.push([c.runId, c.version]);
+      versions.set(c.runId, c.version);
     }
+    const media0 = [...media];
+    claimMedia(media0, false);
     assertArtifacts(artifacts, seen);
+    const held = holdBack(artifacts, versions);
+    const heldIds = new Set(held.map((h) => h.runId));
+    const kept = (path: string): boolean => {
+      const c = classifyPath(path);
+      return !((c.kind === "run" || c.kind === "trace" || c.kind === "clip") && heldIds.has(c.runId));
+    };
+    // The clips first: the run objects beside them (its `clips.json`) name them.
+    const keptMedia = media0.filter((m) => kept(m.path));
+    passMedia.push(...keptMedia.map((m) => m.path));
+    streamedFailures.push(...(await uploadMedia(keptMedia)));
+    for (const [runId, version] of versions) {
+      if (!heldIds.has(runId)) takePair(runId, version);
+    }
+    // The version the manifest keeps naming, for the keep window: kept, and
+    // its history collapsed to it once the flip names it twice (`settleRun`).
+    for (const h of held) if (h.previous !== null) takePair(h.runId, h.previous);
+    const keptArtifacts = artifacts.filter((a) => kept(a.path));
     // With a delay, a window waits with its pass (`delayMs`): its key is its window.
-    if (holding) heldTraces.push(...artifacts.filter((a) => classifyPath(a.path).kind === "trace"));
-    const upload = holding ? artifacts.filter((a) => classifyPath(a.path).kind !== "trace") : artifacts;
+    if (holding) heldTraces.push(...keptArtifacts.filter((a) => classifyPath(a.path).kind === "trace"));
+    const upload = holding ? keptArtifacts.filter((a) => classifyPath(a.path).kind !== "trace") : keptArtifacts;
     streamedFailures.push(...(await uploadWave(upload, "run", "")));
+    return held;
   };
 
   /**
@@ -1180,6 +1287,36 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   claimMedia(result.media ?? []);
   streamedFailures.push(...(await uploadMedia(result.media ?? [])));
   if (streamedFailures.length > 0) throw new PublishError("run", streamedFailures);
+  /*
+   * What a skipped run's row names is this flip's as much as what streamed.
+   * An earlier pass may have written it and then failed before its flip, so
+   * nothing in the keep windows covers it yet: left out here, the flip would
+   * name it and its own prune would delete it as surplus.
+   */
+  const missing: { path: string; error: unknown }[] = [];
+  const namedMedia = new Set(passMedia);
+  for (const key of result.reused ?? []) {
+    const c = classifyPath(key);
+    if ((c.kind !== "run" && c.kind !== "clip") || state.uploaded[key] === undefined) {
+      missing.push({ path: key, error: new Error("a skipped run names it, and the bucket does not hold it") });
+    } else if (c.kind === "run") takePair(c.runId, c.version);
+    else if (!namedMedia.has(key)) {
+      namedMedia.add(key);
+      passMedia.push(key);
+    }
+  }
+  if (missing.length > 0) throw new PublishError("run", missing);
+  // Fail closed on a renderer that did not re-point a held-back run's row:
+  // nothing this pass flips may name a version that was never written.
+  if (heldBackPrefixes.length > 0) {
+    const naming = result.artifacts.filter((a) => waveOf(a.path) !== "run" && heldBackPrefixes.some((p) => a.body.includes(p)));
+    if (naming.length > 0) {
+      throw new PublishError(
+        waveOf(naming[0]!.path),
+        naming.map((a) => ({ path: a.path, error: new Error("names a run version the secret scan held back") })),
+      );
+    }
+  }
 
   let heldMutable: SnapshotArtifact[] = [];
   for (const wave of WAVES) {
@@ -1254,6 +1391,22 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   await release(at);
   report.held = state.held?.length ?? 0;
   return report;
+}
+
+/**
+ * The version of a run the bucket shows, or will once the held passes are
+ * out: the newest held pass's, else the last flip's. Null when there is none,
+ * or when the state no longer holds its objects.
+ */
+function previousVersion(state: PublishState, runId: string): string | null {
+  let version: string | undefined;
+  for (const h of [...(state.held ?? [])].reverse()) {
+    version = h.runPairs.find(([id]) => id === runId)?.[1];
+    if (version !== undefined) break;
+  }
+  version ??= state.runVersions[runId]?.at(-1);
+  if (version === undefined) return null;
+  return state.uploaded[`${RUN_PREFIX}${runId}/${version}/detail.json`] === undefined ? null : version;
 }
 
 /** Whether a held pass carries a run's trace window, which the renderer then need not make again. */
@@ -1359,7 +1512,9 @@ async function runPrune(
 /** The one line a pass is worth in a log. */
 export function describeReport(report: PublishReport): string {
   const parts = [`${report.put.length} put`, `${(report.bytes / 1024).toFixed(1)} KiB`, `${report.unchanged} unchanged`];
-  if (report.scanned !== undefined) parts.push(`${report.scanned} scanned clean`);
+  if (report.scanned !== undefined && report.heldBack !== undefined) {
+    parts.push(`${report.scanned} scanned, ${report.heldBack.length} run(s) held back by the secret scan`);
+  } else if (report.scanned !== undefined) parts.push(`${report.scanned} scanned clean`);
   if (report.deleted.length > 0) parts.push(`${report.deleted.length} pruned`);
   if (report.deleteFailures.length > 0) parts.push(`${report.deleteFailures.length} deletes deferred`);
   parts.push(report.flipped ? "manifest flipped" : "no flip");

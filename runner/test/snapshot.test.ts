@@ -30,7 +30,7 @@ import {
 } from "../viewer/snapshot";
 import { createApi, WINDOW_MAX } from "../viewer/api";
 import { ENTRIES_WINDOW } from "../viewer/public-keys";
-import { emptyState, publishPass, type ObjectStore } from "../../infra/publish-core";
+import { emptyState, publishPass, type HeldBackRun, type ObjectStore } from "../../infra/publish-core";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 import type { PositionsResponse, TraceSegment } from "../viewer/api-types";
 import { SEG_MS, unpackSegs, windowOf } from "@wrathbench/inspector/codec/trace";
@@ -480,6 +480,52 @@ describe("renderSnapshot", () => {
     expect(runKeys()).toEqual(named(third.out));
     expect(JSON.parse(bucket.get("v1/manifest.json")!)).toMatchObject({ gen: third.out.gen, artifacts: third.out.snap });
     for (const key of Object.values(third.out.snap)) expect(bucket.has(key)).toBe(true);
+  });
+
+  /*
+   * A run whose new entries window trips the publisher's secret scan: the
+   * engine holds its new version back and the renderer points its row at the
+   * version the bucket already has, so the pass flips without it.
+   */
+  test("published, a run whose new version the secret scan holds back keeps its published row and the pass flips", async () => {
+    const runs = fixture(false);
+    const bucket = new Map<string, string>();
+    const store: ObjectStore = {
+      put: async (path, body) => void bucket.set(path, typeof body === "string" ? body : await body.text()),
+      delete: async (path) => void bucket.delete(path),
+    };
+    const state = emptyState();
+    const CANARY = "canary-held-back-7d2e";
+    const scan = (body: string): { rule: string; count: number }[] => (body.includes(CANARY) ? [{ rule: "test-canary", count: 1 }] : []);
+    const lines: string[] = [];
+    const pass = async (now: number): Promise<{ out: SnapshotResult; flipped: boolean; heldBack: string[] | undefined }> => {
+      const render = createRenderer({ runsDir: runs });
+      let out: SnapshotResult | undefined;
+      const report = await publishPass(async (sink, published) => (out = await render(now, { sink, batch: 1 }, published)), store, state, {
+        scan,
+        log: (l) => lines.push(l),
+      });
+      return { out: out!, flipped: report.flipped, heldBack: report.heldBack };
+    };
+    const runKeys = (): string[] => [...bucket.keys()].filter((k) => k.startsWith(`v1/run/${DEAD_RUN}/`) && !k.includes("/trace/")).sort();
+
+    const first = await pass(111);
+    const kept = rowOf(first.out, DEAD_RUN).snapshot;
+    expect(runKeys()).toEqual(Object.values(kept).sort());
+
+    appendFileSync(
+      join(runs, DEAD_RUN, "trajectory.jsonl"),
+      JSON.stringify({ ts: 2100, t: "response", turn: 9, message: { role: "assistant", content: `printed ${CANARY}` } }) + "\n",
+    );
+    const second = await pass(222);
+    expect(second.flipped).toBe(true);
+    expect(second.heldBack).toEqual([DEAD_RUN]);
+    expect(rowOf(second.out, DEAD_RUN).snapshot).toEqual(kept);
+    expect(JSON.parse(bucket.get("v1/manifest.json")!)).toMatchObject({ gen: second.out.gen, artifacts: second.out.snap });
+    // Nothing of the new version was written; the published one is all there is.
+    expect(runKeys()).toEqual(Object.values(kept).sort());
+    for (const body of bucket.values()) expect(body.includes(CANARY)).toBe(false);
+    expect(lines.some((l) => l.includes(`run ${DEAD_RUN} held back at`) && l.includes("test-canary ×1"))).toBe(true);
   });
 
   test("no artifact path names a withheld surface", async () => {
@@ -1085,9 +1131,9 @@ describe("trace segments in a pass", () => {
     /** One pass; what it hands back is the run objects it streamed, so a test can read each pass's track. */
     const pass = async (): Promise<SnapshotResult> => {
       const streamed: SnapshotArtifact[] = [];
-      const keep = async (batch: SnapshotArtifact[], sink: (b: SnapshotArtifact[]) => Promise<void>): Promise<void> => {
+      const keep = async (batch: SnapshotArtifact[], sink: (b: SnapshotArtifact[]) => Promise<readonly HeldBackRun[]>): Promise<readonly HeldBackRun[]> => {
         streamed.push(...batch);
-        await sink(batch);
+        return await sink(batch);
       };
       await publishPass(async (sink, published) => await render(Date.now(), { sink: (b) => keep(b, sink), batch: 1 }, published), store, state);
       return { gen: "", snap: {}, artifacts: streamed, withdrawn: [] };
@@ -1268,5 +1314,47 @@ describe("cold runs", () => {
     await pass();
     expect(asked).toEqual([]);
     expect(puts.filter((p) => p.startsWith("v1/run/"))).toEqual([]);
+  });
+
+  /*
+   * A pass that wrote a run's new version and then failed before its flip,
+   * and a pass after it that skips the run as cold: the flip names the version
+   * the failed pass wrote, so it must be what the keep window holds, or the
+   * flip's own prune deletes what the manifest it just wrote points at.
+   */
+  test("through the publisher: a version a failed pass wrote, then skipped as cold, is kept by the flip that names it", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const bucket = new Map<string, string>();
+    let failLive = true;
+    const store: ObjectStore = {
+      put: async (path, body) => {
+        if (failLive && path === "v1/live.json") throw new Error("fake S3: PUT refused");
+        bucket.set(path, typeof body === "string" ? body : await body.text());
+      },
+      delete: async (path) => void bucket.delete(path),
+    };
+    const state = emptyState();
+    let out: SnapshotResult | undefined;
+    const pass = async (): Promise<{ flipped: boolean }> =>
+      await publishPass(async (sink, published) => (out = await render(Date.now(), { sink, batch: 1 }, published)), store, state);
+
+    await expect(pass()).rejects.toThrow(/the manifest was not flipped/);
+    const written = rowOf(out!, DEAD_RUN).snapshot;
+    for (const key of Object.values(written)) expect(bucket.has(key)).toBe(true);
+
+    failLive = false;
+    asked.length = 0;
+    expect((await pass()).flipped).toBe(true);
+    // Skipped as cold, and named all the same.
+    expect(asked).toEqual([]);
+    expect(rowOf(out!, DEAD_RUN).snapshot).toEqual(written);
+    expect(out!.reused).toEqual(Object.values(written).sort());
+    for (const key of Object.values(written)) expect(`${key} ${bucket.has(key)}`).toBe(`${key} true`);
+
+    // And the pass after, which flips the same names again, keeps them too.
+    await pass();
+    for (const key of Object.values(written)) expect(`${key} ${bucket.has(key)}`).toBe(`${key} true`);
   });
 });
