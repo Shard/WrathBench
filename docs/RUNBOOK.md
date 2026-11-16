@@ -479,9 +479,11 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             sandbox): the one cap that is not a credential's. Absent: none beyond the slots.
             Billing is derived per model (free slug / LAN apiBase / subscription CLI -> free, else
             paid); `roster.<name>.billing: "free"|"paid"` overrides it. To the scheduler, billing
-            says only which credential may carry a run. An openai entry's override is also
-            recorded on each run it launches: the ladders' "exclude free" follows it, and a
-            recorded free needs no price.
+            says only which credential may carry a run. Readers get their own verdict, where a
+            subscription (claude-code, codex, OpenCode Go) is paid and only a literally free
+            endpoint or local hardware is free (docs/METHODOLOGY.md); `fleet status` prints the
+            scheduler's. An openai entry's override is also recorded on each run it launches:
+            the ladders' "exclude free" follows it, and a recorded free needs no price.
             `routing` — the fleet-wide default for OpenRouter entries, same shape as an entry's.
             An entry that states its own keeps it WHOLE: the two are never merged. Absent means
             the built-in default (the model author's own provider, fallbacks off).

@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { parseEntryCompactWindow } from "../src/config";
 import { DEFAULT_DRIVER } from "../src/drivers";
+import { entryBilling } from "../src/billing";
 import { configDbPath, readFleetConfig } from "../src/config-store";
 import {
   DEFAULT_POLICY,
@@ -512,7 +513,8 @@ export function rowOf(
     windows: ownedWindows(state),
     platform: state.platform,
     harness: state.harness,
-    billing: state.billing,
+    // The reader's verdict, not the scheduler's `state.billing`: a subscription entry reads paid (billing.ts).
+    billing: entryBilling(state),
     status: state.status,
     eligible: state.eligible as EpisodeIdView[],
     perEpisode,

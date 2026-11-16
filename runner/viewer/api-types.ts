@@ -2319,10 +2319,11 @@ export interface ResultRun {
   /**
    * Whether this run cost the operator money (`runner/src/billing.ts`). Derived
    * from the model id, the api base, and the harness, unless an openai run
-   * recorded its roster entry's own `billing` — a subscription counts as
-   * paid here, which is deliberately the opposite of the scheduler's verdict in
-   * `runner/src/model-cost.ts`; that one answers "does this consume the paid
-   * concurrency budget". The ladder's "exclude free" toggle reads this.
+   * recorded its roster entry's own `billing`. Free means literally free; a
+   * subscription (claude-code, codex, OpenCode Go) counts as paid here, which
+   * is deliberately the opposite of the scheduler's verdict in
+   * `runner/src/model-cost.ts`; that one answers "which credential may carry
+   * this run". The ladder's "exclude free" toggle reads this.
    * Optional for the reason `xpEarned` is: a dashboard built against a viewer
    * that predates the field must still work, and reads `undefined` as unknown
    * rather than as free.
@@ -2722,16 +2723,15 @@ export interface ModelRowView {
   /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;
   /**
-   * Free or paid (`runner/src/model-cost.ts`). Since the tier became the only
-   * budget this says only
-   * which credential may carry a run (a metered key's billing side). It buys
-   * no runs and costs none: that is the tier.
+   * Whether this entry's runs cost the operator money: the reader's verdict
+   * (`entryBilling`, `runner/src/billing.ts`), the same one its runs carry in
+   * `ResultRun.billing`. Free means literally free — a `:free`/`-free`/
+   * contributor-free endpoint, local hardware, or an entry that declared
+   * `billing: "free"`; a subscription (claude-code, codex, OpenCode Go) is paid.
    *
-   * NOT the same verdict as `ResultRun.billing`, and the two disagree on
-   * purpose: this one answers "does this consume the paid concurrency budget",
-   * so a `claude-code` subscription reads `free` here; that one answers "did we
-   * pay for this run", so the same entry's runs read `paid` there
-   * (`runner/src/billing.ts`).
+   * Not the scheduler's verdict (`ModelState.billing`, `model-cost.ts`), which
+   * says only which credential may carry a run and puts a subscription on
+   * `free`; that one stays inside the supervisor and `bun wb fleet status`.
    */
   billing: "free" | "paid";
   /** The tier the config admitted this model to. */

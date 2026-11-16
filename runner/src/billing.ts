@@ -1,28 +1,38 @@
 /**
- * Whether a *run* cost the operator money — the reader's question, not the
- * scheduler's.
+ * Whether a run (or a roster entry's runs) cost the operator money: the
+ * READER's verdict, and the only one any page, the public snapshot or the
+ * Every Eval Ever export shows.
+ *
+ * **Free means literally free** (operator, 2026-11-16): an endpoint that
+ * charges nothing, or hardware the operator already owns. Usage paid for with
+ * a subscription is not free — a Claude Code or ChatGPT plan, or OpenCode Go's
+ * allowance, whose responses report a `usage.cost` of zero until the allowance
+ * is spent — so those runs read `paid` here and show under "exclude free".
  *
  * There are two billing verdicts in this repo and they disagree on purpose.
  * `billingOf` in `model-cost.ts` answers **"which side of a metered key may
  * carry this model?"** — a `claude-code` job bills a flat subscription, so it
  * spends none of the metered budget and lands on `free` there, which is what a
  * metered credential's `billing` is matched against (runner/src/credential-slots.ts).
- * This one answers
- * **"did we pay for this run?"** — a subscription is money, so `claude-code` is
- * `paid` here. Sharing the two would silently re-scope which credential carries a run, so they
- * stay two functions with one shared set of predicates and this comment.
+ * It is the scheduler's alone and never reaches a reader. This one answers
+ * **"did we pay for this run?"**. Sharing the two would silently re-scope
+ * which credential carries a run, so they stay two functions with one shared
+ * set of predicates and this comment.
  *
  * The rules, in order:
  *
- * - the `claude-code` harness (or driver) is **paid** — a subscription is a bill;
+ * - a driver that reaches no model (the scripted reference) is **free**;
+ * - a subscription harness or driver (claude-code, codex) is **paid** — a
+ *   subscription is a bill;
  * - a `billing` the run recorded at launch wins over everything below — the
  *   roster entry's own word, for the id the rules would put on the wrong side
  *   (a stealth id quoted at zero with no free suffix). Honoured on the openai
  *   driver only: a subscription driver's bill is the subscription;
  * - a local/LAN api base, or a run stamped `platform: "local"`, is free — the
  *   operator's own hardware;
- * - a `:free` / `-free` / `-contributor-free` slug is free;
- * - everything else is paid.
+ * - a `:free` (OpenRouter) / `-free` (OpenCode Zen and Go) /
+ *   `-contributor-free` slug is free;
+ * - everything else is paid, OpenCode Go's other slugs included.
  *
  * A run that recorded no model at all still gets a verdict, because every other
  * clause can still answer; with nothing to go on it reads `paid`, which is the
@@ -80,4 +90,31 @@ export function runBilling(run: BillableRun): Billing {
     return "free";
   }
   return "paid";
+}
+
+/** What a roster entry's projection (`ModelState`, runner/src/models.ts) knows about who serves it. */
+export interface BillableEntry {
+  model: string;
+  apiBase?: string | null;
+  platform?: string | null;
+  harness?: string | null;
+  driver?: string | null;
+  /** The entry's own `billing`, as written in the roster; absent when derived. */
+  declaredBilling?: Billing | null;
+}
+
+/**
+ * A roster entry's reader verdict: what its runs read, by the same rules as
+ * `runBilling`, so the models page and its runs cannot disagree. Never the
+ * entry's `ModelState.billing`, which is the scheduler's.
+ */
+export function entryBilling(e: BillableEntry): Billing {
+  return runBilling({
+    model: e.model,
+    apiBase: e.apiBase ?? null,
+    platform: e.platform ?? null,
+    harness: e.harness ?? null,
+    driver: e.driver ?? null,
+    declaredBilling: e.declaredBilling ?? null,
+  });
 }
