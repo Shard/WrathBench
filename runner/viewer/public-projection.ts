@@ -409,19 +409,19 @@ function projectSpells(f: SpellFacts): SpellFacts {
 }
 
 /**
- * A run's deaths as the run page's milestones row prints them: the three
- * counts and each death's turn. Deaths are public (operator, 2026-10-18); a
- * site's position, zone and the `first`/`last` ends are left out because no
- * page reads them. A death's time is left out too, so the public timeline
- * draws no death ticks: shipping it would re-key every run that has a death,
- * which is the operator's call and has not been made.
+ * A run's deaths as the run page's milestones row prints them and its
+ * timeline marks them: the three counts, and each death's turn and time.
+ * Deaths are public (operator, 2026-10-18), and so is when (operator,
+ * 2026-11-16, for the timeline's ticks; every run with a death is re-keyed
+ * once by it). A site's position, zone and the `first`/`last` ends are left
+ * out because no page reads them.
  */
 function projectDeaths(f: DeathFacts): DeathFacts {
   return lean<DeathFacts>({
     deaths: f.deaths,
     releases: f.releases,
     resurrects: f.resurrects,
-    sites: f.sites.map((s) => lean<DeathSite>({ turn: s.turn })),
+    sites: f.sites.map((s) => lean<DeathSite>({ ts: s.ts, turn: s.turn })),
   });
 }
 

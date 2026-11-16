@@ -595,9 +595,10 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   has one carries the field, so no other run is re-keyed by it. The kills of a
   party member's block already carried the same times and entries.
 - **Deaths are public** (operator, 2026-10-18), everywhere a page shows them.
-  A run's death count, its releases and resurrects and each death's turn ship
-  on its `detail.json` (`projectDeaths`; a death site's position and zone stay
-  off, as no page reads them), and a character's total on its card; the
+  A run's death count, its releases and resurrects and each death's turn and
+  time ship on its `detail.json` (`projectDeaths`; the time since 2026-11-16,
+  for the timeline's ticks, re-keying each run with a death once; a death
+  site's position and zone stay off, as no page reads them), and a character's total on its card; the
   death, release and resurrect milestones were already in the entries window.
   Every run is re-keyed once by it, as it was for the travel marks.
 - **A track's travel marks ship.** The replay draws flights in their own
@@ -842,8 +843,7 @@ party's size; ids and harness words). A member's `detail.json` carries its
 `party` block: the member list with no account, the map transfers into and out
 of an instance, the kills (victim guid, creature entry, and the name the
 member's client was answered, a name as an NPC's always is), the group
-changes, the time of each of its deaths (deaths are public, above; only a
-member's carry their times, so no other run re-keys), where it last was (map,
+changes, the time of each of its deaths (deaths are public, above), where it last was (map,
 zone and area ids and their served names), and its own party chat lines,
 which its trace windows already publish as the map's bubbles, masked for
 credential shapes as there. A campaign square of a party definition lists its

@@ -761,10 +761,12 @@ describe("projectRunDetail", () => {
         ...under("achievements", ["earned", "points", "ids"]),
         "taxi",
         "taxi.flights",
-        // Deaths are public (operator, 2026-10-18): the counts and the turns
-        // the milestones row prints, and nothing of a site no page reads.
+        // Deaths are public (operator, 2026-10-18): the counts, and each one's
+        // turn and time (the milestones row, the timeline's tick), and
+        // nothing of a site no page reads.
         "deaths",
         ...under("deaths", ["deaths", "releases", "resurrects", "sites"]),
+        "deaths.sites[].ts",
         "deaths.sites[].turn",
         // The timeline's boss chapters: when and which entry; the name is withheld.
         "bosses",
@@ -782,7 +784,7 @@ describe("projectRunDetail", () => {
       { fromTurn: 5, toTurn: 9 },
       { fromTurn: 12, toTurn: null },
     ]);
-    expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ turn: 3 }] } as DeathFacts);
+    expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ ts: 1500, turn: 3 }] } as DeathFacts);
     expect(out.bosses).toEqual([{ ts: 1700, entry: 644, name: null }]);
     // A run with no boss kill carries no field, so its published key does not move.
     expect("bosses" in projectRunDetail({ ...input, bosses: [] })).toBe(false);

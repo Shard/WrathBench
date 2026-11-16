@@ -137,7 +137,7 @@ describe("a party member's run page", () => {
     // named as the block names it; the plain elite with no entry is no boss.
     expect(d.bosses).toEqual([{ ts: T0 + 4400, entry: 644, name: "Fixture Boss" }]);
     expect(p.groups).toEqual([{ ts: T0 + 900, event: "joined", count: 2 }]);
-    // The death's own stamp, the one the run page's public sites do not carry.
+    // The death's own stamp.
     expect(p.deaths).toEqual([T0 + 4700]);
     // The party's lines only, the say left out.
     expect(p.chat).toEqual([
@@ -166,8 +166,8 @@ describe("a party member's run page", () => {
     expect(d.bosses).toEqual([{ ts: T0 + 4400, entry: 644, name: null }]);
     expect(d.party!.chat).toHaveLength(2);
     expect(d.party!.deaths).toEqual([T0 + 4700]);
-    // The run page's own death sites keep the public shape: a turn, no time.
-    expect(d.deaths!.sites as unknown[]).toEqual([{ turn: 1 }]);
+    // The run page's own death sites in their public shape: the turn and the time, and nothing of where.
+    expect(d.deaths!.sites as unknown[]).toEqual([{ ts: T0 + 4700, turn: 1 }]);
     expect(JSON.stringify(d)).not.toContain("PARTYACCT");
   });
 

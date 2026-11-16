@@ -358,6 +358,14 @@ describe("the pages that mount it", () => {
     expect(map).toContain("withT(runPageHref(p().runId), track() === undefined ? null : tl.focus())");
   });
 
+  test("publicly, a focus outside the one published window puts the feed away for a status line and never blocks the seek", () => {
+    expect(run).toMatch(/const feedAway = createMemo\(\(\): boolean => \{\s*const f = tl\.focus\(\);\s*return SNAPSHOT_MODE && f !== null && entries\(\)\.length > 0 && feedPlan\(held\(\), f\) === "load";/);
+    expect(run).toContain('<p class="dim feed-seam">trajectory logs for this period are unavailable</p>');
+    // Hidden, not unmounted: what the reader opened is there when the focus comes back.
+    expect(run).toContain('<div class="feed" hidden={feedAway()}>');
+    expect(readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")).toContain(".feed[hidden] { display: none; }");
+  });
+
   test("the run page's links to the map carry the focused time, and its crumb does not", () => {
     expect(run).toContain("withT(`/map?run=${encodeURIComponent(run().runId)}`, tl.focus())");
     expect(run).toContain("<A href={`/runs${listSearch()}`}>");

@@ -648,8 +648,8 @@ and `bosses`, the kills the server reported to the run whose victim is a boss
 (creature rank 3, or a five-man dungeon's boss by entry, `isBossKill`), each
 once, named from the run's own client cache. The field is there only where
 there is one, so a run without keeps the body it had. In public mode a boss
-is its time and entry and no name; a death's time does not cross
-(`projectDeaths`), so the public bar draws no death ticks.
+is its time and entry and no name, and a death is its turn and its time
+(`projectDeaths`).
 
 ## Camera replays
 

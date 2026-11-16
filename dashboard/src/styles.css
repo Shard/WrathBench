@@ -421,6 +421,8 @@ button.on { border-color: var(--accent); font-weight: 700; }
 
 /* --- the run feed --- */
 .feed { display: flex; flex-direction: column; gap: 8px; }
+/* Out of sight, not out of the page: what the reader opened is still open when the focus comes back to the window. */
+.feed[hidden] { display: none; }
 .entry { border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
 .entry > .head { display: flex; gap: 10px; align-items: baseline; padding: 5px 10px;
                  border-bottom: 1px solid var(--line); font-size: var(--fs-sm); color: var(--dim); }

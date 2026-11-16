@@ -400,6 +400,16 @@ export default function RunDetail() {
         setError(displayError(e, { retries: false }));
       });
   };
+  /**
+   * The public build, focused on a time its one published window does not
+   * reach: the bar still seeks there and the map link, the video and the
+   * chart follow, and the feed says in a line that it has nothing for the
+   * period rather than showing rows from another one (operator, 2026-11-16).
+   */
+  const feedAway = createMemo((): boolean => {
+    const f = tl.focus();
+    return SNAPSHOT_MODE && f !== null && entries().length > 0 && feedPlan(held(), f) === "load";
+  });
   /** Show the focus in the feed: a scroll inside the window held, or the window that holds it. */
   const showFocus = (): void => {
     if (!feedPublished() || detail() === undefined) return;
@@ -411,8 +421,9 @@ export default function RunDetail() {
       else loadTimer = setTimeout(() => replaceWindow(api.entries(params.id, undefined, WINDOW)), LOAD_SETTLE_MS);
       return;
     }
-    // A snapshot has one window per run: a time outside it scrolls to the nearer end of what there is.
-    if (SNAPSHOT_MODE || feedPlan(held(), f) === "scroll") scrollToTime(f);
+    // A snapshot has one window per run: a time outside it leaves the feed out (`feedAway`) and scrolls nothing.
+    if (feedPlan(held(), f) === "scroll") scrollToTime(f);
+    else if (SNAPSHOT_MODE) return;
     else loadTimer = setTimeout(() => replaceWindow(api.entriesAt(params.id, f, WINDOW)), LOAD_SETTLE_MS);
   };
   /* The feed follows the focus, except a move it reported itself. */
@@ -444,7 +455,8 @@ export default function RunDetail() {
     if (logEl === undefined || guard.own()) return;
     cancelAnimationFrame(scrollFrame);
     scrollFrame = requestAnimationFrame(() => {
-      if (logEl === undefined) return;
+      // A feed put away has no row in view, and the pane collapsing under it is not the reader reaching its end.
+      if (logEl === undefined || feedAway()) return;
       if (atTail() && atBottom(logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight, FOLLOW_THRESHOLD)) {
         if (tl.focus() !== null) tl.goLive("feed");
         return;
@@ -966,7 +978,10 @@ export default function RunDetail() {
                     */}
                     <RunStart.Provider value={() => run().startedAt}>
                     <MoveVerdicts.Provider value={verdicts}>
-                    <div class="feed">
+                    <Show when={feedAway()}>
+                      <p class="dim feed-seam">trajectory logs for this period are unavailable</p>
+                    </Show>
+                    <div class="feed" hidden={feedAway()}>
                       {/*
                         A trajectory is one attempt's, so the feed cannot be
                         stitched — but the reader can walk. At the top of the

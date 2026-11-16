@@ -513,9 +513,11 @@ window that holds that moment (`/entries?at=<ms>`, `entriesWindowAt`: the
 entry at or before the time a quarter of the way in) and replaces the window;
 "load earlier" and "load later" walk on from wherever that leaves the reader,
 and the live tail grows the window only while it is the run's last. The
-public build holds the one window the publisher renders, so a time outside it
-scrolls the feed to the nearer end of what there is; the rule under the bar
-shows which stretch of the run that is.
+public build holds the one window the publisher renders. A time outside it is
+still a seek, and the video, the chart and the map link follow; the feed is
+put away for one line saying it has no logs for the period, and comes back,
+as the reader left it, when the focus returns to the window. The rule under
+the bar shows which stretch of the run that is.
 
 **`?t=` is the focused time** in whole epoch seconds, absolute because the run
 page counts from the run's start, a replay from its first position and a
@@ -534,9 +536,7 @@ itself, a band per level, numbered where there is room; a death is a red
 tick; a pause is a gap; the rule under the bar is the stretch the feed holds.
 The levels come from the run's level marks, or from its state samples where a
 detail carries none (the public one). A boss kill is the detail's `bosses`: a
-victim of creature rank 3, or a five-man dungeon's boss by entry. The public
-detail carries no time for a death, so the public bar has levels and boss
-kills and no death ticks.
+victim of creature rank 3, or a five-man dungeon's boss by entry.
 
 **A run of more than a day can be zoomed**: the wheel or a pinch over the bar,
 or the two buttons, about the time under the pointer, down to ten minutes
