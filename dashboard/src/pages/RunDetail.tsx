@@ -8,6 +8,17 @@
  * follows the same file over the viewer's SSE tail, which also heartbeats every
  * second so a quiet run can be told from a dead connection.
  *
+ * One time is in focus on the page, the timeline's at the bottom of the
+ * viewport (`components/Timeline.tsx`, `lib/timelinestore.ts`), and the feed,
+ * the camera's video and the XP chart's cursor all show it. The feed follows
+ * it and leads it: a seek scrolls the feed to that moment, loading the window
+ * that holds it when this one does not, and the reader's own scroll moves the
+ * focus to the row in view. While the focus is the newest moment (the live
+ * edge of a run still going) the feed stays pinned to its newest entry, which
+ * is all the old auto-scroll toggle did; scrolling up or seeking back lets go,
+ * and the bar's live button takes hold again. The focus rides in `?t=`, so a
+ * link to the map's replay and back keeps the place.
+ *
  * The feed is two tiers: decisions as cards, and the actions between two of
  * them folded to one line of counts that opens (`lib/feedtier.ts` for which is
  * which, `components/FeedRows.tsx` for the rows). Long blocks fold to a few
@@ -23,10 +34,11 @@
  * for it, which the panel says plainly rather than failing the page.
  */
 
-import { A, useLocation, useParams } from "@solidjs/router";
+import { A, useLocation, useParams, useSearchParams } from "@solidjs/router";
 import {
   For,
   Show,
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -60,7 +72,12 @@ import { Coins, QuestCount } from "../components/CharacterFacts";
 import { InventoryPanel, XpBar, createInspectorClient } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
-import { ChaptersPanel, LiveFrame, RunVideo, createChapterLink } from "../components/Replay";
+import { ChaptersPanel, LiveFrame, RunVideo } from "../components/Replay";
+import { Timeline } from "../components/Timeline";
+import { createTimeline } from "../lib/timelinestore";
+import { createScrollGuard, createUrlSync, feedPlan, parseT, rowAt, rowInView, withT, type FeedWindow, type Span } from "../lib/timeline";
+import { runMarks, startLevelOf } from "@viewer/timeline-marks";
+import { activeMsUntil } from "@viewer/sessions";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtDuration, fmtItems, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
@@ -79,7 +96,6 @@ import {
   writeExpandPref,
   type ExpandPreset,
 } from "../lib/feedview";
-import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom, chartClock, contextHint, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
@@ -87,21 +103,13 @@ import { partyHref, partyReplayHref } from "../lib/party";
 
 const WINDOW = 200;
 
-/** How close to the bottom still counts as "following" (px). */
+/** How close to the bottom of the feed still counts as its newest entry (px). */
 const FOLLOW_THRESHOLD = 32;
 
-/**
- * The manual autoscroll preference, remembered across visits. Only the manual
- * toggle writes it; a scroll that turns follow off is a fact about this session
- * (the reader is looking at something) and must not become the saved default.
- */
-const FOLLOW_KEY = "wrathbench.runview.follow";
-function readFollowPref(): boolean {
-  return readBoolPref(FOLLOW_KEY, true);
-}
-function writeFollowPref(keep: boolean): void {
-  writeBoolPref(FOLLOW_KEY, keep);
-}
+/** How long the focus rests before it is written to `?t=`: a scrub or playback is one entry's worth of writes, not forty. */
+const URL_SETTLE_MS = 400;
+/** How long a seek outside the loaded window rests before the window is asked for: a drag across a day asks once. */
+const LOAD_SETTLE_MS = 150;
 
 /** Past this much silence a live run is more likely stopped than thinking. */
 const SILENT_MS = 120_000;
@@ -183,7 +191,6 @@ export default function RunDetail() {
   const [error, setError] = createSignal<string | undefined>(undefined);
   const [lastWrite, setLastWrite] = createSignal(Date.now());
   const [now, setNow] = createSignal(Date.now());
-  const [follow, setFollow] = createSignal(readFollowPref());
   /*
    * Where every foldable block in the feed starts. Remembered, and it only
    * ever sets a default: each block keeps its own toggle, so a reader can open
@@ -246,31 +253,209 @@ export default function RunDetail() {
       });
   };
 
+  const live = (): boolean => detail()?.run.terminationReason === null;
+
+  /*
+   * The focused time (`lib/timelinestore.ts`). The bar covers the run from
+   * its start to its newest moment: this browser's clock while a private run
+   * is live, since the tail keeps the page that current, and the newest thing
+   * a snapshot holds publicly, where "now" is minutes ahead of the data.
+   */
+  let newestSeen = 0;
+  const span = createMemo<Span | null>(
+    () => {
+      const d = detail();
+      if (d === undefined) return null;
+      const list = entries();
+      // The newest thing seen so far, not the newest in the window held: the bar must not shorten when the feed jumps back.
+      newestSeen = Math.max(newestSeen, list[list.length - 1]?.ts ?? 0, d.states[d.states.length - 1]?.ts ?? 0);
+      const seen = newestSeen;
+      const start = d.run.startedAt ?? list[0]?.ts ?? d.states[0]?.ts ?? null;
+      if (start === null) return null;
+      const end = live() ? (SNAPSHOT_MODE ? seen : Math.max(now(), seen)) : Math.max(d.run.endedAt ?? 0, seen);
+      return { from: start, to: Math.max(start, end) };
+    },
+    null,
+    { equals: (x, y) => x?.from === y?.from && x?.to === y?.to },
+  );
+  /** The stretches the run was paused for, which playback hurries through. */
+  const pauses = createMemo<Span[]>(() => {
+    const s = detail()?.sessions ?? [];
+    const out: Span[] = [];
+    for (let i = 1; i < s.length; i++) {
+      const end = s[i - 1]!.end;
+      if (end !== null && s[i]!.start > end) out.push({ from: end, to: s[i]!.start });
+    }
+    return out;
+  });
+  const tl = createTimeline({ span, live, idle: pauses });
+  /* The camera's video, while it plays: the bar's play button is then its pause. */
+  const [videoOn, setVideoOn] = createSignal(false);
+  let video: { pause(): void } | undefined;
+  const marks = createMemo(() => {
+    const d = detail();
+    return d === undefined ? [] : runMarks({ leveling: d.leveling, states: d.states, deaths: d.deaths });
+  });
+
+  /*
+   * `?t=` (`lib/timeline.ts`): a link opens at its time, the focus is written
+   * back once it rests, and a `t` that is not this page's own write (back,
+   * forward, a pasted link) is a seek.
+   */
+  const [search, setSearch] = useSearchParams();
+  const urlSync = createUrlSync(search.t);
+  const opensAt = parseT(search.t);
+  if (opensAt !== null) tl.seek(opensAt, "url");
+  let urlTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(urlTimer));
+  createEffect(
+    on(
+      tl.focus,
+      () => {
+        clearTimeout(urlTimer);
+        urlTimer = setTimeout(() => {
+          const t = urlSync.toUrl(tl.focus());
+          if (t !== undefined) setSearch({ t: t ?? undefined }, { replace: true });
+        }, URL_SETTLE_MS);
+      },
+      { defer: true },
+    ),
+  );
+  createEffect(
+    on(
+      () => search.t,
+      (raw) => {
+        const t = urlSync.fromUrl(raw);
+        if (t === undefined) return;
+        if (t === "none") tl.goLive("url");
+        else tl.seek(t, "url");
+      },
+      { defer: true },
+    ),
+  );
+  /** The runs table's own parameters, without this page's: what the crumb goes back with. */
+  const listSearch = (): string => {
+    const q = new URLSearchParams(location.search);
+    q.delete("t");
+    const text = q.toString();
+    return text === "" ? "" : `?${text}`;
+  };
+
   /*
    * The log column is the scroll container, not the window: with the two-column
    * layout the feed scrolls inside its own pane while the sidebar stays put.
-   * `logEl` is that pane. Pinning to the bottom must happen after Solid commits
-   * the new entry nodes, or `scrollHeight` is read stale and we land mid-list —
-   * so it is done in an effect on `entries`, never inside the SSE callback.
+   * `logEl` is that pane. Every scroll the page makes itself is marked on the
+   * guard first, so the scroll handler can tell it from the reader's
+   * (`createScrollGuard`). Scrolling must happen after Solid commits the new
+   * entry nodes, or `scrollHeight` is read stale and we land mid-list, so it
+   * is done in an effect on `entries`, never inside the SSE callback.
    */
   let logEl: HTMLDivElement | undefined;
+  const guard = createScrollGuard();
+  const rowEls = (): HTMLElement[] => (logEl === undefined ? [] : [...logEl.querySelectorAll<HTMLElement>(".feed > .entry[data-ts]")]);
   const pinToBottom = (): void => {
-    if (logEl !== undefined) logEl.scrollTop = logEl.scrollHeight;
-  };
-  /* A user scrolling up off the bottom turns follow off; scrolling back on. */
-  const onLogScroll = (): void => {
     if (logEl === undefined) return;
-    setFollow(atBottom(logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight, FOLLOW_THRESHOLD));
+    guard.mark();
+    logEl.scrollTop = logEl.scrollHeight;
   };
-  /* The manual toggle: remembered, and it re-pins when switched back on. */
-  const toggleFollow = (): void => {
-    const next = !follow();
-    setFollow(next);
-    writeFollowPref(next);
-    if (next) queueMicrotask(pinToBottom);
+  /** Put the last row at or before `ts` at the top of the pane. */
+  const scrollToTime = (ts: number): void => {
+    if (logEl === undefined) return;
+    const rows = rowEls();
+    const row = rows[rowAt(rows.map((r) => Number(r.dataset.ts)), ts)];
+    if (row === undefined) return;
+    guard.mark();
+    logEl.scrollTop += row.getBoundingClientRect().top - logEl.getBoundingClientRect().top;
   };
-  createEffect(on(entries, () => { if (follow()) pinToBottom(); }));
-  const live = (): boolean => detail()?.run.terminationReason === null;
+  /** The window held, as the feed's rules read it (`feedPlan`). */
+  const held = (): FeedWindow => {
+    const list = entries();
+    return { from: from(), end: from() + list.length, total: total(), oldestTs: list[0]?.ts ?? null, newestTs: list[list.length - 1]?.ts ?? null };
+  };
+  /** Whether the window held ends where the run does: a tail append belongs on it. */
+  const atTail = (): boolean => from() + entries().length >= total();
+  /** Set when a window was asked for to show the focus: the entries effect scrolls to it once the rows exist. */
+  let scrollPending = false;
+  let windowToken = 0;
+  let loadTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(loadTimer));
+  const replaceWindow = (pending: Promise<{ from: number; total: number; entries: FeedEntry[] }>): void => {
+    const mine = ++windowToken;
+    void pending
+      .then((page) => {
+        if (mine !== windowToken) return;
+        scrollPending = true;
+        batch(() => {
+          setEntries(page.entries);
+          setFrom(page.from);
+          setTotal(page.total);
+        });
+      })
+      .catch((e: unknown) => {
+        logError("run entries", e);
+        setError(displayError(e, { retries: false }));
+      });
+  };
+  /** Show the focus in the feed: a scroll inside the window held, or the window that holds it. */
+  const showFocus = (): void => {
+    if (!feedPublished() || detail() === undefined) return;
+    clearTimeout(loadTimer);
+    const f = tl.focus();
+    if (f === null) {
+      // The newest moment: the tail window, pinned to its end.
+      if (atTail() || SNAPSHOT_MODE) pinToBottom();
+      else loadTimer = setTimeout(() => replaceWindow(api.entries(params.id, undefined, WINDOW)), LOAD_SETTLE_MS);
+      return;
+    }
+    // A snapshot has one window per run: a time outside it scrolls to the nearer end of what there is.
+    if (SNAPSHOT_MODE || feedPlan(held(), f) === "scroll") scrollToTime(f);
+    else loadTimer = setTimeout(() => replaceWindow(api.entriesAt(params.id, f, WINDOW)), LOAD_SETTLE_MS);
+  };
+  /* The feed follows the focus, except a move it reported itself. */
+  createEffect(
+    on(
+      tl.focus,
+      () => {
+        if (tl.origin() !== "feed") showFocus();
+      },
+      { defer: true },
+    ),
+  );
+  /* New rows: stay on the newest while following it, and land on the focus when the window was loaded for it. */
+  createEffect(
+    on(entries, () => {
+      if (tl.focus() === null) pinToBottom();
+      else if (scrollPending) scrollToTime(tl.at());
+      scrollPending = false;
+    }),
+  );
+  /*
+   * The reader's own scroll moves the focus to the row in view; at the very
+   * bottom of the run's last window that is its newest moment, which on a
+   * live run is following it.
+   */
+  let scrollFrame = 0;
+  onCleanup(() => cancelAnimationFrame(scrollFrame));
+  const onLogScroll = (): void => {
+    if (logEl === undefined || guard.own()) return;
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = requestAnimationFrame(() => {
+      if (logEl === undefined) return;
+      if (atTail() && atBottom(logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight, FOLLOW_THRESHOLD)) {
+        if (tl.focus() !== null) tl.goLive("feed");
+        return;
+      }
+      const rows = rowEls();
+      const top = logEl.getBoundingClientRect().top;
+      const row = rows[rowInView(rows.map((r) => r.getBoundingClientRect().bottom - top), 0)];
+      const ts = Number(row?.dataset.ts);
+      if (Number.isFinite(ts) && ts > 0) {
+        tl.setPlaying(false);
+        tl.seek(ts, "feed");
+      }
+    });
+  };
+
 
   /**
    * This run's character as one series for `CharacterPlot` — the same shape, the same
@@ -351,7 +536,8 @@ export default function RunDetail() {
      * Its failure is handled where it is awaited below; the empty catch only
      * keeps a detail that failed first from leaving it unhandled.
      */
-    const firstWindow = api.entries(params.id, undefined, WINDOW);
+    // A link that opens at a time asks for the window that holds it, not the tail.
+    const firstWindow = opensAt === null ? api.entries(params.id, undefined, WINDOW) : api.entriesAt(params.id, opensAt, WINDOW);
     void firstWindow.catch(() => undefined);
 
     void api
@@ -407,9 +593,12 @@ export default function RunDetail() {
         let heldThrough: number | undefined;
         const loadWindow = async (pending = api.entries(params.id, undefined, WINDOW)): Promise<void> => {
           const page = await pending;
-          setEntries(page.entries);
-          setFrom(page.from);
-          setTotal(page.total);
+          scrollPending = tl.focus() !== null && entries().length === 0;
+          batch(() => {
+            setEntries(page.entries);
+            setFrom(page.from);
+            setTotal(page.total);
+          });
         };
         if (SNAPSHOT_MODE) {
           try {
@@ -466,8 +655,21 @@ export default function RunDetail() {
         if (SNAPSHOT_MODE) return;
         stop = subscribeTail(api.streamUrl(params.id, heldThrough), {
           onEntries: (added, tot) => {
-            setEntries((prev) => [...prev, ...added]);
-            setTotal((t) => t + added.length);
+            /*
+             * The tail grows the window only while the window is the run's
+             * tail: a reader the timeline took to an earlier window keeps
+             * what they are reading, and the count alone moves. An entry's
+             * `i` is its index in the run, so one already held is dropped,
+             * and a hole (a window swapped under the stream) is closed by
+             * reading the tail again.
+             */
+            const end = from() + entries().length;
+            const fresh = added.filter((e) => e.i >= end);
+            if (end >= total()) {
+              if (fresh.length > 0 && fresh[0]!.i > end) replaceWindow(api.entries(params.id, undefined, WINDOW));
+              else if (fresh.length > 0) setEntries((prev) => [...prev, ...fresh]);
+            }
+            setTotal((t) => Math.max(t, (added[added.length - 1]?.i ?? -1) + 1, t + fresh.length));
             if (tot !== undefined) setTokens(tot);
             setLastWrite(Date.now());
             setDisconnected(false);
@@ -502,6 +704,27 @@ export default function RunDetail() {
       });
   };
 
+  /** The stretch of the run the feed holds, for the rule under the timeline's bar. */
+  const feedSpan = createMemo<Span | null>(() => {
+    const list = entries();
+    const first = list[0]?.ts;
+    const last = list[list.length - 1]?.ts;
+    return first === undefined || last === undefined ? null : { from: first, to: last };
+  });
+
+  /** The window after this one, for a reader the timeline took to the middle of a run. */
+  const loadLater = (): void => {
+    const start = from() + entries().length;
+    if (start >= total()) return;
+    void api
+      .entries(params.id, start, WINDOW)
+      .then((page) => setEntries((prev) => (from() + prev.length === page.from ? [...prev, ...page.entries] : prev)))
+      .catch((e: unknown) => {
+        logError("run entries", e);
+        setError(displayError(e, { retries: false }));
+      });
+  };
+
   /*
    * The composite view (lib/feedgroup.ts): a turn header per request, one
    * card per tool call, everything else as-is. Re-derived from the whole
@@ -510,8 +733,6 @@ export default function RunDetail() {
    * value so settled groups keep their object identity and `<For>` reuses
    * their DOM instead of rebuilding every row per tail append.
    */
-  /** What joins the chapter list under the milestones to the player above it. */
-  const chapterLink = createChapterLink();
   const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
   /** What the run was driven with, for the rows a surface files differently (`lib/feedtier.ts`). */
   const surface = createMemo<Surface>(
@@ -567,6 +788,16 @@ export default function RunDetail() {
            * sessions with a seam at each resume (`runChartInput`).
            */
           const chart = createMemo(() => runChartInput(d().states, run(), d().sessions, playtime(), chartClock(run().live, now)));
+          /*
+           * The focused time on the chart's clock: active time where the run
+           * has sessions, the wall clock where it has none (`runChartInput`).
+           * None while following a live run, whose curve ends at its cursor.
+           */
+          const chartCursor = (): number | null => {
+            if (tl.following()) return null;
+            const sessions = d().sessions;
+            return sessions === undefined || sessions.length === 0 ? tl.at() : activeMsUntil(sessions, tl.at());
+          };
           /* The live status line's words, once: on the line and, whole, in its hover. */
           const silent = (): boolean => now() - lastWrite() > SILENT_MS;
           const statusLine = (): string =>
@@ -589,7 +820,7 @@ export default function RunDetail() {
                   crumb carries the sort and filters they arrived with, so it is
                   also the "back" the second link used to be.
                 */}
-                <A href={`/runs${location.search}`}>runs</A> /{" "}
+                <A href={`/runs${listSearch()}`}>runs</A> /{" "}
                 <span title={run().runId}>{shortRunId(run().runId)}</span>
                 {/*
                   Every run belongs to a character, and a scored run's is a
@@ -628,8 +859,8 @@ export default function RunDetail() {
                     <Show when={disconnected()}> · <span class="err">feed disconnected</span></Show>
                   </span>
                 </Show>
-                {/* The map has the return leg (`open run →`). */}
-                <A class="btn" href={`/map?run=${encodeURIComponent(run().runId)}`}>
+                {/* The map has the return leg (`open run →`); both carry the focused time. */}
+                <A class="btn" href={withT(`/map?run=${encodeURIComponent(run().runId)}`, tl.focus())}>
                   replay on map
                 </A>
                 <Show when={run().party}>
@@ -638,12 +869,6 @@ export default function RunDetail() {
                       party replay
                     </A>
                   )}
-                </Show>
-                <Show when={live()}>
-                  {/* Manual toggle; it reflects and overrides the scroll-driven auto state. */}
-                  <button class={follow() ? "on" : ""} onClick={toggleFollow}>
-                    auto-scroll
-                  </button>
                 </Show>
               </div>
               </div>
@@ -795,6 +1020,11 @@ export default function RunDetail() {
                           </Show>
                         )}
                       </Show>
+                      <Show when={!SNAPSHOT_MODE && from() + entries().length < total()}>
+                        <p class="dim feed-seam">
+                          <button onClick={loadLater}>load later</button>
+                        </p>
+                      </Show>
                     </div>
                     </MoveVerdicts.Provider>
                     </RunStart.Provider>
@@ -910,14 +1140,36 @@ export default function RunDetail() {
                   </div>
 
                   {/*
-                    The camera's newest still while the run plays, private
-                    only; when it ends the poll goes with it and the run's
-                    video takes its place.
+                    The camera's newest still while the reader follows a live
+                    run, private only: it is the live edge's picture, so a
+                    seek back puts it away and leaves the run's video.
                   */}
-                  <Show when={!SNAPSHOT_MODE && live()}>
+                  <Show when={!SNAPSHOT_MODE && tl.following()}>
                     <LiveFrame runId={params.id} now={now()} />
                   </Show>
-                  <Show when={clips()}>{(c) => <RunVideo clips={c()} link={chapterLink} />}</Show>
+                  {/*
+                    The video shows the focused time and, while it plays,
+                    moves it (`lib/video-sync.ts`); starting it stops the
+                    bar's own playback, and the bar's stops it. Until the
+                    reader has focused a time it rests on its poster, so a
+                    page opened at a run's end asks for no part but the first.
+                  */}
+                  <Show when={clips()}>
+                    {(c) => (
+                      <RunVideo
+                        clips={c()}
+                        follow={tl.focus()}
+                        foreign={tl.origin() !== "video"}
+                        hold={tl.playing()}
+                        control={(v) => (video = v)}
+                        onRunTime={(ms) => tl.seek(ms, "video")}
+                        onPlaying={(on) => {
+                          setVideoOn(on);
+                          if (on) tl.setPlaying(false);
+                        }}
+                      />
+                    )}
+                  </Show>
 
                   <div class="cards">
                     {/*
@@ -940,6 +1192,7 @@ export default function RunDetail() {
                             episodeMs={run().comparability?.budget.episodeMs ?? null}
                             now={chart().now}
                             seams={chart().seams}
+                            cursor={chartCursor()}
                           />
                         }
                       >
@@ -951,6 +1204,7 @@ export default function RunDetail() {
                           episodeMs={run().comparability?.budget.episodeMs ?? null}
                           now={chart().now}
                           seams={chart().seams}
+                          cursor={chartCursor()}
                         />
                         {/*
                           Level against cumulative active playtime, stitched
@@ -1011,8 +1265,8 @@ export default function RunDetail() {
 
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
-                  {/* The video's chapter list, folded away down here; the player above keeps the marks on its bar. */}
-                  <Show when={clips()}>{(c) => <ChaptersPanel clips={c()} link={chapterLink} />}</Show>
+                  {/* The video's chapter list, folded away down here; a time in it is a seek on the timeline. */}
+                  <Show when={clips()}>{(c) => <ChaptersPanel clips={c()} at={tl.at()} onSeek={(ms) => tl.seek(ms, "timeline")} />}</Show>
 
                   {/* The character across every attempt, closed until opened, since it is not this run and it is long. */}
                   <Show when={d().character}>{(st) => <CharacterTotalsPanel character={st()} runId={run().runId} />}</Show>
@@ -1045,6 +1299,15 @@ export default function RunDetail() {
                   <ServerFooter info={info()} run={run()} />
                 </aside>
               </div>
+              <Timeline
+                store={tl}
+                playing={tl.playing() || videoOn()}
+                onToggle={() => (videoOn() ? video?.pause() : tl.toggle())}
+                marks={marks()}
+                startLevel={startLevelOf(d())}
+                sessions={d().sessions}
+                feed={feedSpan()}
+              />
             </>
           );
         }}

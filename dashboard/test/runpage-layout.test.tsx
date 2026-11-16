@@ -149,52 +149,57 @@ describe("the character's totals on a run page", () => {
 });
 
 describe("the replay's chapter list", () => {
-  test("is a pane that starts closed, counts its chapters, and seeks the player a chapter's time is clicked on", async () => {
+  test("is a pane that starts closed, lists levels and boss kills only, and seeks the timeline to the run time a chapter is at", async () => {
     const document = installDom();
     const { replay } = await load();
+    // A video cut before the rule: its turn-ins and zones still listed, and a death that is an event, not a chapter.
     const clips = {
+      parts: [{ seconds: 300 }],
       chapters: [
         { t: 0, part: 0, type: "zone", detail: "entered zone 12", caption: "" },
+        { t: 30, part: 0, type: "quest", detail: "turned in quest 7", caption: "" },
         { t: 61, part: 0, type: "level", detail: "reached level 5", caption: "On to the mill." },
-        { t: 185, part: 0, type: "death", detail: "", caption: "" },
+        { t: 185, part: 0, type: "death", detail: "died", caption: "" },
+        { t: 240, part: 0, type: "boss", detail: "killed boss 644", caption: "" },
+      ],
+      // Ten seconds of run time to a second of video, from run time 1,000,000.
+      timemap: [
+        [0, 1_000_000],
+        [300, 4_000_000],
       ],
     } as unknown as ClipsResponse;
-    const link = replay.createChapterLink();
     const sought: number[] = [];
-    // Before a player is bound a click goes nowhere, and nothing throws.
-    link.seek(5);
-    link.bind({ at: () => 70, part: () => 0, seek: (t) => void sought.push(t) });
     const mount = document.createElement("div");
     document.body.append(mount);
-    const dispose = render(() => createComponent(replay.ChaptersPanel, { clips, link }), mount);
+    // The focus is 70 s into the video.
+    const dispose = render(() => createComponent(replay.ChaptersPanel, { clips, at: 1_700_000, onSeek: (ms: number) => void sought.push(ms) }), mount);
 
     const pane = mount.querySelector(".collapsible")!;
     expect(pane.classList.contains("open")).toBe(false);
     expect(pane.querySelector(".collapsible-toggle")!.getAttribute("aria-expanded")).toBe("false");
     expect(pane.querySelector(".collapsible-title")!.textContent).toBe("replay chapters");
-    expect(pane.querySelector(".collapsible-summary")!.textContent).toBe("3");
+    expect(pane.querySelector(".collapsible-summary")!.textContent).toBe("2");
     const rows = [...pane.querySelectorAll("tr")];
     expect(rows.map((r) => [...r.querySelectorAll("td")].map((td) => td.textContent!.trim()))).toEqual([
-      ["0:00", "zone", "entered zone 12"],
       ["1:01", "level", "reached level 5"],
-      ["3:05", "death", "death"],
+      ["4:00", "boss", "killed boss 644"],
     ]);
-    // The chapter the player is in is marked.
-    expect(rows.map((r) => r.className)).toEqual(["", "hovered", ""]);
+    // The chapter the focus is in is marked.
+    expect(rows.map((r) => r.className)).toEqual(["hovered", ""]);
 
     (pane.querySelector(".collapsible-toggle") as HTMLElement).click();
     expect(pane.classList.contains("open")).toBe(true);
-    (rows[2]!.querySelector("a") as HTMLElement).click();
-    expect(sought).toEqual([185]);
+    (rows[1]!.querySelector("a") as HTMLElement).click();
+    expect(sought).toEqual([3_400_000]);
     dispose();
   });
 
-  test("a run with no chapters has no pane", async () => {
+  test("a run with no chapters, or with only what is no chapter any more, has no pane", async () => {
     const document = installDom();
     const { replay } = await load();
     const mount = document.createElement("div");
     document.body.append(mount);
-    const dispose = render(() => createComponent(replay.ChaptersPanel, { clips: { chapters: [] } as unknown as ClipsResponse, link: replay.createChapterLink() }), mount);
+    const dispose = render(() => createComponent(replay.ChaptersPanel, { clips: { parts: [], chapters: [], timemap: [] } as unknown as ClipsResponse, at: 0, onSeek: () => undefined }), mount);
     expect(mount.querySelector(".collapsible")).toBeNull();
     dispose();
   });

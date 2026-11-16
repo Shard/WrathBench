@@ -50,6 +50,8 @@ export function XpChart(props: {
   seams?: readonly { at: number; label: string }[];
   /** The sidebar card's size: fewer labels, and no frame of its own (the card is the frame). */
   compact?: boolean;
+  /** The page's focused time, in the samples' own units: a rule down the plot. Null or outside the window draws none. */
+  cursor?: number | null;
 }) {
   const size = props.compact === true ? COMPACT : FULL;
   const M = size.m;
@@ -159,6 +161,11 @@ export function XpChart(props: {
 
         {/* The cumulative-xp curve. */}
         <path d={path()} fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+
+        {/* The focused time, over the curve. */}
+        <Show when={props.cursor !== null && props.cursor !== undefined && props.cursor >= model().t0 && props.cursor <= model().t1 ? { at: props.cursor } : null}>
+          {(c) => <line x1={px(c().at)} y1={plot.y1} x2={px(c().at)} y2={plot.y0} stroke="var(--fg)" stroke-width="1" vector-effect="non-scaling-stroke" />}
+        </Show>
       </svg>
     </Show>
   );

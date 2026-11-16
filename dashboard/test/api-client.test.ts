@@ -85,6 +85,9 @@ describe("paths", () => {
     const c = createClient({ fetch: s.fetch });
     await c.entries("r1", 40, 60);
     expect(s.calls[0]!.url).toBe("/api/run/r1/entries?limit=60&from=40");
+    // The timeline's jump to a time: the window that holds it.
+    await c.entriesAt("r1", 1_763_000_000_499.6, 60);
+    expect(s.calls[1]!.url).toBe("/api/run/r1/entries?limit=60&at=1763000000500");
   });
 
   test("a base prefix is honoured, for a viewer reached elsewhere", async () => {

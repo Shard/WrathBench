@@ -1,15 +1,16 @@
 /**
- * A run's camera video: one player over all its parts, the chapters, and the
- * model's words under it. `RunVideo` is the run page's (and, compact, the map
- * replay's sidebar), `VideoExcerpt` the home page's few seconds around a
- * chapter, and `LiveFrame` the private run page's newest still while the run
- * plays.
+ * A run's camera video: one player over all its parts, and the model's words
+ * under it. `RunVideo` is the run page's (and, compact, the map replay's
+ * sidebar), `VideoExcerpt` the home page's few seconds around a chapter, and
+ * `LiveFrame` the private run page's newest still while the run plays.
  *
- * The player is the browser's own `<video>` with no library and our own thin
- * timeline over the parts (`@viewer/video-time`): one bar, one clock and one
- * total over the whole run, a seek that lands in the right part, and the
- * chapters as marks on the bar. Two stacked elements play the parts back to
- * back: the next part waits in the hidden one, its head fetched, and takes
+ * The player is the browser's own `<video>` with no library, and it has no
+ * bar of its own: the page's timeline (`components/Timeline.tsx`) is the one
+ * scrubber, and the frame shows the time in focus there (`follow`) through
+ * the time map between the parts and run time (`@viewer/video-time`). A
+ * click on the frame, or its corner button, plays the video itself, and
+ * while it plays it moves the focus (`onRunTime`, `lib/video-sync.ts`). Two
+ * stacked elements play the parts back to back: the next part waits in the hidden one, its head fetched, and takes
  * over on `ended`, so a part boundary does not flash black. Only the current
  * part's poster and the next part's video are ever asked for: on the public
  * site every request under a run counts against the edge's rate limit
@@ -21,35 +22,18 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from "solid-js";
 import { A } from "@solidjs/router";
 import { api, type ChapterView, type ClipsResponse, type VideoPartView } from "../api/client";
-import { fmtAge, fmtElapsed, modelDisplay } from "../lib/format";
+import { fmtAge, modelDisplay } from "../lib/format";
+import { fmtRunClock } from "../lib/timeline";
 import { poll } from "../lib/poll";
 import { Collapsible } from "./Collapsible";
 import { cursorFor, videoSeekFor } from "../lib/video-sync";
-import { captionAt, lastAtOrBefore, partAt, partStarts, totalSeconds } from "@viewer/video-time";
-
-/** A chapter's mark on the bar, in the palette's own tokens. */
-export function chapterColour(type: ChapterView["type"]): string {
-  switch (type) {
-    case "level":
-      return "var(--xp)";
-    case "death":
-      return "var(--err)";
-    case "boss":
-      return "var(--warn)";
-    case "zone":
-      return "var(--dim)";
-    default:
-      return "var(--accent)";
-  }
-}
+import { captionAt, lastAtOrBefore, partAt, partStarts, runToVideo, totalSeconds, videoToRun } from "@viewer/video-time";
+import { chaptersOf } from "@viewer/timeline-marks";
 
 /** A chapter's label: our own short detail, or its kind. */
 export function chapterLabel(c: ChapterView): string {
   return c.detail !== "" ? c.detail : c.type;
 }
-
-/** The bar's drawing width; the SVG scales it to the width it is given. */
-const BAR_W = 1000;
 
 /** Up to this many chapters are all listed in the chapters pane; past it, the current part's. */
 const CHAPTERS_LISTED = 40;
@@ -63,39 +47,20 @@ function partTitle(p: VideoPartView): string {
   return `${from} – ${to} UTC`;
 }
 
-/**
- * What a chapter list somewhere else on the page needs of the player: where
- * it is, and a way to move it. The run page makes one (`createChapterLink`),
- * hands it to its `RunVideo` and to the `ChaptersPanel` further down the
- * sidebar; the player fills it in when it mounts.
- */
-export interface ChapterLink {
-  /** Seconds into the whole video, and the part being watched. */
-  at: () => number;
-  part: () => number;
-  /** Seek to a chapter and play from it; nothing until a player is bound. */
-  seek(t: number): void;
-  bind(player: { at: () => number; part: () => number; seek: (t: number) => void }): void;
-}
-
-export function createChapterLink(): ChapterLink {
-  const [player, setPlayer] = createSignal<{ at: () => number; part: () => number; seek: (t: number) => void } | null>(null);
-  return {
-    at: () => player()?.at() ?? 0,
-    part: () => player()?.part() ?? 0,
-    seek: (t) => player()?.seek(t),
-    bind: (p) => void setPlayer(p),
-  };
-}
-
 export interface RunVideoProps {
   clips: ClipsResponse;
   /** The map replay's sidebar: the player alone, no heading. */
   compact?: boolean;
-  /** The page's chapter list, kept elsewhere (`ChaptersPanel`), to drive this player. */
-  link?: ChapterLink;
-  /** A run time to show, from outside (the map's cursor); followed only while the video is paused. */
+  /** A run time to show: the page's focused time. Null shows nothing new: the video stays where it is. */
   follow?: number | null;
+  /**
+   * Whether `follow` was moved by something other than this video (the bar,
+   * the feed, playback, a link). The video's own time coming back is never
+   * followed; a move from anywhere else stops a playing video and is.
+   */
+  foreign?: boolean;
+  /** Hands the page a way to stop the video: its bar's pause is the video's while the video plays. */
+  control?: (c: { pause(): void }) => void;
   /** Pause the video: the other clock has started. */
   hold?: boolean;
   /** The run time the video shows, as it plays or when its own controls move it. */
@@ -209,12 +174,23 @@ export function RunVideo(props: RunVideoProps) {
     });
   };
 
-  // The map's clock, while the video is still: the frame at or before its cursor.
+  /** Stop, now: the element's own `pause` event lands a task later, and what follows a foreign seek must not wait on it. */
+  const pause = (): void => {
+    els[active()]?.pause();
+    batch(() => {
+      props.onPlaying?.(false);
+      setPlaying(false);
+    });
+  };
+  props.control?.({ pause });
+
+  // The page's focus, while the video is still: the frame at or before it.
   createEffect(
     on(
       () => props.follow,
       (cursor) => {
         if (cursor === null || cursor === undefined) return;
+        if (props.foreign === true && playing()) pause();
         const t = videoSeekFor(props.clips.timemap, cursor, { current: v(), videoPlaying: playing(), lastSent });
         if (t !== null) seek(t, false);
       },
@@ -255,13 +231,6 @@ export function RunVideo(props: RunVideoProps) {
   });
 
   const caption = (): string => captionAt(props.clips.captions, v());
-  props.link?.bind({ at: v, part, seek: (t) => seek(t, true) });
-  const barX = (t: number): number => (total() > 0 ? (t / total()) * BAR_W : 0);
-  const onBar = (e: PointerEvent): void => {
-    const box = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
-    if (box.width <= 0) return;
-    seek(Math.max(0, Math.min(1, (e.clientX - box.left) / box.width)) * total(), true);
-  };
   const posterOf = (slot: number): string | undefined => {
     const p = parts()[slot === active() ? part() : part() + 1]?.poster;
     return p === null || p === undefined ? undefined : api.mediaUrl(p);
@@ -296,10 +265,10 @@ export function RunVideo(props: RunVideoProps) {
           replay
         </h2>
       </Show>
-      {element(0)}
-      {element(1)}
-      <div class="playbar-row transport">
-        <button class="tbtn play" title={playing() ? "pause" : "play"} aria-label={playing() ? "pause" : "play"} onClick={toggle}>
+      <div class="video-frame">
+        {element(0)}
+        {element(1)}
+        <button class="tbtn play" title={playing() ? "pause the video" : "play the video; the timeline follows it"} aria-label={playing() ? "pause the video" : "play the video"} onClick={toggle}>
           <Show
             when={playing()}
             fallback={
@@ -313,35 +282,6 @@ export function RunVideo(props: RunVideoProps) {
             </svg>
           </Show>
         </button>
-        <span class="tclock mono">{fmtElapsed(v() * 1000)}</span>
-        <svg
-          viewBox={`0 0 ${BAR_W} 16`}
-          width="100%"
-          height="16"
-          preserveAspectRatio="none"
-          cursor="pointer"
-          role="slider"
-          aria-label="video position"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(total())}
-          aria-valuenow={Math.round(v())}
-          onPointerDown={onBar}
-        >
-          <rect x="0" y="6" width={BAR_W} height="4" fill="var(--line)" />
-          <rect x="0" y="6" width={barX(v())} height="4" fill="var(--accent)" />
-          <For each={starts().slice(1)}>{(t) => <line x1={barX(t)} x2={barX(t)} y1="4" y2="12" stroke="var(--bg)" stroke-width="2" vector-effect="non-scaling-stroke" />}</For>
-          <For each={props.clips.chapters}>
-            {(c) => (
-              <line x1={barX(c.t)} x2={barX(c.t)} y1="1" y2="15" stroke={chapterColour(c.type)} stroke-width="2" vector-effect="non-scaling-stroke">
-                <title>
-                  {fmtElapsed(c.t * 1000)} · {chapterLabel(c)}
-                </title>
-              </line>
-            )}
-          </For>
-          <rect x={Math.max(0, barX(v()) - 2)} y="2" width="4" height="12" fill="var(--fg)" />
-        </svg>
-        <span class="tclock mono">{fmtElapsed(total() * 1000)}</span>
       </div>
       <Show when={caption() !== ""}>
         <p class="dim">{caption()}</p>
@@ -354,21 +294,25 @@ const CHAPTERS_OPEN_KEY = "wrathbench.runview.chapters";
 
 /**
  * The video's chapters as a list, in a pane of the run page's sidebar under
- * the milestones, closed until the reader opens it (the operator's call):
- * the marks on the player's bar are what sits beside the video, and the list
- * is a reference, not something to read past on the way to the figures. A
- * chapter's time seeks the player through the page's `ChapterLink` and plays
- * from there. Every chapter while there are few; for a long freeplay run's
- * many, the part being watched's.
+ * the milestones, closed until the reader opens it (the operator's call): a
+ * reference, not something to read past on the way to the figures. A chapter
+ * is a level reached or a boss killed (`@viewer/timeline-marks`); a video cut
+ * before that rule still lists its turn-ins and zones, and they are not
+ * drawn. A chapter's time is a seek on the page's timeline, to the run time
+ * the video shows there. Every chapter while there are few; for a long
+ * freeplay run's many, those of the part of the video in focus.
  */
-export function ChaptersPanel(props: { clips: ClipsResponse; link: ChapterLink }) {
-  const all = (): ChapterView[] => props.clips.chapters;
-  const shown = createMemo(() => (all().length <= CHAPTERS_LISTED ? all() : all().filter((c) => c.part === props.link.part())));
-  const current = (): ChapterView | undefined => all()[lastAtOrBefore(all(), props.link.at())];
+export function ChaptersPanel(props: { clips: ClipsResponse; at: number; onSeek: (runMs: number) => void }) {
+  const all = createMemo((): ChapterView[] => chaptersOf(props.clips.chapters));
+  /** Where the focused time is on the video. */
+  const v = (): number => runToVideo(props.clips.timemap, props.at) ?? 0;
+  const part = (): number => partAt(props.clips.parts, v())?.index ?? 0;
+  const shown = createMemo(() => (all().length <= CHAPTERS_LISTED ? all() : all().filter((c) => c.part === part())));
+  const current = (): ChapterView | undefined => all()[lastAtOrBefore(all(), v())];
   return (
     <Show when={all().length > 0}>
       <Collapsible
-        title={<span title="the moments the replay video is marked at; a time seeks the video">replay chapters</span>}
+        title={<span title="the levels and boss kills the replay video is marked at; a time seeks the timeline">replay chapters</span>}
         summary={`${all().length}`}
         storageKey={CHAPTERS_OPEN_KEY}
       >
@@ -382,10 +326,11 @@ export function ChaptersPanel(props: { clips: ClipsResponse; link: ChapterLink }
                       href="#"
                       onClick={(e) => {
                         e.preventDefault();
-                        props.link.seek(c.t);
+                        const ms = videoToRun(props.clips.timemap, c.t);
+                        if (ms !== null) props.onSeek(ms);
                       }}
                     >
-                      {fmtElapsed(c.t * 1000)}
+                      {fmtRunClock(c.t * 1000)}
                     </a>
                   </td>
                   <td class="dim">{c.type}</td>

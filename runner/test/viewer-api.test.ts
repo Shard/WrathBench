@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { ConfigStore } from "../src/config-store";
 import { configFromArgs } from "../src/run";
-import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
+import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi, entriesWindowAt, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { type RunStore, localRunStore } from "../viewer/clickhouse";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 import { readRun } from "../viewer/runs";
@@ -188,6 +188,36 @@ describe("no endpoint serves the bearer token", () => {
     const text = await body(await handle(new Request(`http://x/api/run/${RUN_ID}/entries?from=0`)));
     expect(text).toContain("Fixturely");
     expect(text).toContain("OPENROUTER_KEY");
+  });
+});
+
+describe("the feed window that holds a moment (`/entries?at=`)", () => {
+  const entries = Array.from({ length: 100 }, (_, i) => ({ ts: 1000 + i * 10 }));
+
+  test("starts a quarter of a window before the last entry at or before the time", () => {
+    // 1505 falls after entry 50 (ts 1500): a window of 20 begins five entries before it.
+    expect(entriesWindowAt(entries, 1505, 20)).toBe(45);
+    expect(entriesWindowAt(entries, 1500, 20)).toBe(45);
+  });
+
+  test("is clamped to the run: before the first entry is the first window, past the last is the tail", () => {
+    expect(entriesWindowAt(entries, 0, 20)).toBe(0);
+    expect(entriesWindowAt(entries, 1010, 20)).toBe(0);
+    expect(entriesWindowAt(entries, 99_999, 20)).toBe(80);
+    expect(entriesWindowAt(entries, 1500, 500)).toBe(0);
+    expect(entriesWindowAt([], 1500, 20)).toBe(0);
+  });
+
+  test("the route serves that window, and `from` still wins where a link names both", async () => {
+    const handle = api(fixture());
+    type Page = { from: number; total: number; entries: { i: number; ts: number }[] };
+    const at = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/entries?at=1150&limit=1`))).json()) as Page;
+    expect(at.total).toBe(3);
+    expect(at.entries.map((e) => e.ts)).toEqual([1100]);
+    const tail = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/entries?at=nonsense&limit=1`))).json()) as Page;
+    expect(tail.entries.map((e) => e.ts)).toEqual([1200]);
+    const both = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/entries?from=0&at=1250&limit=1`))).json()) as Page;
+    expect(both.from).toBe(0);
   });
 });
 

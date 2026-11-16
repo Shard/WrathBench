@@ -20,7 +20,7 @@ import { rawPath, SNAPSHOT_MODE } from "../api/client";
 import { actionLines, isActionsEntry, keepLines, sameLine, type MoveVerdict } from "../lib/actionlog";
 import type { CallGroup, FeedGroup, ResponseGroup, TurnGroup } from "../lib/feedgroup";
 import { eventsHead, lineOf, milestoneLine } from "../lib/feedline";
-import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, type ActionRun, type FeedKind, type FeedRow, type Surface, type Tally } from "../lib/feedtier";
+import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, tsOf, type ActionRun, type FeedKind, type FeedRow, type Surface, type Tally } from "../lib/feedtier";
 import { expandedBy, harnessFields, isHarnessEntry, noticeView, splitNotices, stateLine, type ExpandPreset } from "../lib/feedview";
 import { fmtElapsed, fmtLatency, fmtTokens, stamp } from "../lib/format";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
@@ -788,6 +788,17 @@ function RunRow(props: { run: ActionRun; ctx: FeedCtx }) {
   );
 }
 
+/**
+ * A row with its time on it (`data-ts`, run time in ms), which is what the
+ * page reads to scroll the feed to a moment and to tell which moment a
+ * scrolled feed is showing. Every row's root is one element; it is stamped
+ * here, once, rather than in each of the row components.
+ */
+function stamped(row: JSX.Element, ts: number): JSX.Element {
+  if (typeof HTMLElement !== "undefined" && row instanceof HTMLElement) row.dataset.ts = String(ts);
+  return row;
+}
+
 /** A run's place in the list: one object for as long as the run starts at the same entry. */
 interface RunHandle {
   kind: "handle";
@@ -844,10 +855,10 @@ export function FeedList(props: {
   return (
     <For each={keys()}>
       {(k) => {
-        if (k.kind !== "handle") return <FullRow g={k} ctx={ctx} />;
+        if (k.kind !== "handle") return stamped(<FullRow g={k} ctx={ctx} />, tsOf(k));
         // Its run for as long as the handle is listed; the last one it had on the pass that drops it.
         const run = createMemo<ActionRun>((prev) => runs().get(k.anchor) ?? prev, runs().get(k.anchor)!);
-        return <RunRow run={run()} ctx={ctx} />;
+        return stamped(<RunRow run={run()} ctx={ctx} />, run().fromTs);
       }}
     </For>
   );
