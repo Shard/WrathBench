@@ -665,7 +665,18 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
  * height and `main` scrolls past them rather than crushing the feed to a sliver.
  */
 .page.runview { --log-col: 70%; display: flex; flex-direction: column; height: 100%; }
-.runview > h1.section:first-of-type { margin-top: 0; }
+/*
+ * The title row: the crumb, and the run's controls with the live status line
+ * pushed right of it. The controls' group has a fixed basis, so whether it
+ * wraps under the crumb depends on the crumb alone, never on the status
+ * words; the status clips rather than wraps, so the row's height never moves
+ * with them and the columns below never jump.
+ */
+.runview-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 0 0 8px; }
+.runview-head > h1.section { margin: 0; }
+.runview-head > .runview-actions { flex: 1 1 320px; justify-content: flex-end; flex-wrap: nowrap; min-width: 0; margin-bottom: 0; }
+.runview-actions > .btn, .runview-actions > button { flex: none; }
+.runview-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* `height: auto` with the viewBox doing the work: at phone width a fixed 200px
    stretched the plot rather than scaling it. */
@@ -803,8 +814,9 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .runview-side { flex: 1 1 0; min-width: 240px; overflow-y: auto; }
 .runview-logs > h2.section:first-child { margin-top: 0; }
 .runview-side > h2.section:first-child { margin-top: 0; }
-/* One card per row in the narrow sidebar. */
+/* One card per row in the narrow sidebar; two grids of them, the camera between. */
 .runview-side .cards { grid-template-columns: 1fr; }
+.runview-side > .cards { margin-bottom: 10px; }
 
 /*
  * The attempts strip: a durable freeplay character, laid out as the run it is.
@@ -858,6 +870,9 @@ pre.block.scratchpad { max-height: 60vh; overflow-y: auto; overflow-wrap: anywhe
   .runview-side { order: -1; flex: none; }
   /* Keep the feed a scroll container so the autoscroll logic is the same here. */
   .runview-logs { flex: none; max-height: 70vh; }
+  /* Too narrow to share: the status takes a line of its own under the buttons, still one line. */
+  .runview-head > .runview-actions { flex-wrap: wrap; row-gap: 4px; }
+  .runview-status { order: 1; flex: 1 0 100%; text-align: right; }
 }
 
 /*

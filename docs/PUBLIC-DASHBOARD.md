@@ -1079,6 +1079,11 @@ hover away, on a small "i" beside the heading (`components/InfoHint.tsx`), and
 at length in this document. The same goes for a line counting what the header's
 series selector filtered out — the selector is labelled and explains itself.
 
+The run page's cards follow the same rule. Each one shows its value and a
+short line, such as "estimated · 5 turns · 12 tok/s" or "actual · expected $4.00
+(YYYY-MM)". How a figure was counted or priced is behind an "i" beside the
+card's label.
+
 The rule is scoped to the derived views. Home and the about page carry the
 site's intro copy: a reader arriving cold needs to be told what this is before
 any number means anything.

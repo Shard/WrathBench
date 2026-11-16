@@ -56,14 +56,16 @@ import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
 import { ChartCard } from "../components/ChartCard";
 import { CharacterPlot } from "../components/CharacterChart";
-import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
+import { AttemptStrip, CharacterTotalsPanel } from "../components/CharacterCards";
+import { CostCard, runCostReading } from "../components/CostCard";
+import { InfoHint } from "../components/InfoHint";
 import { Coins, QuestCount } from "../components/CharacterFacts";
 import { InventoryPanel, XpBar, createInspectorClient } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
 import { LiveFrame, RunVideo } from "../components/Replay";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { actionLines, isActionsEntry, keepLines, moveVerdicts, sameLine, sameVerdicts, type MoveVerdict } from "../lib/actionlog";
@@ -137,18 +139,31 @@ function achievementLine(d: RunDetailResponse | undefined): string {
 }
 
 /**
- * The token card's speed line: how fast the model is producing, recently and
- * over the run. Recent first, for the reason the fleet column shows it: on a
- * live run the rate now is the question. "no reply yet" rather than a zero — a
- * run whose first request is still in flight has not been slow.
+ * The token card's speed, short: the recent rate, the question on a live run
+ * (the fleet column shows it for the same reason). "no reply yet" rather than
+ * a zero — a run whose first request is still in flight has not been slow.
  */
-function tpsLine(d: RunDetailResponse | undefined, source?: string): string {
+function tpsShort(d: RunDetailResponse | undefined): string {
   const tps = d?.tps ?? null;
-  if (tps === null || tps.recent === null) return "tok/s: no reply measured yet";
-  const line = `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} ${tps.recentReplies === 1 ? "reply" : "replies"} · ${fmtTps(tps.overall)} tok/s over all ${tps.replies}`;
+  if (tps === null || tps.recent === null) return "no reply yet";
+  return `${fmtTps(tps.recent)} tok/s`;
+}
+
+/**
+ * Behind the token card's info hint: how the tokens were counted, and the
+ * speed in full — recent and over the run. The clock is the model's own
+ * replies (what it was waiting on, to the last record of the reply), never the
+ * run's elapsed time, most of which the harness spends driving the game.
+ */
+function tokenHint(d: RunDetailResponse | undefined, source?: string): string {
+  const tps = d?.tps ?? null;
+  const speed =
+    tps === null || tps.recent === null
+      ? "tok/s: no reply measured yet"
+      : `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} ${tps.recentReplies === 1 ? "reply" : "replies"} · ${fmtTps(tps.overall)} tok/s over all ${tps.replies}`;
   // The rate is the token total's per-reply arithmetic, so a total that
   // under-reads makes a rate that under-reads by the same factor.
-  return source === "snapshot" ? `${line} · under-read` : line;
+  return `${sourceLabel(source)}: ${sourceHint(source)}\n\n${speed}\n(output tokens ÷ wall time of model replies: the wait it answered, plus the reply)`;
 }
 
 /**
@@ -550,8 +565,21 @@ export default function RunDetail() {
            * sessions with a seam at each resume (`runChartInput`).
            */
           const chart = createMemo(() => runChartInput(d().states, run(), d().sessions, playtime(), chartClock(run().live, now)));
+          /* The live status line's words, once: on the line and, whole, in its hover. */
+          const silent = (): boolean => now() - lastWrite() > SILENT_MS;
+          const statusLine = (): string =>
+            `${silent() ? "no activity for a while — the run may have stopped" : activity()} · ${fmtAge(now() - lastWrite())}${disconnected() ? " · feed disconnected" : ""}`;
           return (
             <>
+              {/*
+                The title row: the crumb left, and right of it the run's
+                controls with the live status line. The controls used to head
+                the sidebar and the status line sat under them, re-wrapping as
+                its words changed and shoving everything below; here it shares
+                a row the crumb already sets the height of, and clips rather
+                than wraps (`.runview-status`), so nothing below it moves.
+              */}
+              <div class="runview-head">
               <h1 class="section">
                 {/*
                   The runs table is where a reader of this page came from — the
@@ -588,6 +616,35 @@ export default function RunDetail() {
                   )}
                 </Show>
               </h1>
+              <div class="side-controls runview-actions">
+                <Show when={live()}>
+                  {/* Drops the live mark once the run has gone quiet: a live mark
+                      over "no activity for a while" contradicts itself. */}
+                  <span class={silent() ? "runview-status warn" : "runview-status dim"} title={statusLine()}>
+                    <span class={silent() ? "dot" : "dot live"} />
+                    {silent() ? "no activity for a while — the run may have stopped" : activity()} · {fmtAge(now() - lastWrite())}
+                    <Show when={disconnected()}> · <span class="err">feed disconnected</span></Show>
+                  </span>
+                </Show>
+                {/* The map has the return leg (`open run →`). */}
+                <A class="btn" href={`/map?run=${encodeURIComponent(run().runId)}`}>
+                  replay on map
+                </A>
+                <Show when={run().party}>
+                  {(p) => (
+                    <A class="btn" href={partyReplayHref(p().id)} title="every member of the party on one clock">
+                      party replay
+                    </A>
+                  )}
+                </Show>
+                <Show when={live()}>
+                  {/* Manual toggle; it reflects and overrides the scroll-driven auto state. */}
+                  <button class={follow() ? "on" : ""} onClick={toggleFollow}>
+                    auto-scroll
+                  </button>
+                </Show>
+              </div>
+              </div>
 
               {/*
                 The freeplay character this run is one attempt of, as the whole
@@ -767,73 +824,13 @@ export default function RunDetail() {
                   </Show>
                 </div>
 
-                {/* Right column: controls and everything about the run, always in view. */}
+                {/* Right column: everything about the run, always in view. */}
                 <aside class="runview-side">
                   {/*
-                    The controls row heads the sidebar whether the run is live or
-                    over, because the way into this run's replay belongs with the
-                    other controls rather than buried in a section heading — which
-                    is where it used to sit, under "comparability", where nobody
-                    looks for navigation. The map has the return leg (`open run →`).
+                    The model, then the character it played: who and what, before
+                    anything about how it went. The character's totals across
+                    attempts are a pane under the milestones, closed until opened.
                   */}
-                  <div class="side-controls">
-                    <A class="btn" href={`/map?run=${encodeURIComponent(run().runId)}`}>
-                      replay on map
-                    </A>
-                    <Show when={run().party}>
-                      {(p) => (
-                        <A class="btn" href={partyReplayHref(p().id)} title="every member of the party on one clock">
-                          party replay
-                        </A>
-                      )}
-                    </Show>
-                    <Show when={live()}>
-                      {/* Manual toggle; it reflects and overrides the scroll-driven auto state. */}
-                      <button class={follow() ? "on" : ""} onClick={toggleFollow}>
-                        auto-scroll
-                      </button>
-                      <Show when={run().terminationReason === null}>
-                        <span class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
-                          {/* Drops the live mark once the run has gone quiet: a live mark
-                              over "no activity for a while" contradicts itself. */}
-                          <span class={now() - lastWrite() > SILENT_MS ? "dot" : "dot live"} />
-                          {now() - lastWrite() > SILENT_MS
-                            ? "no activity for a while — the run may have stopped"
-                            : activity()}{" "}
-                          · {fmtAge(now() - lastWrite())}
-                          <Show when={disconnected()}> · <span class="err">feed disconnected</span></Show>
-                        </span>
-                      </Show>
-                    </Show>
-                  </div>
-
-                  {/*
-                    For a character, the character's totals are the headline and
-                    this attempt's are the footnote — the whole complaint was a
-                    page that answered "how many quests" with one attempt's
-                    tally. The cards below keep the run's own figures, under a
-                    heading that says which they are.
-                  */}
-                  {/*
-                    The camera's newest still while the run plays, private
-                    only; when it ends the poll goes with it and the run's
-                    video takes its place.
-                  */}
-                  <Show when={!SNAPSHOT_MODE && live()}>
-                    <LiveFrame runId={params.id} now={now()} />
-                  </Show>
-                  <Show when={clips()}>{(c) => <RunVideo clips={c()} />}</Show>
-
-                  <Show when={d().character}>
-                    {(st) => (
-                      <>
-                        <h2 class="section">the character · {st().attempts} attempts</h2>
-                        <CharacterTotalsCard character={st()} />
-                        <h2 class="section">this attempt</h2>
-                      </>
-                    )}
-                  </Show>
-
                   <div class="cards">
                     <div class="card">
                       <div class="k">model</div>
@@ -881,53 +878,6 @@ export default function RunDetail() {
                         </div>
                       </Show>
                     </div>
-                    {/*
-                      The charts live in the sidebar, under the model, so the
-                      feed keeps the page's height: cumulative XP with level
-                      bands, drawn compact, and the full drawing a click away —
-                      with, for a character, its climb across every attempt.
-                      A fan-out run has no curve of its own (each character's
-                      is its session's, under "characters"), so no card.
-                    */}
-                    <Show when={d().fanout === undefined}>
-                      <ChartCard
-                        label="xp"
-                        compact={
-                          <XpChart
-                            compact
-                            states={chart().states}
-                            startedAt={chart().startedAt}
-                            endedAt={chart().endedAt}
-                            episodeMs={run().comparability?.budget.episodeMs ?? null}
-                            now={chart().now}
-                            seams={chart().seams}
-                          />
-                        }
-                      >
-                        <h2 class="section">this attempt</h2>
-                        <XpChart
-                          states={chart().states}
-                          startedAt={chart().startedAt}
-                          endedAt={chart().endedAt}
-                          episodeMs={run().comparability?.budget.episodeMs ?? null}
-                          now={chart().now}
-                          seams={chart().seams}
-                        />
-                        {/*
-                          Level against cumulative active playtime, stitched
-                          across the attempts: the same line the freeplay field
-                          draws, so a character reads the same on both pages.
-                        */}
-                        <Show when={characterPlot()}>
-                          {(plot) => (
-                            <>
-                              <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
-                              <CharacterPlot series={plot().series} omitted={plot().omitted} single />
-                            </>
-                          )}
-                        </Show>
-                      </ChartCard>
-                    </Show>
                     <div class="card">
                       <div class="k">character</div>
                       <div class="v">
@@ -980,23 +930,76 @@ export default function RunDetail() {
                       */}
                       <div class="sub">{achievementLine(detail())}</div>
                     </div>
+                  </div>
+
+                  {/*
+                    The camera's newest still while the run plays, private
+                    only; when it ends the poll goes with it and the run's
+                    video takes its place.
+                  */}
+                  <Show when={!SNAPSHOT_MODE && live()}>
+                    <LiveFrame runId={params.id} now={now()} />
+                  </Show>
+                  <Show when={clips()}>{(c) => <RunVideo clips={c()} />}</Show>
+
+                  <div class="cards">
+                    {/*
+                      The charts live in the sidebar, under the character, so
+                      the feed keeps the page's height: cumulative XP with level
+                      bands, drawn compact, and the full drawing a click away —
+                      with, for a character, its climb across every attempt.
+                      A fan-out run has no curve of its own (each character's
+                      is its session's, under "characters"), so no card.
+                    */}
+                    <Show when={d().fanout === undefined}>
+                      <ChartCard
+                        label="xp"
+                        compact={
+                          <XpChart
+                            compact
+                            states={chart().states}
+                            startedAt={chart().startedAt}
+                            endedAt={chart().endedAt}
+                            episodeMs={run().comparability?.budget.episodeMs ?? null}
+                            now={chart().now}
+                            seams={chart().seams}
+                          />
+                        }
+                      >
+                        <h2 class="section">this attempt</h2>
+                        <XpChart
+                          states={chart().states}
+                          startedAt={chart().startedAt}
+                          endedAt={chart().endedAt}
+                          episodeMs={run().comparability?.budget.episodeMs ?? null}
+                          now={chart().now}
+                          seams={chart().seams}
+                        />
+                        {/*
+                          Level against cumulative active playtime, stitched
+                          across the attempts: the same line the freeplay field
+                          draws, so a character reads the same on both pages.
+                        */}
+                        <Show when={characterPlot()}>
+                          {(plot) => (
+                            <>
+                              <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
+                              <CharacterPlot series={plot().series} omitted={plot().omitted} single />
+                            </>
+                          )}
+                        </Show>
+                      </ChartCard>
+                    </Show>
                     <div class="card">
-                      <div class="k">context / total tokens</div>
+                      <div class="k">
+                        context / total tokens
+                        <InfoHint label="how the tokens were counted" text={tokenHint(detail(), tokens()?.source)} />
+                      </div>
                       <div class="v mono" title={contextHint(tokens())}>
                         {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
                       </div>
-                      <div class="sub" title={sourceHint(tokens()?.source)}>
-                        {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns
-                      </div>
-                      {/*
-                        Speed, in the same unit the tokens above are counted in.
-                        The clock is the model's own replies — what it was
-                        waiting on, to the last record of the reply — never the
-                        run's elapsed time, most of which the harness spends
-                        driving the game.
-                      */}
-                      <div class="sub" title="output tokens ÷ wall time of model replies (the wait it answered, plus the reply)">
-                        {tpsLine(detail(), tokens()?.source)}
+                      <div class="sub">
+                        {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns · {tpsShort(detail())}
                       </div>
                     </div>
                     <div class="card">
@@ -1019,41 +1022,11 @@ export default function RunDetail() {
                       </div>
                     </div>
                     {/*
-                      * Cost sits with the token cards because it is the same
-                      * measurement read in another unit — and it is shown twice
-                      * because two different questions hide behind one number.
-                      * ACTUAL is what the provider charged (OpenRouter's per-call
-                      * `usage.cost`, or the Claude SDK's `total_cost_usd`); most
-                      * runs have none and say so rather than borrowing the
-                      * estimate. EXPECTED is this repo's price table applied to the
-                      * tokens above, dated, so a stale rate reads as stale.
-                      */}
-                    <div class="card">
-                      <div class="k">cost — actual</div>
-                      <div class="v mono" title={detail()?.cost.actual.note ?? ""}>
-                        {fmtCost(detail()?.cost.actual, "—")}
-                      </div>
-                      <div class="sub" title={detail()?.cost.actual.note ?? ""}>
-                        {detail()?.cost.actual.basis === "none"
-                          ? "provider reports no cost for this run"
-                          : detail()?.cost.actual.backfill !== undefined
-                            ? "the driver's own total_cost_usd plus unreported turns, billed to a subscription"
-                            : detail()?.cost.actual.asIfMetered
-                              ? "the driver's own total_cost_usd, billed to a subscription"
-                              : "the provider's own charge, summed over the run"}
-                      </div>
-                    </div>
-                    <div class="card">
-                      <div class="k">cost — expected</div>
-                      <div class="v mono" title={detail()?.cost.expected.note ?? ""}>
-                        {fmtCost(detail()?.cost.expected)}
-                      </div>
-                      <div class="sub" title={detail()?.cost.expected.note ?? ""}>
-                        {detail()?.cost.expected.basis === "none"
-                          ? (detail()?.cost.expected.note ?? "")
-                          : `from the token totals at ${detail()?.cost.expected.priceId ?? "list"} prices, ${detail()?.cost.expected.asOf ?? "undated"}`}
-                      </div>
-                    </div>
+                      Cost sits with the token cards because it is the same
+                      measurement read in another unit. One card, the actual
+                      as its headline where there is one (`CostCard`).
+                    */}
+                    <CostCard reading={runCostReading(detail()?.cost)} />
                   </div>
 
                   {/* The model's own notes, under the figures about the run. Absent for a run with none. */}
@@ -1061,6 +1034,9 @@ export default function RunDetail() {
 
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
+
+                  {/* The character across every attempt, closed until opened, since it is not this run and it is long. */}
+                  <Show when={d().character}>{(st) => <CharacterTotalsPanel character={st()} runId={run().runId} />}</Show>
 
                   {/* A fan-out run has no session of its own: a record per character, picked here. */}
                   <Show when={inspector !== null && detail()?.fanout}>
@@ -1235,9 +1211,11 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
       when={c()}
       fallback={
         <p class="dim">
-          Not recorded — this run predates the comparability stamp. Its harness version is{" "}
-          {shortHarness(props.run.harnessVersion)}; nothing else about what it was given can be
-          established after the fact.
+          not recorded · harness {shortHarness(props.run.harnessVersion)}
+          <InfoHint
+            label="why not"
+            text="this run predates the comparability stamp: nothing else about what it was given can be established after the fact"
+          />
         </p>
       }
     >

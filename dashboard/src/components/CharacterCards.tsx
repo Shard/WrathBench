@@ -10,9 +10,12 @@
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import type { CharacterAttempt, CharacterView } from "../api/client";
-import { backfilledTitle, fmtDuration, fmtTokens, fmtUsd, num, shortRunId } from "../lib/format";
+import { fmtDuration, fmtTokens, num, shortRunId } from "../lib/format";
 import { Coins, LevelXp } from "./CharacterFacts";
 import { sourceHint, sourceLabel } from "../lib/runview";
+import { Collapsible } from "./Collapsible";
+import { CostCard, characterCostReading } from "./CostCard";
+import { InfoHint } from "./InfoHint";
 import { type RunStatus, statusOf, statusText, statusTitle, statusTone } from "../lib/runs";
 
 /**
@@ -67,49 +70,26 @@ export function CharacterTotalsCard(props: { character: CharacterView; runId?: s
         <div class="sub">{mine(fmtDuration(here()?.playtimeMs ?? null))}</div>
       </div>
       <div class="card">
-        <div class="k">tokens in / out</div>
+        <div class="k">
+          tokens in / out
+          <InfoHint label="how the tokens were counted" text={sourceHint(t().tokens?.source)} />
+        </div>
         <div class="v mono">
           {fmtTokens(t().tokens?.promptTokens ?? null)} / {fmtTokens(t().tokens?.completionTokens ?? null)}
         </div>
-        <div class="sub" title={sourceHint(t().tokens?.source)}>
+        <div class="sub">
           {sourceLabel(t().tokens?.source)} · {t().tokens?.turns ?? 0} turns · cache r/w{" "}
           {fmtTokens(t().tokens?.cacheReadTokens ?? null)} / {fmtTokens(t().tokens?.cacheWriteTokens ?? null)}
         </div>
       </div>
       {/*
-        Two sums, never one. `CostFigure` carries a basis and a price date, and
-        a chain of attempts priced three different ways has no single one — so
-        the dollars are added and the COVERAGE is printed beside them, which is
-        what says how much of the character the figure actually accounts for.
+        Two sums, never one, on one card (`CostCard`): `CostFigure` carries a
+        basis and a price date, and a chain of attempts priced three different
+        ways has no single one — so the dollars are added and the COVERAGE is
+        printed beside them, which is what says how much of the character the
+        figure actually accounts for.
       */}
-      <div class="card">
-        <div class="k">cost — actual</div>
-        <div class="v mono" title={backfilledTitle(cost().actualBackfilled)}>
-          {fmtUsd(cost().actualUsd)}
-          {(cost().actualBackfilled ?? 0) > 0 ? "*" : ""}
-        </div>
-        <div class="sub">
-          <Show
-            when={cost().actualAttempts > 0}
-            fallback={<>no attempt reports a provider charge</>}
-          >
-            {cost().actualAttempts} of {cost().attempts} attempts report one
-            <Show when={cost().asIfMetered}> · as-if-metered (a subscription was billed, not this)</Show>
-          </Show>
-        </div>
-      </div>
-      <div class="card">
-        <div class="k">cost — expected</div>
-        <div class="v mono">{fmtUsd(cost().expectedUsd)}</div>
-        <div class="sub">
-          <Show
-            when={cost().expectedAttempts > 0}
-            fallback={<>no attempt could be priced</>}
-          >
-            list prices over {cost().expectedAttempts} of {cost().attempts} attempts
-          </Show>
-        </div>
-      </div>
+      <CostCard reading={characterCostReading(cost())} />
       <div class="card">
         <div class="k">deaths · flights</div>
         <div class="v mono">
@@ -134,6 +114,30 @@ export function CharacterTotalsCard(props: { character: CharacterView; runId?: s
         </div>
       </div>
     </div>
+  );
+}
+
+const TOTALS_OPEN_KEY = "wrathbench.runview.character";
+
+/**
+ * The character's totals on a run page: `CharacterTotalsCard` folded into a
+ * pane under the milestones, closed until the reader opens it.
+ *
+ * It used to lead the sidebar, eight cards tall, so a reader scrolled past the
+ * whole character before reaching anything about the run in front of them —
+ * the operator's call was to fold it away. The summary keeps the one number a
+ * closed pane should still answer: how many attempts there are. The character
+ * page draws the cards bare; this pane is the run page's alone.
+ */
+export function CharacterTotalsPanel(props: { character: CharacterView; runId: string }) {
+  return (
+    <Collapsible
+      title={<span title="this run's character, summed over every attempt">the character</span>}
+      summary={`${props.character.attempts} attempt${props.character.attempts === 1 ? "" : "s"}`}
+      storageKey={TOTALS_OPEN_KEY}
+    >
+      <CharacterTotalsCard character={props.character} runId={props.runId} />
+    </Collapsible>
   );
 }
 
