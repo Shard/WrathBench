@@ -67,9 +67,8 @@ campaigns, and a scored or freeplay launch on it is refused (operator,
 2026-11-14). The adoption did not move the series: a target counts only the
 runs whose tuple names the loop and `yield` its entry now launches, so a
 snippet-loop run in the same series is history, never a copy (operator,
-2026-11-14); the same holds for the rest of the ladder's condition, a routing
-or wiki other than the entry's, since the scheduler and the ladder read one
-key (operator, 2026-11-14). Scored episodes on the program loop waited until a long-clock
+2026-11-14); the same holds for a routing or wiki other than the entry's
+(operator, 2026-11-14). Scored episodes on the program loop waited until a long-clock
 program-loop run had been read; that read is done, and scored episodes are open
 (operator, 2026-11-14; read and opened under the operator's delegation, 2026-11-15). The 1.0 series began at the v1 cutover, when the `v1` branches merged
 to master (operator, 2026-11-15): every eval re-arms in it, and the 0.5 rows
@@ -352,8 +351,10 @@ run (operator, 2026-11-14).
 backends is six machines and six caches, not one measurement. The default is
 the model author's own provider with fallbacks off; a third-party provider is
 a deliberate, named datapoint, and a run a named provider cannot serve fails
-rather than moving. The *requested* routing is a KEY in the tuple: pinned and
-unpinned runs do not share a chart.
+rather than moving. The *requested* routing is a KEY in the tuple, recorded on
+every run so a run always says how it was routed, but it is not a chart
+boundary: runs on any provider, an OpenCode Go run included, share a chart and
+a model's row (operator, 2026-11-16).
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with
@@ -494,8 +495,9 @@ rules, and the operator's runner image carries the program.
 **A ladder belongs to a comparability group.** `probing` has none
 (2026-08-29): a campaign varies its cells on purpose, so ranking its runs ranks
 the sweep, not the models. A scored ladder row is one condition — series,
-episode, harness, effort, routing, wiki, compaction window, loop and `yield`,
-never the prompt hash, which a patch moves within a series — and by default
+episode, harness, effort, wiki, compaction window, loop and `yield`, never the
+prompt hash, which a patch moves within a series, nor the routing (operator,
+2026-11-16) — and by default
 each model at each effort and window shows its newest condition with counted runs, so a row
 moves with its evidence and two conditions never pool; no chart holds
 conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a

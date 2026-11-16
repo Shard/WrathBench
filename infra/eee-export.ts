@@ -28,14 +28,14 @@
  * `(level, xp)` pair and money are the numbers the site prints. The milestone
  * rungs are freeplay achievements and on no scored ladder (operator,
  * 2026-11-15), so no record carries one. A cell is one model under one condition (series, episode,
- * harness, effort, compaction window, loop, `yield`, pinned or unpinned
- * routing, wiki; `runner/viewer/condition.ts`), so a cell never mixes what the
- * methodology keeps apart. The ladder page shows each model's newest condition
- * by default; the export writes every condition, since that is a way of
- * reading the table, not membership. A cell the published rows cannot tell
- * apart from another (two pinned routings of one model, whose providers the
- * public row does not name) derives two ladder rows and is skipped, never
- * written as one. Free runs are left out by default, as the public site's own
+ * harness, effort, compaction window, loop, `yield`, wiki;
+ * `runner/viewer/condition.ts`), so a cell never mixes what the methodology
+ * keeps apart, and like a ladder row it holds a model's runs on every
+ * provider (operator, 2026-11-16). The ladder page shows each model's newest
+ * condition by default; the export writes every condition, since that is a
+ * way of reading the table, not membership. A cell the published rows cannot
+ * tell apart from another (a local build and the hosted model of one id, say)
+ * derives two ladder rows and is skipped, never written as one. Free runs are left out by default, as the public site's own
  * default reading leaves them out (the operator's decision, 2026-10-20);
  * `--include-free` exports them too. The page's representative-effort filter
  * is not applied: it is a way of reading the table, not membership.
@@ -171,7 +171,6 @@ interface CellKey {
   /** The rest of the condition, as the published row carries it (`RunCondition`). */
   loop: "program" | "snippet";
   yield: boolean;
-  pinned: boolean;
   wiki: boolean;
 }
 
@@ -185,7 +184,6 @@ export function evaluationIdOf(k: CellKey): string {
   if (k.compactWindow !== null) parts.push(`compact-${k.compactWindow}`);
   if (k.loop === "program") parts.push("loop-program");
   if (k.yield) parts.push("yield");
-  if (!k.pinned) parts.push("unpinned");
   if (!k.wiki) parts.push("no-wiki");
   return parts.join("/");
 }
@@ -310,7 +308,6 @@ function cellRecord(k: CellKey, runs: readonly ResultRun[], row: LadderRow, mode
     ...(k.compactWindow !== null ? { compact_window: k.compactWindow } : {}),
     ...(k.loop === "program" ? { loop: "program" } : {}),
     ...(k.yield ? { yield: "true" } : {}),
-    ...(!k.pinned ? { routing: "unpinned" } : {}),
     ...(!k.wiki ? { wiki: "none" } : {}),
     episode: k.episode,
     runs: String(runs.length),
@@ -482,7 +479,6 @@ export function eeeFromLadder(episode: EpisodeId, body: Pick<ResultsResponse, "r
       compactWindow: r.compactWindow ?? null,
       loop: c.loop,
       yield: c.yield,
-      pinned: c.pinned,
       wiki: c.wiki,
     };
     const id = evaluationIdOf(key);

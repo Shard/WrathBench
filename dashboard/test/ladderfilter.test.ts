@@ -7,6 +7,7 @@ import {
   defaultLadderRuns,
   inChartGroup,
   newestConditions,
+  pickChartGroup,
   filterOptions,
   lineOf,
   matchesSelection,
@@ -372,6 +373,16 @@ describe("the condition rules", () => {
   test("chart groups count entries, most first; the program loop is never charted with the snippet loop", () => {
     expect(chartGroups(runs).map((g) => [g.id, g.entries])).toEqual([["snippet", 4], ["program", 1]]);
     expect(inChartGroup(runs, "program").map((x) => x.runId)).toEqual(["b2"]);
+  });
+
+  test("?group= picks a group on the page, reads an old -unpinned id as its loop's, and falls back to the default", () => {
+    const groups = chartGroups(runs);
+    expect(pickChartGroup(groups, "program")).toBe("program");
+    expect(pickChartGroup(groups, "program-unpinned")).toBe("program");
+    expect(pickChartGroup(groups, "snippet-unpinned")).toBe("snippet");
+    expect(pickChartGroup(groups, "program-nowiki")).toBe("snippet");
+    expect(pickChartGroup(groups, undefined)).toBe("snippet");
+    expect(pickChartGroup([], "snippet")).toBeNull();
   });
 
   test("the default view: newest conditions, on the chart holding the most entries", () => {

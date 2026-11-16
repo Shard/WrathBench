@@ -159,13 +159,14 @@ export const comparabilitySchema = z.object({
    * exactly as the request sent it (`routing.ts`). A KEY, not an annotation:
    * routing is stated at launch like `effort`, and two runs of one slug served
    * by two machines — six have served `glm-5.3-flash` here — are two
-   * conditions, so they must not share a chart by default. Operator decision
-   * 2026-09-16.
+   * conditions of the tuple (operator, 2026-09-16). The ladder reads it as a
+   * fact about the run, not a chart or a row of its own: runs on any provider
+   * share a chart (operator, 2026-11-16; `runner/viewer/condition.ts`).
    *
    * An OpenCode Go run stamps `{ via: "OpenCode Go", allowFallbacks: true }`
    * (`OPENCODE_GO_ROUTING`): Go picks the backend itself and a request cannot
    * pin one, so the run is unpinned by construction and says so, keyed apart
-   * from a pinned run of the same model elsewhere.
+   * in the tuple from a pinned run of the same model elsewhere.
    *
    * ABSENT, never null, for a run whose request has no routing to state: a
    * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run. That also

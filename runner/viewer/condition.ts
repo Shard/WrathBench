@@ -2,28 +2,30 @@
  * The condition a run was played under, and the one key that names it.
  *
  * A ladder row is one condition (operator, 2026-11-14): the harness series,
- * the episode, the harness, the reasoning effort, the requested routing,
- * whether the reference wiki was served, the compaction window, the agent loop
- * and its `yield` tool; and what is being tested, its subject kind and a
- * local build's `serving` (operator, 2026-11-14, `runner/src/serving.ts`).
- * Two runs that differ in any of these are two rows,
- * never one. The prompt hash is deliberately not in the key: every in-series
- * prompt patch moves it, the series already absorbs those, and a fix commit
- * does not restart evidence (docs/METHODOLOGY.md, "Fixed harness, frozen per
- * version").
+ * the episode, the harness, the reasoning effort, whether the reference wiki
+ * was served, the compaction window, the agent loop and its `yield` tool; and
+ * what is being tested, its subject kind and a local build's `serving`
+ * (operator, 2026-11-14, `runner/src/serving.ts`). Two runs that differ in any
+ * of these are two rows, never one. The prompt hash is deliberately not in the
+ * key: every in-series prompt patch moves it, the series already absorbs
+ * those, and a fix commit does not restart evidence (docs/METHODOLOGY.md,
+ * "Fixed harness, frozen per version"). Nor is the requested routing: it is
+ * stamped on every run and keys the tuple, but runs on any provider share a
+ * row and a chart (operator, 2026-11-16), so a model is one entry per effort
+ * and window however it was routed.
  *
  * The key is read off the stamped tuple and never recomputed: an absent field
  * reads as its default, which is what an absent field has always meant on the
  * tuple (`runner/src/comparability.ts` keeps every default absent so old
- * tuples stay byte-identical): the snippet loop, no `yield`, the wiki served,
- * the CLI's own window and no routing to state.
+ * tuples stay byte-identical): the snippet loop, no `yield`, the wiki served
+ * and the CLI's own window.
  *
  * A *chart group* is coarser: the dimensions on which METHODOLOGY says runs do
  * not share a chart at all. Effort and the compaction window are comparable
  * rows on one chart ("`opus at low` and `opus at high` are two comparable
  * rows", "a recorded run dimension like effort"), and so is the harness, a
- * tag on every row. The loop, pinned against unpinned routing, and the wiki
- * are not.
+ * tag on every row; routing does not even separate rows (above). The loop
+ * and the wiki are the boundaries.
  *
  * Import-free on purpose, like `lineage.ts`: the dashboard derives a row's
  * condition with these same functions when a viewer predates the field.
@@ -33,8 +35,7 @@
 export interface RunCondition {
   /**
    * Equal ids are one condition. Opaque: the private viewer's id spells the
-   * whole key, and the public projection renumbers it per response so the
-   * requested routing, which names providers, never leaves.
+   * whole key, and the public projection renumbers it per response.
    */
   id: string;
   /** The agent loop: the program loop, or the persistent-snippet loop it replaced. */
@@ -45,6 +46,8 @@ export interface RunCondition {
    * False only when the request let the aggregator fall back to any backend
    * (`routing.allowFallbacks`), as an OpenCode Go run always does. A run with
    * no routing to state (a CLI, a direct provider) is served by one backend.
+   * A fact about the run, not part of the key: runs of either routing share
+   * an id, a row and a chart (operator, 2026-11-16).
    */
   pinned: boolean;
   /** False when the run had no reference wiki (`wiki: false`). */
@@ -92,7 +95,7 @@ function subjectOf(f: ConditionFacts): RunCondition["subject"] {
   return f.platform === "local" ? "local" : "hosted";
 }
 
-/** Keys sorted at every depth, so two equal routing blocks spell one string. */
+/** Keys sorted at every depth, so two equal blocks spell one string. */
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value !== null && typeof value === "object") {
@@ -112,7 +115,6 @@ export function conditionKey(f: ConditionFacts): string {
     episode: f.episode,
     harness: f.harness,
     effort: t.effort ?? null,
-    routing: t.routing ?? null,
     wiki: t.wiki !== false,
     compactWindow: t.compactWindow ?? null,
     loop: t.loop === "program" ? "program" : "snippet",
@@ -140,7 +142,7 @@ export function conditionOf(f: ConditionFacts): RunCondition {
 
 /** One set of conditions that may share a chart. */
 export interface ChartGroup {
-  /** Stable and URL-safe: `snippet`, `program`, `program-unpinned`, `snippet-nowiki`. */
+  /** Stable and URL-safe: `snippet`, `program`, `snippet-nowiki`, `external`. */
   id: string;
   /** What the page prints for it. */
   label: string;
@@ -151,9 +153,22 @@ export interface ChartGroup {
  * their own whatever their other dimensions: their conditions are declared and
  * partial, and they are never ranked with ours (operator, 2026-11-14).
  */
-export function chartGroupOf(c: Pick<RunCondition, "loop" | "pinned" | "wiki"> & Partial<Pick<RunCondition, "subject">>): ChartGroup {
+export function chartGroupOf(c: Pick<RunCondition, "loop" | "wiki"> & Partial<Pick<RunCondition, "subject">>): ChartGroup {
   if (c.subject === "external") return { id: "external", label: "external agents" };
-  const id = [c.loop, ...(c.pinned ? [] : ["unpinned"]), ...(c.wiki ? [] : ["nowiki"])].join("-");
-  const label = [`${c.loop} loop`, ...(c.pinned ? [] : ["unpinned"]), ...(c.wiki ? [] : ["no wiki"])].join(" · ");
+  const id = [c.loop, ...(c.wiki ? [] : ["nowiki"])].join("-");
+  const label = [`${c.loop} loop`, ...(c.wiki ? [] : ["no wiki"])].join(" · ");
   return { id, label };
+}
+
+/**
+ * The chart group an id names today. Routing was a chart boundary until
+ * 2026-11-16, so a link may still carry `snippet-unpinned` or
+ * `program-unpinned-nowiki`: it names the same loop and wiki without the
+ * routing.
+ */
+export function currentChartGroupId(id: string): string {
+  return id
+    .split("-")
+    .filter((part) => part !== "unpinned")
+    .join("-");
 }

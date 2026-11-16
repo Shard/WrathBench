@@ -27,7 +27,9 @@ import {
 import { paretoSteps } from "../src/lib/pareto";
 import { filterBySeries } from "../src/lib/harness";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
-import { modelEntries } from "../src/lib/ladderfilter";
+import { chartGroups, defaultLadderRuns, modelEntries, newestConditions, pickChartGroup } from "../src/lib/ladderfilter";
+import { conditionOf } from "../../runner/viewer/condition";
+import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
 import { fmtPlaytimeTick } from "../src/lib/format";
 import {
   CUE_PAD,
@@ -1190,7 +1192,7 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
     for (const r of runs) expect(rowKeys.has(entryKeyOf(r))).toBe(true);
   });
 
-  test("the loop, the routing and the wiki each split a row; the prompt hash does not", () => {
+  test("the loop and the wiki each split a row; the prompt hash does not", () => {
     const base = { model: "m", maxLevel: 3, harnessSeries: "0.5", episode: "e90" as const };
     const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, subject: "hosted", ...over });
     const runs = [
@@ -1199,6 +1201,33 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
       run({ ...base, runId: "c", condition: cond("y", { loop: "program", yield: true }) }),
     ];
     expect(ladderRows(runs).map((r) => [r.runs, r.condition.loop])).toEqual([[2, "snippet"], [1, "program"]]);
+  });
+
+  test("a Go-routed and a pinned run of one model are one entry on one chart (operator, 2026-11-16)", () => {
+    // Each run's condition as the viewer derives it off the stamped tuple (`results.ts`).
+    const onRoute = (runId: string, routing: Record<string, unknown> & { allowFallbacks: boolean }, maxLevel: number, startedAt: number) =>
+      run({
+        runId,
+        model: "glm",
+        maxLevel,
+        startedAt,
+        harnessSeries: "0.5",
+        episode: "e90",
+        condition: conditionOf({ series: "0.5", episode: "e90", harness: "wrathbench", tuple: { effort: null, routing } }),
+      });
+    const go = onRoute("go", { ...OPENCODE_GO_ROUTING }, 5, 200);
+    const pinned = onRoute("pinned", { order: ["z-ai"], allowFallbacks: false }, 7, 100);
+    const runs = [go, pinned];
+    // Still says how each was routed.
+    expect([go.condition!.pinned, pinned.condition!.pinned]).toEqual([false, true]);
+    expect(entryKeyOf(go)).toBe(entryKeyOf(pinned));
+    expect(chartGroups(runs).map((g) => [g.id, g.label, g.entries])).toEqual([["snippet", "snippet loop", 1]]);
+    expect(newestConditions(runs).map((r) => r.runId)).toEqual(["go", "pinned"]);
+    expect(defaultLadderRuns(runs).map((r) => r.runId)).toEqual(["go", "pinned"]);
+    expect(ladderRows(runs).map((r) => [r.model, r.runs, r.bestLevel, r.bestRunId])).toEqual([["glm", 2, 7, "pinned"]]);
+    expect(modelEntries(runs)).toHaveLength(1);
+    // An old link to the unpinned chart opens the loop's, never an empty page.
+    expect(pickChartGroup(chartGroups(runs), "snippet-unpinned")).toBe("snippet");
   });
 
   test("a row from a viewer that predates the field reads as the snippet loop, pinned, with its wiki", () => {

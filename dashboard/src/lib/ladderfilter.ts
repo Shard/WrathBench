@@ -39,7 +39,7 @@ import { catalogueKeyOf, familyOf, weightsOf } from "../../../infra/model-catalo
 
 export { weightsOf };
 import type { ChartGroup, ResultRun } from "@viewer/api-types";
-import { chartGroupOf } from "@viewer/condition";
+import { chartGroupOf, currentChartGroupId } from "@viewer/condition";
 import { COST, XP } from "./axes";
 import { conditionOfRun, entryKeyOf, ladderPoints, scored } from "./ladder";
 import { paretoFront } from "./pareto";
@@ -319,8 +319,8 @@ export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
  * Each model at each effort and window under its newest condition, and nothing else of it.
  *
  * The operator's rule (2026-11-14): a ladder row is one condition — the
- * series, episode, harness, effort, routing, wiki, window, loop and `yield`
- * (`runner/viewer/condition.ts`) — and by default each model at each effort
+ * series, episode, harness, effort, wiki, window, loop and `yield`
+ * (`runner/viewer/condition.ts`), never the routing (2026-11-16) — and by default each model at each effort
  * and compaction window shows the one whose most recent counted run started
  * last. Effort and window are chosen per row rather than collapsed, because
  * they are comparable rows (METHODOLOGY, "A knob is legitimate as a run
@@ -357,9 +357,8 @@ export interface ChartGroupCount extends ChartGroup {
 
 /**
  * The charts the scored runs given belong on (`chartGroupOf`): the dimensions
- * on which runs never share a chart, the loop, pinned against unpinned
- * routing, and the wiki. Most entries first, so the first is the page's
- * default; ties by id.
+ * on which runs never share a chart, the loop and the wiki. Most entries
+ * first, so the first is the page's default; ties by id.
  */
 export function chartGroups(runs: readonly ResultRun[]): ChartGroupCount[] {
   const groups = new Map<string, { group: ChartGroup; entries: Set<string> }>();
@@ -372,6 +371,17 @@ export function chartGroups(runs: readonly ResultRun[]): ChartGroupCount[] {
   return [...groups.values()]
     .map((g) => ({ ...g.group, entries: g.entries.size }))
     .sort((a, b) => b.entries - a.entries || a.id.localeCompare(b.id));
+}
+
+/**
+ * The chart group a `?group=` value picks among those on the page: the one
+ * it names, read as today's id (`currentChartGroupId`, so an old
+ * `snippet-unpinned` link lands on the snippet loop's chart), else the
+ * page's default. Null when the page has none.
+ */
+export function pickChartGroup(groups: readonly ChartGroup[], want: string | undefined): string | null {
+  const id = want === undefined ? undefined : currentChartGroupId(want);
+  return groups.find((g) => g.id === id)?.id ?? groups[0]?.id ?? null;
 }
 
 /** The runs of one chart group. */

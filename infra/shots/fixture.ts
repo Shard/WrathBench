@@ -15,8 +15,9 @@
  *                  a continent to cross to and an instance's own tiles
  *   fixture-ended  terminated `episode-limit` half an hour ago, two and a half
  *                  hours of trace to replay
- *   fixture-e90, fixture-e90-closed, fixture-reference
- *                  three finished `e90` runs, two models' rows and the scripted
+ *   fixture-e90, fixture-e90-go, fixture-e90-closed, fixture-reference
+ *                  four finished `e90` runs, two models' rows (the first
+ *                  model's on two routings, one row) and the scripted
  *                  reference's line, for the ladder (`writeLadderRun`)
  *   fixture-fanout terminated a quarter of an hour ago: one agent driving two
  *                  characters, Oakhart and Pellira, a session record each in
@@ -343,6 +344,7 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null, fanout?: Sp
  * and non-members of the tier for the same reasons a real run's are.
  */
 export const E90_RUN = "fixture-e90";
+export const E90_GO_RUN = "fixture-e90-go";
 export const E90_CLOSED_RUN = "fixture-e90-closed";
 export const REFERENCE_RUN = "fixture-reference";
 export const E90_DUNGEON_RUN = "fixture-e90-dungeon";
@@ -841,6 +843,8 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
   ];
   const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now)), ...freeplay]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
+  // The same model through OpenCode Go, which stamps unpinned routing: the same row, on the same chart (operator, 2026-11-16).
+  writeLadderRun(runsDir, E90_GO_RUN, { driver: "openai", model: "fixture/e90-model", apiBase: "https://opencode.ai/inference/go/openai/v1", character: "Ladderine" }, 5, at(now - 8 * 3_600_000));
   // A second row, under an invented id a family's weights rules still answer
   // for (Anthropic's catch-all reads `closed`), so the ladder's weights filter
   // has two buckets to offer; `fixture/e90-model` reads `unknown`.

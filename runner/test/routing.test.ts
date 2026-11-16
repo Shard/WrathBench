@@ -237,7 +237,7 @@ describe("an OpenCode Go run", () => {
     expect(routingLabel(OPENCODE_GO_ROUTING)).toBe("chosen by OpenCode Go, not pinned");
   });
 
-  test("never shares a chart with a pinned run, or with an unpinned OpenRouter one", () => {
+  test("its tuple is never equal to a pinned run's, or to an unpinned OpenRouter one's", () => {
     const go = comparabilityOf(config({ apiBase: GO }), "harness-0.5-1");
     const pinned = comparabilityOf(
       config({ model: "deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1", routing: { order: ["GMICloud"], allowFallbacks: false } }),

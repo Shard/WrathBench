@@ -75,6 +75,7 @@ import {
   currentModels,
   inChartGroup,
   newestConditions,
+  pickChartGroup,
   filterOptions,
   lineOf,
   matchesSelection,
@@ -244,19 +245,16 @@ export default function Ladder() {
    * (`newestConditions`) unless `?conditions=all`, over the whole narrowed tier
    * so a model whose newest condition is on another chart is not shown here
    * under an older one; then one chart group (`chartGroups`), because the
-   * loop, pinned against unpinned routing, and the wiki never share a chart
-   * (operator, 2026-11-14). `?group=` picks one; the default, and the fallback
+   * loop and the wiki never share a chart (operator, 2026-11-14); routing
+   * does (operator, 2026-11-16). `?group=` picks one (`pickChartGroup`, which
+   * reads an old `-unpinned` id as its loop's); the default, and the fallback
    * for a group the tier no longer holds, is the one with the most entries.
    * The effort and model rules below judge only what is left, so neither
    * compares across charts.
    */
   const conditioned = createMemo(() => (newest() ? newestConditions(narrowed()) : narrowed()));
   const groupsOnPage = createMemo(() => (freeplay() ? [] : chartGroups(conditioned())));
-  const group = (): string | null => {
-    const want = Array.isArray(params.group) ? params.group[0] : params.group;
-    const groups = groupsOnPage();
-    return groups.find((g) => g.id === want)?.id ?? groups[0]?.id ?? null;
-  };
+  const group = (): string | null => pickChartGroup(groupsOnPage(), Array.isArray(params.group) ? params.group[0] : params.group);
   const charted = createMemo(() => {
     const g = group();
     return g === null ? conditioned() : inChartGroup(conditioned(), g);
