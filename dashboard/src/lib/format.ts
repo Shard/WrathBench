@@ -196,11 +196,12 @@ export function fmtCost(
  * runner stores is the Claude Agent SDK's own `total_cost_usd` for the session
  * — provider *reported*, and as-if-metered at the same time
  * (`runner/viewer/pricing.ts`, `reported`); codex reports no cost at all, so a
- * codex figure is only ever the list-price estimate over its tokens. Neither is
- * an invoice, and the wording must not say it is.
+ * codex figure is only ever the list-price estimate over its tokens, and so is
+ * an OpenCode Go one, whose responses' `usage.cost` is zero inside the
+ * allowance. None is an invoice, and the wording must not say it is.
  */
 export const COST_BASIS_NOTE =
-  "claude-code and codex subscription runs carry no bill; a claude-code cost is the as-if-metered figure the Claude SDK reports, a codex cost an as-if-metered estimate over its tokens";
+  "claude-code, codex and OpenCode Go subscription runs carry no bill; a claude-code cost is the as-if-metered figure the Claude SDK reports, a codex or Go cost an as-if-metered estimate over its tokens";
 
 export function fmtTokens(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";

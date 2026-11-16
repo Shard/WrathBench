@@ -13,7 +13,8 @@
     "  prices.anthropic: Anthropic list price by the served ids (ids, default the key), by hand, dated; or 'unpriced'.",
     "  prices.endpoints: provider -> a metered endpoint's price, matched on the run's apiBase and the ids, by hand.",
     "Rate windows are dollars per million tokens, oldest first; the first has no 'from', later ones the day they began.",
-    "providers: who a price row is from; an endpoint provider's apiBase, on-screen label, source and default note.",
+    "providers: who a price row is from; an endpoint provider's apiBase, on-screen label, source and default note;",
+    "  subscription: true on one billed as a flat plan, whose rows are then as-if-metered and its usage.cost not the cost.",
     "families: file order is the precedence for an id no entry lists, matched by glob ('*' any characters).",
     "icons pins the logo source (@lobehub/icons-static-svg, MIT); after editing a family's icon: bun wb data logos.",
     "This file is written in formatCatalogue's spelling, which the tests require: after a hand edit, bun wb data catalogue --format."
@@ -42,7 +43,8 @@
       "apiBase": "https://opencode.ai/inference/go/openai/v1",
       "label": "opencode-go",
       "source": "catalogue",
-      "note": "models.dev registry listing for the opencode-go provider, read {asOf}. The Go endpoint reports no per-response charge, and its usage limits are denominated in dollars, so this list rate is the expected figure for what a run draws against them, not an invoice. Append a dated window when the listing moves"
+      "subscription": true,
+      "note": "models.dev registry listing for the opencode-go provider, read {asOf}. Go is a subscription whose usage.cost is zero inside the allowance, so this list rate is what a run would have cost metered, a comparison and not an invoice. Append a dated window when the listing moves"
     }
   },
   "families": [

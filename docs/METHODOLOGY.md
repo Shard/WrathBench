@@ -476,7 +476,9 @@ OpenCode `-free` or contributor-free id, or an entry the operator declared
 `billing: "free"`. The operator's own hardware reads free as it always has.
 Claude Code, ChatGPT and OpenCode Go runs read paid wherever a reader sees
 billing, even though the scheduler treats a subscription as outside the
-metered budget.
+metered budget. An OpenCode Go run's cost is its model's listed API price over
+its tokens, marked as-if-metered as a codex run's is, never the allowance's $0
+its responses report (operator, 2026-11-16).
 
 ## Scoring
 

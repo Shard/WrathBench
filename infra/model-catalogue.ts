@@ -93,6 +93,12 @@ export interface CatalogueProvider {
   source?: PriceSource;
   /** An endpoint provider's default note for its rows; `{asOf}` is the row's date. */
   note?: string;
+  /**
+   * An endpoint provider billed as a flat plan (OpenCode Go): its rows are
+   * as-if-metered, and the per-response `usage.cost` it reports is the overage
+   * past the allowance, not the run's cost (`runner/viewer/pricing.ts`).
+   */
+  subscription?: boolean;
 }
 
 /** One OpenRouter id's synced windows. An empty list is an id the catalogue no longer prices. */
@@ -383,6 +389,8 @@ export interface EndpointRow {
   asOf: string;
   source: PriceSource;
   note: string;
+  /** The provider's `subscription`: the row is a comparison, not a bill. */
+  subscription: boolean;
 }
 
 /** The flat views of one catalogue's prices. Pure; the module's own are below. */
@@ -425,6 +433,7 @@ export function priceTables(cat: ModelCatalogue): {
           asOf: row.asOf,
           source: row.source ?? provider.source ?? "list",
           note: row.note ?? (provider.note ?? "").replaceAll("{asOf}", row.asOf),
+          subscription: provider.subscription === true,
         });
       }
     }
@@ -528,7 +537,7 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
   for (const [id, p] of Object.entries(providers)) {
     const at = `${where}: providers.${id}`;
     if (!isObj(p)) throw new Error(`${at} must be an object`);
-    only(p, ["name", "asOf", "apiBase", "label", "source", "note"], at);
+    only(p, ["name", "asOf", "apiBase", "label", "source", "note", "subscription"], at);
     str(p["name"], `${at}.name`);
     if (id === "openrouter" && (typeof p["asOf"] !== "string" || !DAY.test(p["asOf"]))) throw new Error(`${at}.asOf must be a YYYY-MM-DD day`);
     if (p["apiBase"] !== undefined) {
@@ -541,6 +550,9 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
       if (!SAFE_SLUG.test(str(p["label"], `${at}.label`))) throw new Error(`${at}.label must match ${SAFE_SLUG}`);
     }
     if (p["source"] !== undefined && !SOURCES.includes(p["source"] as string)) throw new Error(`${at}.source must be list or catalogue`);
+    if (p["subscription"] !== undefined && (p["subscription"] !== true || p["apiBase"] === undefined)) {
+      throw new Error(`${at}.subscription must be true, on an endpoint provider`);
+    }
   }
 
   const families = top["families"];
