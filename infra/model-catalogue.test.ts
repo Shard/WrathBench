@@ -331,6 +331,9 @@ describe("prices", () => {
     const go = ENDPOINT_PRICES.find((r) => r.id === "opencode-go/mimo-v2.5")!;
     expect(go.note).toStartWith("models.dev registry listing for the opencode-go provider, read 2026-10-16.");
     expect(go.source).toBe("catalogue");
+    // Go is the one subscription endpoint; its older base keeps its own reading.
+    expect(ENDPOINT_PRICES.filter((r) => r.subscription).every((r) => r.apiBase === CATALOGUE.providers["opencode-go"]!.apiBase)).toBe(true);
+    expect(ENDPOINT_PRICES.find((r) => r.id === "opencode-go/omen-alpha")!.subscription).toBe(false);
   });
 
   test("an emptied OpenRouter id reads as no row at all, and a delisted one says why", () => {
@@ -391,11 +394,18 @@ describe("parseCatalogue", () => {
     const cat = parseCatalogue(json(doc()));
     const t = priceTables(cat as ModelCatalogue);
     expect(t.endpoints).toEqual([
-      { id: "acme/acme-1", apiBase: "https://api.acme.example/v1", model: "acme-1", windows: [{ input: 3, output: 4, cacheRead: 3, cacheWrite: 3 }], asOf: "2026-09-01", source: "list", note: "Acme's list, read 2026-09-01" },
+      { id: "acme/acme-1", apiBase: "https://api.acme.example/v1", model: "acme-1", windows: [{ input: 3, output: 4, cacheRead: 3, cacheWrite: 3 }], asOf: "2026-09-01", source: "list", note: "Acme's list, read 2026-09-01", subscription: false },
     ]);
     expect(Object.keys(t.openrouter.models)).toEqual(["acme-labs/acme-1", "acme-labs/acme-1:free"]);
     expect(t.delisted).toEqual({ "acme-labs/acme-0": "gone" });
     expect(t.anthropic).toEqual([{ ids: ["claude-x-1"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" }]);
+  });
+
+  test("a subscription provider marks its rows, and the flag is only ever true, on an endpoint provider", () => {
+    const sub = priceTables(parseCatalogue(mutate((d) => (d.providers.acmehost.subscription = true))) as ModelCatalogue);
+    expect(sub.endpoints.map((r) => r.subscription)).toEqual([true]);
+    expect(() => parseCatalogue(mutate((d) => (d.providers.acmehost.subscription = false)))).toThrow(/subscription must be true, on an endpoint provider/);
+    expect(() => parseCatalogue(mutate((d) => (d.providers.anthropic.subscription = true)))).toThrow(/subscription must be true, on an endpoint provider/);
   });
 
   test("a model needs a weights verdict unless its family states one for all", () => {

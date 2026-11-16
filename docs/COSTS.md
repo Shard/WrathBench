@@ -19,7 +19,15 @@ the operator's figure in GitHub issue #66.
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
   `reasoning_tokens`, and the provider's own `cost` where it sends one
   (OpenRouter's credits; OpenCode Go's dollars charged to the balance, zero
-  inside its allowance). DeepSeek's own platform sends no `cost`, so a run
+  inside its allowance). Go's figure is not read as the run's cost: Go is a
+  subscription, so a paid Go run has no actual and its cost is the list-price
+  estimate from its `opencode-go` endpoint row, marked as-if-metered, the way a
+  codex run's is (operator's decision, 2026-11-16). Read as an actual, the
+  allowance's zero made every Go run look free. Overage past a spent allowance
+  is a real charge, so a non-zero sum is named in the cost's note rather than
+  dropped; a `-free` Go slug stays free. The catalogue marks the provider
+  `subscription`, and that flag, matched on the run's `apiBase`, is all the
+  viewer reads. DeepSeek's own platform sends no `cost`, so a run
   there carries an expected figure from its endpoint price row (`prices.endpoints` on its
   entry in `infra/model-catalogue.json`) and no actual one. DeepSeek
   bills double in weekday peak hours, which a dated row cannot express, so
@@ -84,7 +92,8 @@ the operator's figure in GitHub issue #66.
   to, and its expected cost already prices every token.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (the deploy-window design draws the line; the viewer falls back to
-  an estimate only where the provider reported nothing, and labels it).
+  an estimate only where there is no actual, and labels it). A listing that shows
+  only actuals, such as the runs table, shows a blank for a codex or Go run.
 
 ## 2. Rules, each paid for
 

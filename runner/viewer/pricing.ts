@@ -12,6 +12,11 @@
  *   claude-code run's turns that ended before the CLI reported their cost are
  *   priced at list and added, and the figure carries both parts and a `*`
  *   wherever it is shown (`backfilled`; operator's decision, 2026-10-08).
+ *   The one exception the other way: a paid run on a subscription endpoint
+ *   (OpenCode Go) has no actual, whatever its responses report, because its
+ *   `usage.cost` is zero inside the allowance and only the overage past it
+ *   otherwise; its cost is the expected figure, as-if-metered, the way a codex
+ *   run's is (operator's decision, 2026-11-16; `subscriptionActual`).
  * - **expected** — the price table applied to the run's `TokenTotals`. A
  *   derived figure, never an invoice, and computed even when an actual exists
  *   so the two can be read against each other.
@@ -387,14 +392,16 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * listing states 0) bills a write as ordinary input, the same fallback the
  * OpenRouter sync uses. DeepSeek's platform prices by time of day, which a date
  * window cannot say: its row is the off-peak rate, and a cache miss bills at
- * the input rate. Go's usage limits are dollar amounts and its chat responses
- * carry no `usage.cost`, so the listing is the only figure those runs get; the
- * free Go slugs (`-free`) need no row.
+ * the input rate. The free Go slugs (`-free`) need no row.
  *
- * `asIfMetered` is false throughout: these endpoints meter the operator's own
- * balance, so the figure is a list-price estimate of a real bill, not a
- * comparison. A row here does not touch the scheduler's free/paid verdict —
- * that stays `runner/src/model-cost.ts`'s.
+ * `asIfMetered` is false for a provider that meters the operator's own
+ * balance, where the figure is a list-price estimate of a real bill, and true
+ * for one the catalogue marks `subscription` (OpenCode Go), where it is a
+ * comparison: Go is a flat plan whose responses report `usage.cost` zero
+ * inside the allowance, so read as an actual every Go run would be free
+ * (operator's decision, 2026-11-16; `subscriptionActual`). A row here does not
+ * touch the scheduler's free/paid verdict — that stays
+ * `runner/src/model-cost.ts`'s.
  */
 
 /** Two api bases name the same endpoint: same origin, same path, trailing slash ignored. */
@@ -427,7 +434,7 @@ export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: 
       cacheWrite: w.cacheWrite,
       asOf: w.from ?? p.asOf,
       source: p.source,
-      asIfMetered: false,
+      asIfMetered: p.subscription,
       note: w.from === undefined ? p.note : `in force from ${w.from} — ${p.note}`,
     };
   }
@@ -437,6 +444,18 @@ export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: 
 /** Whether a run's base is one the hand-held endpoint rows know at all, whatever the model. */
 function isProviderBase(apiBase: string | null | undefined): boolean {
   return ENDPOINT_PRICES.some((p) => sameBase(apiBase, p.apiBase));
+}
+
+/**
+ * A paid run on an endpoint the catalogue bills as a flat plan (`subscription`,
+ * OpenCode Go). Decided on the base, never on whether a row matched: a paid Go
+ * model with no row yet must read unpriced, not as its responses' $0. A free
+ * slug or a declared-free entry on the same base is free, and keeps its reading.
+ */
+function isSubscriptionRun(run: PriceableRun): boolean {
+  const model = run.model ?? "";
+  if (isFreeSlug(model) || isContributorSlug(model) || declaredBillingOf(run) === "free") return false;
+  return ENDPOINT_PRICES.some((p) => p.subscription && sameBase(run.apiBase, p.apiBase));
 }
 
 /*
@@ -602,13 +621,16 @@ export function unpricedNote(run: PriceableRun): string {
  *
  * One exception to "verbatim": a claude-code run whose CLI never reported a
  * cost for some turns (`coverage.unreported`) gets those turns backfilled, by
- * `backfilled` below.
+ * `backfilled` below. And one blank: a paid run on a subscription endpoint
+ * (OpenCode Go) reports the same field, but it is the overage past the
+ * allowance, not the run's cost, so it has no actual (`subscriptionActual`).
  */
 function actualCost(
   run: PriceableRun & { startedAt?: number | null },
   reportedUsd: number | null,
   coverage: CostCoverage | null,
 ): CostFigure {
+  if (isSubscriptionRun(run)) return subscriptionActual(reportedUsd, coverage);
   if (reportedUsd === null) return none("provider reports no cost for this run");
   const claudeCode = isCliReported(run);
   const unreported = coverage?.unreported;
@@ -643,6 +665,36 @@ function actualCost(
 }
 
 const usdText = (v: number): string => `$${v.toFixed(2)}`;
+
+/**
+ * What a subscription run's own `usage.cost` was, said rather than shown as
+ * its cost. Inside the allowance it is zero, which read as an actual made every
+ * OpenCode Go run free; past a spent allowance it is Go's Extra Usage, billed
+ * to the balance (`usage.opencode.billing_source: "balance"`), and that is a
+ * real charge, so a non-zero sum is named here and on the expected figure's
+ * note (`runCost`) rather than dropped. Four places, so a few cents of
+ * overage do not print as $0.00.
+ */
+function subscriptionCharge(reportedUsd: number | null, coverage: CostCoverage | null): string {
+  if (reportedUsd === null) return "its responses reported no usage.cost";
+  const on = coverage === null ? "" : ` on ${coverage.costed} of ${coverage.costed + coverage.uncosted} responses`;
+  return reportedUsd > 0
+    ? `its responses' usage.cost came to $${reportedUsd.toFixed(4)}${on}: Extra Usage billed to the balance past a spent allowance, a real charge on top of the plan`
+    : `its responses' usage.cost was $0${on}, inside the allowance`;
+}
+
+/**
+ * The actual for a paid run on a subscription endpoint: none, with the
+ * provider's own figure in the note. The run's cost is the list-price estimate,
+ * as-if-metered — the treatment a codex run gets (operator's decision,
+ * 2026-11-16) — and every surface that falls back to the expected figure
+ * shows it so.
+ */
+function subscriptionActual(reportedUsd: number | null, coverage: CostCoverage | null): CostFigure {
+  return none(
+    `a subscription endpoint, so no actual: ${subscriptionCharge(reportedUsd, coverage)}; the cost is the list-price estimate, as-if-metered`,
+  );
+}
 
 /**
  * A claude-code actual with its unreported turns put back.
@@ -760,7 +812,12 @@ export function runCost(args: {
   coverage?: CostCoverage | null;
 }): CostView {
   const actual = actualCost(args.run, args.reportedUsd, args.coverage ?? null);
-  const expected = expectedCost(args);
+  const listed = expectedCost(args);
+  // A subscription run's overage rides with the figure the pages show for it.
+  const expected =
+    isSubscriptionRun(args.run) && args.reportedUsd !== null && args.reportedUsd > 0
+      ? { ...listed, note: `${listed.note}; ${subscriptionCharge(args.reportedUsd, args.coverage ?? null)}` }
+      : listed;
   return { ...expected, actual, expected };
 }
 

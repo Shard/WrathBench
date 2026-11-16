@@ -81,7 +81,7 @@ export interface CatalogueFamily {
   source?: string;
 }
 
-/** Who a price row is from: OpenRouter (synced), Anthropic (by hand), or a metered endpoint matched on its base. */
+/** Who a price row is from: OpenRouter (synced), Anthropic (by hand), or another endpoint matched on its base. */
 export interface CatalogueProvider {
   name: string;
   /** OpenRouter only: the day `infra/sync-prices.ts` last read the catalogue. */
@@ -93,6 +93,12 @@ export interface CatalogueProvider {
   source?: PriceSource;
   /** An endpoint provider's default note for its rows; `{asOf}` is the row's date. */
   note?: string;
+  /**
+   * An endpoint provider billed as a flat plan (OpenCode Go): its rows are
+   * as-if-metered, and the per-response `usage.cost` it reports is the overage
+   * past the allowance, not the run's cost (`runner/viewer/pricing.ts`).
+   */
+  subscription?: boolean;
 }
 
 /** One OpenRouter id's synced windows. An empty list is an id the catalogue no longer prices. */
@@ -113,7 +119,7 @@ export interface AnthropicPrice {
   unpriced?: string;
 }
 
-/** A metered endpoint's price for this model, matched on the run's base and id. */
+/** A non-OpenRouter endpoint's price for this model, matched on the run's base and id. */
 export interface EndpointPrice {
   /** The ids the endpoint serves this model under, exact; the entry's key when absent. */
   ids?: readonly string[];
@@ -383,6 +389,8 @@ export interface EndpointRow {
   asOf: string;
   source: PriceSource;
   note: string;
+  /** The provider's `subscription`: the row is a comparison, not a bill. */
+  subscription: boolean;
 }
 
 /** The flat views of one catalogue's prices. Pure; the module's own are below. */
@@ -425,6 +433,7 @@ export function priceTables(cat: ModelCatalogue): {
           asOf: row.asOf,
           source: row.source ?? provider.source ?? "list",
           note: row.note ?? (provider.note ?? "").replaceAll("{asOf}", row.asOf),
+          subscription: provider.subscription === true,
         });
       }
     }
@@ -451,7 +460,7 @@ export const OPENROUTER_DELISTED: Readonly<Record<string, string>> = /* @__PURE_
 export const ANTHROPIC_PRICES: readonly AnthropicRow[] = /* @__PURE__ */ table("anthropic");
 /** Claude models with no row on purpose, and why — a decided blank, not a missing one. */
 export const ANTHROPIC_UNPRICED: Readonly<Record<string, string>> = /* @__PURE__ */ table("anthropicUnpriced");
-/** Metered endpoints that are not OpenRouter, matched on the run's base and id. */
+/** Endpoints that are not OpenRouter (metered, or a subscription), matched on the run's base and id. */
 export const ENDPOINT_PRICES: readonly EndpointRow[] = /* @__PURE__ */ table("endpoints");
 
 // -------------------------------------------------------------- validation
@@ -528,7 +537,7 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
   for (const [id, p] of Object.entries(providers)) {
     const at = `${where}: providers.${id}`;
     if (!isObj(p)) throw new Error(`${at} must be an object`);
-    only(p, ["name", "asOf", "apiBase", "label", "source", "note"], at);
+    only(p, ["name", "asOf", "apiBase", "label", "source", "note", "subscription"], at);
     str(p["name"], `${at}.name`);
     if (id === "openrouter" && (typeof p["asOf"] !== "string" || !DAY.test(p["asOf"]))) throw new Error(`${at}.asOf must be a YYYY-MM-DD day`);
     if (p["apiBase"] !== undefined) {
@@ -541,6 +550,9 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
       if (!SAFE_SLUG.test(str(p["label"], `${at}.label`))) throw new Error(`${at}.label must match ${SAFE_SLUG}`);
     }
     if (p["source"] !== undefined && !SOURCES.includes(p["source"] as string)) throw new Error(`${at}.source must be list or catalogue`);
+    if (p["subscription"] !== undefined && (p["subscription"] !== true || p["apiBase"] === undefined)) {
+      throw new Error(`${at}.subscription must be true, on an endpoint provider`);
+    }
   }
 
   const families = top["families"];

@@ -660,8 +660,9 @@ Go slug, like an OpenRouter `:free` id, stays a free model of its own. Go no lon
 headers, so the run records the slug only. A `-free` Go slug derives free and
 runs on a free `opencode-go` credential; any other derives paid, runs on the
 paid one with its usage budget, and is priced by an `opencode-go` endpoint
-row on its catalogue entry. Each response reports its charge (`usage.cost`,
-zero inside the allowance) and where it was billed
+row on its catalogue entry, as an as-if-metered estimate (docs/COSTS.md, §1).
+Each response reports its charge (`usage.cost`, zero inside the allowance,
+which the viewer never reads as the run's cost) and where it was billed
 (`usage.opencode.billing_source`): `balance` means Go's Extra Usage billed the
 account past a spent allowance, which the run records and the fleet holds as
 `overage` ("The usage window"). With Extra Usage off, a spent allowance

@@ -426,7 +426,8 @@ describe("the hand-held provider table", () => {
     expect(ds.id).toBe("opencode-go/deepseek-v4.1-flash");
     expect([ds.input, ds.output, ds.cacheRead]).toEqual([0.15, 0.6, 0.003]);
     expect(ds.source).toBe("catalogue");
-    expect(ds.asIfMetered).toBe(false);
+    // Go is a subscription: the listing is a comparison, not a bill.
+    expect(ds.asIfMetered).toBe(true);
     for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5"]) expect(priceFor({ ...go, model: m })?.id).toBe(`opencode-go/${m}`);
     // The $0 Go slugs are free by their suffix, as on every host.
     expect(priceFor({ ...go, model: "longcat-2.5-preview-free" })?.id).toBe("free-tier");
@@ -899,6 +900,74 @@ describe("runCost", () => {
     expect(c.basis).toBe("list-price");
     expect(c.usd).toBe(0);
     expect(c.asIfMetered).toBe(true);
+  });
+});
+
+describe("a run on the OpenCode Go subscription", () => {
+  /*
+   * Go reports `usage.cost` on every response, zero inside the allowance, so
+   * read as an actual every Go run was free. Operator's decision, 2026-11-16:
+   * priced at the listing, as-if-metered, as a codex run is. The tokens are
+   * fleet-deepseek-v41-flash-e360-deepseek-v4-1-flash-20261116-a2's, which
+   * reported $0 on 771 of 771 responses.
+   */
+  const go: PriceableRun = { model: "deepseek-v4.1-flash", apiBase: OPENCODE_GO_BASE, platform: "opencode.ai", driver: "openai", harness: "wrathbench" };
+  const e360 = tokens({ promptTokens: 17_763_781, cacheReadTokens: 12_862_592, cacheWriteTokens: 0, completionTokens: 1_047_384, turns: 771 });
+  const allCosted = { costed: 771, uncosted: 0 };
+
+  test("a reported $0 is not its cost: the listing is, as-if-metered, and the zero is said in the note", () => {
+    const c = runCost({ run: { ...go, startedAt: Date.parse("2026-11-16T06:08:01Z") }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.usd).toBeNull();
+    expect(c.actual.note).toContain("usage.cost was $0 on 771 of 771 responses");
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.priceId).toBe("opencode-go/deepseek-v4.1-flash");
+    expect(c.expected.asIfMetered).toBe(true);
+    expect(c.expected.usd).toBeCloseTo(1.4022, 4);
+    // The top-level figure is the expected one.
+    expect(c.usd).toBe(c.expected.usd);
+  });
+
+  test("an overage past the allowance is a real charge, kept in both notes", () => {
+    const c = runCost({ run: go, tokens: e360, reportedUsd: 0.0031, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.note).toContain("$0.0031");
+    expect(c.actual.note).toContain("balance");
+    expect(c.expected.usd).toBeCloseTo(1.4022, 4);
+    expect(c.expected.note).toContain("$0.0031");
+    // No charge reported at all reads the same way, and says so.
+    expect(runCost({ run: go, tokens: e360, reportedUsd: null }).actual.note).toContain("reported no usage.cost");
+  });
+
+  test("a paid Go model with no row reads unpriced, never as its responses' $0", () => {
+    const c = runCost({ run: { ...go, model: "glm-5.3" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.expected.basis).toBe("none");
+    expect(c.expected.note).toContain("prices.endpoints");
+  });
+
+  test("a free Go slug stays free, and keeps its own reading", () => {
+    const c = runCost({ run: { ...go, model: "cat-jam-free" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.expected.priceId).toBe("free-tier");
+    expect(c.expected.usd).toBe(0);
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.usd).toBe(0);
+  });
+
+  test("an OpenRouter run with a reported cost is still read as reported, metered for real", () => {
+    const or: PriceableRun = { model: "deepseek/deepseek-v4-flash-0731", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    const c = runCost({ run: or, tokens: e360, reportedUsd: 1.37, coverage: allCosted });
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.usd).toBe(1.37);
+    expect(c.actual.asIfMetered).toBe(false);
+    expect(c.expected.asIfMetered).toBe(false);
+  });
+
+  test("omen-alpha on Go's older base keeps the provider's zero as its actual", () => {
+    const omen: PriceableRun = { model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", platform: "opencode.ai", driver: "openai", harness: "wrathbench" };
+    const c = runCost({ run: omen, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.actual.basis).toBe("reported");
+    expect(c.expected.asIfMetered).toBe(false);
   });
 });
 
