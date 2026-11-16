@@ -6,7 +6,6 @@ import {
   currentModels,
   defaultLadderRuns,
   inChartGroup,
-  newestConditions,
   pickChartGroup,
   filterOptions,
   lineOf,
@@ -17,6 +16,7 @@ import {
   type EffortEntry,
   type ModelEntry,
 } from "../src/lib/ladderfilter";
+import { entryKeyOf } from "../src/lib/ladder";
 
 const e = (model: string, effort: string | null, cost: number, xp: number): EffortEntry => ({
   model,
@@ -323,7 +323,7 @@ describe("currentModels", () => {
   });
 });
 
-describe("the condition rules", () => {
+describe("conditions and charts", () => {
   const cond = (id: string, over: Partial<RunCondition> = {}): RunCondition => ({ id, loop: "snippet", yield: false, pinned: true, wiki: true, subject: "hosted", ...over });
   const r = (runId: string, model: string, startedAt: number, condition: RunCondition, unscored: string | null = null): ResultRun =>
     ({ runId, model, startedAt, condition, unscored, harnessSeries: "0.5", episode: "e90", effort: null, harness: "wrathbench" }) as unknown as ResultRun;
@@ -340,34 +340,12 @@ describe("the condition rules", () => {
     r("c1", "c", 50, snippetLow),
   ];
 
-  test("each model keeps the condition whose latest counted run started last, and every run of it", () => {
-    expect(newestConditions(runs).map((x) => x.runId)).toEqual(["a2", "b2", "c1"]);
-  });
-
-  test("the choice is per model, effort and window: each keeps a row", () => {
-    const efforts = [
-      { ...r("lo", "m", 100, cond("s-lo")), effort: "low" },
-      { ...r("hi", "m", 200, cond("s-hi")), effort: "high" },
-      { ...r("hi-p", "m", 300, cond("p-hi", { loop: "program" })), effort: "high" },
-    ] as ResultRun[];
-    expect(newestConditions(efforts).map((x) => x.runId)).toEqual(["lo", "hi-p"]);
-    // The compaction window is a row of its own the same way.
-    const windows = [
-      { ...r("w100", "m", 100, cond("s-100")), compactWindow: "100k" },
-      { ...r("w300", "m", 200, cond("s-300")), compactWindow: "300k" },
-    ] as ResultRun[];
-    expect(newestConditions(windows).map((x) => x.runId)).toEqual(["w100", "w300"]);
-  });
-
-  test("an unscored run never chooses, and a model with no counted run keeps what it has", () => {
-    const onlyUnscored = [r("u1", "u", 10, snippetLow, "unscored (x)"), r("u2", "u", 20, program, "unscored (x)")];
-    expect(newestConditions(onlyUnscored).map((x) => x.runId)).toEqual(["u1", "u2"]);
-  });
-
-  test("ties go to the id that sorts first, so the choice is a function of the set", () => {
-    const tied = [r("x", "m", 1, cond("z")), r("y", "m", 1, cond("a"))];
-    expect(newestConditions(tied).map((x) => x.runId)).toEqual(["y"]);
-    expect(newestConditions([...tied].reverse()).map((x) => x.runId)).toEqual(["y"]);
+  test("every condition of a model is its own row by default, never pooled (operator, 2026-11-16)", () => {
+    // Two conditions of one model on one chart: the older keeps its row beside the newer.
+    const two = [r("old", "m", 100, cond("s-old")), r("new", "m", 900, cond("s-new")), r("again", "m", 50, cond("s-old"))];
+    const shown = defaultLadderRuns(two);
+    expect(shown.map((x) => x.runId)).toEqual(["old", "new", "again"]);
+    expect([...new Set(shown.map(entryKeyOf))]).toEqual(["m\ns-old", "m\ns-new"]);
   });
 
   test("chart groups count entries, most first; the program loop is never charted with the snippet loop", () => {
@@ -385,9 +363,9 @@ describe("the condition rules", () => {
     expect(pickChartGroup([], "snippet")).toBeNull();
   });
 
-  test("the default view: newest conditions, on the chart holding the most entries", () => {
-    // b's newest is the program loop, so it leaves the snippet chart rather than showing an older row there.
-    expect(defaultLadderRuns(runs).map((x) => x.runId)).toEqual(["a2", "c1"]);
+  test("the default view: every condition, on the chart holding the most entries", () => {
+    // b's program-loop runs are on their own chart; its snippet runs stay on this one beside a's two conditions.
+    expect(defaultLadderRuns(runs).map((x) => x.runId)).toEqual(["a1", "a2", "a3", "b1", "b3", "c1"]);
     expect(defaultLadderRuns([])).toEqual([]);
   });
 });

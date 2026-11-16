@@ -74,7 +74,6 @@ import {
   companyOf,
   currentModels,
   inChartGroup,
-  newestConditions,
   pickChartGroup,
   filterOptions,
   lineOf,
@@ -213,9 +212,6 @@ export default function Ladder() {
   /** The model rule, the same way: ON by default, `?models=all` the one form that turns it off. */
   const current = (): boolean =>
     !freeplay() && (Array.isArray(params.models) ? params.models[0] : params.models) !== "all";
-  /** The condition rule, the same way: ON by default, `?conditions=all` the one form that turns it off. */
-  const newest = (): boolean =>
-    !freeplay() && (Array.isArray(params.conditions) ? params.conditions[0] : params.conditions) !== "all";
   /*
    * Which chart a scored tier draws: the scatter of roster entries, the
    * default, or every run as a line of xp against active playtime
@@ -241,23 +237,21 @@ export default function Ladder() {
     ),
   );
   /*
-   * The condition rule, then the chart. Each model at each effort and window under its newest condition
-   * (`newestConditions`) unless `?conditions=all`, over the whole narrowed tier
-   * so a model whose newest condition is on another chart is not shown here
-   * under an older one; then one chart group (`chartGroups`), because the
-   * loop and the wiki never share a chart (operator, 2026-11-14); routing
-   * does (operator, 2026-11-16). `?group=` picks one (`pickChartGroup`, which
-   * reads an old `-unpinned` id as its loop's); the default, and the fallback
-   * for a group the tier no longer holds, is the one with the most entries.
-   * The effort and model rules below judge only what is left, so neither
-   * compares across charts.
+   * The chart. Every condition is its own row (operator, 2026-11-16), so
+   * nothing chooses between a model's conditions; a `?conditions=all` link
+   * from when something did reads as the default. One chart group
+   * (`chartGroups`), because the loop and the wiki never share a chart
+   * (operator, 2026-11-14); routing does (operator, 2026-11-16). `?group=`
+   * picks one (`pickChartGroup`, which reads an old `-unpinned` id as its
+   * loop's); the default, and the fallback for a group the tier no longer
+   * holds, is the one with the most entries. The effort and model rules
+   * below judge only what is left, so neither compares across charts.
    */
-  const conditioned = createMemo(() => (newest() ? newestConditions(narrowed()) : narrowed()));
-  const groupsOnPage = createMemo(() => (freeplay() ? [] : chartGroups(conditioned())));
+  const groupsOnPage = createMemo(() => (freeplay() ? [] : chartGroups(narrowed())));
   const group = (): string | null => pickChartGroup(groupsOnPage(), Array.isArray(params.group) ? params.group[0] : params.group);
   const charted = createMemo(() => {
     const g = group();
-    return g === null ? conditioned() : inChartGroup(conditioned(), g);
+    return g === null ? narrowed() : inChartGroup(narrowed(), g);
   });
   /*
    * The entries the effort rule hides, as entry keys (`entryKeyOf`).
@@ -512,17 +506,6 @@ export default function Ladder() {
               onChange={(e) => setParams({ models: e.currentTarget.checked ? undefined : "all" }, { replace: true })}
             />
             <span>current models</span>
-          </label>
-          <label
-            class="filter check"
-            title="Shows each model at each effort and compaction window under its newest condition only: the one whose latest counted run started last. A condition is the series, episode, harness, effort, routing, wiki, compaction window, loop and yield; a row never mixes two."
-          >
-            <input
-              type="checkbox"
-              checked={newest()}
-              onChange={(e) => setParams({ conditions: e.currentTarget.checked ? undefined : "all" }, { replace: true })}
-            />
-            <span>newest condition</span>
           </label>
         </Show>
         </div>
