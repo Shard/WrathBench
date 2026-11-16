@@ -90,10 +90,9 @@ says why: the viewer's figure is then the one.
 `stuck`'s verdict is the progress line alone; the other lines are evidence,
 and `asks` is a phrase heuristic. On a v1 run the progress line counts the
 record's deaths: `death loop: N deaths …` is `STUCK` (at least `--deaths`, 5,
-after the window's last xp or turn-in, or in all of it with none), however far
-the corpse runs moved or what the repairs and loot changed; fewer deaths print
-as `N death(s)` beside what moved. A run that dies and still gains xp between
-deaths is progressing. `unjudged` means what was recorded does not
+in the window), however far the corpse runs moved, what the repairs and loot
+changed or what xp came between the deaths, which it names `beside` them;
+fewer deaths print as `N death(s)` beside what moved. `unjudged` means what was recorded does not
 cover the window (a young or resumed run, a pause, a runner that was down),
 not that the run is fine. A 0.5 run is covered by its minute state samples;
 a v1 run's trace writes only changes, so a character standing still has no

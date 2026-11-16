@@ -3538,13 +3538,14 @@ export const STUCK_DEFAULTS = {
   /** A gap between state samples (or at either end of the window) longer than this leaves the window unjudged. */
   maxGapMs: 15 * 60_000,
   /**
-   * Deaths after the window's last xp or turn-in (or in the window, with
-   * none) that are a death loop: stuck whatever moved. A corpse run and a
-   * graveyard walk move the character, a repair spends money and a loot
-   * changes the bags, so a character dying at the same camp over and over
-   * read as progressing (a freeplay run, 18 deaths at two camps and no xp for
-   * over an hour). Five because a healthy levelling hour dies once or twice,
-   * and any xp starts the count again.
+   * Deaths in the window that are a death loop: stuck whatever moved and
+   * whatever xp did. A corpse run and a graveyard walk move the character, a
+   * repair spends money and a loot changes the bags, so a character dying at
+   * the same camp over and over read as progressing (a freeplay run, 18
+   * deaths at two camps and no xp for over an hour). Counted over the whole
+   * window, not from the last gain: one kill between deaths used to start
+   * the count again and hid nine deaths in three hours behind a single xp
+   * tick. Five because a healthy levelling hour dies once or twice.
    */
   deaths: 5,
   /** One identical error, digits aside, this many times in the window. */
@@ -3682,8 +3683,8 @@ export interface ProgressVerdict {
   /** What changed, what held, or why the window cannot be judged. */
   evidence: string;
   samples: number;
-  /** A stuck verdict that is a death loop: its deaths, and the xp or turn-in it counts from (null: the window's start). */
-  deathLoop?: { deaths: number; since: number | null };
+  /** A stuck verdict that is a death loop: its deaths in the window. */
+  deathLoop?: { deaths: number };
 }
 
 /**
@@ -3705,12 +3706,11 @@ export interface ProgressVerdict {
  * no sample is a stretch in which nothing changed.
  *
  * Given `deaths` (a v1 run's `death` rows), a covered window with at least
- * `t.deaths` of them after its last (level, xp) rise or turn-in (or in the
- * whole window, with none) is a death loop and stuck, whatever moved or
- * changed: the walk from the graveyard to the corpse is movement, a repair is
- * money and a loot is items, and none of it is the character getting
- * anywhere. Counted from the last gain, so a level reached early in the
- * window does not hide the loop that followed it.
+ * `t.deaths` of them is a death loop and stuck, whatever moved, changed or
+ * was gained: the walk from the graveyard to the corpse is movement, a
+ * repair is money and a loot is items, and an xp tick between deaths is not
+ * the character getting anywhere either. The evidence names any gain beside
+ * the deaths.
  */
 export function progressVerdict(
   all: readonly ProgressSample[],
@@ -3757,11 +3757,8 @@ export function progressVerdict(
   const maps = new Set<number>();
   let map = false;
   const carry = newProgressCarry();
-  /** When the newest (level, xp) rise or turn-in was read: what a death loop counts from. */
-  let gained: number | null = null;
   for (const x of s) {
     const step = progressStep(carry, x);
-    if (step.rose || step.quests > 0) gained = x.ts;
     rose ||= step.rose;
     quests += step.quests;
     money ||= step.money;
@@ -3793,16 +3790,14 @@ export function progressVerdict(
       ? `${n} samples over ${fmtAge(s[n - 1]!.ts - s[0]!.ts)}, largest gap ${fmtAge(gap.ms)}`
       : `${inside.length} trace sample(s) and ${k - inside.length} other record write(s) in the window, largest gap ${fmtAge(gap.ms)}`;
   const died = deaths?.filter((ts) => ts >= w.since && ts <= w.until).length ?? 0;
-  const looped = deaths?.filter((ts) => (gained === null ? ts >= w.since : ts > gained) && ts <= w.until).length ?? 0;
-  if (looped >= t.deaths) {
+  if (died >= t.deaths) {
+    // Whatever was gained beside them is said, and does not end the loop.
+    const gains = changes.slice(0, changes.length - moved.length);
+    const beside = gains.length > 0 ? `, beside ${gains.join(", ")}` : ` with ${lvl} throughout and quests +0`;
     const discounted = moved.length > 0 ? `, which discounts ${moved.join(", ")}` : "";
-    const from =
-      gained === null
-        ? `in the window (threshold ${t.deaths}) with ${lvl} throughout and quests +0`
-        : `since the last xp or turn-in at ${clock(gained)} (threshold ${t.deaths}), at L${last("level") ?? "?"} ${last("xp") ?? "?"}xp`;
-    return { state: "stuck", evidence: `death loop: ${looped} deaths ${from}${discounted} · ${span}`, samples: n, deathLoop: { deaths: looped, since: gained } };
+    return { state: "stuck", evidence: `death loop: ${died} deaths in the window (threshold ${t.deaths})${beside}${discounted} · ${span}`, samples: n, deathLoop: { deaths: died } };
   }
-  // Fewer deaths, or any xp or turn-in beside them, is said and judged as before.
+  // Fewer deaths are said beside the evidence and judged as before.
   const deathNote = died > 0 ? ` · ${died} death(s)` : "";
   if (changes.length > 0) return { state: "progressing", evidence: `${changes.join(" · ")}${deathNote} · ${span}`, samples: n };
   const where = origin === null ? "position unknown" : `map ${origin.map}, within ${stray.toFixed(1)} yd of (${origin.x!.toFixed(0)}, ${origin.y!.toFixed(0)})`;
@@ -3989,7 +3984,7 @@ export function stuckReport(a: StuckScan, w: { since: number; until: number }, t
 
 /** The one line `fleet status` and `inspect stuck` without a run id print for a stuck run. */
 export function stuckFlag(p: ProgressVerdict, windowMs: number): string {
-  // A death loop's evidence says itself, and the window may have held a gain before it.
+  // A death loop's evidence says itself, and the window may have held a gain beside it.
   return p.deathLoop !== undefined ? p.evidence : `no progress in ${fmtAge(windowMs)}: ${p.evidence}`;
 }
 
@@ -4105,7 +4100,7 @@ export async function inspectStuck(runId: string, opts: Ctx & { until: number | 
   const whose = characters === null ? "" : characters.length === 1 ? " (its one character)" : ` (all ${characters.length} characters: a fan-out run is stuck only when every one is)`;
   say(`${runId}: the stuck detector over ${fmtAge(t.windowMs)} to ${iso(report.window.until)} (${anchor}), UTC`);
   say(
-    `verdict   ${p.state === "stuck" ? `STUCK: ${p.deathLoop !== undefined ? "a death loop, no xp or turn-in across its deaths" : "no game progress in the window"}${whose}` : p.state === "progressing" ? `not stuck: ${characters === null ? "the" : "a"} character made progress` : "unjudged: what was recorded does not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
+    `verdict   ${p.state === "stuck" ? `STUCK: ${p.deathLoop !== undefined ? `a death loop, ${t.deaths} or more deaths in the window whatever xp did` : "no game progress in the window"}${whose}` : p.state === "progressing" ? `not stuck: ${characters === null ? "the" : "a"} character made progress` : "unjudged: what was recorded does not cover the window"} (only the progress signal flags a run; the rest are evidence)`,
   );
   say(`source    ${via.line}`);
   if (characters === null) say(`progress  ${label(p)}  ${p.evidence}`);
