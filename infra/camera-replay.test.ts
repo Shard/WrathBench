@@ -69,7 +69,8 @@ describe("the camera's video, viewer to bucket", () => {
     // The public handle's list is projected: its media are the viewer's routes.
     const c = (await (await pub(new Request(`http://x/api/run/${ENDED_RUN}/clips`))).json()) as ClipsResponse;
     expect(c.parts.map((x) => x.video)).toEqual([`/api/run/${ENDED_RUN}/clip/part-000.mp4`, `/api/run/${ENDED_RUN}/clip/part-001.mp4`]);
-    expect(c.chapters.map((x) => x.type)).toEqual(["zone", "quest", "level", "death"]);
+    // The fixture's list was cut before the chapter rule: its zone, turn-in and death are not served.
+    expect(c.chapters.map((x) => x.type)).toEqual(["level", "boss"]);
   }, 60_000);
 
   test("a pass publishes a run's parts as their own objects, named by its clips.json, and a second pass uploads none again", async () => {
@@ -94,7 +95,7 @@ describe("the camera's video, viewer to bucket", () => {
     expect(runs.runs.filter((r) => r.snapshot?.clips !== undefined).map((r) => r.runId)).toEqual([ENDED_RUN]);
     const clips = json<ClipsResponse>(b.objects.get(row.snapshot!.clips!));
     expect(clips.parts.map((c) => c.name)).toEqual(["part-000", "part-001"]);
-    expect(clips.chapters).toHaveLength(4);
+    expect(clips.chapters).toHaveLength(2);
     expect(clips.timemap.length).toBeGreaterThan(1);
     for (const c of clips.parts) {
       expect(classifyPath(c.video)).toMatchObject({ kind: "clip", runId: ENDED_RUN });
@@ -111,7 +112,7 @@ describe("the camera's video, viewer to bucket", () => {
     const highlightKey = json<{ artifacts: Record<string, string> }>(b.objects.get("v1/manifest.json")).artifacts["highlight.json"]!;
     const highlight = json<HighlightResponse>(b.objects.get(highlightKey));
     expect(highlight.highlight?.part.name).toBe("part-001");
-    expect(highlight.highlight?.chapter?.type).toBe("death");
+    expect(highlight.highlight?.chapter?.type).toBe("boss");
     expect(highlight.highlight?.model).toBe("fixture/ended-model");
     expect(b.objects.has(highlight.highlight!.part.video)).toBe(true);
     expect(highlight.highlight!.part.video).toBe(clips.parts[1]!.video);

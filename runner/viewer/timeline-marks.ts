@@ -46,8 +46,29 @@ export const BOSS_RANK = 3;
  * entry is one a caller names (a five-man dungeon's bosses are elites, rank 1,
  * and are known only by entry).
  */
-export function isBossKill(kill: { entry?: number | null; rank?: number | null }, named: ReadonlySet<number> = new Set()): boolean {
+export function isBossKill(kill: { entry?: number | null | undefined; rank?: number | null | undefined }, named: ReadonlySet<number> = new Set()): boolean {
   return kill.rank === BOSS_RANK || (typeof kill.entry === "number" && named.has(kill.entry));
+}
+
+/**
+ * A run's boss kills off the kills the server reported to it: each boss once
+ * (a party's kill is told to every member in range, and a recorder that
+ * restarted can be told again), oldest first, named where `names` knows the
+ * entry.
+ */
+export function bossKillsOf(
+  kills: readonly { ts: number; victimGuid: string; entry: number | null; rank?: number | undefined }[],
+  named: ReadonlySet<number>,
+  names: ReadonlyMap<number, string> = new Map(),
+): BossKill[] {
+  const seen = new Set<string>();
+  const out: BossKill[] = [];
+  for (const k of [...kills].sort((a, b) => a.ts - b.ts)) {
+    if (!isBossKill(k, named) || seen.has(k.victimGuid)) continue;
+    seen.add(k.victimGuid);
+    out.push({ ts: k.ts, entry: k.entry, name: k.entry === null ? null : (names.get(k.entry) ?? null) });
+  }
+  return out;
 }
 
 /** One mark on a run's timeline, at a run time. */

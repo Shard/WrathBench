@@ -171,6 +171,18 @@ interface Spec {
   /** Where it walks, and its level; the open field and 7 when left out. */
   ground?: Ground;
   level?: number;
+  /** Its samples read the levels its turns gain (`levelAt`), so its track and its chart climb with its marks. */
+  climbs?: true;
+}
+
+/** A level every twelfth turn, at the turn-in's moment: the `level` event's time, and the level a sample reads after it. */
+const LEVEL_EVERY_TURNS = 12;
+const levelEventAt = (spec: Spec, turn: number): number => spec.startedAt + 30_000 + (turn - 1) * 60_000 + 12_900;
+function levelAt(spec: Spec, t: number): number {
+  if (spec.climbs !== true) return spec.level ?? 7;
+  let level = 6;
+  for (let turn = 2; levelEventAt(spec, turn) <= t; turn += LEVEL_EVERY_TURNS) level++;
+  return level;
 }
 
 /** How often a character says something: often enough that every shot has a bubble up, and now and then two. */
@@ -207,7 +219,7 @@ function traceRows(spec: Spec, from: number, to: number, keyAtFrom = true): Trac
     const p = position(t, spec.phase, at);
     const windowStart = t - (t % TRACE_WINDOW_MS);
     if ((t === from && keyAtFrom) || t - windowStart < 2_000) {
-      rows.push({ ts: t, kind: "key", map: at.map, x: p.x, y: p.y, z: at.z, o: p.o, data: keyData(spec.level ?? 7, xp(t), pelts(t), money(t), complete(t)) });
+      rows.push({ ts: t, kind: "key", map: at.map, x: p.x, y: p.y, z: at.z, o: p.o, data: keyData(levelAt(spec, t), xp(t), pelts(t), money(t), complete(t)) });
       lastPelts = pelts(t);
       lastComplete = complete(t);
       continue;
@@ -413,6 +425,11 @@ function writeTurn(traj: Trajectory, session: FixtureSession, spec: Spec, turn: 
         note(t + 5_200, "cast_spell", { args: { spellId: 9101, targetGuid: "17379391038838735001" }, names: { spell: "Invented Strike", target: "Invented Wolf" }, status: 400, error: "out_of_range", hint: "step inside the spell's range before casting", count: 3 }),
       ],
     });
+    // One boss, late in a long enough run: a rank-3 kill, which the timeline marks as a chapter.
+    if (turn === 99) {
+      at(10_000);
+      w.ingest(drainOf(spec, { events: [{ kind: "kill", ts: t + 9_800, victimGuid: "17379391038838739999", entry: 99001, rank: 3, self: true, member: false }] }));
+    }
     if (turn % 12 === 3) {
       at(11_000);
       w.ingest(drainOf(spec, { events: [{ kind: "death", ts: t + 10_800, zone: 12, area: 9, released: false }] }));
@@ -626,6 +643,68 @@ function writeFreeplayAttempt(runsDir: string, a: FreeplayAttempt): Promise<void
   return closed;
 }
 
+/**
+ * A freeplay character three days and six hours into one attempt, ended: the
+ * run the timeline's zoom is for. A turn every twenty minutes, a level every
+ * five hours or so, a death now and then, two bosses, and two pauses (six
+ * hours and two), so its bar has bands, ticks, marks and gaps to draw.
+ */
+export const LONG_RUN = "fixture-long";
+const LONG_HOURS = 78;
+
+function writeLongRun(runsDir: string, startedAt: number): Promise<void> {
+  const dir = join(runsDir, LONG_RUN);
+  mkdirSync(dir, { recursive: true });
+  let clock = startedAt;
+  const traj = new Trajectory(dir, { now: () => clock });
+  const token = `${LONG_RUN}-fixture-token-000000000000`;
+  const name = "Longhaul";
+  const config = { ...loadRunConfig({ episode: "freeplay", account: "FIXTURE", driver: "openai", model: "fixture/long-model", character: name }), runId: LONG_RUN, token, runsDir };
+  traj.writeMeta({ runId: LONG_RUN, harnessVersion: "harness-fixture", startedAt, config, comparability: comparabilityOf(config, "harness-fixture") });
+  traj.setCharacter(LONG_RUN, name);
+  const id = createHash("sha256").update(token).digest("hex").slice(0, 16);
+  const writer = new SessionWriter({ dir: sessionDirOf(dir), id, stack: { version: "fixture" }, now: () => clock, log: () => {} });
+  writer.open();
+  const HOUR = 3_600_000;
+  const pauses: [number, number][] = [[20, 26], [50, 52]];
+  const paused = (h: number): boolean => pauses.some(([a, b]) => h >= a && h < b);
+  const rows: TraceRow[] = [];
+  const events: EventRow[] = [];
+  let level = 10;
+  let turn = 0;
+  let seq = 0;
+  for (let m = 1; m <= LONG_HOURS * 60; m += 20) {
+    const h = m / 60;
+    const t = startedAt + m * 60_000;
+    for (const [a, b] of pauses) {
+      if (m - 20 < a * 60 && m >= a * 60) {
+        clock = startedAt + a * HOUR;
+        traj.append({ t: "pause", reason: "usage-limit", detail: "an invented pause" });
+      }
+      if (m - 20 < b * 60 && m >= b * 60) {
+        clock = startedAt + b * HOUR;
+        traj.append({ t: "resume", turnOffset: turn, turns: 0 });
+      }
+    }
+    if (paused(h)) continue;
+    clock = t;
+    ++turn;
+    traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 });
+    traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}. Hour ${Math.floor(h)} of the long road: the next camp, then the pass.` } });
+    if (turn % 14 === 0) events.push({ kind: "level", ts: t + 5_000, seq: ++seq, from: level, to: ++level, xp: 40 });
+    if (turn % 23 === 5) events.push({ kind: "death", ts: t + 8_000, seq: ++seq, zone: 12, area: 9, released: false });
+    if (turn === 60 || turn === 170) events.push({ kind: "kill", ts: t + 9_000, seq: ++seq, victimGuid: `1737939103883874${turn}`, entry: 99000 + turn, rank: 3, self: true, member: false });
+    const p = position(t, 0);
+    rows.push({ ts: t, kind: "key", map: 0, x: p.x, y: p.y, z: CENTRE.z, o: p.o, data: { ...keyData(level, 100 * turn, 1, 400 * turn, false), xpMax: null } });
+  }
+  writer.ingest({ trace: { rows, dropped: 0, dict: DICT }, events: { rows: events, dropped: 0 }, nearby: { rows: [], dropped: 0, through: 0 }, moves: [], character: { guid: SELF_GUID, name, race: 1, class: 1 }, stream: { connected: true, events: 0, seq: 0 } });
+  clock = startedAt + LONG_HOURS * HOUR;
+  const closed = writer.close();
+  traj.setTermination(LONG_RUN, "idle", "idle watchdog");
+  traj.close();
+  return closed;
+}
+
 const PAD = (character: string): string => `# ${character}: an invented plan
 
 ## Goal
@@ -733,6 +812,8 @@ export interface Fixture {
   /** The live fan-out run, and its characters in name order. */
   fanoutLive: { runId: string; characters: string[] };
   ended: string;
+  /** An ended run of more than three days, for the timeline's zoom. */
+  long: string;
   /** Resolves once the ended run's session record is closed; the live runs' rings are on disk before `writeFixture` returns. */
   ready: Promise<void>;
   /** Keep the live run live: a position, a heartbeat and now and then a state sample. */
@@ -748,7 +829,8 @@ export const LIVE_RUN_4 = "fixture-live-4";
  * A camera's output for a run, in the contract's layout: `camera/clips.json`
  * (version 2) naming a video in two parts, each the same two-second synthetic
  * test pattern (ffmpeg's `testsrc`, `runner/test/fixtures/camera/`) and never
- * a game image, with chapters, the model's words and a time map over the
+ * a game image, with chapters (a list cut before the chapter rule: its zone,
+ * turn-in and death still listed, and not drawn), the model's words and a time map over the
  * run's span, and `meta.json` labelled `camera`. A frame on disk too, with no
  * index, which nothing may ever serve.
  */
@@ -781,6 +863,7 @@ function writeCamera(runsDir: string, runId: string, from: number, to: number, m
           { t: 1.5, part: 0, type: "quest", detail: "turned in quest 33", caption: "Pelts done; turning in." },
           { t: 2.5, part: 1, type: "level", detail: "reached level 5", caption: "Five pelts to go, then the scout by the old mill." },
           { t: 3.25, part: 1, type: "death", detail: "died", caption: "Too many wolves at once." },
+          { t: 3.5, part: 1, type: "boss", detail: "killed boss 99001", caption: "The foreman is down." },
         ],
         captions: [
           { t: 0, text: `${model}: heading out of the abbey.` },
@@ -991,6 +1074,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     traceTo: endedAt,
     phase: LOOP_MS / 3,
     scratchpad: PAD("Replayna"),
+    climbs: true,
   };
   const endedRun = writeRun(runsDir, endedSpec, endedAt);
   endedRun.traj.close();
@@ -1018,7 +1102,9 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     writeFreeplayAttempt(runsDir, { runId: FREEPLAY_RUN_2, continuedFrom: FREEPLAY_RUN, startedAt: freeplayAt + 4 * 3_600_000, minutes: 120, levels: [8, 12], events: [{ at: 1, kind: "zone", to: 1519 }, { at: 40, kind: "taxi" }] }),
     writeFreeplayAttempt(runsDir, { runId: FREEPLAY_FRESH, character: "Fernhollow", startedAt: freeplayAt + 7 * 3_600_000, minutes: 90, levels: [1, 6], events: [{ at: 1, kind: "area", to: 9 }, { at: 50, kind: "area", to: 24 }, { at: 55, kind: "area", to: 24 }] }),
   ];
-  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now)), ...freeplay]).then(() => undefined);
+  // A run of days, for the timeline's zoom.
+  const long = writeLongRun(runsDir, at(now - (LONG_HOURS + 4) * 3_600_000));
+  const ready = Promise.all([endedRun.session.writer.close(), ...fanoutRun.sessions.map((x) => x.writer.close()), writeDungeonRuns(runsDir, at(now)), ...freeplay, long]).then(() => undefined);
   writeLadderRun(runsDir, E90_RUN, { driver: "openai", model: "fixture/e90-model", character: "Laddera" }, 6, at(now - 5 * 3_600_000));
   // The same model through OpenCode Go, which stamps unpinned routing and
   // records the bare id where OpenRouter prefixes the vendor: one model, so
@@ -1101,6 +1187,7 @@ export function writeFixture(runsDir: string, now = Date.now()): Fixture {
     lives: liveSpecs.map((s) => s.runId),
     fanoutLive: { runId: FANOUT_LIVE_RUN, characters: fanoutLiveSpecs.map((s) => s.character).sort() },
     ended: ENDED_RUN,
+    long: LONG_RUN,
     ready,
     tick(t = Date.now()) {
       ring.tick(t);

@@ -133,8 +133,11 @@ describe("a party member's run page", () => {
       { ts: T0 + 4400, victimGuid: "7001", entry: 644, name: "Fixture Boss", self: true },
       { ts: T0 + 4600, victimGuid: "7002", entry: null, name: null, self: false },
     ]);
+    // The timeline's boss chapters, off the same kills: the Deadmines boss by its entry (an elite, rank 1),
+    // named as the block names it; the plain elite with no entry is no boss.
+    expect(d.bosses).toEqual([{ ts: T0 + 4400, entry: 644, name: "Fixture Boss" }]);
     expect(p.groups).toEqual([{ ts: T0 + 900, event: "joined", count: 2 }]);
-    // The death's own stamp, the one the run page's public sites do not carry.
+    // The death's own stamp.
     expect(p.deaths).toEqual([T0 + 4700]);
     // The party's lines only, the say left out.
     expect(p.chat).toEqual([
@@ -159,10 +162,12 @@ describe("a party member's run page", () => {
   test("the public handle serves the same block, still without accounts", async () => {
     const d = await detail(api(fixture(), true), `${STEM}-tank`);
     expect(d.party!.kills[0]!.name).toBe("Fixture Boss");
+    // The boss chapter crosses with its time and entry; the name, the client cache's, does not ride on it.
+    expect(d.bosses).toEqual([{ ts: T0 + 4400, entry: 644, name: null }]);
     expect(d.party!.chat).toHaveLength(2);
     expect(d.party!.deaths).toEqual([T0 + 4700]);
-    // The run page's own death sites keep the public shape: a turn, no time.
-    expect(d.deaths!.sites as unknown[]).toEqual([{ turn: 1 }]);
+    // The run page's own death sites in their public shape: the turn and the time, and nothing of where.
+    expect(d.deaths!.sites as unknown[]).toEqual([{ ts: T0 + 4700, turn: 1 }]);
     expect(JSON.stringify(d)).not.toContain("PARTYACCT");
   });
 

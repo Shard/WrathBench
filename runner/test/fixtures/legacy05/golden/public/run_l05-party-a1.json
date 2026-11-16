@@ -76,7 +76,7 @@
   "rosterName": null,
   "achievements": {"earned":3,"points":30,"ids":[96001,96002,96003]},
   "taxi": {"flights":1},
-  "deaths": {"deaths":1,"releases":1,"resurrects":1,"sites":[{"turn":4}]},
+  "deaths": {"deaths":1,"releases":1,"resurrects":1,"sites":[{"ts":1760000286000,"turn":4}]},
   "spells": {"learned":1,"atLogin":3,"ids":[93012],"marks":[{"id":93012,"ts":1760000233300,"turn":3}]},
   "talents": {"spends":1,"talents":1,"marks":[{"id":98001,"points":1,"ts":1760000233300,"turn":3}]},
   "trades": {"trades":1,"first":{"ts":1760000240000,"turn":3},"last":{"ts":1760000240000,"turn":3},"marks":[{"ts":1760000240000,"turn":3}]},

@@ -638,6 +638,19 @@ a run's ring goes overwrites its window with nothing, and no history of
 positions accumulates anywhere (docs/PUBLIC-DASHBOARD.md, "The units around a live
 run").
 
+## The timeline's marks
+
+`timeline-marks.ts` is the one rule for what a run's timeline marks: a level
+reached and a boss killed are chapters, a death is an event, and nothing else
+is marked. The dashboard's bar, the chapter list and the camera all read it. A
+run's detail carries what the bar needs: `leveling` and `deaths` as they were,
+and `bosses`, the kills the server reported to the run whose victim is a boss
+(creature rank 3, or a five-man dungeon's boss by entry, `isBossKill`), each
+once, named from the run's own client cache. The field is there only where
+there is one, so a run without keeps the body it had. In public mode a boss
+is its time and entry and no name, and a death is its turn and its time
+(`projectDeaths`).
+
 ## Camera replays
 
 A camera may follow a run (`docs/DATA-AND-LEGAL.md`; the director that runs
@@ -656,7 +669,10 @@ it (`camera.ts`):
   run is labelled `camera` only after it is filmed) and a 404 is a console
   error on each. The parts end at the first that
   does not read or whose file is missing, so the timeline has no gaps, and a
-  chapter, cue or time-map point past its end goes with them.
+  chapter, cue or time-map point past its end goes with them. A chapter is a
+  level reached or a boss killed (`timeline-marks.ts`, the one rule the
+  dashboard's timeline and the camera read too): a list cut before that rule
+  also names turn-ins, zones and deaths, and those are not served.
 - `/api/run/<id>/clip/<name>.mp4` and `.jpg`: a part's video and poster.
   Single byte ranges are honoured (206, `Content-Range`, 416 past the end;
   several ranges get the whole file), because a video seeks with them and

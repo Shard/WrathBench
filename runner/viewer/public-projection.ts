@@ -409,17 +409,19 @@ function projectSpells(f: SpellFacts): SpellFacts {
 }
 
 /**
- * A run's deaths as the run page's milestones row prints them: the three
- * counts and each death's turn. Deaths are public (operator, 2026-10-18); a
- * site's position, zone and the `first`/`last` ends are left out because no
- * page reads them.
+ * A run's deaths as the run page's milestones row prints them and its
+ * timeline marks them: the three counts, and each death's turn and time.
+ * Deaths are public (operator, 2026-10-18), and so is when (operator,
+ * 2026-11-16, for the timeline's ticks; every run with a death is re-keyed
+ * once by it). A site's position, zone and the `first`/`last` ends are left
+ * out because no page reads them.
  */
 function projectDeaths(f: DeathFacts): DeathFacts {
   return lean<DeathFacts>({
     deaths: f.deaths,
     releases: f.releases,
     resurrects: f.resurrects,
-    sites: f.sites.map((s) => lean<DeathSite>({ turn: s.turn })),
+    sites: f.sites.map((s) => lean<DeathSite>({ ts: s.ts, turn: s.turn })),
   });
 }
 
@@ -1554,6 +1556,11 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       : {}),
     ...(d.taxi !== undefined ? { taxi: d.taxi === null ? null : projectTaxi(d.taxi) } : {}),
     ...(d.deaths !== undefined ? { deaths: d.deaths === null ? null : projectDeaths(d.deaths) } : {}),
+    // The timeline's boss chapters: when, and the creature's entry. Its name is the client cache's and stays private.
+    // Only a run with a boss kill carries the field, so no other run's key moves.
+    ...(Array.isArray(d.bosses) && d.bosses.length > 0
+      ? { bosses: d.bosses.filter((b) => typeof b?.ts === "number").map((b) => ({ ts: b.ts, entry: typeof b.entry === "number" ? b.entry : null, name: null })) }
+      : {}),
     ...(d.spells !== undefined ? { spells: d.spells === null ? null : projectSpells(d.spells) } : {}),
     ...(d.talents !== undefined ? { talents: d.talents === null ? null : projectTalents(d.talents) } : {}),
     ...(d.trades !== undefined ? { trades: d.trades === null ? null : projectTrades(d.trades) } : {}),

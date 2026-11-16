@@ -72,8 +72,9 @@ import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
-import { partyDetailOf } from "./party-marks";
-import { boardsOf, DUNGEON_BOARD_VERSION } from "./dungeons";
+import { creatureNamesOf, partyDetailOf } from "./party-marks";
+import { bossKillsOf, isBossKill } from "./timeline-marks";
+import { boardsOf, DEADMINES_BOSSES, DUNGEON_BOARD_VERSION } from "./dungeons";
 import { dungeonMarksOf } from "./dungeon-marks";
 import {
   projectCampaigns,
@@ -150,6 +151,9 @@ import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
  */
 export const POLL_MS = 1000;
 export const WINDOW_MAX = ENTRIES_WINDOW;
+
+/** The five-man bosses known by entry: elites by rank, so the rank alone does not say (`isBossKill`). */
+const NAMED_BOSSES: ReadonlySet<number> = new Set(DEADMINES_BOSSES);
 
 /**
  * Where the `/entries` window that shows the moment `at` begins: the window
@@ -2026,6 +2030,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * other run's page pays nothing and keeps its shape.
        */
       const party = run.party === undefined ? null : await partyDetailOf(runsDir, runId, dir, tail);
+      /*
+       * The run's boss kills, for the timeline's chapters (`timeline-marks.ts`):
+       * rank-3 victims and the Deadmines' named bosses off the same kill
+       * marks, each named as the run's own client cache answered its entry.
+       */
+      const bossMarks = tail.kills.filter((k) => isBossKill(k, NAMED_BOSSES));
+      const bosses = bossKillsOf(bossMarks, NAMED_BOSSES, creatureNamesOf(dir, new Set(bossMarks.map((k) => k.entry).filter((e): e is number => e !== null))));
       const body: RunDetailResponse = {
         /*
          * The row's quest count is the newest sample's, and the counter is the
@@ -2068,6 +2079,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         taxi: tail.taxi,
         leveling: tail.leveling,
         deaths: tail.deaths,
+        // Only where there is one: a run with none keeps the body, and the published key, it had.
+        ...(bosses.length > 0 ? { bosses } : {}),
         spells: tail.spells,
         talents: tail.talents,
         trades: tail.trades,

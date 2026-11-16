@@ -135,12 +135,21 @@ describe("the clips route", () => {
 
   test("a chapter or a cue that does not read is dropped, and a time map that runs backwards loses the point", () => {
     const l = layout(undefined, {
-      chapters: [{ t: 1, part: 0, type: "start", detail: "x" }, { t: -1, part: 0, type: "level" }, { t: 1, part: 7, type: "level" }, { t: 1, part: 0, type: "quest", detail: "turned in quest 7" }],
+      // A kind that never was a chapter, two that do not fall on the video, the three a list cut before the rule holds and one that is a chapter still.
+      chapters: [
+        { t: 1, part: 0, type: "start", detail: "x" },
+        { t: -1, part: 0, type: "level" },
+        { t: 1, part: 7, type: "level" },
+        { t: 1, part: 0, type: "quest", detail: "turned in quest 7" },
+        { t: 1, part: 0, type: "zone", detail: "entered zone 12" },
+        { t: 1, part: 0, type: "death", detail: "died" },
+        { t: 1.5, part: 0, type: "boss", detail: "killed boss 644" },
+      ],
       captions: [{ t: 1 }, { t: 9, text: "past the end" }, { t: 1, text: "ok" }],
       timemap: [[0, T], [1, T - 5], [2, T + 5], "x"],
     });
     const v = readClips(l.runsDir, RUN)!;
-    expect(v.chapters).toEqual([{ t: 1, part: 0, type: "quest", detail: "turned in quest 7", caption: "" }]);
+    expect(v.chapters).toEqual([{ t: 1.5, part: 0, type: "boss", detail: "killed boss 644", caption: "" }]);
     expect(v.captions).toEqual([{ t: 1, text: "ok" }]);
     expect(v.timemap).toEqual([[0, T], [2, T + 5]]);
   });

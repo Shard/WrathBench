@@ -134,7 +134,8 @@ export async function partyDetailOf(runsDir: string, runId: string, dir: string,
   if (stamp === null) return null;
   const raw = tail.kills;
   const names = creatureNamesOf(dir, new Set(raw.map((k) => k.entry).filter((e): e is number => e !== null)));
-  const kills: PartyKillMark[] = raw.map((k) => ({ ...k, name: k.entry === null ? null : (names.get(k.entry) ?? null) }));
+  // The rank is the viewer's own, for the timeline's boss rule; the block serves what it always did.
+  const kills: PartyKillMark[] = raw.map(({ rank: _rank, ...k }) => ({ ...k, name: k.entry === null ? null : (names.get(k.entry) ?? null) }));
   const place = lastPlace(dir, runId);
   const where: PartyWhereView | null =
     place === null

@@ -18,6 +18,7 @@
  */
 
 import type { CameraEvent, CameraEventType } from "./layout";
+import { isBossKill } from "../../runner/viewer/timeline-marks";
 
 /** An event, at the session record's instant. */
 export interface TimedEvent extends CameraEvent {
@@ -36,14 +37,15 @@ export interface SessionEventRow {
   self?: unknown;
 }
 
-/** Creature rank 3 is a boss (creature_template.rank); the five-man bosses are elites, named by entry. */
-const BOSS_RANK = 3;
-
 /**
- * The camera event a session row is, or null. Only gains are events: a
- * recorder's first reading (`level`/`zone` without a `from`) states a
- * baseline and is not one. Details are ours, ids and numbers only, never
- * game text.
+ * The camera event a session row is, or null: a level gained, a death, a boss
+ * killed (`isBossKill`: creature rank 3, or one of the five-man bosses, which
+ * are elites and named by entry). Those are what a run's timeline marks
+ * (`runner/viewer/timeline-marks.ts`), and nothing else is worth a burst: a
+ * turn-in and a zone crossed were events until a real run's video was a
+ * solid band of them (operator, 2026-11-16). Only gains are events: a
+ * recorder's first reading (a `level` without a `from`) states a baseline and
+ * is not one. Details are ours, ids and numbers only, never game text.
  */
 export function cameraEventOf(row: SessionEventRow, bosses: ReadonlySet<number>): TimedEvent | null {
   const ts = row.ts;
@@ -51,17 +53,11 @@ export function cameraEventOf(row: SessionEventRow, bosses: ReadonlySet<number>)
     case "level":
       if (typeof row.from !== "number" || typeof row.to !== "number" || row.to <= row.from) return null;
       return { ts, type: "level", detail: `reached level ${row.to}` };
-    case "quest":
-      return typeof row.id === "number" ? { ts, type: "quest", detail: `turned in quest ${row.id}` } : { ts, type: "quest", detail: "turned in a quest" };
     case "death":
       return { ts, type: "death", detail: "died" };
-    case "zone":
-      if (row.from === undefined || typeof row.to !== "number" || row.to === row.from) return null;
-      return { ts, type: "zone", detail: `entered zone ${row.to}` };
     case "kill": {
       const entry = typeof row.entry === "number" ? row.entry : null;
-      const boss = (entry !== null && bosses.has(entry)) || row.rank === BOSS_RANK;
-      if (!boss) return null;
+      if (!isBossKill({ entry, rank: typeof row.rank === "number" ? row.rank : null }, bosses)) return null;
       return { ts, type: "boss", detail: entry !== null ? `killed boss ${entry}` : "killed a boss" };
     }
     default:
