@@ -339,7 +339,7 @@ runs are back-filled at *read* time, never written back — read differently,
 not relabelled. The wiki bundle's identity has the same standing: it says
 which file a run read, and so which side of a text-changing rebuild a run sits
 on; the rebuild itself ships as a patch within the series. A locally served
-build is a serving condition like a routed backend: its weights, quantisation
+build is a serving condition: its weights, quantisation
 and runtime are declared on its roster entry and stamped as a key with its
 subject kind (`hosted`, `local` or `external`), so a local build and the hosted
 model of one id never share a row, and a local entry that does not state them
