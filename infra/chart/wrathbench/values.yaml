@@ -541,6 +541,15 @@ camera:
   # Hours still frames are kept after the assembly that covers them; the video
   # is kept. The camera sweep CronJob prunes them (infra/camera/sweep.ts).
   frameKeepHours: 24
+  # The client's heap grows with the ground it streams and is not given back,
+  # so a cgroup OOM would otherwise be what restarts it (every 1.3 to 1.9 h on
+  # the reference node). Minutes in the world before the director restarts the
+  # client, at a moment no event is being filmed (or while idle); 0 is never.
+  restartMinutes: 60
+  # glibc's MALLOC_ARENA_MAX for the client: most of its heap sits in
+  # per-thread arenas, one per thread, which keep what they free. 0 leaves
+  # glibc's default (eight per core).
+  mallocArenaMax: 2
   # gpu: Vulkan on the node's /dev/dri, through the device plugin. software:
   # Mesa's lavapipe on the CPU, no claim, several cores per camera.
   renderer: gpu
