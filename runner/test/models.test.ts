@@ -1531,8 +1531,9 @@ describe("one model served by two providers fills one target (operator, 2026-11-
   test("the two entries are one model: siblings, and each counts the other's runs", () => {
     expect(modelSiblings([go, or])).toEqual(new Map([["ds-go", ["ds-or"]], ["ds-or", ["ds-go"]]]));
     expect(sameModel(or, goRun(1))).toBe(true);
-    // Another effort is another model, as before.
+    // Another effort is another model, as before, and a free endpoint is never the paid model.
     expect(modelSiblings([go, { ...or, effort: "high" }]).size).toBe(0);
+    expect(modelSiblings([go, { ...or, model: "deepseek/deepseek-v4.1-flash:free" }]).size).toBe(0);
     // Owning a run is unchanged: a Go run is resumed, its credential read and its character kept only under the Go entry.
     expect(entryOwnsRun(or, goRun(1))).toBe(false);
     expect(matchesRoster(goRun(1), or)).toBe(false);

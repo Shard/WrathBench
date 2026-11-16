@@ -634,7 +634,8 @@ row. Go records a model under its bare id (`deepseek-v4.1-flash`) where
 OpenRouter prefixes the vendor (`deepseek/deepseek-v4.1-flash`); the two are
 one model (`canonicalModelId`, infra/model-catalogue.ts; docs/METHODOLOGY.md,
 "A model served by different providers is one model"), so a Go entry and an
-OpenRouter entry of it fill one target ("The scheduling policy"). Go no longer names the backend in its response
+OpenRouter entry of it fill one target ("The scheduling policy"). A `-free`
+Go slug, like an OpenRouter `:free` id, stays a free model of its own. Go no longer names the backend in its response
 headers, so the run records the slug only. A `-free` Go slug derives free and
 runs on a free `opencode-go` credential; any other derives paid, runs on the
 paid one with its usage budget, and is priced by an `opencode-go` endpoint

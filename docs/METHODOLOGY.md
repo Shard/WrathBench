@@ -374,7 +374,11 @@ Flash as `deepseek-v4.1-flash` and OpenRouter as
 filter value and one export record, and either fills the one target the
 model's roster entries share. The reader is not asked to care which provider
 served it. The provider and the routing stay recorded on every run, as the id
-the provider reported, and a run's page still says how it was served.
+the provider reported, and a run's page still says how it was served. A
+literally free endpoint is the exception: an OpenRouter `:free` id, a Zen
+`-free` or a contributor-free model stays a model of its own, always marked
+free, and never pools with the paid one; a subscription's usage is not free in
+this sense (operator, 2026-11-16).
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with

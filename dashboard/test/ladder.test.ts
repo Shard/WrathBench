@@ -1257,6 +1257,10 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
     // No cost reading here, so the chart names the one entry rather than placing it.
     expect(ladderPoints(runs).omitted.map((o) => [o.key, o.label])).toEqual([[entryKeyOf(go), "deepseek-v4.1-flash"]]);
     expect(modelEntries(runs)).toHaveLength(1);
+    // A literally free endpoint of it is its own entry, always labelled free.
+    const free = at("free", "deepseek/deepseek-v4.1-flash:free", { order: ["Chutes"], allowFallbacks: false }, 3, 50);
+    expect(entryKeyOf(free)).not.toBe(entryKeyOf(go));
+    expect(ladderPoints([...runs, free]).omitted.map((o) => o.label).sort()).toEqual(["deepseek-v4.1-flash", "deepseek-v4.1-flash (free)"]);
   });
 
   test("a row from a viewer that predates the field reads as the snippet loop, pinned, with its wiki", () => {

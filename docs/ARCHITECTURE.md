@@ -451,7 +451,10 @@ the SPA owns everything that is UI.
   the key or an alias, then through the bare form of a vendor-prefixed id, so
   OpenCode Go's `deepseek-v4.1-flash` and OpenRouter's
   `deepseek/deepseek-v4.1-flash` are one model (operator, 2026-11-16;
-  docs/METHODOLOGY.md); an id nothing lists is its bare form. The validator
+  docs/METHODOLOGY.md); an id nothing lists is its bare form. A literally free
+  endpoint (`:free`, `-free`, contributor-free: `isFreeSlug`'s spelling) is the
+  model it serves marked `:free`, never the paid model, and an entry spelled
+  free is its own key. The validator
   refuses a bare form two entries would share. Everything that groups by model
   keys on it (the ladder's entries, the models page, the runs filter, the
   dungeon board, the export's cells), and so does the scheduler's target

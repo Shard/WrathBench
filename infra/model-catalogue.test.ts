@@ -242,12 +242,24 @@ describe("canonicalModelId — one model whichever provider served it (operator,
   test("the aliases are the explicit entries, for what the rule cannot decide", () => {
     expect(canonicalModelId("qwen-3.8-27b")).toBe("qwen/qwen3.8-27b");
     expect(canonicalModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
-    expect(canonicalModelId("laguna-s-2.1-free")).toBe("poolside/laguna-s-2.1");
   });
 
-  test("compared as the catalogue compares: trimmed, lowercased, and an OpenRouter `:free` endpoint is the same model", () => {
+  test("compared trimmed and lowercased", () => {
     expect(canonicalModelId(" DeepSeek-V4.1-Flash ")).toBe("deepseek/deepseek-v4.1-flash");
-    expect(canonicalModelId("deepseek/deepseek-v4.1-flash:free")).toBe("deepseek/deepseek-v4.1-flash");
+  });
+
+  test("a literally free endpoint is never the paid model: it is the model marked free, on any free endpoint (operator, 2026-11-16)", () => {
+    // OpenRouter's `:free` endpoint and a Zen `-free` id of one model: one free model, apart from the paid one.
+    expect(canonicalModelId("deepseek/deepseek-v4.1-flash:free")).toBe("deepseek/deepseek-v4.1-flash:free");
+    expect(canonicalModelId("deepseek-v4.1-flash-free")).toBe("deepseek/deepseek-v4.1-flash:free");
+    // A `-free` alias of a paid entry.
+    expect(canonicalModelId("laguna-s-2.1-free")).toBe("poolside/laguna-s-2.1:free");
+    expect(canonicalModelId("poolside/laguna-s-2.1")).toBe("poolside/laguna-s-2.1");
+    // An entry spelled free is its own key, and so is its alias; a contributor-free one too.
+    expect(canonicalModelId("catjam")).toBe("cat-jam-free");
+    expect(canonicalModelId("muse-spark-1.2-contributor-free")).toBe("muse-spark-1.2-contributor-free");
+    // Every one still resolves in the catalogue: its mark, its family.
+    for (const id of ["deepseek/deepseek-v4.1-flash:free", "poolside/laguna-s-2.1:free", "cat-jam-free"]) expect(familyOf(canonicalModelId(id))).not.toBeNull();
   });
 
   test("an uncatalogued model's bare and prefixed runs still meet, on the bare form", () => {
@@ -260,7 +272,9 @@ describe("canonicalModelId — one model whichever provider served it (operator,
     const seen = new Map<string, string>();
     for (const [key, e] of Object.entries(CATALOGUE.models)) {
       expect({ key, canonical: canonicalModelId(key) }).toEqual({ key, canonical: key });
-      for (const alias of e.aliases ?? []) expect({ alias, canonical: canonicalModelId(alias) }).toEqual({ alias, canonical: key });
+      // A `-free` alias of a paid entry is that entry's free endpoint.
+      const free = (id: string): boolean => /(?::free|-free)$/.test(id);
+      for (const alias of e.aliases ?? []) expect({ alias, canonical: canonicalModelId(alias) }).toEqual({ alias, canonical: free(alias) && !free(key) ? `${key}:free` : key });
       const bare = key.slice(key.lastIndexOf("/") + 1);
       expect({ bare, canonical: canonicalModelId(bare) }).toEqual({ bare, canonical: key });
       expect(seen.get(canonicalModelId(key))).toBeUndefined();

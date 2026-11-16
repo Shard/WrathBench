@@ -252,6 +252,22 @@ function bareIndexOf(cat: ModelCatalogue): Map<string, string> {
 const BARE_INDEX = bareIndexOf(CATALOGUE);
 
 /**
+ * A literally free endpoint's id, spelled as the billing rule spells it
+ * (`isFreeSlug`, runner/src/model-cost.ts): an OpenRouter `:free` id, a Zen
+ * `-free` id, a contributor-free one. The id without its marker, or null for
+ * an id that is not one.
+ */
+function freeBaseOf(id: string): string | null {
+  const m = /^(.*?)(?::free|-free)$/.exec(id);
+  return m === null || bareOf(m[1]!) === "" || m[1]!.endsWith("/") ? null : m[1]!;
+}
+
+/** The entry an id names through its key, an alias or its bare form (rules 1–3 below), or the bare form itself. */
+function resolveId(id: string): string {
+  return INDEX.get(id) ?? BARE_INDEX.get(bareOf(id)) ?? bareOf(id);
+}
+
+/**
  * A model's one identity, whichever provider served it (operator,
  * 2026-11-16): OpenCode Go records DeepSeek V4.1 Flash as
  * `deepseek-v4.1-flash` and OpenRouter as `deepseek/deepseek-v4.1-flash`, and
@@ -259,26 +275,35 @@ const BARE_INDEX = bareIndexOf(CATALOGUE);
  * ladder entry, a models row, a filter, an export cell) and what a target
  * counts in are this, never the id a run recorded, which stays the record.
  *
- * Keyed on the provider's id, compared as the catalogue compares ids
- * (`normalizeModelId`: so OpenRouter's `:free` endpoint is the same model):
+ * Keyed on the provider's id, compared trimmed and lowercased:
  *
  * 1. An id the catalogue lists, as a key or an alias, is that entry's key.
  *    The aliases are the explicit entries, for spellings no rule can decide (a
- *    codex slug, a dated snapshot, a Zen `-free` id, `qwen-3.8-27b` beside
- *    `qwen/qwen3.8-27b`).
+ *    codex slug, a dated snapshot, `qwen-3.8-27b` beside `qwen/qwen3.8-27b`).
  * 2. Otherwise the general rule: a vendor-prefixed id and the bare id after
  *    its slash are one model, so either form finds the entry whose key or
  *    alias has that bare form (`north-mini-code` is `cohere/north-mini-code`).
  * 3. An id nothing lists is its bare form, so a bare and a prefixed run of an
  *    uncatalogued model still meet.
  *
+ * A literally free endpoint is never the paid model (operator, 2026-11-16):
+ * an OpenRouter `:free` id, a Zen `-free` id and a contributor-free one are
+ * the model they serve marked `:free` (`deepseek/deepseek-v4.1-flash:free`,
+ * `poolside/laguna-s-2.1:free` for Zen's `laguna-s-2.1-free`), one model
+ * across the free endpoints and always shown as free. An entry spelled free
+ * (`cat-jam-free`, whose alias `catjam` is too) is its own key.
+ *
  * Pure and total; an empty id is handed back as it came.
  */
 export function canonicalModelId(model: string): string {
-  const id = normalizeModelId(model);
+  const id = model.trim().toLowerCase();
   if (id === "") return model;
-  const bare = bareOf(id);
-  return INDEX.get(id) ?? BARE_INDEX.get(bare) ?? bare;
+  const free = freeBaseOf(id);
+  // Listed as it is first (a `-free` entry, a `-free` alias of a paid one), then by its rules.
+  const key = INDEX.get(id) ?? resolveId(free ?? id);
+  // An entry spelled free is its own free model; a free endpoint of a paid one is that model marked free.
+  if (freeBaseOf(key) !== null) return key;
+  return free !== null ? `${key}:free` : key;
 }
 
 /** The first family whose glob claims the id: the fallback for an id no entry lists. */

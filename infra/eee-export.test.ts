@@ -138,7 +138,7 @@ describe("cells", () => {
       "wrathbench/0.5/e90/claude-code/opus/low",
       "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default",
       "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/high",
-      "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3/default",
+      "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default",
       "wrathbench/0.5/e360/codex/openai/gpt-6-luna/default",
     ]);
     const ids = files.flatMap((f) => JSON.parse(f.record.evaluation_results[0]!.generation_config.additional_details.run_ids!) as string[]);
@@ -154,6 +154,13 @@ describe("cells", () => {
     const { files: alone } = eeeExport(new Map([["e90", ladder("e90", [go])]] as const));
     expect(alone.map((f) => [f.record.evaluation_id, f.path.split("/").slice(0, 4).join("/")])).toEqual([
       ["wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default", "data/wrathbench/deepseek/deepseek-v4.1-flash"],
+    ]);
+    // A free endpoint of it is never the paid model: a record of its own.
+    const free = run({ runId: "ds-free", model: "deepseek/deepseek-v4.1-flash:free", billing: "free", maxLevel: 4 });
+    const { files: withFree } = eeeExport(new Map([["e90", ladder("e90", [run({ runId: "ds-or", maxLevel: 6 }), go, free])]] as const), { includeFree: true });
+    expect(withFree.map((f) => f.record.evaluation_id).sort()).toEqual([
+      "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default",
+      "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash:free/default",
     ]);
   });
 
@@ -192,7 +199,7 @@ describe("cells", () => {
   });
 
   test("a null reading is no result, never a zero; a zero is a reading", () => {
-    const free = byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3/default");
+    const free = byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
     expect(free.record.evaluation_results.map((r) => r.metric_config.metric_id)).toEqual(["wrathbench.best_level"]);
     const high = byId(files, "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/high");
     expect(resultOf(high, "best_money")!.score_details.score).toBe(0);
@@ -202,9 +209,9 @@ describe("cells", () => {
     const only = eeeExport(ladders, { series: "0.4" }).files.map((f) => f.record.evaluation_id);
     expect(only).toEqual(["wrathbench/0.4/e90/wrathbench/deepseek/deepseek-v4.1-flash/default"]);
     const paid = eeeExport(ladders);
-    expect(paid.files.map((f) => f.record.evaluation_id)).not.toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3/default");
+    expect(paid.files.map((f) => f.record.evaluation_id)).not.toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
     expect(paid.skipped).toContainEqual({ reason: "e90: free (--include-free exports them)", runs: 1 });
-    expect(files.map((f) => f.record.evaluation_id)).toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3/default");
+    expect(files.map((f) => f.record.evaluation_id)).toContain("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default");
     expect(skipped.map((x) => x.reason)).not.toContain("e90: free (--include-free exports them)");
   });
 
@@ -279,14 +286,14 @@ describe("what EEE's CLI checks beyond the schema", () => {
       expect(["self_deployed", "externally_managed", "unknown"]).toContain(f.record.model_info.additional_details.deployment_type);
       expect(["open_weights", "closed_weights", "unknown"]).toContain(f.record.model_info.additional_details.model_availability);
     }
-    expect(byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3/default").record.model_info.additional_details.deployment_type).toBe("externally_managed");
+    expect(byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default").record.model_info.additional_details.deployment_type).toBe("externally_managed");
   });
 
   test("model_availability is the catalogue's weights verdict in EEE's names", () => {
     const availability = (id: string): string => byId(files, id).record.model_info.additional_details.model_availability;
     // DeepSeek V4.1 Flash and MiniMax M3 publish their weights; Claude and GPT-6 do not.
     expect(availability("wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default")).toBe("open_weights");
-    expect(availability("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3/default")).toBe("open_weights");
+    expect(availability("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default")).toBe("open_weights");
     // A CLI alias reads through the id the provider resolved.
     expect(availability("wrathbench/0.5/e90/claude-code/opus/low")).toBe("closed_weights");
     expect(availability("wrathbench/0.5/e360/codex/openai/gpt-6-luna/default")).toBe("closed_weights");
