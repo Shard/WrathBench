@@ -380,11 +380,17 @@ const view = (id: string, x: AxisSpec, y: AxisSpec): LadderView => ({ id, title:
  * less resolution on one. `LEVEL` stays a spec because the hover's "also"
  * line reads it; a stale `?view=cost-level` link falls back to the default
  * through `viewParam`.
+ *
+ * Nor turns on x (operator, 2026-11-16): a turn is not one unit across
+ * drivers — on claude-code it is one CLI session, which can run for hours —
+ * so the axis put runs side by side on a count that meant something
+ * different for each, and it told a reader little the other views did not.
+ * `TURNS` stays a spec for the hover's "also" line, and a stale
+ * `?view=turns-xp` link falls back to the default the same way.
  */
 export const LADDER_VIEWS: readonly LadderView[] = [
   view("cost-xp", COST, XP),
   view("tokens-xp", TOKENS, XP),
-  view("turns-xp", TURNS, XP),
   view("calls-xp", TOOL_CALLS, XP),
 ];
 

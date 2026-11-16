@@ -64,6 +64,7 @@ import type {
 } from "./api-types";
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
 import { scriptedReferenceLines } from "./scripted-reference";
+import { ENTRIES_WINDOW } from "./public-keys";
 import { campaignsView } from "./campaigns";
 import { modelsResponse, readFleetRoster, rosterNameOf } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
@@ -141,9 +142,14 @@ import {
 import { playtimeMs, segmentsFrom } from "./sessions";
 import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
 
-/** How often the live tail rescans, and the biggest window a client may ask for. */
+/**
+ * How often the live tail rescans, and the biggest entries window a client may
+ * ask for: the run page's own window (`ENTRIES_WINDOW`), which the publisher
+ * reads through this handler too, so a smaller cap would cut the published
+ * window and leave a hole in the private page's "load earlier".
+ */
 export const POLL_MS = 1000;
-export const WINDOW_MAX = 500;
+export const WINDOW_MAX = ENTRIES_WINDOW;
 
 /**
  * Where the `/entries` window that shows the moment `at` begins: the window
@@ -2240,7 +2246,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/entries") {
       await scan(runId, tail);
       const total = tail.entries.length;
-      const limit = Math.min(WINDOW_MAX, Math.max(1, Number(url.searchParams.get("limit") ?? 200)));
+      const limit = Math.min(WINDOW_MAX, Math.max(1, Number(url.searchParams.get("limit") ?? ENTRIES_WINDOW)));
       const fromParam = url.searchParams.get("from");
       // `at` is the timeline's jump to a time: the window that holds that moment (`entriesWindowAt`).
       const atParam = Number(url.searchParams.get("at") ?? Number.NaN);

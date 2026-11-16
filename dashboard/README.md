@@ -465,8 +465,10 @@ action log's counts with what failed and how many hints the harness added. A
 click on the head opens the card as it was; "snippets" and "all" start it
 open. Every other tool's card is short and is drawn whole. The rows are
 `components/FeedRows.tsx`, the one-line readings `lib/feedline.ts`. The feed
-is a window of 200 entries, so folding the actions shortens what a window
-draws, not what it holds: a window of a walking character is a few turns.
+is a window of a thousand entries (`ENTRIES_WINDOW`, `runner/viewer/public-keys.ts`),
+the same in both builds, because folding the actions shortens what a window
+draws, not what it holds: two hundred entries of a walking character were two
+or three turns.
 What a reader opened stays open while a live tail grows the run under it.
 Every row carries its time (`data-ts`), which is what the timeline scrolls
 the feed by.

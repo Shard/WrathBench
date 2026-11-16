@@ -507,10 +507,9 @@ rules, and the operator's runner image carries the program.
 the sweep, not the models. A scored ladder row is one condition — series,
 episode, harness, effort, wiki, compaction window, loop and `yield`, never the
 prompt hash, which a patch moves within a series, nor the routing (operator,
-2026-11-16) — and by default
-each model at each effort and window shows its newest condition with counted runs, so a row
-moves with its evidence and two conditions never pool; no chart holds
-conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a
+2026-11-16) — so two conditions never pool, and no chart holds conditions
+this document keeps apart (operator, 2026-11-14). Each condition is its own
+row (operator, 2026-11-16). The freeplay ladder is an overview, not a
 leaderboard (2026-08-29): the whole active field, paused and in-progress
 characters included, one row per character across attempts with its
 milestones, with the reader's filters applied, the series included (operator, 2026-11-15).

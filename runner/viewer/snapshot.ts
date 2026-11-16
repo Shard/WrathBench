@@ -15,7 +15,7 @@
  * renderer's own handle never sets `tilesPublic`, and no pass asks for a tile.
  *
  * Per run, one entries window is published: the tail (`ENTRIES_WINDOW`
- * entries), the same shape the run page's private path loads first. No
+ * entries, `public-keys.ts`), the window the run page's private path loads first. No
  * "load earlier" publicly — a static set would otherwise have to carry every
  * window of every run.
  *
@@ -100,7 +100,7 @@ import type {
 } from "./api-types";
 import { unpackSegs } from "@wrathbench/inspector/codec/trace";
 import { clipMediaKey, traceSegmentKey } from "./public-keys";
-import { PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
+import { ENTRIES_WINDOW, PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -298,9 +298,6 @@ export const FULL_RENDER_MS = 6 * 60 * 60_000;
  * its scans per run, not globally.
  */
 const RUN_CONCURRENCY = 8;
-
-/** The one published entries window per run: the feed's tail, as the run page loads it. */
-export const ENTRIES_WINDOW = 200;
 
 /**
  * Where a streaming pass hands off each batch of per-run artifacts.

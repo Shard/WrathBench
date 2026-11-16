@@ -279,14 +279,34 @@ export function resolvedLabel(
 }
 
 /**
- * The run dimensions a model's label carries after its name: the effort, and a
- * CLI entry's compaction window when it set one — `max · 100k`, `max`,
- * `100k`. Null when neither was set: absent effort is the provider's default
- * and absent window the CLI's own `auto`, and neither is printed.
+ * A run's effort and a CLI entry's compaction window as settings, for a
+ * column or header that lists them — `max · 100k`, `max`, `100k`. Null when
+ * neither was set: absent effort is the provider's default and absent window
+ * the CLI's own `auto`, and neither is printed. Never part of a model's name:
+ * a title carries the effort alone and leaves the window to `windowNote`
+ * (operator, 2026-11-16).
  */
 export function effortLabel(effort: string | null | undefined, compactWindow?: string | null): string | null {
   const parts = [effort, compactWindow].filter((p): p is string => typeof p === "string" && p.length > 0);
   return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/**
+ * A compaction window as the setting it is, for a tooltip beside a model's
+ * name: `compaction window 300k`. Null with none set or the CLI's own `auto`.
+ * A window is a comparability setting, not a title (operator, 2026-11-16), so
+ * two entries of one model that differ only in it share a name and are told
+ * apart here; they stay two entries (`entryKeyOf`).
+ */
+export function windowNote(compactWindow: string | null | undefined): string | null {
+  if (typeof compactWindow !== "string" || compactWindow.length === 0 || compactWindow.toLowerCase() === "auto") return null;
+  return `compaction window ${compactWindow}`;
+}
+
+/** A tooltip of parts, the absent ones dropped: `claude-sonnet-5-5 · compaction window 300k`. */
+export function titleOf(...parts: (string | null | undefined)[]): string | undefined {
+  const kept = parts.filter((p): p is string => typeof p === "string" && p.length > 0);
+  return kept.length === 0 ? undefined : kept.join(" · ");
 }
 
 /**
