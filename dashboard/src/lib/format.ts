@@ -3,6 +3,19 @@
  * holds everywhere: a missing value gets the dash, a recorded zero never does.
  */
 
+/**
+ * Text the way a pre-wrap pane draws it: the blank lines before the first line
+ * of text and every trailing space and newline dropped, everything between
+ * (the first line's indentation and blank lines inside included) exactly as
+ * written. Some models open their reply with the newlines left after a
+ * thinking block, and a pane that keeps whitespace drew them as empty lines.
+ * Display only: the record keeps the text as the model wrote it. Text that is
+ * only whitespace comes back empty, so it draws as an empty reply does.
+ */
+export function paneText(text: string): string {
+  return text.trimEnd().replace(/^(?:[^\S\n]*\n)+/, "");
+}
+
 export function num(v: number | null | undefined): string {
   return v === null || v === undefined ? "—" : String(v);
 }

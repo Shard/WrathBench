@@ -386,7 +386,11 @@ function writeTurn(traj: Trajectory, session: FixtureSession, spec: Spec, turn: 
   traj.append({ t: "events_served", turn, via: "context", count: 3, events: [{ opcode: "SMSG_ATTACKSTART" }, { opcode: "SMSG_LOOT_RESPONSE" }, { opcode: "SMSG_LOG_XPGAIN" }] });
   traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 + turn * 50 });
   at(3_000);
-  traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}. ${REPLIES[phase]}` } });
+  // The plan's reply is written the way a thinking model's often is, with the
+  // blank lines left after its thinking block and a closing newline, which the
+  // page must not draw.
+  const reply = `Turn ${turn}. ${REPLIES[phase]}`;
+  traj.append({ t: "response", turn, message: { role: "assistant", content: phase === 2 ? `\n\n${reply}\n` : reply } });
 
   // The patrol routine belongs to the snippet that last started it, which is seldom this turn's call.
   let owner = routineOwner;

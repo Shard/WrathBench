@@ -22,7 +22,7 @@ import type { CallGroup, FeedGroup, ResponseGroup, TurnGroup } from "../lib/feed
 import { eventsHead, lineOf, milestoneLine } from "../lib/feedline";
 import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, tsOf, type ActionRun, type FeedKind, type FeedRow, type Surface, type Tally } from "../lib/feedtier";
 import { expandedBy, harnessFields, isHarnessEntry, noticeView, splitNotices, stateLine, type ExpandPreset } from "../lib/feedview";
-import { fmtElapsed, fmtLatency, fmtTokens, stamp } from "../lib/format";
+import { fmtElapsed, fmtLatency, fmtTokens, paneText, stamp } from "../lib/format";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { FeedIcon } from "./FeedIcon";
 
@@ -91,6 +91,22 @@ function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
         </button>
       </Show>
     </>
+  );
+}
+
+/**
+ * A card's body: its text in a `FoldBlock`, with the blank lines at either end
+ * dropped (`paneText`), and nothing at all when no text is left — an empty
+ * reply and one that is only newlines draw the same.
+ */
+function FoldBody(props: { text: string; defaultOpen: boolean }) {
+  const text = createMemo(() => paneText(props.text));
+  return (
+    <Show when={text().length > 0}>
+      <div class="body">
+        <FoldBlock text={text()} defaultOpen={props.defaultOpen} />
+      </div>
+    </Show>
   );
 }
 
@@ -173,11 +189,7 @@ function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset; k
           <RawLink runId={props.runId} i={props.entry.i} />
         </Show>
       </div>
-      <Show when={parts().text.length > 0}>
-        <div class="body">
-          <FoldBlock text={parts().text} defaultOpen={expandedBy(props.preset, "detail")} />
-        </div>
-      </Show>
+      <FoldBody text={parts().text} defaultOpen={expandedBy(props.preset, "detail")} />
     </div>
   );
 }
@@ -239,11 +251,7 @@ function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPre
           <RawLink runId={props.runId} i={e().i} />
         </Show>
       </div>
-      <Show when={(e().text ?? "").length > 0}>
-        <div class="body">
-          <FoldBlock text={e().text ?? ""} defaultOpen={expandedBy(props.preset, "response")} />
-        </div>
-      </Show>
+      <FoldBody text={e().text ?? ""} defaultOpen={expandedBy(props.preset, "response")} />
     </div>
   );
 }
@@ -282,7 +290,10 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
   const [over, setOver] = createSignal<boolean | null>(null);
   createEffect(on(() => props.preset, () => setOver(null), { defer: true }));
   const open = (): boolean => !folds() || (over() ?? expandedBy(props.preset, "call"));
-  const codeLines = createMemo(() => (input().length === 0 ? 0 : input().split("\n").length));
+  const codeLines = createMemo(() => {
+    const code = paneText(input());
+    return code.length === 0 ? 0 : code.split("\n").length;
+  });
   /** What the closed head says of the action log and the harness's lines, so neither a refusal nor a hint is hidden. */
   const closedTally = createMemo((): Tally => {
     const t = tallyNotes(g().actions);
@@ -340,11 +351,7 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
         </Show>
       </div>
       <Show when={open()}>
-        <Show when={input().length > 0}>
-          <div class="body">
-            <FoldBlock text={input()} defaultOpen={expandedBy(props.preset, "call")} />
-          </div>
-        </Show>
+        <FoldBody text={input()} defaultOpen={expandedBy(props.preset, "call")} />
         <Show when={g().actions.length > 0}>
           <ActionLines records={g().actions} preset={props.preset} />
         </Show>
@@ -366,11 +373,7 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
             const split = createMemo(() => splitNotices(r().text ?? ""));
             return (
               <>
-                <Show when={split().body.length > 0}>
-                  <div class="body">
-                    <FoldBlock text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
-                  </div>
-                </Show>
+                <FoldBody text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
                 <Show when={split().notices.length > 0}>
                   <div class="body notices">
                     <NoticeCallout lines={split().notices} />
@@ -585,16 +588,14 @@ function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPrese
       </div>
       <Show when={!n().bookkeeping}>
         <div class="body notices">
-          <NoticeCallout lines={n().text.split("\n")} />
+          <NoticeCallout lines={paneText(n().text).split("\n")} />
         </div>
         {/*
           The rest of the record, and only when there is one: a notice whose
           whole content is its text would otherwise print that text twice.
         */}
         <Show when={harnessFields(props.entry).length > 0}>
-          <div class="body">
-            <FoldBlock text={detailOf(props.entry)} defaultOpen={expandedBy(props.preset, "detail")} />
-          </div>
+          <FoldBody text={detailOf(props.entry)} defaultOpen={expandedBy(props.preset, "detail")} />
         </Show>
       </Show>
     </div>
