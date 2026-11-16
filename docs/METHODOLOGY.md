@@ -408,7 +408,9 @@ is absent on runs that have the wiki, so older runs stamp as they did.
 commissioned sweep to completion and are never re-armed; freeplay never
 finishes and never counts. Each episode id is a comparability group, and a
 wrong default is replaced by a *new id*, never widened in place, because
-widening silently re-scopes every existing score. A probe exists only as a cell
+widening silently re-scopes every existing score. The one exception is
+`e90`'s no-XP watchdog, turned off in place (operator, 2026-11-16): an e90 is
+cheap to play out to its clock, and the watchdog dated from before 0.5. A probe exists only as a cell
 and an arm of a versioned campaign definition committed to git; a published
 version never changes, so any change is a new version, for the same reason
 (2026-10-09; arms 2026-10-11).

@@ -50,7 +50,7 @@ describe("the table", () => {
   test("every id is its own key, and the numbers are the ones EPISODES.md states", () => {
     for (const id of EPISODE_IDS) expect(EPISODES[id].id).toBe(id);
     expect(EPISODES.e90).toMatchObject({
-      minutes: 90, idleMinutes: 20, noXpMinutes: 20, toolCalls: 3000,
+      minutes: 90, idleMinutes: 20, noXpMinutes: null, toolCalls: 3000,
       objectiveAllowed: false, scored: true,
     });
     expect(EPISODES.e360).toMatchObject({
@@ -73,7 +73,7 @@ describe("the table", () => {
   });
 
   test("watchdogsFor carries a disabled watchdog through as null, not zero", () => {
-    expect(watchdogsFor(EPISODES.e90)).toEqual({ idleMs: 20 * M, noXpMs: 20 * M, episodeMs: 90 * M });
+    expect(watchdogsFor(EPISODES.e90)).toEqual({ idleMs: 20 * M, noXpMs: null, episodeMs: 90 * M });
     expect(watchdogsFor(EPISODES.e360)).toEqual({ idleMs: 20 * M, noXpMs: null, episodeMs: 360 * M });
     expect(watchdogsFor(EPISODES.freeplay)).toEqual({ idleMs: 20 * M, noXpMs: null, episodeMs: null });
   });
@@ -82,17 +82,20 @@ describe("the table", () => {
     const leash = { idleMs: 20 * M, noXpMs: null, episodeMs: null };
     // freeplay pins no ceiling, so no ceiling can take a run out of it.
     expect(matchesTier(EPISODES.freeplay, { ...leash, maxToolCalls: 2500 })).toBe(true);
-    expect(matchesTier(EPISODES.e90, { idleMs: 20 * M, noXpMs: 20 * M, episodeMs: 90 * M, maxToolCalls: 2500 })).toBe(false);
+    expect(matchesTier(EPISODES.e90, { idleMs: 20 * M, noXpMs: null, episodeMs: 90 * M, maxToolCalls: 2500 })).toBe(false);
   });
 });
 
 describe("--episode sets the leash", () => {
-  test("e90 supplies both watchdogs, the wall clock and the tool-call ceiling", () => {
+  test("e90 supplies the idle watchdog, the wall clock and the tool-call ceiling, with no-xp off", () => {
     const c = configFromArgs(["--episode", "e90", "--model", "m"]);
     expect(c.episode).toBe("e90");
-    expect(c.watchdogs).toMatchObject({ idleMs: 20 * M, noXpMs: 20 * M, episodeMs: 90 * M });
+    expect(c.watchdogs).toMatchObject({ idleMs: 20 * M, noXpMs: null, episodeMs: 90 * M });
     expect(c.maxToolCallsPerEpisode).toBe(3000);
     expect(episodeOverrideOf(c)).toBe(false);
+    expect(comparabilityOf(c, "v").budget.noXpMs).toBeNull();
+    // Saying "off" out loud is the tier's own leash, not an override.
+    expect(episodeOverrideOf(configFromArgs(["--episode", "e90", "--no-xp-ms", "0"]))).toBe(false);
   });
 
   test("e360 disables no-xp and supplies the 12000-call ceiling", () => {
@@ -113,18 +116,28 @@ describe("--episode sets the leash", () => {
     expect(c.watchdogs.idleMs).toBe(20 * M);
   });
 
-  test("no --episode leaves the bare defaults exactly as they were", () => {
+  test("no --episode leaves the bare defaults, no-xp off as on every tier", () => {
     const c = configFromArgs(["--model", "m"]);
     expect(c.episode).toBeUndefined();
-    expect(c.watchdogs).toMatchObject({ idleMs: 10 * M, noXpMs: 45 * M, episodeMs: 6 * 60 * M });
+    expect(c.watchdogs).toMatchObject({ idleMs: 10 * M, noXpMs: null, episodeMs: 6 * 60 * M });
     expect(episodeOverrideOf(c)).toBe(false);
+    // An opt-in still works where a run names it.
+    expect(configFromArgs(["--model", "m", "--no-xp-ms", String(45 * M)]).watchdogs.noXpMs).toBe(45 * M);
+  });
+
+  test("a stored config keeps the no-xp it was launched with", () => {
+    // What a resume parses: meta.json's config carries every watchdog key.
+    expect(loadRunConfig({ watchdogs: { noXpMs: 45 * M } }).watchdogs.noXpMs).toBe(45 * M);
+    expect(loadRunConfig({ episode: "e90", watchdogs: { idleMs: 20 * M, noXpMs: 20 * M, episodeMs: 90 * M } }).watchdogs.noXpMs).toBe(20 * M);
   });
 });
 
 describe("overrides cost membership, not the flag", () => {
   test("an explicit threshold wins and stamps episodeOverride", () => {
-    const c = configFromArgs(["--episode", "e90", "--no-xp-ms", "0"]);
-    expect(c.watchdogs.noXpMs).toBeNull();
+    // e90's leash before the no-XP watchdog was turned off: on a launch (or a
+    // resume of a run stored with it) it is no longer the tier's.
+    const c = configFromArgs(["--episode", "e90", "--no-xp-ms", String(20 * M)]);
+    expect(c.watchdogs.noXpMs).toBe(20 * M);
     expect(c.watchdogs.episodeMs).toBe(90 * M); // the rest of the tier still applies
     expect(episodeOverrideOf(c)).toBe(true);
     expect(comparabilityOf(c, "v").episodeOverride).toBe(true);
@@ -226,7 +239,7 @@ describe("scorability", () => {
   test("a scored tier stays scored; an override is a membership question, not a stamp", () => {
     const clean = comparabilityOf(configFromArgs(["--episode", "e90"]), "v");
     expect(unscoredReason(runRow({ comparability: clean }))).toBeNull();
-    const over = comparabilityOf(configFromArgs(["--episode", "e90", "--no-xp-ms", "0"]), "v");
+    const over = comparabilityOf(configFromArgs(["--episode", "e90", "--idle-ms", "0"]), "v");
     expect(unscoredReason(runRow({ comparability: over }))).toBeNull();
   });
 

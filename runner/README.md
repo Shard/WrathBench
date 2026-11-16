@@ -1548,7 +1548,8 @@ until the resume re-leases the token, which rotates it.
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`
 (no model output), `no-xp` (no level/XP progress once progress was first
-observed), `episode-limit`, `snippet-runaway`, plus the config ceilings
+observed; off by default and on every episode, so only a run or a campaign
+definition that names a threshold has it), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).
 `environment-defect` is never auto-detected — it is applied by a human via
 `classify.ts` after reading the trajectory. Model-API quota exhaustion is a

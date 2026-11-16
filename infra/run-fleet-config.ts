@@ -718,7 +718,7 @@ export function healthyFrom(states: readonly ModelState[]): (name: string) => bo
 /**
  * What an episode id means in the flags the runner has today (mirrors
  * runner/src/episodes.ts), passed alongside `--episode <id>` until the runner
- * owns the id. e90: 90m, idle 20m, no-xp 20m, 3000 calls. e360: 6h, idle 20m,
+ * owns the id. e90: 90m, idle 20m, no-xp off, 3000 calls. e360: 6h, idle 20m,
  * no-xp off — ceilings are a runaway guard at 1000 calls per 30 min (e90
  * 3000, e360 12000; docs/EPISODES.md). freeplay: no wall clock, unscored, and
  * no tool-call ceiling either — a guard sized in calls-per-minute is
@@ -730,7 +730,7 @@ export function healthyFrom(states: readonly ModelState[]): (name: string) => bo
 export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "watchdogs" | "maxToolCalls"> {
   switch (id) {
     case "e90":
-      return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 3000 };
+      return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 3000 };
     case "e360":
       return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 12000 };
     case "probing":
