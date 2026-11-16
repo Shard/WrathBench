@@ -158,16 +158,22 @@ describe("the feed's two tiers, drawn", () => {
   });
 
   test("a reply's blank lines at either end are not drawn; one that is only whitespace draws as an empty reply", async () => {
-    const { host, dispose } = await mount(() => [
-      e("response", 100, { turn: 1, text: "\n\nHeading to the mill.\n\nThen the fence.\n" }),
-      e("response", 200, { turn: 2, text: "\n\n \n" }),
-      e("response", 300, { turn: 3, text: "At the mill." }),
-      e("response", 400, { turn: 4, text: "" }),
-    ]);
-    const rows = [...host.children];
+    // "all" opens the line a text-less reply folds to into its card, so the
+    // whitespace-only reply's card is drawn and can be compared.
+    const { host, dispose } = await mount(
+      () => [
+        e("response", 100, { turn: 1, text: "\n\nHeading to the mill.\n\nThen the fence.\n" }),
+        e("response", 200, { turn: 2, text: "\n\n \n" }),
+        e("response", 300, { turn: 3, text: "At the mill." }),
+        e("response", 400, { turn: 4, text: "" }),
+      ],
+      () => "all",
+    );
     expect([...host.querySelectorAll("pre.block")].map((p) => p.textContent)).toEqual(["Heading to the mill.\n\nThen the fence.", "At the mill."]);
-    expect(rows[1]!.className).toBe(rows[3]!.className);
-    expect(rows[1]!.querySelector(".body")).toBeNull();
+    const [blank, empty] = [host.children[1]!, host.children[3]!].map((r) => r.querySelector(".act .entry"));
+    expect(blank).not.toBeNull();
+    expect(blank!.querySelector(".body")).toBeNull();
+    expect(blank!.innerHTML.replace("turn 2", "turn 4").replace(/>[^<]*:[^<]*</g, "><")).toBe(empty!.innerHTML.replace(/>[^<]*:[^<]*</g, "><"));
     dispose();
   });
 
