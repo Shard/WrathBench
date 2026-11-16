@@ -39,10 +39,14 @@ everything else is derived from it — no list of names decides what counts.
 - **Objective.** None. The standing goal only — an operator objective is what
   makes a run unscored.
 - **Prompt.** The standing goal plus one sentence stating the clock, "This episode lasts 90 minutes.", as `e360` states its own (`runner/src/prompt.ts` holds the wording). Promotion is the scheduler's stopping rule and the model is not told about it (operator, 2026-11-14): a stopping rule the model knows of becomes part of what is measured, and the tiers and the bar can now change without moving a prompt hash. Until then the sentence named the level-5 bar, then that reaching it did not end the episode, because three Sonnet 5.5 runs read the bar as a finish line and idled into the no-XP watchdog.
-- **Watchdogs.** Idle 20m, no-XP 20m, plus the standing sandbox-restart guard.
+- **Watchdogs.** Idle 20m, plus the standing sandbox-restart guard. **The
+  no-XP watchdog is off** (operator, 2026-11-16): an e90 is cheap to play out
+  to its clock, and the watchdog, at 20m here, dated from before 0.5. An e90
+  run from before then is stamped with that 20m and may have ended `no-xp`;
+  it keeps its place in the group, and its tuple says which leash it ran under.
   Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
-- **Ends.** Normally on `episode-limit`. Also on `idle` or `no-xp` (the model
-  stopped, or stopped making progress), `adapter-error` (fatal model API error)
+- **Ends.** Normally on `episode-limit`. Also on `idle` (the model
+  stopped), `adapter-error` (fatal model API error)
   or `harness-error` (our defect). A run that **pauses** — its provider refused,
   or the fleet stopped under it — ends too: a scored episode does not resume.
   It is a **failed attempt** (`attempt-failed`, or `manual` when the
@@ -57,14 +61,16 @@ everything else is derived from it — no list of names decides what counts.
   on `t0` keeps the witness and stays. The rule, the budgets and what counts:
   `docs/METHODOLOGY.md` ("Episodes, lanes, and evidence", under *The tier is
   the evidence budget*).
-- **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
-  thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`, and
+- **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, the idle
+  threshold, no-XP disabled, the tool-call ceiling, `objective: none`, `wikiCoords: false`, and
   the reference wiki included (`wiki` is absent unless a run withheld it).
 
 Ninety minutes is short enough that a full roster gets several episodes a
 night, which is what makes `e90` the sampling episode. If it turns out to be the
 wrong default it will be replaced by a **new id** — never widened in place,
 because that would silently re-scope every score already carrying this label.
+The one change made in place is the no-XP watchdog's removal (operator,
+2026-11-16; see *Watchdogs* above).
 
 ## `e360` — the long episode
 
@@ -81,7 +87,7 @@ because that would silently re-scope every score already carrying this label.
   runaway guard of 1000 calls per 30 minutes, sized so a
   fast model cannot touch it; it bounds the claude-code harness's inner loop,
   not the score.
-- **Ends.** As `e90`, minus `no-xp`.
+- **Ends.** As `e90`.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
   them on one axis would rank the schedule rather than the models.
@@ -592,11 +598,12 @@ Only a provider's pause (`quota-exhausted`, `rate-limited`, and
 A run launched without `--episode` is not a member of any episode. It reads
 `episode: null`, the scheduling policy counts it toward nothing (no target, no
 promotion, no chart), and it therefore carries no comparability claim to
-protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —
-stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m.
-They are the shape of an untagged
-one-off, not a quiet third ruleset: moving them would change every flagless run
-without any tuple field saying so, and every run that is scored passes the flag.
+protect. So the bare idle default in the runner, 10m, stays as it is and is
+deliberately not aligned with `e90`'s pinned 20m. It is the shape of an
+untagged one-off, not a quiet third ruleset, and every run that is scored
+passes the flag. The bare no-XP default is off, as on every episode
+(operator, 2026-11-16, with `e90`'s); it was 45m, which a run launched before
+keeps in its stored config.
 
 ## Runs before this page
 

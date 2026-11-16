@@ -229,8 +229,8 @@ describe("watchdog overrides", () => {
 describe("argv -> run config", () => {
   test("the nav-probe job's generated argv lands as the config the probe needs", () => {
     // Verbatim what `episodeArgv` produces for the nav-probe roster entry. If any
-    // of it silently failed to land, the 6h probe would die at 45 minutes as
-    // `no-xp` and read like a harness fault.
+    // of it silently failed to land, the 6h probe would have died at 45 minutes
+    // as `no-xp` (the bare default then) and read like a harness fault.
     const config = configFromArgs([
       "--driver", "claude-code",
       "--model", "sonnet",
@@ -271,7 +271,7 @@ describe("argv -> run config", () => {
     expect(config.wikiCoords).toBe(false);
     expect(config.watchdogs).toEqual({
       idleMs: 10 * 60_000,
-      noXpMs: 45 * 60_000,
+      noXpMs: null,
       episodeMs: 6 * 60 * 60_000,
       maxSandboxRestarts: 3,
     });

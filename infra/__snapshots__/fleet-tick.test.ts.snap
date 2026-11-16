@@ -347,7 +347,7 @@ exports[`the supervisor's tick over fixture states a fresh boot: e90 for every t
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -375,7 +375,7 @@ exports[`the supervisor's tick over fixture states a fresh boot: e90 for every t
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -398,7 +398,7 @@ exports[`the supervisor's tick over fixture states a fresh boot: e90 for every t
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -421,7 +421,7 @@ exports[`the supervisor's tick over fixture states a fresh boot: e90 for every t
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -606,7 +606,7 @@ exports[`the supervisor's tick over fixture states a fresh boot with the pool ca
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -634,7 +634,7 @@ exports[`the supervisor's tick over fixture states a fresh boot with the pool ca
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -858,7 +858,7 @@ exports[`the supervisor's tick over fixture states an account held by a run outs
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -886,7 +886,7 @@ exports[`the supervisor's tick over fixture states an account held by a run outs
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -909,7 +909,7 @@ exports[`the supervisor's tick over fixture states an account held by a run outs
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -1173,7 +1173,7 @@ exports[`the supervisor's tick over fixture states e360: a t2 model past its e90
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -1196,7 +1196,7 @@ exports[`the supervisor's tick over fixture states e360: a t2 model past its e90
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -1219,7 +1219,7 @@ exports[`the supervisor's tick over fixture states e360: a t2 model past its e90
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -1521,7 +1521,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo: a t2 model wi
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -1544,7 +1544,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo: a t2 model wi
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -1567,7 +1567,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo: a t2 model wi
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -2071,7 +2071,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo while failed b
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -2094,7 +2094,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo while failed b
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -2117,7 +2117,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo while failed b
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -2513,7 +2513,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo with worlds of
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -2536,7 +2536,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo with worlds of
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -2559,7 +2559,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo with worlds of
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -3564,7 +3564,7 @@ exports[`the supervisor's tick over fixture states freeplay: a character's accou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -3576,7 +3576,7 @@ exports[`the supervisor's tick over fixture states freeplay: a character's accou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -3588,7 +3588,7 @@ exports[`the supervisor's tick over fixture states freeplay: a character's accou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -3600,7 +3600,7 @@ exports[`the supervisor's tick over fixture states freeplay: a character's accou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -3612,7 +3612,7 @@ exports[`the supervisor's tick over fixture states freeplay: a character's accou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -3894,7 +3894,7 @@ exports[`the supervisor's tick over fixture states a fresh launch sweeps its mod
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -3923,7 +3923,7 @@ exports[`the supervisor's tick over fixture states a fresh launch sweeps its mod
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4183,7 +4183,7 @@ exports[`the supervisor's tick over fixture states queue: a manual job takes a p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -4199,7 +4199,7 @@ exports[`the supervisor's tick over fixture states queue: a manual job takes a p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4227,7 +4227,7 @@ exports[`the supervisor's tick over fixture states queue: a manual job takes a p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4255,7 +4255,7 @@ exports[`the supervisor's tick over fixture states queue: a manual job takes a p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4278,7 +4278,7 @@ exports[`the supervisor's tick over fixture states queue: a manual job takes a p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4396,7 +4396,7 @@ exports[`the supervisor's tick over fixture states queue: manual jobs wait when 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4668,7 +4668,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose ref is ine
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4696,7 +4696,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose ref is ine
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4719,7 +4719,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose ref is ine
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -4742,7 +4742,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose ref is ine
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5014,7 +5014,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose repeat is 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5042,7 +5042,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose repeat is 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5065,7 +5065,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose repeat is 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5088,7 +5088,7 @@ exports[`the supervisor's tick over fixture states queue: a job whose repeat is 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5360,7 +5360,7 @@ exports[`the supervisor's tick over fixture states queue: a cooling job waits ou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5388,7 +5388,7 @@ exports[`the supervisor's tick over fixture states queue: a cooling job waits ou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5411,7 +5411,7 @@ exports[`the supervisor's tick over fixture states queue: a cooling job waits ou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5434,7 +5434,7 @@ exports[`the supervisor's tick over fixture states queue: a cooling job waits ou
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5699,7 +5699,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5727,7 +5727,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5755,7 +5755,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5778,7 +5778,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5808,7 +5808,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5836,7 +5836,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5859,7 +5859,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -5882,7 +5882,7 @@ exports[`the supervisor's tick over fixture states queue: a finished job stays f
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6074,7 +6074,7 @@ exports[`the supervisor's tick over fixture states pinned: a job on its own acco
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6102,7 +6102,7 @@ exports[`the supervisor's tick over fixture states pinned: a job on its own acco
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6125,7 +6125,7 @@ exports[`the supervisor's tick over fixture states pinned: a job on its own acco
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6265,7 +6265,7 @@ exports[`the supervisor's tick over fixture states pinned: a job whose repeat is
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6416,7 +6416,7 @@ exports[`the supervisor's tick over fixture states pinned: an ineligible job is 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6540,7 +6540,7 @@ exports[`the supervisor's tick over fixture states pinned: a disabled job that i
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6568,7 +6568,7 @@ exports[`the supervisor's tick over fixture states pinned: a disabled job that i
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6704,7 +6704,7 @@ exports[`the supervisor's tick over fixture states pinned: a running job the con
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6939,7 +6939,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job the
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6967,7 +6967,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job the
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -6991,7 +6991,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job the
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7206,7 +7206,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job sti
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -7218,7 +7218,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job sti
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7246,7 +7246,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job sti
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7274,7 +7274,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job sti
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7297,7 +7297,7 @@ exports[`the supervisor's tick over fixture states pool: a running queue job sti
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7536,7 +7536,7 @@ exports[`the supervisor's tick over fixture states policy: a running freeplay jo
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7564,7 +7564,7 @@ exports[`the supervisor's tick over fixture states policy: a running freeplay jo
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7587,7 +7587,7 @@ exports[`the supervisor's tick over fixture states policy: a running freeplay jo
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7791,7 +7791,7 @@ exports[`the supervisor's tick over fixture states policy: a running e90 job kee
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7819,7 +7819,7 @@ exports[`the supervisor's tick over fixture states policy: a running e90 job kee
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7842,7 +7842,7 @@ exports[`the supervisor's tick over fixture states policy: a running e90 job kee
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -7865,7 +7865,7 @@ exports[`the supervisor's tick over fixture states policy: a running e90 job kee
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8129,7 +8129,7 @@ exports[`the supervisor's tick over fixture states policy: a pick from last tick
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8157,7 +8157,7 @@ exports[`the supervisor's tick over fixture states policy: a pick from last tick
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8180,7 +8180,7 @@ exports[`the supervisor's tick over fixture states policy: a pick from last tick
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8203,7 +8203,7 @@ exports[`the supervisor's tick over fixture states policy: a pick from last tick
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8359,7 +8359,7 @@ exports[`the supervisor's tick over fixture states credentials: a usage window p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8382,7 +8382,7 @@ exports[`the supervisor's tick over fixture states credentials: a usage window p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8586,7 +8586,7 @@ exports[`the supervisor's tick over fixture states credentials: a spent window d
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8614,7 +8614,7 @@ exports[`the supervisor's tick over fixture states credentials: a spent window d
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8637,7 +8637,7 @@ exports[`the supervisor's tick over fixture states credentials: a spent window d
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8660,7 +8660,7 @@ exports[`the supervisor's tick over fixture states credentials: a spent window d
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8816,7 +8816,7 @@ exports[`the supervisor's tick over fixture states credentials: a disabled crede
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8839,7 +8839,7 @@ exports[`the supervisor's tick over fixture states credentials: a disabled crede
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -8995,7 +8995,7 @@ exports[`the supervisor's tick over fixture states credentials: slots full on ev
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9018,7 +9018,7 @@ exports[`the supervisor's tick over fixture states credentials: slots full on ev
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9203,7 +9203,7 @@ exports[`the supervisor's tick over fixture states credentials: a runs-per-day b
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9231,7 +9231,7 @@ exports[`the supervisor's tick over fixture states credentials: a runs-per-day b
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9444,7 +9444,7 @@ exports[`the supervisor's tick over fixture states the host cap: claude-code ses
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9467,7 +9467,7 @@ exports[`the supervisor's tick over fixture states the host cap: claude-code ses
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9490,7 +9490,7 @@ exports[`the supervisor's tick over fixture states the host cap: claude-code ses
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9796,7 +9796,7 @@ exports[`the supervisor's tick over fixture states resume: an operator-paused e9
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9824,7 +9824,7 @@ exports[`the supervisor's tick over fixture states resume: an operator-paused e9
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9847,7 +9847,7 @@ exports[`the supervisor's tick over fixture states resume: an operator-paused e9
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -9870,7 +9870,7 @@ exports[`the supervisor's tick over fixture states resume: an operator-paused e9
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10166,7 +10166,7 @@ exports[`the supervisor's tick over fixture states resume: a paused freeplay cha
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10194,7 +10194,7 @@ exports[`the supervisor's tick over fixture states resume: a paused freeplay cha
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10217,7 +10217,7 @@ exports[`the supervisor's tick over fixture states resume: a paused freeplay cha
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10534,7 +10534,7 @@ exports[`the supervisor's tick over fixture states resume: a scored run that pau
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10557,7 +10557,7 @@ exports[`the supervisor's tick over fixture states resume: a scored run that pau
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10580,7 +10580,7 @@ exports[`the supervisor's tick over fixture states resume: a scored run that pau
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -10905,7 +10905,7 @@ exports[`the supervisor's tick over fixture states resume: a paused run whose ac
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -10917,7 +10917,7 @@ exports[`the supervisor's tick over fixture states resume: a paused run whose ac
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -10929,7 +10929,7 @@ exports[`the supervisor's tick over fixture states resume: a paused run whose ac
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -10941,7 +10941,7 @@ exports[`the supervisor's tick over fixture states resume: a paused run whose ac
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
         {
@@ -10953,7 +10953,7 @@ exports[`the supervisor's tick over fixture states resume: a paused run whose ac
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11283,7 +11283,7 @@ exports[`the supervisor's tick over fixture states lapse: a paused scored run pa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11311,7 +11311,7 @@ exports[`the supervisor's tick over fixture states lapse: a paused scored run pa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11334,7 +11334,7 @@ exports[`the supervisor's tick over fixture states lapse: a paused scored run pa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11357,7 +11357,7 @@ exports[`the supervisor's tick over fixture states lapse: a paused scored run pa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11640,7 +11640,7 @@ exports[`the supervisor's tick over fixture states lapse: an end that cannot be 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11668,7 +11668,7 @@ exports[`the supervisor's tick over fixture states lapse: an end that cannot be 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11691,7 +11691,7 @@ exports[`the supervisor's tick over fixture states lapse: an end that cannot be 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -11714,7 +11714,7 @@ exports[`the supervisor's tick over fixture states lapse: an end that cannot be 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12206,7 +12206,7 @@ exports[`the supervisor's tick over fixture states lapse: a verdict-less scored 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12234,7 +12234,7 @@ exports[`the supervisor's tick over fixture states lapse: a verdict-less scored 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12257,7 +12257,7 @@ exports[`the supervisor's tick over fixture states lapse: a verdict-less scored 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12280,7 +12280,7 @@ exports[`the supervisor's tick over fixture states lapse: a verdict-less scored 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12545,7 +12545,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12573,7 +12573,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12596,7 +12596,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12619,7 +12619,7 @@ exports[`the supervisor's tick over fixture states cooling: a model on the defer
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12888,7 +12888,7 @@ exports[`the supervisor's tick over fixture states a recorded termination the ro
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12911,7 +12911,7 @@ exports[`the supervisor's tick over fixture states a recorded termination the ro
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12934,7 +12934,7 @@ exports[`the supervisor's tick over fixture states a recorded termination the ro
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -12963,7 +12963,7 @@ exports[`the supervisor's tick over fixture states a recorded termination the ro
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13177,7 +13177,7 @@ exports[`the supervisor's tick over fixture states an unowned live run holds its
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13200,7 +13200,7 @@ exports[`the supervisor's tick over fixture states an unowned live run holds its
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13223,7 +13223,7 @@ exports[`the supervisor's tick over fixture states an unowned live run holds its
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13487,7 +13487,7 @@ exports[`the supervisor's tick over fixture states a hand launch with no episode
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13515,7 +13515,7 @@ exports[`the supervisor's tick over fixture states a hand launch with no episode
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13538,7 +13538,7 @@ exports[`the supervisor's tick over fixture states a hand launch with no episode
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13561,7 +13561,7 @@ exports[`the supervisor's tick over fixture states a hand launch with no episode
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13781,7 +13781,7 @@ exports[`the supervisor's tick over fixture states a run this supervisor's proce
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13809,7 +13809,7 @@ exports[`the supervisor's tick over fixture states a run this supervisor's proce
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13832,7 +13832,7 @@ exports[`the supervisor's tick over fixture states a run this supervisor's proce
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -13855,7 +13855,7 @@ exports[`the supervisor's tick over fixture states a run this supervisor's proce
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -14120,7 +14120,7 @@ exports[`the supervisor's tick over fixture states an exited process no longer c
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -14148,7 +14148,7 @@ exports[`the supervisor's tick over fixture states an exited process no longer c
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -14171,7 +14171,7 @@ exports[`the supervisor's tick over fixture states an exited process no longer c
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -14194,7 +14194,7 @@ exports[`the supervisor's tick over fixture states an exited process no longer c
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -15111,7 +15111,7 @@ exports[`the supervisor's tick over fixture states probes: a pinned campaign spa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -15139,7 +15139,7 @@ exports[`the supervisor's tick over fixture states probes: a pinned campaign spa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -15162,7 +15162,7 @@ exports[`the supervisor's tick over fixture states probes: a pinned campaign spa
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -17694,7 +17694,7 @@ exports[`the supervisor's tick over fixture states parties: two parties draw fro
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -17717,7 +17717,7 @@ exports[`the supervisor's tick over fixture states parties: two parties draw fro
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -18856,7 +18856,7 @@ exports[`the supervisor's tick over fixture states parties: a pinned party with 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -18884,7 +18884,7 @@ exports[`the supervisor's tick over fixture states parties: a pinned party with 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -18907,7 +18907,7 @@ exports[`the supervisor's tick over fixture states parties: a pinned party with 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -18930,7 +18930,7 @@ exports[`the supervisor's tick over fixture states parties: a pinned party with 
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19212,7 +19212,7 @@ exports[`the supervisor's tick over fixture states the pause switch: picks are p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19240,7 +19240,7 @@ exports[`the supervisor's tick over fixture states the pause switch: picks are p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19263,7 +19263,7 @@ exports[`the supervisor's tick over fixture states the pause switch: picks are p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19286,7 +19286,7 @@ exports[`the supervisor's tick over fixture states the pause switch: picks are p
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19491,7 +19491,7 @@ exports[`the supervisor's tick over fixture states a refused pin is left disable
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19519,7 +19519,7 @@ exports[`the supervisor's tick over fixture states a refused pin is left disable
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19542,7 +19542,7 @@ exports[`the supervisor's tick over fixture states a refused pin is left disable
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],
@@ -19565,7 +19565,7 @@ exports[`the supervisor's tick over fixture states a refused pin is left disable
           "watchdogs": {
             "episodeMs": 5400000,
             "idleMs": 1200000,
-            "noXpMs": 1200000,
+            "noXpMs": null,
           },
         },
       ],

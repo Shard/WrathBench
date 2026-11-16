@@ -2,9 +2,10 @@
  * The OpenAI-compatible adapter's streaming path against a fake fetch: event
  * assembly, the plain-JSON fallback, and the request clock (silence and
  * ceiling). No network, no model; the clock tests use real timers at
- * millisecond scale.
+ * millisecond scale, except the two that hold the default ceiling, which run
+ * on fake timers so minutes pass without a sleep.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import {
   FINISHED_GRACE_MS,
   OpenAiChatAdapter,
@@ -448,9 +449,63 @@ describe("OpenAiChatAdapter request clock", () => {
     expect(ok(await adapter.complete(req)).content).toBe("late");
   });
 
-  test("the defaults are a 120 s silence and a 5-minute ceiling", () => {
+  test("the defaults are a 120 s silence and a 10-minute ceiling", () => {
     expect(SILENCE_TIMEOUT_MS).toBe(120_000);
-    expect(REQUEST_CEILING_MS).toBe(300_000);
+    expect(REQUEST_CEILING_MS).toBe(600_000);
+  });
+
+  /**
+   * Drive `p` on fake timers: flush the microtasks a stream read needs, then
+   * advance the clock a step, until `p` settles or `maxMs` of fake time is spent.
+   */
+  async function onFakeClock<T>(p: Promise<T>, stepMs: number, maxMs: number): Promise<{ settled: boolean; elapsedMs: number }> {
+    let settled = false;
+    p.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    let elapsedMs = 0;
+    for (;;) {
+      for (let k = 0; k < 50; k++) await Promise.resolve();
+      if (settled || elapsedMs >= maxMs) return { settled, elapsedMs };
+      jest.advanceTimersByTime(stepMs);
+      elapsedMs += stepMs;
+    }
+  }
+
+  test("at the default ceiling, a steady stream that runs past five minutes but under ten completes", async () => {
+    jest.useFakeTimers();
+    try {
+      // A data event a minute, well inside the silence, for eight minutes in all.
+      const parts = Array.from({ length: 8 }, () => data(chunk({ content: "x" })));
+      parts.push(data(chunk({}, "stop")), "data: [DONE]\n\n");
+      const { adapter } = adapterServing(() => Promise.resolve(streamed(parts, { gapMs: 60_000 })), { maxAttempts: 1 });
+      const p = adapter.complete(req);
+      const { settled, elapsedMs } = await onFakeClock(p, 10_000, 11 * 60_000);
+      expect(settled).toBe(true);
+      expect(elapsedMs).toBeGreaterThan(5 * 60_000);
+      expect(elapsedMs).toBeLessThan(REQUEST_CEILING_MS);
+      expect(ok(await p).content).toBe("xxxxxxxx");
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("at the default ceiling, a stream that trickles past ten minutes ends there", async () => {
+    jest.useFakeTimers();
+    try {
+      const parts = Array.from({ length: 30 }, () => data(chunk({ content: "." })));
+      const { adapter } = adapterServing(() => Promise.resolve(streamed(parts, { gapMs: 60_000 })), { maxAttempts: 1 });
+      const p = adapter.complete(req);
+      p.catch(() => {});
+      const { settled, elapsedMs } = await onFakeClock(p, 10_000, 20 * 60_000);
+      expect(settled).toBe(true);
+      expect(elapsedMs).toBeGreaterThanOrEqual(REQUEST_CEILING_MS);
+      expect(elapsedMs).toBeLessThan(REQUEST_CEILING_MS + 60_000);
+      await expect(p).rejects.toThrow(/body read failed: the request passed its 600 s ceiling/);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("a stalled stream times out on silence, is cancelled, and ends as an adapter error when it keeps stalling", async () => {

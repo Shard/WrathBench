@@ -2305,7 +2305,7 @@ It needs no key, no credential and no `--model`: the route is the model
 refuses `driver: reference`, and the scheduler counts it toward nothing. What
 it shares with everything else is the account, so run no smoke on `PROBE`
 while a reference run holds it. The program never ends a run itself, so the
-verdict should be `episode-limit`; `no-xp` means the route stalled somewhere.
+verdict should be `episode-limit`.
 A pause is not resumed.
 
 Check it with `bun wb inspect run <run-id>` and `bun wb inspect trajectory

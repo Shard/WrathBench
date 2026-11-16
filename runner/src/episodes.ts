@@ -15,7 +15,7 @@
  *   90 minutes; the runner, the viewer and the dashboard all read this module
  *   (the dashboard through the wire, since `api-types.ts` stays import-free).
  * - **An explicit override does not silently un-tier the run.** Passing
- *   `--episode e90 --no-xp-ms 0` is allowed — harness development needs it —
+ *   `--episode e90 --idle-ms 0` is allowed — harness development needs it —
  *   but the tuple then carries `episodeOverride: true`, so the run cannot pass
  *   as a clean tier run on a chart.
  * - **A derived tier is a label, not a membership.** Past runs are never
@@ -115,15 +115,18 @@ export const EPISODES = {
     id: "e90",
     minutes: 90,
     idleMinutes: 20,
-    noXpMinutes: 20,
+    // Off on every tier now (docs/EPISODES.md, `e90`): a ninety-minute run is
+    // cheap to play out to its clock.
+    noXpMinutes: null,
     toolCalls: 3000,
     objectiveAllowed: false,
     scored: true,
     start: { race: 1, class: 2 },
     summary:
       "The default episode, and the one every model starts on. Ninety minutes of wall clock, a " +
-      "fresh level-1 Human Paladin, no operator objective, idle and no-XP watchdogs at " +
-      "twenty minutes each, and a 3000-call runaway ceiling — 1000 calls per thirty minutes, " +
+      "fresh level-1 Human Paladin, no operator objective, an idle watchdog at twenty minutes " +
+      "and the no-XP watchdog off, since a ninety-minute run is cheap to play out to its clock, and " +
+      "a 3000-call runaway ceiling — 1000 calls per thirty minutes, " +
       "a guard against a loop rather than a task budget. Short " +
       "enough that a full roster gets several episodes a night, which is what makes it the " +
       "sampling episode. Scored — and if ninety minutes turns out to be the wrong default it is " +

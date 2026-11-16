@@ -3527,8 +3527,8 @@ export async function inspectPadAt(runId: string, opts: Ctx & { at: number }, ou
  * it: two days, thousands of near-identical snippets, level, xp and position
  * unchanged) and to stay quiet through ordinary waiting: a flight moves, a
  * crafting or fishing session changes the bags, a vendor trip the money, an
- * xp-making sleep loop the xp. An e90 ends on its own `no-xp` watchdog (20
- * minutes) long before a two-hour window could trip.
+ * xp-making sleep loop the xp. An e90 ends on its 90-minute clock before a
+ * two-hour window could trip.
  */
 export const STUCK_DEFAULTS = {
   /** The trailing window the run is judged over. */

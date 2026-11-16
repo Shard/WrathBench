@@ -50,7 +50,7 @@ import {
  * `null` outright. `watchdogs.ts` guards on `!== null`; a zero left as zero
  * would trip the threshold on the first check instead of disabling it.
  */
-function msThreshold(defaultMs: number) {
+function msThreshold(defaultMs: number | null) {
   return z
     .union([z.number().int().nonnegative(), z.null()])
     .default(defaultMs)
@@ -64,8 +64,13 @@ function msThreshold(defaultMs: number) {
 export const watchdogConfigSchema = z.object({
   /** No model response for this long => `idle`. Null/0 disables. */
   idleMs: msThreshold(10 * 60_000),
-  /** No level/XP progress for this long (session must exist) => `no-xp`. Null/0 disables. */
-  noXpMs: msThreshold(45 * 60_000),
+  /**
+   * No level/XP progress for this long (session must exist) => `no-xp`. Null/0
+   * disables. Off by default, as on every episode tier (docs/EPISODES.md,
+   * `e90`): an opt-in a run or a campaign definition names for itself. It was
+   * 45 minutes until then, which a run launched before keeps in its stored config.
+   */
+  noXpMs: msThreshold(null),
   /** Episode wall-clock limit => `episode-limit`. Generous by default. Null/0 disables. */
   episodeMs: msThreshold(6 * 60 * 60_000),
   /** Consecutive sandbox restarts (event-loop-blocking snippets) => `snippet-runaway`. */

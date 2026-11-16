@@ -129,7 +129,7 @@ import { billingOf } from "../runner/src/model-cost";
 import { parseCredentials } from "../runner/src/credential-slots";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, TIERS, TIER_TABLE, modelStates, planNextJobs, schedulability, wantsIdle, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
-import type { EpisodeId } from "../runner/src/episodes";
+import { EPISODE_IDS, EPISODES, watchdogsFor, type EpisodeId } from "../runner/src/episodes";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
@@ -1863,7 +1863,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(jobArgv(l, { stamp: "20260101", until: undefined })).not.toContain("--loop");
     // An entry's own watchdog tightening wins key by key over the tier's.
     const tight = jobSpawn(job({ ref: "glm" }), { glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none", watchdogs: { idleMs: 60_000 } } }, "RUNNER", "20260101");
-    expect(tight.entries[0]!.watchdogs).toEqual({ episodeMs: 5_400_000, idleMs: 60_000, noXpMs: 1_200_000 });
+    expect(tight.entries[0]!.watchdogs).toEqual({ episodeMs: 5_400_000, idleMs: 60_000, noXpMs: null });
   });
 
   test("idle freeplay materializes with only its idle watchdog, not a six-hour episode cap", () => {
@@ -1878,7 +1878,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
   });
 
   test("episode ids map to today's runner flags until the runner owns --episode", () => {
-    expect(episodeDimensions("e90")).toEqual({ episode: "e90", watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 3000 });
+    expect(episodeDimensions("e90")).toEqual({ episode: "e90", watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 3000 });
     expect(episodeDimensions("e360").watchdogs).toEqual({ episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null });
     expect(episodeDimensions("freeplay").watchdogs!.episodeMs).toBeNull();
     // Freeplay is the one id with no ceiling of its own to pin: null is "no
@@ -1887,6 +1887,17 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     // unless its campaign or cell names a number.
     expect(episodeDimensions("freeplay").maxToolCalls).toBeNull();
     expect(episodeDimensions("probing").maxToolCalls).toBeUndefined();
+  });
+
+  test("every id's flags are its tier's leash, so a fleet launch is never stamped an override of its own tier", () => {
+    // The fleet states the watchdogs explicitly (`--watchdogs-json`), and the
+    // runner stamps `episodeOverride` on any that differ from the tier's: a
+    // drift here would leave every fleet run of the id uncounted.
+    for (const id of EPISODE_IDS) {
+      const dims = episodeDimensions(id);
+      expect(dims.watchdogs).toEqual(watchdogsFor(EPISODES[id]));
+      if (EPISODES[id].toolCalls !== null) expect(dims.maxToolCalls).toBe(EPISODES[id].toolCalls!);
+    }
   });
 
   test("a pinned job and a pool job are the same thing to diffJobs: one set of drain/rearm semantics", () => {

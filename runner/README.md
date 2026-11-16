@@ -166,7 +166,7 @@ It streams every request and assembles the events back into the body a
 non-streaming call returns, so the trajectory, usage and cost records are the
 same shapes either way; a provider that answers with plain JSON is read as
 before. Streaming is there for the clock: an attempt fails after 120 s with no
-data (keep-alive comments do not count) or at a 5-minute ceiling however
+data (keep-alive comments do not count) or at a 10-minute ceiling however
 steady it is, rather than after 120 s in total, so a slow model that keeps
 producing is never cut for being slow. A failed attempt, a cut stream
 included, is retried whole, and attempts start only inside a 5-minute budget.
@@ -1548,7 +1548,8 @@ until the resume re-leases the token, which rotates it.
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`
 (no model output), `no-xp` (no level/XP progress once progress was first
-observed), `episode-limit`, `snippet-runaway`, plus the config ceilings
+observed; off by default and on every episode, so only a run or a campaign
+definition that names a threshold has it), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).
 `environment-defect` is never auto-detected — it is applied by a human via
 `classify.ts` after reading the trajectory. Model-API quota exhaustion is a
