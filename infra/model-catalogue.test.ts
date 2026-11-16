@@ -68,7 +68,15 @@ describe("the committed file", () => {
  * promise) and the test fixtures' stand-ins. Anything else a fixture or the
  * roster example names is a real model and needs an entry.
  */
-const INVENTED = new Set(["anthropic/fixture-model", "anthropic/claude-sonnet-5.5", "vendor/flash-model:free", "z-ai/glm-6", "test/model"]);
+const INVENTED = new Set([
+  "anthropic/fixture-model",
+  "anthropic/claude-sonnet-5.5",
+  "vendor/flash-model:free",
+  "z-ai/glm-6",
+  "test/model",
+  // The shots fixture's `fixture/e90-model` as OpenCode Go records it, bare.
+  "e90-model",
+]);
 const invented = (id: string): boolean => id.startsWith("fixture/") || INVENTED.has(id);
 
 /** `model: "…"`, `"model": "…"` and `models: [ … ]`, as the fixtures spell them. */
