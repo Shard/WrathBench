@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { backfilledTitle, costMark, effortLabel, titleOf, windowNote, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
+import { backfilledTitle, costMark, effortLabel, titleOf, windowNote, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, paneText } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -373,3 +373,23 @@ describe("money as coins, for the line that draws them", () => {
   });
 });
 
+
+describe("paneText", () => {
+  test("drops the blank lines a reply opens with and the newline it ends on", () => {
+    expect(paneText("\n\nHeading to the mill.\n")).toBe("Heading to the mill.");
+  });
+
+  test("keeps the blank lines inside the text and the first line's indentation", () => {
+    expect(paneText(" \t\n\n  first\n\n\nsecond  \n  \n")).toBe("  first\n\n\nsecond");
+    expect(paneText("a\r\n\r\nb\r\n")).toBe("a\r\n\r\nb");
+  });
+
+  test("text with nothing at either end is returned as it is", () => {
+    expect(paneText("one\ntwo")).toBe("one\ntwo");
+    expect(paneText("")).toBe("");
+  });
+
+  test("text that is only whitespace is empty", () => {
+    expect(paneText("\n\n \t\n")).toBe("");
+  });
+});

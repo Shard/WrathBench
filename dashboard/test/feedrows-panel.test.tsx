@@ -157,6 +157,20 @@ describe("the feed's two tiers, drawn", () => {
     dispose();
   });
 
+  test("a reply's blank lines at either end are not drawn; one that is only whitespace draws as an empty reply", async () => {
+    const { host, dispose } = await mount(() => [
+      e("response", 100, { turn: 1, text: "\n\nHeading to the mill.\n\nThen the fence.\n" }),
+      e("response", 200, { turn: 2, text: "\n\n \n" }),
+      e("response", 300, { turn: 3, text: "At the mill." }),
+      e("response", 400, { turn: 4, text: "" }),
+    ]);
+    const rows = [...host.children];
+    expect([...host.querySelectorAll("pre.block")].map((p) => p.textContent)).toEqual(["Heading to the mill.\n\nThen the fence.", "At the mill."]);
+    expect(rows[1]!.className).toBe(rows[3]!.className);
+    expect(rows[1]!.querySelector(".body")).toBeNull();
+    dispose();
+  });
+
   test("every row carries its time, which is what the timeline scrolls the feed by", async () => {
     const { host, dispose } = await mount(window);
     // The turn's request, the reply, the snippet's call, the run's first action, the level, the reply.

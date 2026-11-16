@@ -15,7 +15,7 @@
  */
 
 import { Collapsible } from "./Collapsible";
-import { fmtTokens } from "../lib/format";
+import { fmtTokens, paneText } from "../lib/format";
 
 const OPEN_KEY = "wrathbench.runview.scratchpad";
 
@@ -27,7 +27,7 @@ export function ScratchpadPanel(props: { text: string }) {
       defaultOpen
       storageKey={OPEN_KEY}
     >
-      <pre class="block scratchpad">{props.text}</pre>
+      <pre class="block scratchpad">{paneText(props.text)}</pre>
     </Collapsible>
   );
 }
