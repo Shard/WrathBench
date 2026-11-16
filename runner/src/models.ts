@@ -493,7 +493,7 @@ export interface RosterModel {
   /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
   serving?: ServingSpec;
   apiBase?: string;
-  /** The routing block the entry declares, the fleet's default folded in (`routing.ts`); a target counts only runs routed as it now would be. */
+  /** The routing block the entry declares, the fleet's default folded in (`routing.ts`). A target counts a run whatever its routing (operator, 2026-11-16). */
   routing?: RoutingSpec;
   /** False when the entry runs without the reference wiki; a target counts only runs with its wiki. */
   wiki?: boolean;
@@ -837,7 +837,7 @@ export interface ModelState {
   compactWindow?: string;
   /** The entry's local build (`RosterModel.serving`); absent on a hosted entry. */
   serving?: ServingSpec;
-  /** What the entry launches with, for `countsTowardTarget`: its base, routing and wiki (`RosterModel`). */
+  /** What the entry launches with (`RosterModel`): its base and routing, and its wiki, which `countsTowardTarget` compares. */
   apiBase?: string;
   routing?: RoutingSpec;
   wiki?: boolean;

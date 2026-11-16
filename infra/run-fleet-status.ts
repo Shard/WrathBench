@@ -599,7 +599,8 @@ export function formatAccounts(rows: readonly AccountRow[], max?: number): strin
 /**
  * --status / --dry-run rendering of the projection as a table: one row per
  * roster model — status, counted/target per episode, best level, why it is or
- * is not schedulable. `excluded` names roster entries outside the policy
+ * is not schedulable — and a model on two providers as one row, its first
+ * entry's, with a `└` line per other entry (operator, 2026-11-16). `excluded` names roster entries outside the policy
  * (pinned, or a probe) and why. Pure.
  */
 export function formatModels(
