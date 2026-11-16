@@ -67,9 +67,11 @@ export const MIN_FRAME_BYTES = 32_000;
  */
 export const CINEMATIC_WAIT_MS = 5_000;
 /**
- * Only blank frames, with the subject in range, for this long: the client's
- * screen is stuck black (a fade it never lifted). Leaving the world clears
- * it, so the camera logs out and back in.
+ * The same blank frame, byte for byte in size, with the subject in range, for
+ * this long: the client's screen is stuck black (a fade it never lifted).
+ * Leaving the world clears it, so the camera logs out and back in. A dark or
+ * foggy scene under the blank threshold varies in size from frame to frame,
+ * so it never counts.
  */
 export const BLANK_RELOG_MS = 3 * 60_000;
 /**
@@ -320,8 +322,9 @@ export class Director {
     let lastCheck = this.now();
     let started = false;
     let skips = 0;
-    /** Since when every frame in range has been blank; null after a kept one. */
+    /** Since when every frame in range has been the same blank frame; null after a kept one. */
     let blankSince: number | null = null;
+    let blankBytes = 0;
     for (;;) {
       if (this.refused || this.lost || this.o.stopping?.() === true) break;
       const tick = this.now();
@@ -366,7 +369,10 @@ export class Director {
           const bytes = await c.screenshot(JPEG_QUALITY);
           if (bytes !== null && bytes.length < MIN_FRAME_BYTES) {
             if (++skips % 30 === 1) this.log(`skip: a blank frame (${bytes.length} bytes)`);
-            blankSince ??= tick;
+            if (blankSince === null || bytes.length !== blankBytes) {
+              blankSince = tick;
+              blankBytes = bytes.length;
+            }
             if (tick - blankSince >= BLANK_RELOG_MS) {
               this.log(`only blank frames for ${Math.round((tick - blankSince) / 60_000)} min with ${subject.character} in view: the screen is stuck; logging out and in again`);
               await c.lua("Logout() return true");

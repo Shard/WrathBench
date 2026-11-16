@@ -3127,8 +3127,9 @@ kubectl -n <ns> logs <release>-camera-<id> -c camera --tail=50
   world per eval's camera makes a new character, whose first login plays its
   race's intro, and a stop sent before the intro starts leaves its fade at
   black. The director skips an intro only once it plays (`skipped the intro
-  cinematic`), and after three minutes of nothing but blank frames with the
-  subject in view it logs the client out and in again, which clears any fade
+  cinematic`), and after three minutes of the same blank frame (one size,
+  byte for byte; a dark scene's frames vary) with the subject in view it logs
+  the client out and in again, which clears any fade
   (`the screen is stuck; logging out and in again`). The renderer is not the
   cause; a frame from the client's own port shows it (`GET /screenshot` with
   the bearer in `/run/camera/token`, from the `camera-director` container).

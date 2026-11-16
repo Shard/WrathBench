@@ -34,6 +34,8 @@ class ScriptedClient extends CameraClient {
   black = false;
   /** How big a frame is while the screen is not black. */
   frameBytes = 0;
+  /** When set, the size of each drawn frame in turn (a dark scene's, under the blank threshold). */
+  sizes: (() => number) | null = null;
   readonly sent: string[] = [];
 
   constructor() {
@@ -76,7 +78,7 @@ class ScriptedClient extends CameraClient {
 
   override async screenshot(): Promise<Uint8Array | null> {
     if (this.st?.in_world !== true || this.frameBytes === 0) return null;
-    return new Uint8Array(this.black ? 25_827 : this.frameBytes);
+    return new Uint8Array(this.black ? 25_827 : (this.sizes?.() ?? this.frameBytes));
   }
 
   /** The GM commands it said, in order. */
@@ -277,6 +279,17 @@ describe("a screen stuck black", () => {
     const index = readFileSync(join(run, "camera", "frames.jsonl"), "utf8").trim().split("\n");
     expect(index.length).toBeGreaterThan(0);
     appearsOnlyWhileInvisible(r.client);
+  });
+
+  test("a dark scene's small frames, each a different size, are never taken for one", async () => {
+    const { runsDir, beat } = liveRun();
+    const r = rig({ untilMs: BLANK_RELOG_MS + 3 * 60_000, runsDir, onTick: beat });
+    let n = 0;
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    r.client.sizes = () => 24_000 + (n++ % 50) * 100;
+    await r.director.live();
+    expect(r.logs.some((l) => l.includes("skip: a blank frame"))).toBe(true);
+    expect(r.client.count("Logout()")).toBe(0);
   });
 
   test("a frame between blanks restarts the count: no logout", async () => {
