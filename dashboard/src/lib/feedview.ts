@@ -61,7 +61,7 @@ export type ExpandPreset = (typeof EXPAND_PRESETS)[number];
 export type BlockKind =
   /** The model's own reply text. */
   | "response"
-  /** A tool call's input and its result — snippet code, args, output. */
+  /** A tool call's input and its result — snippet code, args, output — and whether a snippet's card is open at all. */
   | "call"
   /** A run of actions between two decisions (`lib/feedtier.ts`): its counts, or a line each. */
   | "actions"
@@ -89,8 +89,8 @@ export const EXPAND_LABELS: Record<ExpandPreset, string> = {
 };
 
 /**
- * The default when nothing is remembered: the model's reasoning open, the
- * multi-KB snippet bodies still folded. It is the reading a visitor wants
+ * The default when nothing is remembered: the model's reasoning open, a
+ * snippet's card closed to its head. It is the reading a visitor wants
  * without scrolling past console dumps to find it, and it is one click from
  * either neighbour.
  */

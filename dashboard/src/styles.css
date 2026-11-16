@@ -536,6 +536,13 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .act-line.err .act-label, .act-line.err .act-text { color: var(--err); }
 .act.open > .act-line .act-text { white-space: normal; overflow-wrap: anywhere; }
 .act > .entry { margin: 2px 10px 8px 31px; font-size: var(--fs-base); color: var(--fg); background: var(--panel); }
+/* A snippet's card closed to its head: the head is the row, and the whole of it is the click. */
+.entry.closed > .head { border-bottom: none; flex-wrap: wrap; }
+.entry > .head.folds { cursor: pointer; }
+.entry > .head .outcome { font-weight: 700; }
+.fold-toggle { display: inline-flex; align-self: center; padding: 0; background: none; border: none; color: inherit; font: inherit; }
+.fold-toggle > .feed-icon { transition: transform .1s; }
+.fold-toggle.open > .feed-icon { transform: rotate(90deg); color: var(--accent); }
 /* An action log on a snippet's card: the same head, the lines indented under it. */
 .entry .body.actions > .fold-head { padding: 0; }
 .entry .body.actions > .fold-head ~ .action-line { padding-left: 21px; }

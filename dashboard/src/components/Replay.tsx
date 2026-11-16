@@ -23,6 +23,7 @@ import { A } from "@solidjs/router";
 import { api, type ChapterView, type ClipsResponse, type VideoPartView } from "../api/client";
 import { fmtAge, fmtElapsed, modelDisplay } from "../lib/format";
 import { poll } from "../lib/poll";
+import { Collapsible } from "./Collapsible";
 import { cursorFor, videoSeekFor } from "../lib/video-sync";
 import { captionAt, lastAtOrBefore, partAt, partStarts, totalSeconds } from "@viewer/video-time";
 
@@ -50,7 +51,7 @@ export function chapterLabel(c: ChapterView): string {
 /** The bar's drawing width; the SVG scales it to the width it is given. */
 const BAR_W = 1000;
 
-/** Up to this many chapters are all listed beside the player; past it, the current part's. */
+/** Up to this many chapters are all listed in the chapters pane; past it, the current part's. */
 const CHAPTERS_LISTED = 40;
 
 /** How close to a part's end the next part's whole file is asked for. */
@@ -62,10 +63,37 @@ function partTitle(p: VideoPartView): string {
   return `${from} – ${to} UTC`;
 }
 
+/**
+ * What a chapter list somewhere else on the page needs of the player: where
+ * it is, and a way to move it. The run page makes one (`createChapterLink`),
+ * hands it to its `RunVideo` and to the `ChaptersPanel` further down the
+ * sidebar; the player fills it in when it mounts.
+ */
+export interface ChapterLink {
+  /** Seconds into the whole video, and the part being watched. */
+  at: () => number;
+  part: () => number;
+  /** Seek to a chapter and play from it; nothing until a player is bound. */
+  seek(t: number): void;
+  bind(player: { at: () => number; part: () => number; seek: (t: number) => void }): void;
+}
+
+export function createChapterLink(): ChapterLink {
+  const [player, setPlayer] = createSignal<{ at: () => number; part: () => number; seek: (t: number) => void } | null>(null);
+  return {
+    at: () => player()?.at() ?? 0,
+    part: () => player()?.part() ?? 0,
+    seek: (t) => player()?.seek(t),
+    bind: (p) => void setPlayer(p),
+  };
+}
+
 export interface RunVideoProps {
   clips: ClipsResponse;
-  /** The map replay's sidebar: the player alone, no heading and no chapter list. */
+  /** The map replay's sidebar: the player alone, no heading. */
   compact?: boolean;
+  /** The page's chapter list, kept elsewhere (`ChaptersPanel`), to drive this player. */
+  link?: ChapterLink;
   /** A run time to show, from outside (the map's cursor); followed only while the video is paused. */
   follow?: number | null;
   /** Pause the video: the other clock has started. */
@@ -227,11 +255,7 @@ export function RunVideo(props: RunVideoProps) {
   });
 
   const caption = (): string => captionAt(props.clips.captions, v());
-  // Every chapter while there are few; for a long freeplay run's many, the part being watched's.
-  const shownChapters = createMemo(() =>
-    props.compact === true ? [] : props.clips.chapters.length <= CHAPTERS_LISTED ? props.clips.chapters : props.clips.chapters.filter((c) => c.part === part()),
-  );
-  const current = (): number => lastAtOrBefore(props.clips.chapters, v());
+  props.link?.bind({ at: v, part, seek: (t) => seek(t, true) });
   const barX = (t: number): number => (total() > 0 ? (t / total()) * BAR_W : 0);
   const onBar = (e: PointerEvent): void => {
     const box = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
@@ -322,18 +346,43 @@ export function RunVideo(props: RunVideoProps) {
       <Show when={caption() !== ""}>
         <p class="dim">{caption()}</p>
       </Show>
-      <Show when={shownChapters().length > 0}>
-        <table>
+    </>
+  );
+}
+
+const CHAPTERS_OPEN_KEY = "wrathbench.runview.chapters";
+
+/**
+ * The video's chapters as a list, in a pane of the run page's sidebar under
+ * the milestones, closed until the reader opens it (the operator's call):
+ * the marks on the player's bar are what sits beside the video, and the list
+ * is a reference, not something to read past on the way to the figures. A
+ * chapter's time seeks the player through the page's `ChapterLink` and plays
+ * from there. Every chapter while there are few; for a long freeplay run's
+ * many, the part being watched's.
+ */
+export function ChaptersPanel(props: { clips: ClipsResponse; link: ChapterLink }) {
+  const all = (): ChapterView[] => props.clips.chapters;
+  const shown = createMemo(() => (all().length <= CHAPTERS_LISTED ? all() : all().filter((c) => c.part === props.link.part())));
+  const current = (): ChapterView | undefined => all()[lastAtOrBefore(all(), props.link.at())];
+  return (
+    <Show when={all().length > 0}>
+      <Collapsible
+        title={<span title="the moments the replay video is marked at; a time seeks the video">replay chapters</span>}
+        summary={`${all().length}`}
+        storageKey={CHAPTERS_OPEN_KEY}
+      >
+        <table class="chapters">
           <tbody>
-            <For each={shownChapters()}>
+            <For each={shown()}>
               {(c) => (
-                <tr class={props.clips.chapters[current()] === c ? "hovered" : undefined} title={c.caption === "" ? undefined : c.caption}>
+                <tr class={current() === c ? "hovered" : undefined} title={c.caption === "" ? undefined : c.caption}>
                   <td class="mono">
                     <a
                       href="#"
                       onClick={(e) => {
                         e.preventDefault();
-                        seek(c.t, true);
+                        props.link.seek(c.t);
                       }}
                     >
                       {fmtElapsed(c.t * 1000)}
@@ -346,8 +395,8 @@ export function RunVideo(props: RunVideoProps) {
             </For>
           </tbody>
         </table>
-      </Show>
-    </>
+      </Collapsible>
+    </Show>
   );
 }
 

@@ -143,7 +143,7 @@ describe("the feed's two tiers, drawn", () => {
     const { host, dispose } = await mount(window);
     // turn, response, the snippet's card, the run, the level, the response.
     const rows = [...host.children];
-    expect(rows.map((r) => r.className.replace(/\s+/g, " ").trim())).toEqual(["entry turn", "entry", "entry", "entry run bad", "entry mark", "entry"]);
+    expect(rows.map((r) => r.className.replace(/\s+/g, " ").trim())).toEqual(["entry turn", "entry", "entry closed", "entry run bad", "entry mark", "entry"]);
     for (const r of rows) expect(r.querySelector(".feed-icon")).not.toBeNull();
     expect(texts(host, ".entry.mark .t")).toEqual(["level 6 → 7"]);
 
@@ -157,14 +157,58 @@ describe("the feed's two tiers, drawn", () => {
     dispose();
   });
 
-  test("a snippet's own action log is its counts on the card, the refusal under them", async () => {
+  test("under the default a snippet is its head: lines, outcome and what it put on the wire; a click opens the card", async () => {
     const { host, dispose } = await mount(window);
     const card = host.children[2]!;
     expect(texts(card, ".head .t")).toEqual(["run_snippet"]);
+    expect(card.querySelector(".fold-toggle")!.getAttribute("aria-expanded")).toBe("false");
+    expect(card.querySelectorAll(".body")).toHaveLength(0);
+    expect(texts(card, ".head")[0]).toContain("1 line");
+    expect(texts(card, ".head .outcome")).toEqual(["ok"]);
+    // The refused cast is on the closed head, in the error colour.
+    expect(texts(card, ".head .tally-chip")).toEqual(["2 combat actions", "1 loot", "1 failed"]);
+    expect(card.querySelector(".head .tally-chip.err")).not.toBeNull();
+
+    click(card.querySelector(".head"));
+    expect(card.querySelector(".fold-toggle")!.getAttribute("aria-expanded")).toBe("true");
+    expect(texts(card, "pre.block")).toEqual(["await sdk.killTarget(boar)", "ok"]);
+    expect(card.querySelectorAll(".head .tally-chip")).toHaveLength(0);
+    // Its action log: the counts, the refusal under them, and every dispatch once opened.
     expect(texts(card, ".body.actions .tally-chip")).toEqual(["2 combat actions", "1 loot", "1 failed"]);
     expect(texts(card, ".body.actions .action-line")).toEqual(["cast Invented Strike → refused: out_of_range"]);
     click(card.querySelector(".body.actions .fold-head"));
     expect(texts(card, ".body.actions .action-line")).toEqual(["target Invented Boar", "cast Invented Strike → refused: out_of_range", "loot Invented Boar"]);
+    click(card.querySelector(".fold-toggle"));
+    expect(card.querySelectorAll(".body")).toHaveLength(0);
+    dispose();
+  });
+
+  test("a snippet that errored keeps its error mark closed; the presets that open calls open it; other tools' cards are whole", async () => {
+    const [preset, setPreset] = createSignal<ExpandPreset>("responses");
+    const entries = [
+      e("tool_call", 1, { turn: 1, name: "run_snippet", args: {}, dispatchTs: 1 }),
+      e("snippet", 1, { turn: 1, code: "a\nb\nc" }),
+      e("snippet_result", 2, { turn: 1, name: "run_snippet", isError: true, text: "error (4ms)\nTypeError: x\n--- harness ---\nmoveTo too_far ×2: walk it in legs" }),
+      e("tool_call", 3, { turn: 1, name: "log_status", args: { text: "noted" }, dispatchTs: 3 }),
+      e("tool_result", 4, { turn: 1, name: "log_status", isError: false, text: "logged" }),
+    ];
+    const { host, dispose } = await mount(() => entries, preset);
+    const [snippet, log] = [...host.children];
+    expect(snippet!.className.replace(/\s+/g, " ").trim()).toBe("entry bad closed");
+    expect(texts(snippet!, ".head .outcome.err")).toEqual(["error"]);
+    expect(texts(snippet!, ".head")[0]).toContain("3 lines");
+    expect(texts(snippet!, ".head .tally-chip.hint")).toEqual(["1 hint"]);
+    // `log_status` is the model's own words: never closed.
+    expect(log!.querySelector(".fold-toggle")).toBeNull();
+    expect(texts(log!, "pre.block")).toEqual(['{"text":"noted"}', "logged"]);
+
+    setPreset("minimal");
+    expect(snippet!.querySelectorAll(".body")).toHaveLength(0);
+    for (const p of ["snippets", "all"] as const) {
+      setPreset(p);
+      expect(snippet!.querySelector(".fold-toggle")!.getAttribute("aria-expanded")).toBe("true");
+      expect(snippet!.querySelector(".notice-callout")).not.toBeNull();
+    }
     dispose();
   });
 

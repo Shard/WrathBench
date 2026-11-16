@@ -359,8 +359,10 @@ bucket as everything else.
 
 - **One player over the parts.** The run page plays the parts back to back
   with one bar, one clock and one total over the whole run; a seek lands in
-  the right part, the chapters are marks on the bar and a list beside it, and
-  the caption under it follows the playhead. On the map's replay of one run
+  the right part, the chapters are marks on the bar, and
+  the caption under it follows the playhead. The chapters as a list are a
+  pane further down the sidebar, under the milestones and closed until
+  opened; a chapter's time there seeks the player. On the map's replay of one run
   the same player sits in the sidebar on the map's clock, both ways: while the
   video plays it moves the map's playhead, otherwise the playhead seeks the
   video to the frame at or before it, and starting either stops the other

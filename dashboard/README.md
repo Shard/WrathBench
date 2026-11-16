@@ -396,10 +396,12 @@ one line, its full text in the hover, so its words changing never move
 anything below. Under the row is a freeplay character's attempt strip, then the
 feed on the left and the sidebar on the right: the model, the character card,
 the camera's still or video, the XP chart, the token and playtime cards and one
-cost card, then the scratchpad and the milestones. After the milestones comes
-the character's totals across every attempt, a pane that stays closed until
-the reader opens it, then fan-out characters, comparability and the server
-footer. A card shows its value and a short line under it; the explanation (how
+cost card, then the scratchpad and the milestones. After the milestones come
+two panes that stay closed until the reader opens them: the replay video's
+chapter list (`ChaptersPanel`, whose times seek the player above through a
+`ChapterLink`; the player itself keeps only the marks on its bar) and the
+character's totals across every attempt. Then fan-out characters,
+comparability and the server footer. A card shows its value and a short line under it; the explanation (how
 tokens were counted, where each cost comes from, the full tok/s) sits behind
 the card's "i" (`components/InfoHint.tsx`). The cost card's headline is the
 provider's actual where there is one, else the list-price expected, with the
@@ -449,7 +451,12 @@ routine's moves and its action log are rows in their own time.
 Every row leads with its kind's icon, one small set of inline SVG paths in
 `components/FeedIcon.tsx` drawn in the row's colour: nothing is fetched for
 them. The expand select still sets where every fold starts ("minimal",
-"responses", "snippets", "all"); only "all" opens the runs. The rows are
+"responses", "snippets", "all"); only "all" opens the runs. Under "minimal"
+and "responses", the default, a `run_snippet` card is closed to its head: its
+line count, "ok" or "error" (an errored one keeps its error rule), and its
+action log's counts with what failed and how many hints the harness added. A
+click on the head opens the card as it was; "snippets" and "all" start it
+open. Every other tool's card is short and is drawn whole. The rows are
 `components/FeedRows.tsx`, the one-line readings `lib/feedline.ts`. The feed
 is a window of 200 entries, so folding the actions shortens what a window
 draws, not what it holds: a window of a walking character is a few turns.
@@ -493,8 +500,8 @@ pure layer — view maths and pip placement, the API client's paths, encoding an
 error mapping — plus a few focused component checks: the shared chart axis, the
 map's play bar across a route swap, the campaigns page across its routes, the
 run page's scratchpad panel against a hostile pad, its sidebar order, closed
-character pane and single cost card, its feed's collapsed runs and what they
-open to, and the map's quest button
+character and chapter panes and single cost card, its feed's collapsed runs
+and snippet cards and what they open to, and the map's quest button
 and its rows across a counter change.
 Those use the small `happy-dom` harness to mount the components through Vite;
 the rest of the suite does not need a DOM.

@@ -250,6 +250,8 @@ function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPre
 
 /**
  * One tool call as one card: the input on top, the result under a dashed rule.
+ * A snippet's card starts closed to its head under the presets that do not
+ * open calls, with its line count, its outcome and its action log's counts.
  * For run_snippet the input is the snippet's code and the call's args are not
  * shown — they are the same code again, which is exactly the duplication this
  * card exists to remove. The duration is `result.ts − call.ts` and only shown
@@ -269,9 +271,35 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
     g().call?.name ?? g().result?.name ?? (g().snippet !== null ? "run_snippet" : "?");
   const turn = (): number | undefined => (g().call ?? g().snippet ?? g().result)?.turn;
   const anyTs = (): number => g().call?.ts ?? g().snippet?.ts ?? g().result?.ts ?? 0;
+  /*
+   * A snippet's card is closed to its head unless the preset opens calls
+   * ("snippets", "all") or the reader clicks: under the default the feed is
+   * the model's replies, and a snippet is one line that says how long its
+   * code is, how it ended and what it put on the wire. Every other tool's
+   * card is short already and is drawn whole.
+   */
+  const folds = (): boolean => props.kind === "snippet";
+  const [over, setOver] = createSignal<boolean | null>(null);
+  createEffect(on(() => props.preset, () => setOver(null), { defer: true }));
+  const open = (): boolean => !folds() || (over() ?? expandedBy(props.preset, "call"));
+  const codeLines = createMemo(() => (input().length === 0 ? 0 : input().split("\n").length));
+  /** What the closed head says of the action log and the harness's lines, so neither a refusal nor a hint is hidden. */
+  const closedTally = createMemo((): Tally => {
+    const t = tallyNotes(g().actions);
+    return { ...t, hints: splitNotices(g().result?.text ?? "").notices.length };
+  });
+  const onHead = (e: MouseEvent): void => {
+    if (!folds() || (e.target as Element).closest("a, button") !== null) return;
+    setOver(!open());
+  };
   return (
-    <div class={`entry ${g().result?.isError === true ? "bad" : ""} ${props.reflecting ? "reflecting" : ""}`}>
-      <div class="head">
+    <div class={`entry ${g().result?.isError === true ? "bad" : ""} ${props.reflecting ? "reflecting" : ""}`} classList={{ closed: !open() }}>
+      <div class="head" classList={{ folds: folds() }} onClick={onHead}>
+        <Show when={folds()}>
+          <button class="fold-toggle" classList={{ open: open() }} aria-expanded={open()} aria-label={open() ? "collapse" : "expand"} onClick={() => setOver(!open())}>
+            <FeedIcon kind="chevron" />
+          </button>
+        </Show>
         <FeedIcon kind={props.kind} />
         <span class="t">{name()}</span>
         {/* The surface's own three tools, named where a reader will look for
@@ -290,6 +318,15 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
         <Show when={g().durationMs !== null}>
           <span class="lat">{fmtLatency(g().durationMs)}</span>
         </Show>
+        <Show when={!open()}>
+          <span>
+            {codeLines()} {codeLines() === 1 ? "line" : "lines"}
+          </span>
+          <Show when={g().result} fallback={<span>no result yet</span>}>
+            {(r) => <span class={r().isError === true ? "err outcome" : "ok outcome"}>{r().isError === true ? "error" : "ok"}</span>}
+          </Show>
+          <TallyChips tally={closedTally()} />
+        </Show>
         <span class="spacer" />
         <When ts={anyTs()} />
         <Show when={g().call?.clipped === true}>
@@ -302,45 +339,47 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
           <RawLink runId={props.runId} i={g().result!.i} label="raw result" />
         </Show>
       </div>
-      <Show when={input().length > 0}>
-        <div class="body">
-          <FoldBlock text={input()} defaultOpen={expandedBy(props.preset, "call")} />
-        </div>
-      </Show>
-      <Show when={g().actions.length > 0}>
-        <ActionLines records={g().actions} preset={props.preset} />
-      </Show>
-      <Show
-        when={g().result}
-        fallback={
-          // A live tail that has the call but not yet the result — or a run
-          // that died mid-call and never wrote one.
-          <div class="body pending">no result yet</div>
-        }
-      >
-        {(r) => {
-          /*
-           * The harness's own lines are lifted out of the result text and drawn
-           * as a callout: they are the harness talking to the model, not the
-           * tool's output, and inside a folded console dump they were invisible
-           * to a reader looking for exactly them (lib/feedview.ts).
-           */
-          const split = createMemo(() => splitNotices(r().text ?? ""));
-          return (
-            <>
-              <Show when={split().body.length > 0}>
-                <div class="body">
-                  <FoldBlock text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
-                </div>
-              </Show>
-              <Show when={split().notices.length > 0}>
-                <div class="body notices">
-                  <NoticeCallout lines={split().notices} />
-                </div>
-              </Show>
-            </>
-          );
-        }}
+      <Show when={open()}>
+        <Show when={input().length > 0}>
+          <div class="body">
+            <FoldBlock text={input()} defaultOpen={expandedBy(props.preset, "call")} />
+          </div>
+        </Show>
+        <Show when={g().actions.length > 0}>
+          <ActionLines records={g().actions} preset={props.preset} />
+        </Show>
+        <Show
+          when={g().result}
+          fallback={
+            // A live tail that has the call but not yet the result — or a run
+            // that died mid-call and never wrote one.
+            <div class="body pending">no result yet</div>
+          }
+        >
+          {(r) => {
+            /*
+             * The harness's own lines are lifted out of the result text and drawn
+             * as a callout: they are the harness talking to the model, not the
+             * tool's output, and inside a folded console dump they were invisible
+             * to a reader looking for exactly them (lib/feedview.ts).
+             */
+            const split = createMemo(() => splitNotices(r().text ?? ""));
+            return (
+              <>
+                <Show when={split().body.length > 0}>
+                  <div class="body">
+                    <FoldBlock text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
+                  </div>
+                </Show>
+                <Show when={split().notices.length > 0}>
+                  <div class="body notices">
+                    <NoticeCallout lines={split().notices} />
+                  </div>
+                </Show>
+              </>
+            );
+          }}
+        </Show>
       </Show>
     </div>
   );

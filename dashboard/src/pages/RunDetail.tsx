@@ -60,7 +60,7 @@ import { Coins, QuestCount } from "../components/CharacterFacts";
 import { InventoryPanel, XpBar, createInspectorClient } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
-import { LiveFrame, RunVideo } from "../components/Replay";
+import { ChaptersPanel, LiveFrame, RunVideo, createChapterLink } from "../components/Replay";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtDuration, fmtItems, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
@@ -510,6 +510,8 @@ export default function RunDetail() {
    * value so settled groups keep their object identity and `<For>` reuses
    * their DOM instead of rebuilding every row per tail append.
    */
+  /** What joins the chapter list under the milestones to the player above it. */
+  const chapterLink = createChapterLink();
   const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
   /** What the run was driven with, for the rows a surface files differently (`lib/feedtier.ts`). */
   const surface = createMemo<Surface>(
@@ -915,7 +917,7 @@ export default function RunDetail() {
                   <Show when={!SNAPSHOT_MODE && live()}>
                     <LiveFrame runId={params.id} now={now()} />
                   </Show>
-                  <Show when={clips()}>{(c) => <RunVideo clips={c()} />}</Show>
+                  <Show when={clips()}>{(c) => <RunVideo clips={c()} link={chapterLink} />}</Show>
 
                   <div class="cards">
                     {/*
@@ -1009,6 +1011,8 @@ export default function RunDetail() {
 
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
+                  {/* The video's chapter list, folded away down here; the player above keeps the marks on its bar. */}
+                  <Show when={clips()}>{(c) => <ChaptersPanel clips={c()} link={chapterLink} />}</Show>
 
                   {/* The character across every attempt, closed until opened, since it is not this run and it is long. */}
                   <Show when={d().character}>{(st) => <CharacterTotalsPanel character={st()} runId={run().runId} />}</Show>
