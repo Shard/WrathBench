@@ -3122,9 +3122,16 @@ kubectl -n <ns> logs <release>-camera-<id> -c camera --tail=50
 - A camera pod `Pending`: no free `devic.es/dri` claim. No world waits on it.
 - No adapter: the client's log names the Vulkan device it picked; `llvmpipe`
   on a `gpu` camera means the device was not visible in the container.
-- `skip: a blank frame`: the client answered with a flat image (seen once
-  on the Intel GPU, in a client's first minutes in the world). Blank frames
-  are never kept; if it persists, switch `renderer` to `software`.
+- `skip: a blank frame`: the client answered with a flat image, never kept.
+  A run of them is a screen held black by a fade the client never lifted: a
+  world per eval's camera makes a new character, whose first login plays its
+  race's intro, and a stop sent before the intro starts leaves its fade at
+  black. The director skips an intro only once it plays (`skipped the intro
+  cinematic`), and after three minutes of nothing but blank frames with the
+  subject in view it logs the client out and in again, which clears any fade
+  (`the screen is stuck; logging out and in again`). The renderer is not the
+  cause; a frame from the client's own port shows it (`GET /screenshot` with
+  the bearer in `/run/camera/token`, from the `camera-director` container).
 - `login: refused (World(39), 0x27)` in the client's log: the world's realm
   row is missing or flagged offline, so the client was handed another realm.
   A world's row is the launcher's; a release no longer prunes it.

@@ -7,11 +7,11 @@
  *
  * What it may do in the world is fixed here and nowhere else: `.appear
  * <subject>` to move to the subject, `.morph target 11686` to hide the
- * camera's own body, and, once, `.gm on` and `.gm visible off` should the
- * world's config not have applied them. It never targets, says, casts or
- * moves otherwise, and it never moves while the client is visible: every
- * `.appear` is preceded by the invisibility check, and a camera found
- * visible logs out and stays out.
+ * camera's own body, skip its own character's intro cinematic, and log
+ * itself out (found visible, or its screen stuck black). It never targets,
+ * says, casts or moves otherwise, and it never moves while the client is
+ * visible: every `.appear` is preceded by the invisibility check, and a
+ * camera found visible logs out and stays out.
  *
  * It keeps the client in the world on its own: a client that leaves it (its
  * process restarted after a crash, a worldserver restart, a lost session) is
@@ -60,6 +60,24 @@ export const RETRY_MS = 15_000;
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
  */
 export const MIN_FRAME_BYTES = 32_000;
+/**
+ * After the zone text is up, how long to watch for the intro cinematic a new
+ * character's first login plays. It starts a fade and a frame after the loading
+ * screen clears, which is when the zone text appears.
+ */
+export const CINEMATIC_WAIT_MS = 5_000;
+/**
+ * Only blank frames, with the subject in range, for this long: the client's
+ * screen is stuck black (a fade it never lifted). Leaving the world clears
+ * it, so the camera logs out and back in.
+ */
+export const BLANK_RELOG_MS = 3 * 60_000;
+/**
+ * Stops a cinematic only while one plays. `StopCinematic()` on a cinematic the
+ * client has latched but not yet started leaves its fade-out at black for good,
+ * so it is never sent blind.
+ */
+export const SKIP_CINEMATIC_LUA = "if InCinematic() then StopCinematic() return true end return false";
 
 export interface DirectorOptions {
   client: CameraClient;
@@ -182,7 +200,11 @@ export class Director {
     // The world's own config makes the camera a GM and invisible before it is
     // on the map (GM.LoginState = 1, GM.Visible = 0); check, never assume.
     for (let i = 0; i < 30 && String((await c.value("return GetZoneText()")) ?? "") === ""; i++) await this.sleep(1_000);
-    await c.lua("pcall(StopCinematic) return true");
+    // A new character's first login plays its race's intro: skip it once it is playing.
+    for (let waited = 0; waited < CINEMATIC_WAIT_MS; waited += 1_000) {
+      if ((await this.skipCinematic()) || (await c.status())?.in_world !== true) break;
+      await this.sleep(1_000);
+    }
     const v = await this.visibility();
     if (v === "unknown") {
       // Out again before it could be checked (a crash, a disconnect): nothing was sent; try again.
@@ -215,6 +237,13 @@ export class Director {
   /** True once the camera has refused to act: it stays logged out for the life of the process. */
   get refusedForGood(): boolean {
     return this.refused;
+  }
+
+  /** Skips a cinematic that is playing; true when there was one. */
+  private async skipCinematic(): Promise<boolean> {
+    if ((await this.o.client.value(SKIP_CINEMATIC_LUA)) !== true) return false;
+    this.log("skipped the intro cinematic");
+    return true;
   }
 
   private async hideBody(): Promise<void> {
@@ -291,6 +320,8 @@ export class Director {
     let lastCheck = this.now();
     let started = false;
     let skips = 0;
+    /** Since when every frame in range has been blank; null after a kept one. */
+    let blankSince: number | null = null;
     for (;;) {
       if (this.refused || this.lost || this.o.stopping?.() === true) break;
       const tick = this.now();
@@ -335,7 +366,15 @@ export class Director {
           const bytes = await c.screenshot(JPEG_QUALITY);
           if (bytes !== null && bytes.length < MIN_FRAME_BYTES) {
             if (++skips % 30 === 1) this.log(`skip: a blank frame (${bytes.length} bytes)`);
+            blankSince ??= tick;
+            if (tick - blankSince >= BLANK_RELOG_MS) {
+              this.log(`only blank frames for ${Math.round((tick - blankSince) / 60_000)} min with ${subject.character} in view: the screen is stuck; logging out and in again`);
+              await c.lua("Logout() return true");
+              this.markLost();
+              break;
+            }
           } else if (bytes !== null) {
+            blankSince = null;
             const ts = this.now();
             if (!started) {
               shutter.event({ ts, type: "start", detail: "camera attached" });
@@ -351,6 +390,8 @@ export class Director {
         lastCheck = tick;
         // A client that came back in the world on its own (a silent reconnect) has a new interface: shown again, the morph gone.
         if (!needSetup && (await c.value("return UIParent:IsShown() and true or false")) === true) needSetup = true;
+        // An intro that started after `enterWorld` stopped watching for it.
+        if (await this.skipCinematic()) needSetup = true;
         let meta: Parameters<typeof notLive>[1] = null;
         try {
           meta = JSON.parse(readFileSync(join(subject.runDir, "meta.json"), "utf8"));
