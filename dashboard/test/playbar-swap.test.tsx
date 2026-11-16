@@ -160,11 +160,11 @@ describe("the play bar across the route swap", () => {
       const [route, setRoute] = createSignal("");
       const [track, setTrack] = createSignal<TrackResponse | undefined>(undefined);
       const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
-      const [cursor, setCursor] = createSignal(0);
-      const [playing, setPlaying] = createSignal(false);
+      const [, setCursor] = createSignal(0);
+      const [, setPlaying] = createSignal(false);
       const [selected, setSelected] = createSignal<AgentPosition | null>(null);
       const [count, setCount] = createSignal(0);
-      const calls = { seek: [] as number[], toggle: 0, tracks: [] as string[] };
+      const calls = { tracks: [] as string[] };
       const replayId = (): string | undefined => runParam(new URLSearchParams(route()).get("run") ?? undefined);
 
       const disposeEffect = createRoot((dispose) => {
@@ -196,24 +196,12 @@ describe("the play bar across the route swap", () => {
           return replayError();
         },
         feedError: undefined,
-        get cursor() {
-          return cursor();
-        },
-        get playing() {
-          return playing();
-        },
-        speed: 1,
         get count() {
           return count();
         },
         get selected() {
           return selected();
         },
-        onSeek: (ts) => calls.seek.push(ts),
-        onTogglePlay: () => calls.toggle++,
-        onStepBack: () => {},
-        onStepForward: () => {},
-        onCycleSpeed: () => {},
       };
 
       const mount = document.createElement("div");
@@ -234,6 +222,7 @@ describe("the play bar across the route swap", () => {
       // Live: the feed arrives, nothing selected.
       setCount(2);
       expect(has(".live-pill")).toBe(true);
+      // The strip never holds a transport: the scrubber is the timeline's, at the bottom of the viewport.
       expect(has(".transport")).toBe(false);
       expect(text()).toContain("2 characters");
 
@@ -249,32 +238,23 @@ describe("the play bar across the route swap", () => {
       expect(calls.tracks).toEqual([TRACK.runId]);
       expect(text()).toContain("loading replay of 20260905");
       expect(has(".live-link")).toBe(true);
-      expect(has(".transport")).toBe(false);
 
       // The track lands and the cursor is placed, as the fetch's `.then` does it.
       setTrack(TRACK);
       setCursor(1_000);
-      expect(has(".transport")).toBe(true);
       expect(text()).toContain("Benchy");
       expect(text()).toContain("2 positions");
-      expect([...mount.querySelectorAll(".tclock")].map((el) => el.textContent)).toEqual(["0:00", "1:00"]);
-      expect(mount.querySelector("button.play")?.hasAttribute("disabled")).toBe(false);
-      // Stepping back from the first sample has nowhere to go.
-      expect(mount.querySelector('button[aria-label="previous sample"]')?.hasAttribute("disabled")).toBe(true);
-      expect(mount.querySelector('button[aria-label="next sample"]')?.hasAttribute("disabled")).toBe(false);
+      expect(has(".transport")).toBe(false);
+      expect(has("input.scrubber")).toBe(false);
 
       setCursor(61_000);
       setPlaying(true);
-      expect([...mount.querySelectorAll(".tclock")].map((el) => el.textContent)).toEqual(["1:00", "1:00"]);
-      expect(mount.querySelector('button[aria-label="pause"]')).not.toBeNull();
-      expect(mount.querySelector('button[aria-label="next sample"]')?.hasAttribute("disabled")).toBe(true);
 
       // Back to live: the route changes and the effect unwinds the replay. This
       // is the swap that froze the page, and the assertion is that the strip
       // survives it and says live.
       expect(() => setRoute("")).not.toThrow();
       expect(has(".live-pill")).toBe(true);
-      expect(has(".transport")).toBe(false);
       expect(has(".live-link")).toBe(false);
       expect(track()).toBeUndefined();
       expect(text()).toContain("0 characters");
@@ -283,10 +263,9 @@ describe("the play bar across the route swap", () => {
       expect(() => setRoute(`?run=${TRACK.runId}`)).not.toThrow();
       setTrack(TRACK);
       setCursor(1_000);
-      expect(has(".transport")).toBe(true);
+      expect(text()).toContain("Benchy");
       expect(() => setRoute("?run=fleet-b-qwen-20260905")).not.toThrow();
       expect(text()).toContain("loading replay of 20260905");
-      expect(has(".transport")).toBe(false);
 
       // A replay that fails to load says so, and going live clears that too.
       setReplayError("no such run");
@@ -322,16 +301,8 @@ describe("the play bar across the route swap", () => {
         },
         replayError: undefined,
         feedError: undefined,
-        cursor: 1_000,
-        playing: false,
-        speed: 1,
         count: 0,
         selected: null,
-        onSeek: () => {},
-        onTogglePlay: () => {},
-        onStepBack: () => {},
-        onStepForward: () => {},
-        onCycleSpeed: () => {},
       };
       const mount = document.createElement("div");
       const dispose = render(
@@ -381,47 +352,6 @@ describe("the play bar across the route swap", () => {
     }
   });
 
-  test("a one-reading track shows the transport disabled rather than a dead slider", async () => {
-    const { document, restore } = installDom();
-    try {
-      const { PlayBar, MemoryRouter, Route, createMemoryHistory } = await loadEntry();
-      const props: PlayBarProps = {
-        replayId: TRACK.runId,
-        track: { ...TRACK, points: [TRACK.points[0]!] },
-        replayError: undefined,
-        feedError: undefined,
-        cursor: 1_000,
-        playing: false,
-        speed: 1,
-        count: 0,
-        selected: null,
-        onSeek: () => {},
-        onTogglePlay: () => {},
-        onStepBack: () => {},
-        onStepForward: () => {},
-        onCycleSpeed: () => {},
-      };
-      const mount = document.createElement("div");
-      const dispose = render(
-        () =>
-          createComponent(MemoryRouter, {
-            history: createMemoryHistory(),
-            get children() {
-              return createComponent(Route, { path: "*", component: () => createComponent(PlayBar, props) });
-            },
-          }),
-        mount,
-      );
-      expect(mount.textContent).toContain("1 position");
-      expect(mount.textContent).toContain("one reading");
-      expect(mount.querySelector("input.scrubber")).toBeNull();
-      expect(mount.querySelector("button.play")?.hasAttribute("disabled")).toBe(true);
-      dispose();
-    } finally {
-      restore();
-    }
-  });
-
   test("the route's legend is a tooltip, and the public build promises no gap it is not sent", async () => {
     const { document, restore } = installDom();
     try {
@@ -431,16 +361,8 @@ describe("the play bar across the route swap", () => {
         track: TRACK,
         replayError: undefined,
         feedError: undefined,
-        cursor: 1_000,
-        playing: false,
-        speed: 1,
         count: 0,
         selected: null,
-        onSeek: () => {},
-        onTogglePlay: () => {},
-        onStepBack: () => {},
-        onStepForward: () => {},
-        onCycleSpeed: () => {},
       };
       const mount = document.createElement("div");
       const dispose = render(

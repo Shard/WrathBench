@@ -314,6 +314,8 @@ export default function RunDetail() {
       () => {
         clearTimeout(urlTimer);
         urlTimer = setTimeout(() => {
+          // A time the URL gave is already there.
+          if (tl.origin() === "url") return;
           const t = urlSync.toUrl(tl.focus());
           if (t !== undefined) setSearch({ t: t ?? undefined }, { replace: true });
         }, URL_SETTLE_MS);

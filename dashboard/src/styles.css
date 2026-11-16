@@ -615,7 +615,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .live-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
              text-transform: uppercase; letter-spacing: .08em; font-size: var(--fs-xs); }
 
-/* The transport row: step, play, step, clock, scrubber, clock, speed. */
+/* The transport's buttons and clock: the timeline's, and the camera frame's play button. */
 .transport { gap: 6px; }
 .tbtn {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -632,24 +632,6 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
               border-color: var(--line); }
 .tclock { color: var(--dim); font-size: var(--fs-xs); min-width: 3.2em; text-align: center; }
 
-.scrubber {
-  -webkit-appearance: none; appearance: none; flex: 1; min-width: 80px;
-  height: 20px; margin: 0; background: transparent; cursor: pointer;
-}
-.scrubber:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.scrubber::-webkit-slider-runnable-track {
-  height: 4px; border-radius: 2px;
-  background: linear-gradient(to right, var(--accent) 0 calc(var(--p) * 100%),
-                              var(--line) calc(var(--p) * 100%) 100%);
-}
-.scrubber::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%;
-  background: var(--fg); border: 2px solid var(--accent);
-}
-.scrubber::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
-.scrubber::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
-.scrubber::-moz-range-thumb { width: 8px; height: 8px; border-radius: 50%;
-                              background: var(--fg); border: 2px solid var(--accent); }
 .side { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
         padding: 12px 14px; overflow-y: auto; }
 .side h3 { font-size: var(--fs-md); margin: 0 0 8px; font-weight: 700; }
@@ -684,7 +666,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 /* The bar: the level bands, with the pauses cut out of them and the marks over them. */
 .timeline-bar { position: absolute; left: 0; right: 0; top: 14px; height: 18px; border-radius: 3px; overflow: hidden; background: var(--line); }
 .timeline-band { position: absolute; top: 0; bottom: 0; background: var(--line); overflow: hidden;
-                 color: var(--dim); font-size: var(--fs-2xs); line-height: 18px; padding-left: 4px; }
+                 color: var(--dim); font-size: var(--fs-2xs); line-height: 18px; padding-left: 8px; }
 .timeline-band.alt { background: var(--gridline); }
 .timeline-gap { position: absolute; top: 0; bottom: 0; background: var(--panel);
                 border-left: 1px solid var(--line); border-right: 1px solid var(--line); }

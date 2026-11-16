@@ -57,6 +57,12 @@ export interface TimelineProps {
   startLevel?: number | null | undefined;
   /** The run's active stretches; what lies between two is drawn as a gap. */
   sessions?: readonly { start: number; end: number | null }[] | undefined;
+  /**
+   * Where the run's clock counts from, when that is not where the bar starts:
+   * a replay's bar starts at the first recorded position, a moment after the
+   * run did, and its clock must read what the run page's reads.
+   */
+  zero?: number | null | undefined;
   /** The stretch of the run the feed has loaded. */
   feed?: Span | null | undefined;
   /** A scrub, where the page does more than move the focus (the map pauses and remembers). */
@@ -117,10 +123,12 @@ export function Timeline(props: TimelineProps) {
     }
     return out;
   });
+  /** The run's clock at a time: counted from `zero`, or from the bar's start. */
+  const zero = (): number => props.zero ?? span()?.from ?? 0;
   const ticks = createMemo(() => {
     const sp = span();
     const v = shown();
-    return sp === null || v === null ? [] : axisTicks(sp, v, width());
+    return sp === null || v === null ? [] : axisTicks({ from: zero(), to: sp.to }, v, width());
   });
   /** Where the playhead is across the view; null while it is off it (zoomed elsewhere). */
   const head = createMemo((): { f: number } | null => {
@@ -272,7 +280,7 @@ export function Timeline(props: TimelineProps) {
 
   const clock = (): string => {
     const sp = span();
-    return sp === null ? "—" : `${fmtRunClock(tl.at() - sp.from)} / ${fmtRunClock(sp.to - sp.from)}`;
+    return sp === null ? "—" : `${fmtRunClock(tl.at() - zero())} / ${fmtRunClock(sp.to - zero())}`;
   };
   const tip = createMemo(() => {
     const ts = hover();
@@ -281,7 +289,7 @@ export function Timeline(props: TimelineProps) {
     if (ts === null || sp === null || v === null) return null;
     const m = markNear(ts);
     const at = m?.ts ?? ts;
-    return { f: fractionOf(v, at), text: `${fmtRunClock(at - sp.from)} · ${stamp(at)}`, mark: m };
+    return { f: fractionOf(v, at), text: `${fmtRunClock(at - zero())} · ${stamp(at)}`, mark: m };
   });
 
   return (
@@ -329,7 +337,7 @@ export function Timeline(props: TimelineProps) {
         aria-valuemin={span()?.from ?? 0}
         aria-valuemax={span()?.to ?? 0}
         aria-valuenow={Math.round(tl.at())}
-        aria-valuetext={span() === null ? "" : fmtRunClock(tl.at() - span()!.from)}
+        aria-valuetext={span() === null ? "" : fmtRunClock(tl.at() - zero())}
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}

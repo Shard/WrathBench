@@ -252,6 +252,83 @@ describe("the timeline's bar", () => {
   });
 });
 
+describe("the bar across what a page puts it through", () => {
+  test("a span that comes, goes and comes back (the map's route swap) redraws without a throw; one reading has nothing to scrub", async () => {
+    const document = installDom();
+    const entry = await load();
+    const host = document.createElement("div");
+    document.body.append(host);
+    let setSpan!: (s: Span | null) => void;
+    let tl!: TimelineStore;
+    const dispose = render(() => {
+      const [span, set] = entry.createSignal<Span | null>(null);
+      setSpan = (s) => void set(s);
+      tl = entry.createTimeline({ span, external: true });
+      return createComponent(entry.Timeline, { store: tl, marks: marksFor(3), startLevel: 7 });
+    }, host);
+    const bar = host.querySelector(".timeline")!;
+    const play = (): HTMLButtonElement => bar.querySelector(".tbtn.play") as HTMLButtonElement;
+    // Before the track lands: the bar is there, empty and inert.
+    expect(play().disabled).toBe(true);
+    expect(bar.querySelector(".timeline-track")!.classList.contains("off")).toBe(true);
+    expect(bar.querySelectorAll(".timeline-band, .timeline-mark, .timeline-head")).toHaveLength(0);
+    expect(bar.querySelector(".timeline-clock")!.textContent).toBe("—");
+
+    expect(() => setSpan({ from: T0, to: T0 + 3 * HOUR })).not.toThrow();
+    tl.seek(T0 + HOUR, "url");
+    expect(play().disabled).toBe(false);
+    expect(bar.querySelectorAll(".timeline-band")).toHaveLength(3);
+    expect(bar.querySelector(".timeline-clock")!.textContent).toBe("1:00:00 / 3:00:00");
+
+    // The swap: the cursor is zeroed and the span goes away, write by write, as `clearReplayState` does it.
+    expect(() => {
+      tl.seek(0, "clock");
+      tl.setPlaying(false);
+      setSpan(null);
+    }).not.toThrow();
+    expect(play().disabled).toBe(true);
+    expect(bar.querySelectorAll(".timeline-band, .timeline-mark, .timeline-head")).toHaveLength(0);
+
+    // A track with one reading: a span with no length, and nothing to play or scrub.
+    expect(() => setSpan({ from: T0, to: T0 })).not.toThrow();
+    expect(play().disabled).toBe(true);
+    expect(bar.querySelector(".timeline-track")!.getAttribute("tabindex")).toBe("-1");
+    dispose();
+  });
+
+  test("a page's own steps and seek replace the bar's: the map steps by sample and remembers a scrub", async () => {
+    const document = installDom();
+    const entry = await load();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const calls: string[] = [];
+    let tl!: TimelineStore;
+    const dispose = render(() => {
+      const [span] = entry.createSignal<Span | null>({ from: T0, to: T0 + 3 * HOUR });
+      tl = entry.createTimeline({ span, external: true });
+      return createComponent(entry.Timeline, {
+        store: tl,
+        playing: true,
+        onSeek: (ts: number) => void calls.push(`seek ${ts - T0}`),
+        onToggle: () => void calls.push("toggle"),
+        steps: { back: () => void calls.push("back"), forward: () => void calls.push("forward"), canBack: false, canForward: true, noun: "sample" },
+      });
+    }, host);
+    const bar = host.querySelector(".timeline")!;
+    expect((bar.querySelector('[aria-label="previous sample"]') as HTMLButtonElement).disabled).toBe(true);
+    (bar.querySelector('[aria-label="next sample"]') as HTMLElement).click();
+    // The page says something is playing (its video): the button is a pause, and pressing it is the page's.
+    (bar.querySelector('[aria-label="pause"]') as HTMLElement).click();
+    const key = new win!.Event("keydown", { bubbles: true, cancelable: true }) as unknown as Record<string, unknown>;
+    Object.assign(key, { key: "Home" });
+    document.dispatchEvent(key as unknown as Event);
+    expect(calls).toEqual(["forward", "toggle", "seek 0"]);
+    // The store was not moved behind the page's back.
+    expect(tl.focus()).toBeNull();
+    dispose();
+  });
+});
+
 describe("the pages that mount it", () => {
   const run = readFileSync(new URL("../src/pages/RunDetail.tsx", import.meta.url), "utf8");
   const replay = readFileSync(new URL("../src/components/Replay.tsx", import.meta.url), "utf8");
@@ -264,6 +341,21 @@ describe("the pages that mount it", () => {
     // The camera's player has a frame and a play button, and no bar of its own.
     expect(replay).not.toContain('role="slider"');
     expect(replay).not.toContain("onBar");
+  });
+
+  test("the map's replay has the timeline, on its own cursor, and no transport of its own", () => {
+    const map = readFileSync(new URL("../src/pages/MapPage.tsx", import.meta.url), "utf8");
+    const strip = readFileSync(new URL("../src/components/PlayBar.tsx", import.meta.url), "utf8");
+    expect(map).toMatch(/<Show when=\{replayId\(\) !== undefined\}>\s*<Timeline/);
+    expect(map).toContain("createTimeline({ span, external: true })");
+    expect(map).toContain("const cursor = tl.at;");
+    // The keys are the bar's now, on both pages.
+    expect(map).not.toContain("playbackKey");
+    expect(strip).not.toContain('type="range"');
+    expect(strip).not.toContain("tbtn");
+    expect(readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")).not.toContain(".scrubber");
+    // Both ways out of a replay carry the cursor's time.
+    expect(map).toContain("withT(runPageHref(p().runId), track() === undefined ? null : tl.focus())");
   });
 
   test("the run page's links to the map carry the focused time, and its crumb does not", () => {

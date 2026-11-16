@@ -1,13 +1,13 @@
 /**
  * Where a replay was left off, per run, for the life of the page.
  *
- * `/map` and `/map?run=<id>` are the only two URL states, deliberately: the
- * cursor is not a parameter because the play slider would rewrite history four
- * times a second. The cost of that decision is that every route back into a
- * replay — browser back from the run page, the pip's "replay →" link, the live
- * control and in again — reloads the track and drops the cursor on the first
- * recorded sample. An operator who scrubbed to hour four and pressed back got
- * hour zero.
+ * The cursor rides in `?t=` once it rests (`lib/timeline.ts`), so a link that
+ * carries it, and back or forward to an entry that has it, open at that time.
+ * A way into a replay that carries none (the pip's "replay →" link, the
+ * strip's attempt steps, the live control and in again) would otherwise
+ * reload the track and drop the cursor on the first recorded sample: an
+ * operator who scrubbed to hour four of one attempt, stepped to the next and
+ * came back got hour zero.
  *
  * So the cursor is remembered beside the route rather than in it: one
  * `Map<runId, ts>` consulted when a track loads. In memory and nowhere else —

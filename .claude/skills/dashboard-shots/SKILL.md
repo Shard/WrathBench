@@ -45,7 +45,7 @@ Script it against the rig rather than starting servers yourself:
 import { startRig } from "<repo>/infra/dashboard-shots.ts";
 const rig = await startRig({ out: "<dir>" });
 const p = await rig.page("public", { width: 1440, height: 900 });
-await p.open(`/map?run=${rig.ended}`, "input.scrubber");
+await p.open(`/map?run=${rig.ended}`, ".timeline-track:not(.off)");
 await p.seek(0.8);
 await p.page.click(".popover-anchor.bag .popover-button");
 await p.shot("public-replay-bag");

@@ -200,7 +200,8 @@ takes from the stack and how.
   imported after the dashboard's own) and the classes it styles. What stays
   here is the benchmark's: the model's side, scoring, the ladder, campaigns,
   the fleet pages, the public projection and publisher, and the map's
-  composition: the map page with its live list and play bar, which draw
+  composition: the map page with its live list and strip, and the timeline
+  the map's replay and the run page share (`dashboard/README.md`), which draw
   models and logos, run ids, replay and party links, reflection status and
   attempts; the map view's maths, which are built on the viewer's world and
   tile-pyramid transforms (`runner/viewer/worldmap.ts`, `tileindex.ts`) and

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { createRoot, createSignal } from "solid-js";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { createTimeline, type TimelineStore } from "../src/lib/timelinestore";
 import type { Span } from "../src/lib/timeline";
 
@@ -98,6 +98,39 @@ describe("the focused time", () => {
     expect(tl.speed()).toBe(60);
     tl.cycleSpeed();
     expect(tl.speed()).toBe(600);
+    dispose();
+  });
+});
+
+describe("a page's own effects", () => {
+  test("an effect that seeks is not re-run when the span moves: the store's methods subscribe no one", () => {
+    let runs = 0;
+    const { tl, setSpan, setRoute, dispose } = createRoot((dispose) => {
+      const [span, setSpan] = createSignal<Span | null>(null);
+      const [route, setRoute] = createSignal("a");
+      const tl = createTimeline({ span, external: true });
+      // The map's route swap: it reads the route, and zeroes the replay through the store.
+      createEffect(() => {
+        route();
+        runs++;
+        tl.seek(0, "clock");
+        tl.setPlaying(false);
+        tl.fit();
+      });
+      return { tl, setSpan, setRoute, dispose };
+    });
+    expect(runs).toBe(1);
+    // The track lands and the span with it: not the route's business.
+    setSpan({ from: 1_000, to: 2_000 });
+    tl.seek(1_500, "url");
+    tl.toggle();
+    tl.cycleSpeed();
+    tl.zoom(1_500, 0.5);
+    expect(runs).toBe(1);
+    expect(tl.at()).toBe(1_500);
+    setRoute("b");
+    expect(runs).toBe(2);
+    expect(tl.at()).toBe(1_000);
     dispose();
   });
 });
