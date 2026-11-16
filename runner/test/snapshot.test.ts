@@ -31,6 +31,7 @@ import {
 import { createApi, WINDOW_MAX } from "../viewer/api";
 import { ENTRIES_WINDOW } from "../viewer/public-keys";
 import { emptyState, publishPass, type HeldBackRun, type ObjectStore } from "../../infra/publish-core";
+import { verifyPublication } from "../../infra/publish-accept";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 import type { PositionsResponse, TraceSegment } from "../viewer/api-types";
 import { SEG_MS, unpackSegs, windowOf } from "@wrathbench/inspector/codec/trace";
@@ -526,6 +527,8 @@ describe("renderSnapshot", () => {
     expect(runKeys()).toEqual(Object.values(kept).sort());
     for (const body of bucket.values()) expect(body.includes(CANARY)).toBe(false);
     expect(lines.some((l) => l.includes(`run ${DEAD_RUN} held back at`) && l.includes("test-canary ×1"))).toBe(true);
+    // What `bun wb site verify` asks: nothing the manifest reaches is missing.
+    expect((await verifyPublication({ get: async (k) => bucket.get(k) ?? null })).missing).toEqual([]);
   });
 
   test("no artifact path names a withheld surface", async () => {
@@ -1353,8 +1356,11 @@ describe("cold runs", () => {
     expect(out!.reused).toEqual(Object.values(written).sort());
     for (const key of Object.values(written)) expect(`${key} ${bucket.has(key)}`).toBe(`${key} true`);
 
+    expect((await verifyPublication({ get: async (k) => bucket.get(k) ?? null })).missing).toEqual([]);
+
     // And the pass after, which flips the same names again, keeps them too.
     await pass();
     for (const key of Object.values(written)) expect(`${key} ${bucket.has(key)}`).toBe(`${key} true`);
+    expect((await verifyPublication({ get: async (k) => bucket.get(k) ?? null })).missing).toEqual([]);
   });
 });
