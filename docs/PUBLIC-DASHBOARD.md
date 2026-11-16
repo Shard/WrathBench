@@ -930,7 +930,9 @@ field existed is the snippet loop with nothing to state. A table row, a
 scatter point, a mean line and the shared highlight are all keyed on that
 entry, so no two conditions ever pool. The public row carries the condition's
 loop, `yield`, whether the run's routing was pinned, and its wiki, with the id
-renumbered per artifact (`c1`, `c2`, …).
+renumbered per artifact (`c1`, `c2`, …). Every condition is its own row
+(operator, 2026-11-16): nothing picks one condition of a model over another,
+and a `?conditions=all` link from when a filter did opens the default view.
 
 Each row's headline numbers are still maxima over a model's counted runs, and
 the page is plain about that. Beside them it shows the spread those runs
@@ -951,23 +953,15 @@ playtime each was reached at (operator, 2026-11-15).
   `?group=` picks another (`chartGroups` in
   `dashboard/src/lib/ladderfilter.ts`); an older `-unpinned` id, such as
   `snippet-unpinned`, opens its loop's chart.
-- **newest condition**, **on by default** (operator, 2026-11-14). Each model
-  at each effort and compaction window shows only its newest condition: the one whose latest counted
-  run started last, over the whole tier before the chart group is chosen, so a
-  row whose newest runs are on the program loop leaves the snippet chart
-  rather than showing an older one there. Efforts and windows are comparable
-  rows, so each keeps its own. Ties go to the condition id that sorts first.
-  `?conditions=all` shows every condition as its own row. The rule is
-  `newestConditions`; the homepage and the social card read the ladder
-  through the same default (`defaultLadderRuns`). On the 0.5 e90 data at the
-  time it kept every one of the 84 rows: no 0.5 model has two conditions at
-  one effort yet.
 
 Three of the four dropdowns are off the page. Race and class
 asked a question an eval episode cannot answer differently — every scored run
 is the same baseline character — and the harness select was the shell's
 series selector spelled a second time. The tier and axes chips and the pareto
-front are unchanged. What else is above the chart:
+front are unchanged. The axes chips are cost, tokens and tool calls, each
+against xp; turns × xp is withdrawn (operator, 2026-11-16), because a turn is
+not one unit across drivers (a claude-code turn is one CLI session), and a
+`?view=turns-xp` link opens cost × xp. What else is above the chart:
 
 - **company** and **family** filters. Company is the model catalogue's own
   company for the model's family (`infra/model-catalogue.json`); family is the
@@ -999,7 +993,8 @@ front are unchanged. What else is above the chart:
   and XP rather than following the axes chips, or the set on screen would mean
   something different on every view. On the data measured it hides
   five of twenty-eight entries at e90 and one of eight at e360. It judges
-  only what the condition rules leave, on one chart.
+  one chart at a time, and compares every entry of a model on it, so of two
+  conditions of a model one can be hidden when the other beats it on both.
 - **current models**, **on by default** (operator, 2026-10-24). Within each model
   line (the family filter's `lineOf`, read off the id the provider served, so
   the CLI alias `sonnet` counts as the Sonnet it ran) only the newest model is

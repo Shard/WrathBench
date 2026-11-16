@@ -9,9 +9,8 @@
  *    variants a model's own better efforts already dominate.
  *  - `currentModels` — the default-on rule that hides every model of a line
  *    but its newest, unless the field's front keeps it.
- *  - `newestConditions` — the default-on rule that shows each model at each
- *    effort and window under its newest condition only, and `chartGroups`, the charts the conditions
- *    left on the page belong to.
+ *  - `chartGroups` — the charts the conditions on the page belong to; every
+ *    condition is its own row on its chart.
  *  - `lineOf` — the model *line* a slug belongs to, which is the "family" a
  *    reader means when they say sonnet, fable or astra.
  *  - `companyOf` — who makes it, which the model catalogue records.
@@ -313,41 +312,7 @@ export function currentModels<E extends ModelEntry>(rows: readonly E[]): E[] {
   return rows.filter((row) => keep.has(row));
 }
 
-/* --------------------------------------------------------- the condition rules */
-
-/**
- * Each model at each effort and window under its newest condition, and nothing else of it.
- *
- * The operator's rule (2026-11-14): a ladder row is one condition — the
- * series, episode, harness, effort, wiki, window, loop and `yield`
- * (`runner/viewer/condition.ts`), never the routing (2026-11-16) — and by default each model at each effort
- * and compaction window shows the one whose most recent counted run started
- * last. Effort and window are chosen per row rather than collapsed, because
- * they are comparable rows (METHODOLOGY, "A knob is legitimate as a run
- * dimension", and the window is "a recorded run dimension like effort") and
- * the ladder kept every one of them before the key existed. A row therefore moves to a
- * new condition, the program loop say, as soon as it has a counted run there,
- * and until then stays where its evidence is. Ties go to the condition id
- * that sorts first, so the choice is a function of the set.
- *
- * Only scored runs choose; every run of the chosen condition is kept, scored or
- * not, and a model with no scored run keeps everything, since it has no row.
- */
-export function newestConditions(runs: readonly ResultRun[]): ResultRun[] {
-  const rowOf = (r: ResultRun): string => `${r.model ?? "(unnamed)"}\n${r.effort ?? ""}\n${r.compactWindow ?? ""}`;
-  const newest = new Map<string, { id: string; at: number }>();
-  for (const r of scored(runs)) {
-    const row = rowOf(r);
-    const id = conditionOfRun(r).id;
-    const at = r.startedAt ?? -Infinity;
-    const have = newest.get(row);
-    if (have === undefined || at > have.at || (at === have.at && id < have.id)) newest.set(row, { id, at });
-  }
-  return runs.filter((r) => {
-    const chosen = newest.get(rowOf(r));
-    return chosen === undefined || conditionOfRun(r).id === chosen.id;
-  });
-}
+/* ---------------------------------------------------------------- the charts */
 
 /** One chart's worth of conditions on the page, and how many entries it holds. */
 export interface ChartGroupCount extends ChartGroup {
@@ -390,15 +355,14 @@ export function inChartGroup(runs: readonly ResultRun[], groupId: string): Resul
 }
 
 /**
- * What a scored ladder shows before a reader changes anything: each model's
- * newest condition at each effort and window, on the chart holding the most entries. The homepage and
- * the social card read the ladder through this, so they show what the
- * ladder page opens on.
+ * What a scored ladder shows before a reader changes anything: every
+ * condition of every model as its own row (operator, 2026-11-16), on the
+ * chart holding the most entries. The homepage and the social card read the
+ * ladder through this, so they show what the ladder page opens on.
  */
 export function defaultLadderRuns(runs: readonly ResultRun[]): ResultRun[] {
-  const shown = newestConditions(runs);
-  const first = chartGroups(shown)[0];
-  return first === undefined ? shown : inChartGroup(shown, first.id);
+  const first = chartGroups(runs)[0];
+  return first === undefined ? [...runs] : inChartGroup(runs, first.id);
 }
 
 /**

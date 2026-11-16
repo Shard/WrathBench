@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { backfilledTitle, costMark, effortLabel, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, playbackClock } from "../src/lib/format";
+import { backfilledTitle, costMark, effortLabel, titleOf, windowNote, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, playbackClock } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -149,6 +149,21 @@ describe("num", () => {
     expect(num(undefined)).toBe("—");
     expect(num(0)).toBe("0");
     expect(num(42)).toBe("42");
+  });
+});
+
+describe("windowNote and titleOf: the window as a setting, in a tooltip (operator, 2026-11-16)", () => {
+  test("a set window is said; none, empty or the CLI's own auto is not", () => {
+    expect(windowNote("300k")).toBe("compaction window 300k");
+    expect(windowNote("auto")).toBeNull();
+    expect(windowNote("")).toBeNull();
+    expect(windowNote(null)).toBeNull();
+    expect(windowNote(undefined)).toBeNull();
+  });
+  test("titleOf joins the parts there are", () => {
+    expect(titleOf("claude-sonnet-5-5", windowNote("300k"))).toBe("claude-sonnet-5-5 · compaction window 300k");
+    expect(titleOf("claude-sonnet-5-5", windowNote(null))).toBe("claude-sonnet-5-5");
+    expect(titleOf(null, undefined)).toBeUndefined();
   });
 });
 

@@ -1,7 +1,8 @@
 /**
  * One run, turn by turn.
  *
- * The feed is windowed: the last 200 entries load first and "load earlier"
+ * The feed is windowed: the last `ENTRIES_WINDOW` entries (a thousand,
+ * `@viewer/public-keys`) load first and "load earlier"
  * walks backwards a window at a time, because a `request` entry embeds the
  * whole message array and an `events_served` entry every packet — the server
  * summarises them, but the count is still thousands on a long run. A live run
@@ -16,8 +17,8 @@
  * fold starts; a per-block click still overrides it.
  *
  * The public build is this page without the tail and without "load earlier":
- * the publisher renders one window per run — the same last-200 tail this page
- * loads first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
+ * the publisher renders one window per run — the same tail this page loads
+ * first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
  * "Trajectory logs") — and a live run's window advances with the detail poll
  * instead of over SSE. A snapshot from before the window existed answers 404
  * for it, which the panel says plainly rather than failing the page.
@@ -69,6 +70,7 @@ import type { Surface } from "../lib/feedtier";
 import { moveVerdicts, sameVerdicts } from "../lib/actionlog";
 import { FeedList, MoveVerdicts, RunStart } from "../components/FeedRows";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
+import { ENTRIES_WINDOW } from "@viewer/public-keys";
 import { modelsHref } from "../lib/models";
 import { linkable } from "../lib/nav";
 import { poll } from "../lib/poll";
@@ -85,7 +87,7 @@ import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
 
-const WINDOW = 200;
+const WINDOW = ENTRIES_WINDOW;
 
 /** How close to the bottom still counts as "following" (px). */
 const FOLLOW_THRESHOLD = 32;
@@ -290,7 +292,7 @@ export default function RunDetail() {
       const model = d.run.model ?? "(unnamed)";
       // The line is named for the model, not the character;
       // the name rides along for the hover.
-      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null, d.run.comparability?.compactWindow);
+      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null);
       const last = st.runs[st.runs.length - 1];
       if (last === undefined) {
         return { series: [], omitted: [{ characterId: st.characterId, label, why: "no attempt served" }] };
@@ -700,7 +702,7 @@ export default function RunDetail() {
                     </Show>
                     <Show when={SNAPSHOT_MODE && from() > 0}>
                       {" "}
-                      <span class="dim">last {WINDOW} of {total()}</span>
+                      <span class="dim">last {total() - from()} of {total()}</span>
                     </Show>
                     <Show when={feedPublished()}>
                       <label class="filter expand-preset">
