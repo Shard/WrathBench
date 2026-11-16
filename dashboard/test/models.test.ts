@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, modelTableRows, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -201,5 +201,23 @@ describe("freeplay column", () => {
     expect(windowParam({ compactWindow: "100k", windows: ["100k"] })).toBe("100k");
     expect(windowParam({ compactWindow: "100k" })).toBe("100k");
     expect(windowParam({})).toBeNull();
+  });
+});
+
+describe("modelTableRows — one row per model (operator, 2026-11-16)", () => {
+  const runOf = (runId: string, startedAt: number) => ({ runId, startedAt }) as ModelRowView["runs"][number];
+  test("an entry's siblings fold into the first of them in table order, with every entry's runs, newest first", () => {
+    const go = row({ name: "ds-go", model: "deepseek-v4.1-flash", tier: "t1", declaredTier: "t1", siblings: ["ds-or"], runs: [runOf("go-2", 300), runOf("go-1", 100)], newestRunId: "go-2" });
+    const or = row({ name: "ds-or", model: "deepseek/deepseek-v4.1-flash", tier: "t0", declaredTier: "t0", siblings: ["ds-go"], runs: [runOf("or-1", 200)], newestRunId: "or-1" });
+    const alone = row({ name: "solo", model: "m", tier: "t0", declaredTier: "t0" });
+    const table = modelTableRows([or, alone, go]);
+    expect(table.map((t) => [t.row.name, t.also.map((a) => a.name)])).toEqual([
+      ["ds-go", ["ds-or"]],
+      ["solo", []],
+    ]);
+    expect(table[0]!.row.runs.map((r) => r.runId)).toEqual(["go-2", "or-1", "go-1"]);
+    expect(table[0]!.row.newestRunId).toBe("go-2");
+    // A row from a viewer that predates the field is a row of its own, as before.
+    expect(modelTableRows([row({ name: "a" }), row({ name: "b" })]).map((t) => t.also.length)).toEqual([0, 0]);
   });
 });

@@ -11,7 +11,7 @@ import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
-import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
+import { isOpenRouterBase, parseRouting, type RoutingSpec } from "../runner/src/routing";
 import { parseServing } from "../runner/src/serving";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
 import {
@@ -52,6 +52,7 @@ import { tenantAccountRefusal } from "./tenant-accounts";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_DRIVER, driverEntry, ROSTER_DRIVERS } from "../runner/src/drivers";
+import { PROVIDER_OPTION_KEYS, type ProviderOption } from "../runner/src/provider-options";
 
 /**
  * The harness series this supervisor runs from: the projection
@@ -205,6 +206,14 @@ export interface FleetRosterEntry extends RosterSpec {
    * The policy still holds it until `policy.rehearsed` names `deadmines`.
    */
   deadmines?: true;
+  /**
+   * The providers this model may run on, in preference order
+   * (`runner/src/provider-options.ts`; operator, 2026-11-16). Absent on a
+   * single-provider entry, whose `apiBase`, `credential` and `routing` are its
+   * one provider. Present, the entry states none of the three itself, and the
+   * parser sets `model`, `apiBase` and `routing` from the first option.
+   */
+  providers?: ProviderOption[];
   /**
    * Set by the parser when this entry was refused: it stays in the catalog so a
    * job naming it is gated rather than taking the whole file down, and nothing
@@ -1103,11 +1112,17 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   // its own routing keeps it whole — the two are alternatives, never merged —
   // and an entry off OpenRouter is left alone, because a routing block there is refused, not defaulted.
   if (policy.routing !== undefined) {
+    const defaulted = <T extends { routing?: RoutingSpec | undefined; apiBase?: string | undefined }>(x: T, driver: string | undefined): T =>
+      x.routing !== undefined || driverEntry(driver ?? DEFAULT_DRIVER)?.routing !== true || !(x.apiBase === undefined || isOpenRouterBase(x.apiBase)) ? x : { ...x, routing: policy.routing };
     for (const [name, e] of Object.entries(roster)) {
-      if (e.routing !== undefined) continue;
-      if (driverEntry(e.driver ?? DEFAULT_DRIVER)?.routing !== true) continue;
-      if (!(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) continue;
-      roster[name] = { ...e, routing: policy.routing };
+      // A provider list takes the default per provider, and the entry's own routing is its first's.
+      if (e.providers !== undefined) {
+        const providers = e.providers.map((o) => defaulted(o, e.driver));
+        const { routing: _r, ...bare } = e;
+        roster[name] = { ...bare, providers, ...(providers[0]!.routing !== undefined ? { routing: providers[0]!.routing } : {}) };
+        continue;
+      }
+      roster[name] = defaulted(e, e.driver);
     }
   }
   // Every refusal of a whole ENTRY, in one verdict the viewer's campaign
@@ -1294,13 +1309,26 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     } catch (err) {
       fail((err as Error).message);
     }
-    const [validated] = validateEntries(`roster:${name}`, [rawBilling === undefined ? rest : { ...rest, billing: rawBilling }]);
+    const { providers: rawProviders, ...spec } = rest;
+    const options = rawProviders === undefined ? undefined : parseProviders(name, rawProviders, { apiBase: spec["apiBase"], routing: spec["routing"], credential: rawCred });
+    const withBilling = (x: Record<string, unknown>): Record<string, unknown> => (rawBilling === undefined ? x : { ...x, billing: rawBilling });
+    // Each provider is validated as the entry it launches as (its model, base and
+    // routing on the entry's driver), and keeps the routing in its one spelling.
+    const providers = options?.map((o): ProviderOption => {
+      const [v] = validateEntries(`roster:${name} provider ${o.credential}`, [withBilling({ ...spec, model: o.model ?? spec["model"], ...(o.apiBase !== undefined ? { apiBase: o.apiBase } : {}), ...(o.routing !== undefined ? { routing: o.routing } : {}) })]);
+      return { credential: o.credential, model: v!.model, ...(v!.apiBase !== undefined ? { apiBase: v!.apiBase } : {}), ...(v!.routing !== undefined ? { routing: v!.routing } : {}) };
+    });
+    const first = providers?.[0];
+    const [validated] = validateEntries(`roster:${name}`, [
+      withBilling(first === undefined ? spec : { ...spec, model: first.model, ...(first.apiBase !== undefined ? { apiBase: first.apiBase } : {}), ...(first.routing !== undefined ? { routing: first.routing } : {}) }),
+    ]);
     out[name] = {
       ...validated!,
       tier,
       idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
       ...(rawCred !== undefined ? { credential: rawCred as string } : {}),
+      ...(providers !== undefined ? { providers } : {}),
       ...(rawCampaignOnly === true ? { campaignOnly: true as const } : {}),
       ...(rawDeadmines === true ? { deadmines: true as const } : {}),
     };
@@ -1309,6 +1337,46 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   const clash = harnessClash(out);
   if (clash !== null) fail(`roster: ${clash}`);
   return out;
+}
+
+/**
+ * An entry's `providers` list, at the boundary (`runner/src/provider-options.ts`):
+ * an ordered, non-empty list of objects, each naming the credential that pays
+ * for it, unique in the list, and only the keys an option may carry. With it
+ * the entry's own `apiBase`, `credential` and `routing` are refused: they are
+ * each provider's, and two places to say one thing is how they would disagree.
+ * The models, bases and routings are validated by the caller, as entries.
+ */
+function parseProviders(
+  name: string,
+  raw: unknown,
+  own: { apiBase: unknown; routing: unknown; credential: unknown },
+): { credential: string; model?: string; apiBase?: string; routing?: unknown }[] {
+  const at = `roster ${name}: providers`;
+  if (!Array.isArray(raw) || raw.length === 0) fail(`${at} is a non-empty list of { credential, apiBase?, model?, routing? }, in preference order`);
+  for (const key of ["apiBase", "credential", "routing"] as const) {
+    if (own[key] !== undefined) fail(`${at}: with providers, ${key} is each provider's — move it into the list`);
+  }
+  const seen = new Set<string>();
+  return (raw as unknown[]).map((o, i) => {
+    if (typeof o !== "object" || o === null || Array.isArray(o)) fail(`${at}[${i}] must be an object`);
+    const opt = o as Record<string, unknown>;
+    const unknown = Object.keys(opt).filter((k) => !(PROVIDER_OPTION_KEYS as readonly string[]).includes(k));
+    if (unknown.length > 0) fail(`${at}[${i}]: unknown key ${unknown.map((k) => `\`${k}\``).join(", ")} (valid keys: ${PROVIDER_OPTION_KEYS.join(", ")})`);
+    const credential = opt["credential"];
+    if (typeof credential !== "string" || !isCredentialId(credential)) fail(`${at}[${i}]: credential is required, a credential's id (credentials/<id>), never a secret`);
+    if (seen.has(credential)) fail(`${at}[${i}]: credential ${credential} is named twice — a provider is its credential`);
+    seen.add(credential);
+    for (const key of ["model", "apiBase"] as const) {
+      if (opt[key] !== undefined && (typeof opt[key] !== "string" || (opt[key] as string).length === 0)) fail(`${at}[${i}]: ${key} must be a non-empty string`);
+    }
+    return {
+      credential,
+      ...(opt["model"] !== undefined ? { model: opt["model"] as string } : {}),
+      ...(opt["apiBase"] !== undefined ? { apiBase: opt["apiBase"] as string } : {}),
+      ...(opt["routing"] !== undefined ? { routing: opt["routing"] } : {}),
+    };
+  });
 }
 
 /**
@@ -1347,8 +1415,9 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
             ...(e.driver !== undefined ? { driver: e.driver } : {}),
             ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
             ...(e.serving !== undefined ? { serving: e.serving } : {}),
-            // What a target compares a run against (`countsTowardTarget`): the
-            // routing a launch sends, the fleet's default folded in, and the wiki.
+            ...(e.providers !== undefined ? { providers: e.providers } : {}),
+            // What a launch sends: the routing, the fleet's default folded in,
+            // and the wiki, which a target compares (`countsTowardTarget`).
             ...(e.routing !== undefined ? { routing: e.routing } : {}),
             ...(e.wiki !== undefined ? { wiki: e.wiki } : {}),
             tier: e.tier,

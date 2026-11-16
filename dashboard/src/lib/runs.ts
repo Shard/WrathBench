@@ -16,6 +16,7 @@
 
 import type { ResultRun } from "@viewer/api-types";
 import { effortLabel } from "./format";
+import { canonicalModelId } from "../../../infra/model-catalogue";
 
 /**
  * The table, left to right, as the header prints it. Keys, not labels — the
@@ -395,6 +396,16 @@ function windowMatches(runWindow: string | null, filter: string | null): boolean
 }
 
 /**
+ * Whether a run's model is the one a filter names, whichever provider's
+ * spelling either is in (`canonicalModelId`, operator 2026-11-16): a link
+ * carrying `deepseek-v4.1-flash` or `deepseek/deepseek-v4.1-flash` lists the
+ * model's runs on every provider.
+ */
+function sameModelId(model: string | null, filter: string): boolean {
+  return model != null && (model === filter || canonicalModelId(model) === canonicalModelId(filter));
+}
+
+/**
  * Apply the filter. An absent `effort` under a present `model` means "the
  * entry with no effort", never "any effort" — the same reading the models page
  * links with, so its `2/3` lands on exactly those runs. An absent window is
@@ -403,7 +414,7 @@ function windowMatches(runWindow: string | null, filter: string | null): boolean
 export function filterRuns(runs: readonly ResultRun[], f: RunFilter): ResultRun[] {
   return runs.filter(
     (r) =>
-      (f.model === null || (r.model === f.model && (r.effort ?? null) === f.effort && windowMatches(r.compactWindow ?? null, f.compactWindow))) &&
+      (f.model === null || (sameModelId(r.model, f.model) && (r.effort ?? null) === f.effort && windowMatches(r.compactWindow ?? null, f.compactWindow))) &&
       (f.episode === null || r.episode === f.episode) &&
       (f.harness === null || r.harness === f.harness) &&
       (f.character === null || r.characterLabel === f.character) &&

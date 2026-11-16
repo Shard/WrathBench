@@ -139,10 +139,29 @@ describe("cells", () => {
       "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default",
       "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/high",
       "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default",
-      "wrathbench/0.5/e360/codex/gpt-6-luna/default",
+      "wrathbench/0.5/e360/codex/openai/gpt-6-luna/default",
     ]);
     const ids = files.flatMap((f) => JSON.parse(f.record.evaluation_results[0]!.generation_config.additional_details.run_ids!) as string[]);
     for (const out of ["live", "paused", "steered", "reference", "stealth", "unstamped"]) expect(ids).not.toContain(out);
+  });
+
+  test("a model's runs on OpenCode Go and on OpenRouter are one record, under its one id (operator, 2026-11-16)", () => {
+    const go = run({ runId: "ds-go", model: "deepseek-v4.1-flash", platform: "opencode-go", maxLevel: 7, xp: 20 });
+    const { files: both } = eeeExport(new Map([["e90", ladder("e90", [run({ runId: "ds-or", maxLevel: 6 }), go])]] as const));
+    expect(both.map((f) => f.record.evaluation_id)).toEqual(["wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default"]);
+    expect(JSON.parse(both[0]!.record.evaluation_results[0]!.generation_config.additional_details.run_ids!)).toEqual(["ds-go", "ds-or"]);
+    // A Go run alone files where the OpenRouter runs do.
+    const { files: alone } = eeeExport(new Map([["e90", ladder("e90", [go])]] as const));
+    expect(alone.map((f) => [f.record.evaluation_id, f.path.split("/").slice(0, 4).join("/")])).toEqual([
+      ["wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default", "data/wrathbench/deepseek/deepseek-v4.1-flash"],
+    ]);
+    // A free endpoint of it is never the paid model: a record of its own.
+    const free = run({ runId: "ds-free", model: "deepseek/deepseek-v4.1-flash:free", billing: "free", maxLevel: 4 });
+    const { files: withFree } = eeeExport(new Map([["e90", ladder("e90", [run({ runId: "ds-or", maxLevel: 6 }), go, free])]] as const), { includeFree: true });
+    expect(withFree.map((f) => f.record.evaluation_id).sort()).toEqual([
+      "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default",
+      "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash:free/default",
+    ]);
   });
 
   test("what is left out is counted, with its reason", () => {
@@ -277,7 +296,7 @@ describe("what EEE's CLI checks beyond the schema", () => {
     expect(availability("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default")).toBe("open_weights");
     // A CLI alias reads through the id the provider resolved.
     expect(availability("wrathbench/0.5/e90/claude-code/opus/low")).toBe("closed_weights");
-    expect(availability("wrathbench/0.5/e360/codex/gpt-6-luna/default")).toBe("closed_weights");
+    expect(availability("wrathbench/0.5/e360/codex/openai/gpt-6-luna/default")).toBe("closed_weights");
     expect(MODEL_AVAILABILITY).toEqual({ open: "open_weights", closed: "closed_weights", unknown: "unknown" });
     // An id the catalogue does not list is unknown, never a family guess.
     expect(availabilityOf("openai/gpt-9-unreleased", "gpt-9-unreleased")).toBe("unknown");

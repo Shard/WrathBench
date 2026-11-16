@@ -236,6 +236,20 @@ describe("filter", () => {
     expect(runsHref({ page: 1 })).toBe("/runs");
   });
 
+  test("a model link in either provider's spelling lists the model's runs on every provider (operator, 2026-11-16)", () => {
+    const ds = [
+      run({ runId: "go", model: "deepseek-v4.1-flash" }),
+      run({ runId: "or", model: "deepseek/deepseek-v4.1-flash" }),
+      run({ runId: "other", model: "deepseek/deepseek-v4-flash" }),
+    ];
+    // An old link from the Go row and one from the OpenRouter row land on the same runs.
+    for (const model of ["deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash", "DeepSeek/DeepSeek-V4.1-Flash"]) {
+      const href = runsHref({ model, episode: "e90" });
+      const params = Object.fromEntries(new URL(href, "https://x.invalid").searchParams);
+      expect(filterRuns(ds, filterParams(params)).map((r) => r.runId)).toEqual(["go", "or"]);
+    }
+  });
+
   test("a compaction window narrows like effort: absent under a model is the entry with none", () => {
     const hk = [
       run({ runId: "auto", model: "hk", effort: "max" }),

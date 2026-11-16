@@ -26,7 +26,13 @@ import {
 import { providerById } from "../runner/src/credential-slots";
 
 /** A roster entry as far as its list is concerned. */
-type ListedEntry = { model: string; driver?: string | null | undefined; apiBase?: string | null | undefined };
+type ListedEntry = {
+  model: string;
+  driver?: string | null | undefined;
+  apiBase?: string | null | undefined;
+  /** Every provider's list is read (`provider-options.ts`). */
+  providers?: readonly { model: string; apiBase?: string | undefined }[] | undefined;
+};
 
 /** Every list the roster's entries are on, each with the models on it. */
 export function modelListsToRead(
@@ -34,12 +40,14 @@ export function modelListsToRead(
   env: Record<string, string | undefined> = process.env,
 ): { source: ModelListSource; models: string[] }[] {
   const byUrl = new Map<string, { source: ModelListSource; models: string[] }>();
-  for (const e of Object.values(roster)) {
-    const source = modelListSourceOf(e, env);
-    if (source === null) continue;
-    const row = byUrl.get(source.url) ?? { source, models: [] };
-    if (!row.models.includes(e.model)) row.models.push(e.model);
-    byUrl.set(source.url, row);
+  for (const entry of Object.values(roster)) {
+    for (const e of entry.providers?.map((p) => ({ driver: entry.driver, model: p.model, apiBase: p.apiBase })) ?? [entry]) {
+      const source = modelListSourceOf(e, env);
+      if (source === null) continue;
+      const row = byUrl.get(source.url) ?? { source, models: [] };
+      if (!row.models.includes(e.model)) row.models.push(e.model);
+      byUrl.set(source.url, row);
+    }
   }
   return [...byUrl.values()];
 }

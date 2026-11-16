@@ -33,6 +33,7 @@
 
 import { partyAttempt } from "../src/campaigns";
 import { conditionKey } from "./condition";
+import { canonicalModelId } from "../../infra/model-catalogue";
 import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
@@ -70,7 +71,8 @@ export function countedRow(r: ResultRun): boolean {
 }
 
 /**
- * What a row is keyed on: the model, and the ladder's condition
+ * What a row is keyed on: the model, whichever provider served it
+ * (`canonicalModelId`, operator 2026-11-16), and the ladder's condition
  * (`condition.ts`: series, harness, effort, wiki, window, loop and `yield`)
  * with the episode left out, so a row of either id names its
  * condition as the level ladders name theirs.
@@ -84,7 +86,7 @@ export function boardKey(r: Pick<ResultRun, "model" | "harnessSeries" | "harness
   } else {
     condition = conditionKey({ series: r.harnessSeries, episode: null, harness: r.harness, tuple: { effort: r.effort, compactWindow: r.compactWindow ?? null, ...(r.wiki === false ? { wiki: false } : {}) } });
   }
-  return `${r.model ?? ""}\n${condition}`;
+  return `${r.model === null ? "" : canonicalModelId(r.model)}\n${condition}`;
 }
 
 /** A run's attempts on its id: runs grouped by party id, a run with none its own attempt. */
@@ -200,7 +202,8 @@ export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): Du
     const ranked = [...attempts].sort((a, b) => compareAttempts(a, b) || (a.launchedAt ?? 0) - (b.launchedAt ?? 0));
     const r = list[0]!.run;
     rows.push({
-      model: r.model,
+      // One model whichever provider served it (operator, 2026-11-16).
+      model: r.model === null ? null : canonicalModelId(r.model),
       effort: r.effort,
       harness: r.harness,
       ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),

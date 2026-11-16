@@ -29,6 +29,7 @@ import {
 } from "./axes";
 import { niceTicks, scaleLinear } from "./chart";
 import { effortLabel, modelDisplay } from "./format";
+import { canonicalModelId } from "../../../infra/model-catalogue";
 import { chainsOf } from "@viewer/lineage";
 import { OPAQUE_PAUSE_REASON, type RunStatus, statusOf as runStatusOf } from "./runs";
 
@@ -57,12 +58,25 @@ export function conditionOfRun(r: ResultRun): RunCondition {
 }
 
 /**
+ * The model a run is of, whichever provider served it (`canonicalModelId`):
+ * an OpenCode Go run recorded as `deepseek-v4.1-flash` and an OpenRouter run
+ * recorded as `deepseek/deepseek-v4.1-flash` are one model (operator,
+ * 2026-11-16). What every grouping by model here is keyed on and labelled
+ * with; the id the provider reported stays on the run, and the run's page
+ * says how it was served.
+ */
+export function modelOfRun(r: Pick<ResultRun, "model">): string {
+  return r.model == null ? "(unnamed)" : canonicalModelId(r.model);
+}
+
+/**
  * The identity of a ladder entry: one model under one condition. A row, a
  * point, a mean line and the page's shared highlight are all keyed on it, so
- * none of them ever pools two conditions (operator, 2026-11-14).
+ * none of them ever pools two conditions (operator, 2026-11-14), and a
+ * model's runs on any provider are one entry (operator, 2026-11-16).
  */
 export function entryKeyOf(r: ResultRun): string {
-  return `${r.model ?? "(unnamed)"}\n${conditionOfRun(r).id}`;
+  return `${modelOfRun(r)}\n${conditionOfRun(r).id}`;
 }
 
 /* ----------------------------------------------------------------- filters */
@@ -225,7 +239,7 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
   const rows: LadderRow[] = [];
   for (const [key, list] of byEntry) {
     const first = list[0]!;
-    const model = first.model ?? "(unnamed)";
+    const model = modelOfRun(first);
     const furthest = furthestOf(list);
     const richest = richestOf(list);
     rows.push({
@@ -422,7 +436,7 @@ export function ladderPoints(
 ): { points: LadderPoint[]; omitted: LadderOmission[] } {
   const groups = new Map<string, { model: string; effort: string | null; compactWindow: string | null; runs: ResultRun[] }>();
   for (const r of scored(runs)) {
-    const model = r.model ?? "(unnamed)";
+    const model = modelOfRun(r);
     const key = entryKeyOf(r);
     const g = groups.get(key);
     if (g === undefined) groups.set(key, { model, effort: r.effort, compactWindow: r.compactWindow ?? null, runs: [r] });

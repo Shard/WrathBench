@@ -623,3 +623,61 @@ describe("the reports say the tick's own decision", () => {
     expect(formatHeld(plan.holds).join("\n")).toContain("son: HELD — e90 wanted, no credential has room");
   });
 });
+
+describe("one model on two providers, as the tick and its reports read it (operator, 2026-11-16)", () => {
+  const GO_BASE = "https://opencode.ai/inference/go/openai/v1";
+  const twoProviders = (goOpen = true): FleetConfig =>
+    fleet({
+      credentials: { ...CREDENTIALS, opencodego: { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 2, billing: "paid", enabled: goOpen } },
+      roster: {
+        "ds-go": { tier: "t1", model: "deepseek-v4.1-flash", apiBase: GO_BASE },
+        "ds-or": { tier: "t1", model: "deepseek/deepseek-v4.1-flash" },
+      },
+    });
+  const goRun = (i: number): RunFact => ({ ...countedFact({ model: "deepseek-v4.1-flash", driver: "openai" }, "e90", 3, { i, now: NOW, series: SERIES }), runId: `go-${i}`, apiBase: GO_BASE, credential: "opencodego", account: "RUNNER" } as RunFact);
+  const orRun = (i: number): RunFact => ({ ...countedFact({ model: "deepseek/deepseek-v4.1-flash" }, "e90", 2, { i, now: NOW, series: SERIES }), runId: `or-${i}`, credential: "or-paid", account: "RUNNER" });
+  const report = (config: FleetConfig, runs: RunFact[]): { picks: string[]; lines: string[] } => {
+    const plan = planOf(config, { now: NOW, stamp: STAMP, runs });
+    return {
+      picks: plan.picks.map((p) => `${p.job.name} on ${p.account}`),
+      lines: [...formatModels(plan.states, new Set(), NOW, new Map(), config.policy, true, plannedVerdicts(plan)).slice(1), ...formatHeld(plan.holds)],
+    };
+  };
+
+  test("three Go e90s are the model's three: the OpenRouter entry launches no fourth", () => {
+    const { picks, lines } = report(twoProviders(), [goRun(1), goRun(2), goRun(3)]);
+    expect(picks).toEqual([]);
+    expect(lines).toEqual([
+      "  model        billing tier      status   e90          e360         extras schedulable",
+      "  ds-go        paid    t1        active   3/3 L3       -            0      free: targets met on e90 — last episode-limit 5760m ago — one model, also run as ds-or: counted runs under any fill its targets",
+      "  └ ds-or      paid    t1        active   ↑            -            0      free: targets met on e90",
+    ]);
+  });
+
+  test("a job in flight under one entry holds the other's e90, unless it is a probe", () => {
+    const runs = [goRun(1), orRun(2)];
+    const inFlight = (refs: string[], episode: "e90" | "probing") => planOf(twoProviders(), { now: NOW, stamp: STAMP, runs, running: [{ name: `${refs[0]}-${episode}`, account: "RUNNER4", refs, episode }] });
+    // ds-go plays its e90: ds-or launches none beside it.
+    expect(inFlight(["ds-go"], "e90").picks.map((p) => p.job.name)).toEqual([]);
+    // ds-or plays a probe: ds-go's e90 goes ahead.
+    expect(inFlight(["ds-or"], "probing").picks.map((p) => `${p.job.name} on ${p.account}`)).toEqual(["ds-go-e90 on RUNNER"]);
+  });
+
+  test("owing one between them, one e90 launches, under the first entry with room", () => {
+    const owed = report(twoProviders(), [goRun(1), orRun(2)]);
+    expect(owed.picks).toEqual(["ds-go-e90 on RUNNER"]);
+    expect(owed.lines).toEqual([
+      "  model        billing tier      status   e90          e360         extras schedulable",
+      "  ds-go        paid    t1        active   2/3 L3       -            0      yes: schedulable on e90 — next tick: e90 on RUNNER — last episode-limit 5880m ago — one model, also run as ds-or: counted runs under any fill its targets",
+      "  └ ds-or      paid    t1        active   ↑            -            0      held: schedulable on e90 — e90 launches under ds-go next tick (one model) — last episode-limit 5820m ago",
+    ]);
+    // The Go credential has no room (disabled here): the pick moves to the OpenRouter entry, and Go's hold says why.
+    const full = report(twoProviders(false), [goRun(1), orRun(2)]);
+    expect(full.picks).toEqual(["ds-or-e90 on RUNNER"]);
+    expect(full.lines.slice(1)).toEqual([
+      "  ds-go        paid    t1        active   2/3 L3       -            0      held: schedulable on e90 — e90 held — no enabled OpenCode Go credential carries paid models — add one under credentials — last episode-limit 5880m ago — one model, also run as ds-or: counted runs under any fill its targets",
+      "  └ ds-or      paid    t1        active   ↑            -            0      yes: schedulable on e90 — next tick: e90 on RUNNER — last episode-limit 5820m ago",
+      "  ds-go: HELD — e90 wanted, no enabled OpenCode Go credential carries paid models — add one under credentials",
+    ]);
+  });
+});

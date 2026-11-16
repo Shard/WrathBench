@@ -46,6 +46,7 @@ import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { episodeRunsInPod } from "./episode-launcher";
 import { utcDay, type RunFact } from "../runner/src/models";
 import { isOpenCodeGoBase } from "../runner/src/platform";
+import { asProvider } from "../runner/src/provider-options";
 import { GoUsagePoller, goUsageUrl, type GoFetch } from "../runner/src/opencode-go";
 import type { SecretResolution } from "../runner/src/store-secrets";
 import {
@@ -365,7 +366,7 @@ export type PlaceResult = { ok: true; placement: Placement } | { ok: false; why:
  * none.
  */
 export function placeRef(
-  entry: Pick<FleetRosterEntry, "model" | "driver" | "apiBase" | "billing"> | undefined,
+  entry: (Pick<FleetRosterEntry, "model" | "driver" | "apiBase" | "billing"> & Partial<Pick<FleetRosterEntry, "providers">>) | undefined,
   episode: string,
   o: {
     credentials: readonly Credential[];
@@ -377,6 +378,20 @@ export function placeRef(
   },
 ): PlaceResult {
   if (entry === undefined) return { ok: false, why: "not in the roster" };
+  // Several providers (operator, 2026-11-16): the first, in the entry's order,
+  // whose credential is enabled, under its gate and with a slot. A pin (a job's
+  // credential, a paused run's) narrows the list to the provider it names.
+  if (entry.providers !== undefined && entry.providers.length > 0) {
+    const options = o.pin === undefined ? entry.providers : entry.providers.filter((p) => p.credential === o.pin);
+    if (options.length === 0) return { ok: false, why: `credential ${o.pin} is not one of this entry's providers (${entry.providers.map((p) => p.credential).join(", ")})` };
+    const whys: string[] = [];
+    for (const option of options) {
+      const r = placeRef(asProvider({ ...entry, model: entry.model }, option), episode, { ...o, pin: option.credential });
+      if (r.ok) return r;
+      whys.push(options.length > 1 ? `${option.credential}: ${r.why}` : r.why);
+    }
+    return { ok: false, why: whys.length === 1 ? whys[0]! : `no provider has room (${whys.join("; ")})` };
+  }
   const sessions = o.sessions ?? 1;
   const fit = credentialCandidates(o.credentials, entry, { pin: o.pin, ...(o.env !== undefined ? { env: o.env } : {}) });
   if (fit.provider === null) {
@@ -410,7 +425,7 @@ export function placeRef(
  * launch would.
  */
 export function placeResume(
-  entry: Pick<FleetRosterEntry, "model" | "driver" | "apiBase" | "billing"> | undefined,
+  entry: (Pick<FleetRosterEntry, "model" | "driver" | "apiBase" | "billing"> & Partial<Pick<FleetRosterEntry, "providers">>) | undefined,
   episode: string,
   recorded: string | null | undefined,
   o: Parameters<typeof placeRef>[2],

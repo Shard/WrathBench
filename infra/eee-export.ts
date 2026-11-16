@@ -57,7 +57,7 @@ import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
 import { conditionOfRun, ladderRows, scored, type LadderRow } from "../dashboard/src/lib/ladder";
 import { seriesOf } from "../dashboard/src/lib/harness";
-import { familyOf, weightsOf, type Weights } from "./model-catalogue";
+import { canonicalModelId, familyOf, weightsOf, type Weights } from "./model-catalogue";
 import { httpSource, scanBody, type AcceptSource } from "./publish-accept";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -175,9 +175,11 @@ interface CellKey {
 }
 
 /**
- * The record identity, keyed on the raw recorded values (never on a resolved
- * id, never on now). A dimension at its default adds nothing, so a record
- * written before the dimension existed keeps its id.
+ * The record identity, keyed on the recorded values (never on a resolved
+ * id, never on now), the model by its identity across providers
+ * (`canonicalModelId`, operator 2026-11-16), so a model's runs on two
+ * providers are one record. A dimension at its default adds nothing, so a
+ * record written before the dimension existed keeps its id.
  */
 export function evaluationIdOf(k: CellKey): string {
   const parts = [COLLECTION, k.series, k.episode, k.harness, k.model, k.effort ?? "default"];
@@ -474,7 +476,7 @@ export function eeeFromLadder(episode: EpisodeId, body: Pick<ResultsResponse, "r
       series,
       episode,
       harness: r.harness,
-      model: r.model,
+      model: canonicalModelId(r.model),
       effort: r.effort,
       compactWindow: r.compactWindow ?? null,
       loop: c.loop,

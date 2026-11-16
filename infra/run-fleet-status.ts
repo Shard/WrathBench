@@ -97,7 +97,7 @@ import {
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy, accountHolders } from "./run-roster";
-import { EPISODE_LIST } from "../runner/src/episodes";
+import { EPISODE_LIST, EPISODES } from "../runner/src/episodes";
 import { className as classNameOf, raceName as raceNameOf } from "../runner/viewer/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
 import { runCampaignFile } from "../runner/src/campaign-file";
@@ -599,7 +599,8 @@ export function formatAccounts(rows: readonly AccountRow[], max?: number): strin
 /**
  * --status / --dry-run rendering of the projection as a table: one row per
  * roster model — status, counted/target per episode, best level, why it is or
- * is not schedulable. `excluded` names roster entries outside the policy
+ * is not schedulable — and a model on two providers as one row, its first
+ * entry's, with a `└` line per other entry (operator, 2026-11-16). `excluded` names roster entries outside the policy
  * (pinned, or a probe) and why. Pure.
  */
 export function formatModels(
@@ -612,8 +613,29 @@ export function formatModels(
   evals = true,
   /** What the tick does with each model this time (`plannedVerdicts`), said after its verdict. */
   planned: ReadonlyMap<string, PlannedVerdict> = new Map(),
+  /** Those of `running` whose run holds the model's other entries: scored or freeplay, never a probe (`schedulability`). */
+  holding: ReadonlySet<string> = running,
 ): string[] {
-  const w = Math.max(12, ...states.map((s) => s.name.length));
+  // One model, one row (operator, 2026-11-16): an entry's siblings — the
+  // same model on another provider (`ModelState.siblings`) — follow it as
+  // `└` lines carrying only what is the entry's own, since the counts are the
+  // model's and the first line already says them.
+  const byName = new Map(states.map((s) => [s.name, s]));
+  const placed = new Set<string>();
+  const rows: { s: ModelState; sibling: boolean }[] = [];
+  for (const s of states) {
+    if (placed.has(s.name)) continue;
+    placed.add(s.name);
+    rows.push({ s, sibling: false });
+    for (const n of s.siblings ?? []) {
+      const sib = byName.get(n);
+      if (sib === undefined || placed.has(n)) continue;
+      placed.add(n);
+      rows.push({ s: sib, sibling: true });
+    }
+  }
+  const SIB = "└ ";
+  const w = Math.max(12, ...rows.map((r) => r.s.name.length + (r.sibling ? SIB.length : 0)));
   const series = policy.series ?? "any";
   const out: string[] = [
     `models: ${states.length} in roster (policy: tier budgets; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
@@ -636,7 +658,7 @@ export function formatModels(
     if (!s.eligible.includes(ep)) return "-";
     return `${st.counted}/${st.target}${st.stillborn > 0 ? `+${st.stillborn}sb` : ""}${st.bestLevel !== null ? ` L${st.bestLevel}` : ""}`;
   };
-  for (const s of states) {
+  for (const { s, sibling } of rows) {
     const ex = excluded.get(s.name);
     // Freeplay is in the walk: a local model past its targets has nothing but
     // freeplay extras, and "last ... never" would be wrong about it.
@@ -646,18 +668,21 @@ export function formatModels(
     // the whole reason the verdict stopped being a pair of booleans: `free` is
     // where probe campaigns and idle work draw from.
     const verdictWord = { eval: "yes", free: "free", blocked: "no" } as const;
-    const verdict = verdictForGroups(schedulability(s, running, policy), evals);
+    const verdict = verdictForGroups(schedulability(s, running, policy, holding), evals);
     const decided = planned.get(s.name);
     // The tick's own decision wins the word: a model the projection would schedule but the tick holds is held.
     const word = decided?.held === true && verdict.verdict !== "blocked" ? "held" : verdictWord[verdict.verdict];
     const sched = ex !== undefined ? `no: ${ex}` : `${word}: ${verdict.why}${decided !== undefined ? ` — ${decided.text}` : ""}`;
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
+    const shared = (ep: "e90" | "e360"): string => (sibling ? (s.eligible.includes(ep) ? "↑" : "-") : cell(s, ep));
+    const lead = !sibling && (s.siblings ?? []).some((n) => byName.has(n));
     out.push(
-      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${tierCell(s).padEnd(9)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
+      `  ${(sibling ? SIB + s.name : s.name).padEnd(w)} ${s.billing.padEnd(7)} ${tierCell(s).padEnd(9)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${shared("e90").padEnd(12)} ${shared("e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
         (last !== undefined && ex === undefined ? ` — last ${last.lastReason ?? "unterminated"} ${ago(last.lastEnded)}` : "") +
         (s.ladder > 0 ? ` — ladder ${s.ladder}` : "") +
-        (other > 0 ? ` — ${other} run(s) from other series not counted` : ""),
+        (other > 0 ? ` — ${other} run(s) from other series not counted` : "") +
+        (lead ? ` — one model, also run as ${s.siblings!.filter((n) => byName.has(n)).join(", ")}: counted runs under any fill its targets` : ""),
     );
   }
   // A steered entry carries no tier and so has no row: it is not evidence, and
@@ -692,6 +717,14 @@ export function plannedVerdicts(plan: TickPlan): Map<string, PlannedVerdict> {
   for (const a of plan.queue.assign) if (launches.has(a.job.name)) say(a.job.refs, `next tick: ${a.job.name} on ${a.account}`);
   for (const p of plan.picks) if (launches.has(p.job.name)) say(p.job.refs, `next tick: ${p.job.episode} on ${p.account}`);
   for (const h of plan.holds) say(h.refs, `${h.episode ?? "a launch"} held — ${h.why}`, true);
+  // The model's other entries: one scored launch toward its one target (operator, 2026-11-16).
+  for (const p of plan.picks) {
+    if (!launches.has(p.job.name) || !EPISODES[p.job.episode].scored) continue;
+    for (const ref of p.job.refs) {
+      const sibs = plan.states.find((st) => st.name === ref)?.siblings ?? [];
+      say(sibs, `${p.job.episode} launches under ${ref} next tick (one model)`, true);
+    }
+  }
   return out;
 }
 
@@ -1177,6 +1210,8 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
     // reads its real reason (tainted, cooling, free), not "running". A live
     // fleet run no alive job owns holds its model too, as on the tick.
     const running = new Set([...runningRefsOf(aliveJobs), ...(plan?.unownedRefs ?? [])]);
+    // A probe in flight holds only its own entry, never the model's others.
+    const holding = new Set([...runningRefsOf(new Map([...aliveJobs].filter(([, j]) => j.episode !== "probing"))), ...(plan?.unownedRefs ?? [])]);
     // The projection the tick plans with: after its ends, its resumes holding their models' scored episodes.
     const states = plan?.states ?? projected;
     const excluded = new Map<string, string>();
@@ -1184,7 +1219,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
       const why = policyExclusion(config, name);
       if (why !== undefined) excluded.set(name, why);
     }
-    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals, plan !== undefined ? plannedVerdicts(plan) : undefined)) console.log(`  ${line}`);
+    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals, plan !== undefined ? plannedVerdicts(plan) : undefined, holding)) console.log(`  ${line}`);
     // What the next tick holds back, beside what it launches (the table above): the queue's own skips are in its block below.
     for (const line of formatHeld(plan?.holds.filter((h) => h.by !== "queue") ?? [])) console.log(`  ${line}`);
     for (const line of formatModelLists(readModelListsSidecar(RUNS_DIR), Date.now())) console.log(`  ${line}`);
@@ -1687,7 +1722,8 @@ export function printDryRun(
     if (why !== undefined) excluded.set(name, why);
   }
   // Every run in flight holds its model, owned or not, as the plan does.
-  for (const line of formatModels(plan.states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals, plannedVerdicts(plan))) console.log(line);
+  const holding = new Set(inFlight.filter((r) => r.episode !== "probing").flatMap((r) => r.refs));
+  for (const line of formatModels(plan.states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals, plannedVerdicts(plan), holding)) console.log(line);
   for (const line of formatHeld(plan.holds.filter((h) => h.by !== "pinned" && h.by !== "queue"))) console.log(line);
   for (const line of formatPaused(plan.resumes.listed, pauseDetailOf())) console.log(line);
   for (const line of formatEnded(plan.ends, false)) console.log(line);

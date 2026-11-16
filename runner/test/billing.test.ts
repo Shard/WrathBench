@@ -8,10 +8,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { runBilling } from "../src/billing";
+import { entryBilling, runBilling } from "../src/billing";
 import { loadRunConfig } from "../src/config";
+import { credentialCandidates, parseCredentials } from "../src/credential-slots";
 import { billingOf } from "../src/model-cost";
+import { DEFAULT_POLICY, outstandingWork, projectModel, type RosterModel } from "../src/models";
 import { configFromArgs } from "../src/run";
+import { rowOf } from "../viewer/models";
 
 describe("runBilling", () => {
   const cases: { why: string; run: Parameters<typeof runBilling>[0]; want: "free" | "paid" }[] = [
@@ -127,5 +130,74 @@ describe("runBilling", () => {
     expect(billingOf({ model: "qwen3-30b", apiBase: "http://192.168.100.20:1234/v1", billing: "paid" })).toBe("paid");
     expect(billingOf({ model: "claude-sonnet-4-5", driver: "claude-code", billing: "paid" })).toBe("paid");
     expect(billingOf({ model: "openai/gpt-5", billing: "free" })).toBe("free");
+  });
+});
+
+/*
+ * Free means literally free to a reader (operator, 2026-11-16): one row per
+ * lane, the reader's verdict beside the scheduler's, which must not move.
+ */
+const GO = "https://opencode.ai/inference/go/openai/v1";
+const ZEN = "https://opencode.ai/zen/v1";
+const LANES: { lane: string; entry: Omit<RosterModel, "tier">; reader: "free" | "paid"; scheduler: "free" | "paid" }[] = [
+  { lane: "claude-code subscription", entry: { name: "sub-opus", model: "claude-opus-5-5", driver: "claude-code" }, reader: "paid", scheduler: "free" },
+  { lane: "codex subscription", entry: { name: "codex-sol", model: "gpt-6.1-sol", driver: "codex" }, reader: "paid", scheduler: "free" },
+  { lane: "OpenCode Go usage", entry: { name: "ds-go", model: "deepseek-v4.1-flash", apiBase: GO }, reader: "paid", scheduler: "paid" },
+  { lane: "OpenCode Go -free", entry: { name: "go-free", model: "hy3-free", apiBase: GO }, reader: "free", scheduler: "free" },
+  { lane: "OpenRouter paid", entry: { name: "ds-or", model: "deepseek/deepseek-v4.1-flash" }, reader: "paid", scheduler: "paid" },
+  { lane: "OpenRouter :free", entry: { name: "nemo", model: "nvidia/nemotron-3-super-120b-a12b:free" }, reader: "free", scheduler: "free" },
+  { lane: "OpenCode Zen -free", entry: { name: "zen-free", model: "laguna-s-2.1-free", apiBase: ZEN }, reader: "free", scheduler: "free" },
+  { lane: "contributor-free", entry: { name: "muse", model: "muse-spark-1.2-contributor-free", apiBase: ZEN }, reader: "free", scheduler: "free" },
+  { lane: "local hardware", entry: { name: "box", model: "qwen3.8-27b", apiBase: "http://192.168.1.21:8000/v1" }, reader: "free", scheduler: "free" },
+  { lane: "declared free (a stealth id)", entry: { name: "bunny", model: "stealth/space-bunny-alpha", billing: "free" }, reader: "free", scheduler: "free" },
+  { lane: "declared paid on a :free id", entry: { name: "paid-free", model: "x/y:free", billing: "paid" }, reader: "paid", scheduler: "paid" },
+];
+
+describe("the reader's verdict, lane by lane", () => {
+  const NOW = 1_800_000_000_000;
+  for (const l of LANES) {
+    test(`${l.lane}: ${l.reader} to a reader, ${l.scheduler} to the scheduler`, () => {
+      const state = projectModel({ tier: "t1", ...l.entry }, [], DEFAULT_POLICY, { now: NOW });
+      // The scheduler's verdict is unchanged: the projection still stamps it.
+      expect(state.billing).toBe(l.scheduler);
+      // The models page and the public snapshot read the reader's.
+      expect(entryBilling(state)).toBe(l.reader);
+      expect(rowOf(state, [], "/nowhere").billing).toBe(l.reader);
+      // And a run of the entry reads the same as its row.
+      expect(
+        runBilling({
+          model: l.entry.model,
+          apiBase: l.entry.apiBase ?? null,
+          platform: state.platform,
+          harness: state.harness,
+          driver: state.driver ?? null,
+          declaredBilling: l.entry.billing ?? null,
+        }),
+      ).toBe(l.reader);
+    });
+  }
+});
+
+describe("a subscription lane's scheduling is the scheduler's verdict, not the reader's", () => {
+  const NOW = 1_800_000_000_000;
+  const credentials = parseCredentials({
+    "claude-1": { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: true },
+    "or-free": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, billing: "free", enabled: true },
+    "or-paid": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true },
+    "go-free": { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 1, billing: "free", enabled: true },
+    "go-paid": { provider: "opencode-go", secretEnv: "OPENCODE_KEY", slots: 1, budget: { kind: "usage" }, billing: "paid", enabled: true },
+  });
+
+  test("credentials: a subscription takes its own, a Go slug the side of its slug", () => {
+    expect(credentialCandidates(credentials, { model: "claude-opus-5-5", driver: "claude-code" }).candidates.map((c) => c.id)).toEqual(["claude-1"]);
+    expect(credentialCandidates(credentials, { model: "deepseek-v4.1-flash", apiBase: GO }).candidates.map((c) => c.id)).toEqual(["go-paid"]);
+    expect(credentialCandidates(credentials, { model: "hy3-free", apiBase: GO }).candidates.map((c) => c.id)).toEqual(["go-free"]);
+  });
+
+  test("outstanding work groups a claude-code entry under its provider, as before", () => {
+    const st = (e: Omit<RosterModel, "tier">) => projectModel({ tier: "t1", ...e }, [], DEFAULT_POLICY, { now: NOW });
+    const states = [st({ name: "sub-opus", model: "claude-opus-5-5", driver: "claude-code" }), st({ name: "ds-go", model: "deepseek-v4.1-flash", apiBase: GO })];
+    const o = outstandingWork({ states, excluded: [], accounts: 4, credentials, maxSessions: {} });
+    expect(o.breakdown.map((b) => b.group).sort()).toEqual(["claude", "opencode-go (paid)"]);
   });
 });
