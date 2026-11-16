@@ -228,12 +228,18 @@ describe("the feed and the bar", () => {
     expect(guard.own()).toBe(false);
   });
 
-  test("the row a scrolled feed shows is the first not wholly above the pane", () => {
+  test("the row a scrolled feed shows is the first not wholly above the pane, found without measuring them all", () => {
+    // Row bottoms in the pane's scroll coordinates; `at` is how far it is scrolled.
     const bottoms = [40, 90, 200, 260];
-    expect(rowInView(bottoms, 0)).toBe(0);
-    expect(rowInView(bottoms, 40)).toBe(1);
-    expect(rowInView(bottoms, 100)).toBe(2);
-    expect(rowInView(bottoms, 9_999)).toBe(3);
-    expect(rowInView([], 0)).toBe(-1);
+    const shown = (at: number): number => rowInView(bottoms.length, (i) => bottoms[i]! - at);
+    expect(shown(0)).toBe(0);
+    expect(shown(40)).toBe(1);
+    expect(shown(100)).toBe(2);
+    expect(shown(9_999)).toBe(3);
+    expect(rowInView(0, () => 0)).toBe(-1);
+    let measured = 0;
+    rowInView(1000, (i) => (measured++, i * 30 - 12_000));
+    expect(measured).toBeLessThanOrEqual(11);
   });
+
 });

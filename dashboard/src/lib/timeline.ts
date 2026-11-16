@@ -308,20 +308,22 @@ export function createScrollGuard(now: () => number = () => performance.now(), h
 }
 
 /**
- * The row a scrolled feed is showing: the first whose bottom is below the top
- * of the pane (`bottoms` in the pane's own scroll coordinates, oldest first);
- * the last row when every one is above it, -1 with none.
+ * The row a scrolled feed is showing: the first of `count` rows, oldest
+ * first, whose bottom (`bottomOf`, measured from the top of the pane) is
+ * below that top; the last row when every one is above it, -1 with none. A
+ * binary search that measures only the rows it visits, because a window is
+ * a thousand entries and this runs as the reader scrolls.
  */
-export function rowInView(bottoms: readonly number[], scrollTop: number, slack = 4): number {
+export function rowInView(count: number, bottomOf: (i: number) => number, slack = 4): number {
   let lo = 0;
-  let hi = bottoms.length - 1;
-  let found = -1;
+  let hi = count - 1;
+  let found = count - 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (bottoms[mid]! > scrollTop + slack) {
+    if (bottomOf(mid) > slack) {
       found = mid;
       hi = mid - 1;
     } else lo = mid + 1;
   }
-  return found === -1 ? bottoms.length - 1 : found;
+  return found;
 }

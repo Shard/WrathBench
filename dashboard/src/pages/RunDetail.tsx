@@ -449,7 +449,7 @@ export default function RunDetail() {
       }
       const rows = rowEls();
       const top = logEl.getBoundingClientRect().top;
-      const row = rows[rowInView(rows.map((r) => r.getBoundingClientRect().bottom - top), 0)];
+      const row = rows[rowInView(rows.length, (i) => rows[i]!.getBoundingClientRect().bottom - top)];
       const ts = Number(row?.dataset.ts);
       if (Number.isFinite(ts) && ts > 0) {
         tl.setPlaying(false);

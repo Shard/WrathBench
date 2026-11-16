@@ -349,7 +349,7 @@ export function createClient(opts: ClientOptions = {}) {
      * window (`entriesWindowAt`); a snapshot has one window per run and
      * answers with it whatever the time.
      */
-    entriesAt: (id: string, at: number, limit = 200): Promise<EntriesResponse> =>
+    entriesAt: (id: string, at: number, limit = ENTRIES_WINDOW): Promise<EntriesResponse> =>
       get<EntriesResponse>(`/api/run/${encodeURIComponent(id)}/entries?${new URLSearchParams({ limit: String(limit), at: String(Math.round(at)) }).toString()}`),
     /**
      * The run's scratchpad, the model's own notes as it last wrote them. A run
