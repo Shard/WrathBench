@@ -344,6 +344,14 @@ export function createClient(opts: ClientOptions = {}) {
       return get<EntriesResponse>(`/api/run/${encodeURIComponent(id)}/entries?${q.toString()}`);
     },
     /**
+     * The feed window that holds the moment `at` (run time, epoch ms): the
+     * timeline's jump to a time the page has not loaded. The viewer finds the
+     * window (`entriesWindowAt`); a snapshot has one window per run and
+     * answers with it whatever the time.
+     */
+    entriesAt: (id: string, at: number, limit = ENTRIES_WINDOW): Promise<EntriesResponse> =>
+      get<EntriesResponse>(`/api/run/${encodeURIComponent(id)}/entries?${new URLSearchParams({ limit: String(limit), at: String(Math.round(at)) }).toString()}`),
+    /**
      * The run's scratchpad, the model's own notes as it last wrote them. A run
      * that never wrote one is a 404.
      */

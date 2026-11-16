@@ -731,6 +731,8 @@ describe("the entries window", () => {
     // `from`/`limit` name nothing the bucket holds: the same artifact answers.
     const earlier = await c.entries("r1", 0, 40);
     expect(earlier).toEqual(first);
+    // A jump to a time names nothing else either: the page scrolls inside the one window.
+    expect(await c.entriesAt("r1", 1_763_000_000_000, 200)).toEqual(first);
     expect(b.urls.filter((u) => u.endsWith("/entries.json"))).toHaveLength(1);
   });
 
@@ -878,7 +880,8 @@ describe("the public build's call sites", () => {
   test("the live camera still is mounted only in the private build, and only while live", () => {
     // Live viewing is the private viewer's alone: the public build never mounts
     // the poll, and its client (above) would answer nothing if it did.
-    expect(read("../src/pages/RunDetail.tsx")).toMatch(/<Show when=\{!SNAPSHOT_MODE && live\(\)\}>\s*<LiveFrame /);
+    // On the run page "while live" is while the reader follows the live edge (`TimelineStore.following`).
+    expect(read("../src/pages/RunDetail.tsx")).toMatch(/<Show when=\{!SNAPSHOT_MODE && tl\.following\(\)\}>\s*<LiveFrame /);
     expect(read("../src/pages/MapPage.tsx")).toMatch(
       /<Show when=\{SNAPSHOT_MODE \|\| track\(\) !== undefined \? undefined : p\(\)\.runId\} keyed>\s*\{\(id\) => <LiveFrame /,
     );

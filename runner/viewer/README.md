@@ -723,6 +723,12 @@ the byte range of each line. Big fields collapse to counts; the full JSON of any
 single entry is re-read from disk on demand behind a click. The SSE tail
 heartbeats once a second, so a quiet run can be told from a dead connection.
 
+`/entries` serves one window: the tail by default, the entries from `?from=`,
+or, with `?at=<epoch ms>`, the window that holds that moment (`entriesWindowAt`:
+the last entry at or before it a quarter of the way in, clamped to the run),
+which is how the run page's timeline jumps the feed to a time it has not
+loaded.
+
 Every reader of a run shares its one tail, so each SSE stream keeps its own
 cursor into the tail's entries and sends whatever lies past it after any
 scan, whoever ran it: a second tab, the run page's own poll or `/entries`

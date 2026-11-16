@@ -390,17 +390,16 @@ the whole map.
 ## The run page
 
 `/run/:id` (`src/pages/RunDetail.tsx`), both builds. The title row holds the
-crumb and, to its right, the run's controls (replay on map, party replay,
-auto-scroll) with a live run's status line before them. The status clips to
+crumb and, to its right, the run's controls (replay on map, party replay)
+with a live run's status line before them. The status clips to
 one line, its full text in the hover, so its words changing never move
 anything below. Under the row is a freeplay character's attempt strip, then the
 feed on the left and the sidebar on the right: the model, the character card,
 the camera's still or video, the XP chart, the token and playtime cards and one
 cost card, then the scratchpad and the milestones. After the milestones come
 two panes that stay closed until the reader opens them: the replay video's
-chapter list (`ChaptersPanel`, whose times seek the player above through a
-`ChapterLink`; the player itself keeps only the marks on its bar) and the
-character's totals across every attempt. Then fan-out characters,
+chapter list (`ChaptersPanel`, its levels and boss kills, whose times seek the
+timeline) and the character's totals across every attempt. Then fan-out characters,
 comparability and the server footer. A card shows its value and a short line under it; the explanation (how
 tokens were counted, where each cost comes from, the full tok/s) sits behind
 the card's "i" (`components/InfoHint.tsx`). The cost card's headline is the
@@ -463,6 +462,69 @@ the same in both builds, because folding the actions shortens what a window
 draws, not what it holds: two hundred entries of a walking character were two
 or three turns.
 What a reader opened stays open while a live tail grows the run under it.
+Every row carries its time (`data-ts`), which is what the timeline scrolls
+the feed by.
+
+## The timeline
+
+One bar is fixed to the bottom of the viewport on the run page
+(`components/Timeline.tsx`), across its whole width, and it is the page's only
+scrubber: the camera's video has a frame and a play button and no bar of its
+own. The shell is padded by the bar's height while it is mounted
+(`.has-timeline`), so it covers nothing; on a phone it is two rows, the track
+over the controls.
+
+**One time is in focus**, held in one store (`lib/timelinestore.ts`), and
+everything that shows a moment of the run reads it: the feed, the video's
+frame, the XP chart's cursor, the live still. Whoever moves it says who they
+are, and a follower skips a move that was its own (`Origin`,
+`lib/timeline.ts`):
+
+| Mover | Moves the focus when | Follows the focus by |
+| --- | --- | --- |
+| the bar | a press, a drag, a key, a step to a mark | drawing the playhead |
+| the feed | the reader scrolls it (never a scroll the page made: `createScrollGuard`) | scrolling the last row at or before the time to the top, unless the move was its own |
+| the video | it plays | seeking, while it is still, to the frame at or before the time; a move from anywhere else stops it first |
+| playback | the bar's play button, on the run's own clock at the map's speeds, pauses hurried through | — |
+| a link | `?t=` on arrival, back and forward | the focus written back to `?t=` once it rests |
+
+The focus is null while the reader follows the run's newest moment: the live
+edge of a run still going, the end of one that is not. A live run's feed is
+then pinned to its newest entry, which is all the old auto-scroll toggle did,
+and the camera's live still is shown. Scrolling up or seeking back pins a
+time and lets go of the edge; the bar's live button, or scrolling back to the
+bottom, takes hold again.
+
+**The feed jumps to a time.** A seek inside the window the page holds is a
+scroll. One outside it, on a run with entries there, asks the viewer for the
+window that holds that moment (`/entries?at=<ms>`, `entriesWindowAt`: the
+entry at or before the time a quarter of the way in) and replaces the window;
+"load earlier" and "load later" walk on from wherever that leaves the reader,
+and the live tail grows the window only while it is the run's last. The
+public build holds the one window the publisher renders, so a time outside it
+scrolls the feed to the nearer end of what there is; the rule under the bar
+shows which stretch of the run that is.
+
+**`?t=` is the focused time** in whole epoch seconds, absolute because the run
+page counts from the run's start, a replay from its first position and a
+party from five. The page replaces the entry rather than pushing one, a
+moment after the focus rests, so a scrub is not forty history entries;
+absent means "where the page opens by itself". The link to the map's replay
+carries it.
+
+**What the bar marks** is one rule, `@viewer/timeline-marks`, shared with the
+chapter list and the camera: a level reached and a boss killed are chapters,
+a death is an event, and nothing else is marked. The chapters are the bar
+itself, a band per level, numbered where there is room; a death is a red
+tick; a pause is a gap; the rule under the bar is the stretch the feed holds.
+The levels come from the run's level marks, or from its state samples where a
+detail carries none (the public one).
+
+**A run of more than a day can be zoomed**: the wheel or a pinch over the bar,
+or the two buttons, about the time under the pointer, down to ten minutes
+across. A sideways wheel pans, as does a drag on the overview strip drawn
+above the bar while zoomed, and "fit" shows the whole run again. A focus that
+leaves the zoomed part takes the view with it.
 
 ## Structure
 
@@ -503,8 +565,9 @@ error mapping — plus a few focused component checks: the shared chart axis, th
 map's play bar across a route swap, the campaigns page across its routes, the
 run page's scratchpad panel against a hostile pad, its sidebar order, closed
 character and chapter panes and single cost card, its feed's collapsed runs
-and snippet cards and what they open to, and the map's quest button
-and its rows across a counter change.
+and snippet cards and what they open to, the timeline's bar (its bands and
+marks, a scrub, the keys, the live button, the zoom), and the map's quest
+button and its rows across a counter change.
 Those use the small `happy-dom` harness to mount the components through Vite;
 the rest of the suite does not need a DOM.
 

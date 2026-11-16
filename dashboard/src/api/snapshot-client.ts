@@ -673,6 +673,9 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      */
     entries: async (id: string): Promise<EntriesResponse> =>
       await held<EntriesResponse>(await pointer(id, "entries")),
+    /** The same one window, whatever the time: the page clamps a jump to what it holds. */
+    entriesAt: async (id: string): Promise<EntriesResponse> =>
+      await held<EntriesResponse>(await pointer(id, "entries")),
     /*
      * The scratchpad the listing names for the run's current version, and only
      * that one. A row with no pointer — a run that never wrote a pad, or a

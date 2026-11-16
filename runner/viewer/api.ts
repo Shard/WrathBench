@@ -152,6 +152,27 @@ export const POLL_MS = 1000;
 export const WINDOW_MAX = ENTRIES_WINDOW;
 
 /**
+ * Where the `/entries` window that shows the moment `at` begins: the window
+ * of `limit` entries with the last entry at or before `at` a quarter of the
+ * way in, so a reader who jumped to a time has a little of what led up to it
+ * and most of what came after. Clamped to the run, so a time before the first
+ * entry is the first window and one past the last is the tail.
+ */
+export function entriesWindowAt(entries: readonly { ts: number }[], at: number, limit: number): number {
+  let lo = 0;
+  let hi = entries.length - 1;
+  let found = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (entries[mid]!.ts <= at) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return Math.max(0, Math.min(found - Math.floor(limit / 4), entries.length - limit));
+}
+
+/**
  * How long a run's entry index (`TrajectoryTail`) outlives its last reader.
  * Ten minutes covers an operator flipping between a handful of run pages; past
  * it the next visit re-reads the file, which is what the first visit cost.
@@ -2230,7 +2251,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const total = tail.entries.length;
       const limit = Math.min(WINDOW_MAX, Math.max(1, Number(url.searchParams.get("limit") ?? ENTRIES_WINDOW)));
       const fromParam = url.searchParams.get("from");
-      const from = fromParam === null ? Math.max(0, total - limit) : Math.max(0, Number(fromParam));
+      // `at` is the timeline's jump to a time: the window that holds that moment (`entriesWindowAt`).
+      const atParam = Number(url.searchParams.get("at") ?? Number.NaN);
+      const from =
+        fromParam !== null
+          ? Math.max(0, Number(fromParam))
+          : Number.isFinite(atParam)
+            ? entriesWindowAt(tail.entries, atParam, limit)
+            : Math.max(0, total - limit);
       const page = { from, total, entries: tail.entries.slice(from, from + limit) };
       // Public mode serves the same window the snapshot publishes: each entry
       // through the per-type allowlist and the game-prose redactor.

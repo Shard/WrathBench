@@ -157,6 +157,13 @@ describe("the feed's two tiers, drawn", () => {
     dispose();
   });
 
+  test("every row carries its time, which is what the timeline scrolls the feed by", async () => {
+    const { host, dispose } = await mount(window);
+    // The turn's request, the reply, the snippet's call, the run's first action, the level, the reply.
+    expect([...host.children].map((r) => (r as HTMLElement).dataset.ts)).toEqual(["100", "200", "300", "500", "800", "900"]);
+    dispose();
+  });
+
   test("under the default a snippet is its head: lines, outcome and what it put on the wire; a click opens the card", async () => {
     const { host, dispose } = await mount(window);
     const card = host.children[2]!;
