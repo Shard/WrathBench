@@ -2227,7 +2227,7 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "money", "questsCompleted", "zone", "area",
     "items", "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
   ],
-  move: ["moveId", "map", "x", "y", "z", "target", "status"],
+  move: ["callTs", "routine", "moveId", "map", "x", "y", "z", "target", "status"],
   // The notes themselves cross `projectActionNotes`, field by field.
   actions: ["callTs", "routine", "dropped", "actions"],
   milestone: [

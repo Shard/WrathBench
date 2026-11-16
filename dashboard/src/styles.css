@@ -493,6 +493,53 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .entry.state > .head .state-line { color: var(--fg); }
 .entry.state .body, .entry.harness > .head + .body { padding-top: 0; }
 
+/* A milestone or a turn-in is one line too, with its record behind the same toggle. */
+.entry.mark > .head { flex-wrap: wrap; border-bottom: none; }
+.entry.mark .body { padding-top: 0; }
+
+/*
+ * A row's kind, as an icon at its head (`components/FeedIcon.tsx`): stroked in
+ * the row's own colour, and tinted only where the kind is one a reader scans
+ * for. Sized in em, so it follows the row's type.
+ */
+.feed-icon { flex: none; align-self: center; width: 1.15em; height: 1.15em; fill: none; stroke: currentColor;
+             stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.feed-icon.k-response, .feed-icon.k-snippet, .feed-icon.k-program, .feed-icon.k-routine { color: var(--accent); }
+.feed-icon.k-reflect, .feed-icon.k-log, .feed-icon.k-pad, .feed-icon.k-level { color: var(--xp); }
+.feed-icon.k-quest, .feed-icon.k-milestone { color: var(--ok); }
+.feed-icon.k-notice { color: var(--warn); }
+.feed-icon.k-death { color: var(--err); }
+
+/*
+ * The actions tier (`lib/feedtier.ts`): what the model did between two
+ * decisions, minimised. No panel and a dashed rule, so the cards either side
+ * are what the eye lands on; the counts are a line of chips, and opened, a
+ * line per action. A failure inside keeps the error rule a card has.
+ */
+.entry.run { border-style: dashed; background: none; font-size: var(--fs-sm); color: var(--dim); }
+.entry.run.bad { border-left-style: solid; }
+.fold-head, .act-line { display: flex; gap: 8px; align-items: baseline; width: 100%; min-width: 0; padding: 3px 10px;
+                        background: none; border: none; border-radius: 0; color: inherit; font: inherit; text-align: left; }
+.fold-head:hover, .act-line:hover { color: var(--fg); }
+.fold-head .spacer, .act-line .spacer { flex: 1; }
+.fold-head > .k-chevron { transition: transform .1s; }
+.fold-head.open > .k-chevron, .act.open > .act-line > .feed-icon:first-child { color: var(--accent); }
+.fold-head.open > .k-chevron { transform: rotate(90deg); }
+.tally { display: flex; flex-wrap: wrap; gap: 2px 14px; min-width: 0; }
+.tally-chip { display: inline-flex; gap: 5px; align-items: baseline; white-space: nowrap; }
+.tally-chip.err { font-weight: 700; }
+.tally-chip.hint { color: var(--warn); font-weight: 700; }
+.entry.run > .action-line { padding: 0 10px 3px 31px; }
+.run-items { border-top: 1px dashed var(--line); padding: 2px 0; }
+.act-line .act-label { flex: none; color: var(--fg); }
+.act-line .act-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-line.err .act-label, .act-line.err .act-text { color: var(--err); }
+.act.open > .act-line .act-text { white-space: normal; overflow-wrap: anywhere; }
+.act > .entry { margin: 2px 10px 8px 31px; font-size: var(--fs-base); color: var(--fg); background: var(--panel); }
+/* An action log on a snippet's card: the same head, the lines indented under it. */
+.entry .body.actions > .fold-head { padding: 0; }
+.entry .body.actions > .fold-head ~ .action-line { padding-left: 21px; }
+
 /* --- the map --- */
 .map-wrap { display: flex; height: 100%; }
 /* The stage and its chips are the inspector's (`@wrathbench/inspector/views/views.css`). */

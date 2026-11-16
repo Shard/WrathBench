@@ -63,14 +63,16 @@ export type BlockKind =
   | "response"
   /** A tool call's input and its result — snippet code, args, output. */
   | "call"
-  /** The long form of everything else: a state sample, a generic entry. */
+  /** A run of actions between two decisions (`lib/feedtier.ts`): its counts, or a line each. */
+  | "actions"
+  /** The long form of everything else: a state sample, a generic entry, the card under an action's line. */
   | "detail";
 
 const OPENS: Record<ExpandPreset, ReadonlySet<BlockKind>> = {
   minimal: new Set(),
   responses: new Set<BlockKind>(["response"]),
   snippets: new Set<BlockKind>(["response", "call"]),
-  all: new Set<BlockKind>(["response", "call", "detail"]),
+  all: new Set<BlockKind>(["response", "call", "actions", "detail"]),
 };
 
 /** Whether a block of this kind starts expanded under this preset. */

@@ -774,6 +774,12 @@ pass leaves out, and who reads what is left:
   `FleetRunFacts`, so the compiler says it reads nothing else. Every other listing field is on
   `results.json` or the run's own `detail.json`, where the page that shows it
   reads it. This was two megabytes that move on every pass with a live run.
+  The page draws that window as the private one does, in two tiers
+  (`dashboard/README.md`, "The run page"): decisions as cards, the actions
+  between them folded to a line of counts, every fold opening on what the
+  window already holds. A `move` entry carries the `callTs` and `routine` an
+  action log does, which is how a call's own moves stay on its card; both are
+  a timestamp and a flag already published on `actions`.
 - **A run's `detail.json` states are the chart's three fields** (`ts`,
   `level`, `xp`, typed as `ChartSample`), and its cost is `actual` and
   `expected`, not a third copy of `expected` beside them. The row drops

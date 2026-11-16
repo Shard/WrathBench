@@ -44,7 +44,17 @@
  * post-hoc appenders, between the snippet and its result on the fixed loop — so
  * it is joined by that value, wherever in the window it sits. A record whose
  * call is not in the window (or that no call owns: actions outside every
- * snippet) stays a row of its own.
+ * snippet) stays a row of its own, and so does a routine's: it is flushed on
+ * an idle timer for as long as the routine runs, so on its launching call's
+ * card it would grow without end under a result written hours earlier.
+ *
+ * A `move` record is joined the same way where it says whose it is: the
+ * viewer stamps it with the `callTs` of the call that dispatched it and marks
+ * a routine's (`runner/viewer/record-feed.ts`), and a call's own moves are
+ * already on its card, as the action log's `move to …` lines with their
+ * verdicts. So they are held on the group (`moves`) rather than drawn again
+ * under it. A routine's moves, a move whose call is off the window, and every
+ * move of a run recorded without the stamp stay rows.
  *
  * A card's duration is the result's `ts` minus the call's `dispatchTs`, which
  * every writer stamps with the moment it handed the call to the tool. That is
@@ -94,6 +104,8 @@ export interface CallGroup {
   result: SnippetResultEntry | null;
   /** The action log of this call's snippet, joined by `callTs`; empty for runs without one. */
   actions: ActionsEntry[];
+  /** The `move` records of this call's own moves, which its action lines already show; see the module comment. */
+  moves: FeedEntry[];
   /**
    * `result.ts − call.dispatchTs` (see module comment). On an unstamped
    * legacy call, `result.ts − call.ts` when the shape says the call was
@@ -175,6 +187,7 @@ function takeCall(
   entries: readonly FeedEntry[],
   i: number,
   actionsByCall: ReadonlyMap<number, ActionsEntry[]>,
+  movesByCall: ReadonlyMap<number, FeedEntry[]>,
 ): { group: CallGroup; skipped: FeedEntry[]; next: number } {
   const first = entries[i]!;
   let call: ToolCallEntry | null = null;
@@ -219,10 +232,11 @@ function takeCall(
   }
 
   const actions = typeof call?.dispatchTs === "number" ? (actionsByCall.get(call.dispatchTs) ?? []) : [];
+  const moves = typeof call?.dispatchTs === "number" ? (movesByCall.get(call.dispatchTs) ?? NO_MOVES) : NO_MOVES;
   return {
-    group: { kind: "call", call, snippet, result, actions, durationMs: callDuration(call, result) },
+    group: { kind: "call", call, snippet, result, actions, moves, durationMs: callDuration(call, result) },
     // Joined records render inside the card, not before it.
-    skipped: skipped.filter((s) => !joined(s, actionsByCall)),
+    skipped: skipped.filter((s) => !joined(s, actionsByCall) && !ownMove(s, movesByCall)),
     next,
   };
 }
@@ -241,12 +255,41 @@ function indexActions(entries: readonly FeedEntry[]): Map<number, ActionsEntry[]
   for (const e of entries) {
     if (e.t !== "actions") continue;
     const callTs = (e as ActionsEntry).callTs;
-    if (typeof callTs !== "number" || !calls.has(callTs)) continue;
+    // A routine's log is flushed on its own clock, long after the call that started it returned: a row of its own.
+    if (typeof callTs !== "number" || !calls.has(callTs) || (e as ActionsEntry).routine === true) continue;
     const list = out.get(callTs) ?? [];
     list.push(e as ActionsEntry);
     out.set(callTs, list);
   }
   return out;
+}
+
+const NO_MOVES: FeedEntry[] = [];
+
+/**
+ * The window's `move` records by the call that dispatched them: only a call
+ * that is in the window and has an action log there, whose lines are where
+ * the move is read, and never a routine's.
+ */
+function indexMoves(entries: readonly FeedEntry[], actionsByCall: ReadonlyMap<number, ActionsEntry[]>): Map<number, FeedEntry[]> {
+  const out = new Map<number, FeedEntry[]>();
+  for (const e of entries) {
+    if (e.t !== "move") continue;
+    const r = e as unknown as Record<string, unknown>;
+    const callTs = r["callTs"];
+    if (typeof callTs !== "number" || r["routine"] === true || !actionsByCall.has(callTs)) continue;
+    const list = out.get(callTs) ?? [];
+    list.push(e);
+    out.set(callTs, list);
+  }
+  return out;
+}
+
+/** Whether an entry is a `move` record a call in the window has claimed. */
+function ownMove(e: FeedEntry, movesByCall: ReadonlyMap<number, FeedEntry[]>): boolean {
+  if (e.t !== "move") return false;
+  const callTs = (e as unknown as Record<string, unknown>)["callTs"];
+  return typeof callTs === "number" && (movesByCall.get(callTs)?.includes(e) ?? false);
 }
 
 /** Whether an entry is an action-log record a call in the window has claimed. */
@@ -271,7 +314,7 @@ function callDuration(call: ToolCallEntry | null, result: SnippetResultEntry | n
 }
 
 /** The entry a group is anchored on — its identity across re-derivations. */
-function anchorOf(g: FeedGroup): number {
+export function anchorOf(g: FeedGroup): number {
   switch (g.kind) {
     case "turn":
       return g.request.i;
@@ -300,7 +343,9 @@ function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
         a.result === o.result &&
         a.durationMs === o.durationMs &&
         a.actions.length === o.actions.length &&
-        a.actions.every((x, k) => x === o.actions[k])
+        a.actions.every((x, k) => x === o.actions[k]) &&
+        a.moves.length === o.moves.length &&
+        a.moves.every((x, k) => x === o.moves[k])
       );
     }
     default:
@@ -330,6 +375,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
   };
 
   const actionsByCall = indexActions(entries);
+  const movesByCall = indexMoves(entries, actionsByCall);
 
   /** ts of the last entry that fed or was the model, for response latency. */
   let lastActivityTs: number | null = null;
@@ -338,7 +384,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
     const e = entries[i]!;
 
     // Drawn inside its call's card, wherever it sits.
-    if (joined(e, actionsByCall)) {
+    if (joined(e, actionsByCall) || ownMove(e, movesByCall)) {
       i++;
       continue;
     }
@@ -354,7 +400,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
       }
       const req = entries[j];
       if (req !== undefined && req.t === "request") {
-        for (const s of between) if (!joined(s, actionsByCall)) emit({ kind: "plain", entry: s });
+        for (const s of between) if (!joined(s, actionsByCall) && !ownMove(s, movesByCall)) emit({ kind: "plain", entry: s });
         emit({ kind: "turn", request: req as RequestEntry, events: e as EventsServedEntry });
         if (req.ts > 0) lastActivityTs = req.ts;
         i = j + 1;
@@ -387,7 +433,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
     }
 
     if (e.t === "tool_call" || e.t === "snippet" || isResult(e)) {
-      const taken = takeCall(entries, i, actionsByCall);
+      const taken = takeCall(entries, i, actionsByCall, movesByCall);
       for (const s of taken.skipped) emit({ kind: "plain", entry: s });
       emit(taken.group);
       const r = taken.group.result;

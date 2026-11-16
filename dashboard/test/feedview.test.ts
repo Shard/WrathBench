@@ -33,7 +33,7 @@ function e(t: string, extra: Record<string, unknown> = {}): FeedEntry {
 }
 
 describe("expandedBy", () => {
-  const kinds: BlockKind[] = ["response", "call", "detail"];
+  const kinds: BlockKind[] = ["response", "call", "actions", "detail"];
 
   test("the presets nest: each opens everything the one before it did", () => {
     for (let i = 1; i < EXPAND_PRESETS.length; i++) {
@@ -53,6 +53,8 @@ describe("expandedBy", () => {
     expect(expandedBy("responses", "response")).toBe(true);
     expect(expandedBy("responses", "call")).toBe(false);
     expect(expandedBy("snippets", "call")).toBe(true);
+    // A run of actions stays one line until the reader asks for everything.
+    expect(expandedBy("snippets", "actions")).toBe(false);
     expect(expandedBy("snippets", "detail")).toBe(false);
   });
 });

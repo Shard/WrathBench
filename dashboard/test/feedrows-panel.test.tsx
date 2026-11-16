@@ -1,0 +1,221 @@
+/**
+ * The run feed's rows, rendered (`components/FeedRows.tsx`): a run of actions
+ * between two decisions is one closed line of counts with its failures drawn
+ * under it, it opens to a line per action, a line opens to the card it used
+ * to be, and what a reader opened stays open while a live tail grows the run.
+ *
+ * happy-dom through Vite, as the scratchpad panel's test does. Which rows
+ * fold and what they count is `feedtier.test.ts`'s; this is the drawing.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { createComponent, createSignal } from "solid-js";
+import { Window } from "happy-dom";
+import { render } from "solid-js/web";
+import { createServer } from "vite";
+import solid from "vite-plugin-solid";
+import { fileURLToPath } from "node:url";
+import type { FeedEntry } from "../../runner/viewer/api-types";
+import { groupFeed, type FeedGroup } from "../src/lib/feedgroup";
+import type { ExpandPreset } from "../src/lib/feedview";
+
+const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
+
+type RowsModule = typeof import("../src/components/FeedRows");
+
+async function load(): Promise<RowsModule> {
+  const server = await createServer({
+    root: dashboardRoot,
+    configFile: false,
+    resolve: { alias: { "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)) } },
+    plugins: [solid({ dev: false, ssr: false })],
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true },
+  });
+  try {
+    return (await server.ssrLoadModule("/src/components/FeedRows.tsx")) as RowsModule;
+  } finally {
+    await server.close();
+  }
+}
+
+const DOM_GLOBALS = ["window", "document", "Node", "Text", "Element", "HTMLElement", "SVGElement", "Document", "Event", "navigator", "localStorage"] as const;
+const prior = new Map<string, { present: boolean; value: unknown }>();
+
+function installDom(): Document {
+  const window = new Window();
+  const values: Record<(typeof DOM_GLOBALS)[number], unknown> = {
+    window,
+    document: window.document,
+    Node: window.Node,
+    Text: window.Text,
+    Element: window.Element,
+    HTMLElement: window.HTMLElement,
+    SVGElement: window.SVGElement,
+    Document: window.Document,
+    Event: window.Event,
+    navigator: window.navigator,
+    localStorage: window.localStorage,
+  };
+  for (const name of DOM_GLOBALS) {
+    prior.set(name, { present: name in globalThis, value: (globalThis as Record<string, unknown>)[name] });
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: values[name] });
+  }
+  return window.document as unknown as Document;
+}
+
+afterEach(() => {
+  for (const [name, p] of prior) {
+    if (p.present) Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: p.value });
+    else delete (globalThis as Record<string, unknown>)[name];
+  }
+  prior.clear();
+});
+
+let seq = 0;
+function e(t: string, ts: number, extra: Record<string, unknown> = {}): FeedEntry {
+  return { i: seq++, t, ts, start: 0, end: 0, ...extra } as FeedEntry;
+}
+
+function move(moveId: number, ts: number, status = "arrived"): FeedEntry[] {
+  const at = { moveId, map: 0, x: moveId * 10, y: 20, z: 0, target: null, routine: true };
+  return [e("move", ts, { ...at, status: null }), e("move", ts + 5, { ...at, status })];
+}
+
+/** A reply, a snippet with its own action log, then a walk with one refusal and a read, then a reply. */
+function window(): FeedEntry[] {
+  return [
+    e("request", 100, { turn: 1, messageCount: 4, promptChars: 9000 }),
+    e("response", 200, { turn: 1, text: "Pulling the nearest boar, then walking the fence." }),
+    e("tool_call", 300, { turn: 1, name: "run_snippet", args: {}, dispatchTs: 300 }),
+    e("snippet", 300, { turn: 1, code: "await sdk.killTarget(boar)" }),
+    e("actions", 380, {
+      callTs: 300,
+      actions: [
+        { ts: 310, action: "set_target", status: 200, ms: 2, names: { target: "Invented Boar" } },
+        { ts: 320, action: "cast_spell", status: 400, ms: 2, error: "out_of_range", names: { spell: "Invented Strike" } },
+        { ts: 330, action: "loot", status: 200, ms: 2, names: { target: "Invented Boar" } },
+      ],
+    }),
+    e("snippet_result", 400, { turn: 1, name: "run_snippet", isError: false, text: "ok" }),
+    ...move(1, 500),
+    ...move(2, 600, "too_far"),
+    e("tool_call", 700, { turn: 1, name: "state_summary", args: {}, dispatchTs: 700 }),
+    e("tool_result", 710, { turn: 1, name: "state_summary", isError: false, text: "level 7 · 62% health" }),
+    e("milestone", 800, { kind: "level", from: 6, to: 7 }),
+    e("response", 900, { turn: 2, text: "Level 7. On to the mill." }),
+  ];
+}
+
+const texts = (root: Element, selector: string): string[] => [...root.querySelectorAll(selector)].map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim());
+const click = (el: Element | null): void => {
+  if (el === null) throw new Error("nothing to click");
+  (el as HTMLElement).click();
+};
+
+async function mount(entries: () => FeedEntry[], preset: () => ExpandPreset = () => "responses") {
+  const document = installDom();
+  const { FeedList } = await load();
+  const host = document.createElement("div");
+  document.body.append(host);
+  let prev: FeedGroup[] = [];
+  const groups = (): FeedGroup[] => (prev = groupFeed(entries(), prev));
+  const dispose = render(
+    () =>
+      createComponent(FeedList, {
+        get groups() {
+          return groups();
+        },
+        runId: "fixture",
+        get preset() {
+          return preset();
+        },
+        surface: { loop: "program" },
+        reflections: undefined,
+      }),
+    host,
+  );
+  return { host, dispose };
+}
+
+describe("the feed's two tiers, drawn", () => {
+  test("decisions are cards with an icon; the actions between them are one closed line of counts", async () => {
+    const { host, dispose } = await mount(window);
+    // turn, response, the snippet's card, the run, the level, the response.
+    const rows = [...host.children];
+    expect(rows.map((r) => r.className.replace(/\s+/g, " ").trim())).toEqual(["entry turn", "entry", "entry", "entry run bad", "entry mark", "entry"]);
+    for (const r of rows) expect(r.querySelector(".feed-icon")).not.toBeNull();
+    expect(texts(host, ".entry.mark .t")).toEqual(["level 6 → 7"]);
+
+    const run = host.querySelector(".entry.run")!;
+    const head = run.querySelector(":scope > .fold-head")!;
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(texts(run, ".tally-chip")).toEqual(["2 moves", "1 read", "1 failed"]);
+    // Closed, no line is drawn but the one that failed.
+    expect(run.querySelectorAll(".act-line")).toHaveLength(0);
+    expect(texts(run, ":scope > .action-line.err")).toEqual(["routine move to (20, 20) → too far"]);
+    dispose();
+  });
+
+  test("a snippet's own action log is its counts on the card, the refusal under them", async () => {
+    const { host, dispose } = await mount(window);
+    const card = host.children[2]!;
+    expect(texts(card, ".head .t")).toEqual(["run_snippet"]);
+    expect(texts(card, ".body.actions .tally-chip")).toEqual(["2 combat actions", "1 loot", "1 failed"]);
+    expect(texts(card, ".body.actions .action-line")).toEqual(["cast Invented Strike → refused: out_of_range"]);
+    click(card.querySelector(".body.actions .fold-head"));
+    expect(texts(card, ".body.actions .action-line")).toEqual(["target Invented Boar", "cast Invented Strike → refused: out_of_range", "loot Invented Boar"]);
+    dispose();
+  });
+
+  test("a run opens to a line per action, and a line opens to the card it was", async () => {
+    const { host, dispose } = await mount(window);
+    const run = host.querySelector(".entry.run")!;
+    click(run.querySelector(":scope > .fold-head"));
+    expect(run.querySelector(":scope > .fold-head")!.getAttribute("aria-expanded")).toBe("true");
+    expect(texts(run, ".act-line .act-label")).toEqual(["routine move", "routine move", "state_summary"]);
+    expect(texts(run, ".act-line .act-text")).toEqual(["to (10, 20) → arrived", "to (20, 20) → too far", "level 7 · 62% health"]);
+    expect(run.querySelectorAll(".act-line.err")).toHaveLength(1);
+    // The failures are in the list now, not repeated under the head.
+    expect(run.querySelectorAll(":scope > .action-line")).toHaveLength(0);
+
+    expect(run.querySelectorAll(".act > .entry")).toHaveLength(0);
+    click(run.querySelectorAll(".act-line")[2]!);
+    const card = run.querySelector(".act > .entry")!;
+    expect(texts(card, ".head .t")).toEqual(["state_summary"]);
+    expect(texts(card, "pre.block")).toContain("level 7 · 62% health");
+    dispose();
+  });
+
+  test("what a reader opened stays open while the live tail grows the run", async () => {
+    const base = window().slice(0, -2);
+    const [entries, setEntries] = createSignal(base);
+    const { host, dispose } = await mount(entries);
+    const run = host.querySelector(".entry.run")!;
+    click(run.querySelector(":scope > .fold-head"));
+    const first = run.querySelector(".act-line")!;
+    expect(run.querySelectorAll(".act-line")).toHaveLength(3);
+
+    setEntries([...base, ...move(3, 750)]);
+    // The same row, still open, the same first line, and one more.
+    expect(host.querySelector(".entry.run")).toBe(run);
+    expect(run.querySelector(":scope > .fold-head")!.getAttribute("aria-expanded")).toBe("true");
+    expect(run.querySelector(".act-line")).toBe(first);
+    expect(run.querySelectorAll(".act-line")).toHaveLength(4);
+    expect(texts(run, ".tally-chip")).toEqual(["3 moves", "1 read", "1 failed"]);
+    dispose();
+  });
+
+  test("a run of one action is that action's line; the 'all' preset opens every run", async () => {
+    const [preset, setPreset] = createSignal<ExpandPreset>("responses");
+    const only = [e("response", 1, { turn: 1, text: "Reading." }), e("tool_call", 2, { turn: 1, name: "read_log", args: {}, dispatchTs: 2 }), e("tool_result", 3, { turn: 1, name: "read_log", isError: false, text: "5 entries" }), e("response", 4, { turn: 2, text: "Right." }), ...move(1, 10), ...move(2, 20)];
+    const { host, dispose } = await mount(() => only, preset);
+    const [single, walk] = [...host.querySelectorAll(".entry.run")];
+    expect(single!.querySelector(".fold-head")).toBeNull();
+    expect(texts(single!, ".act-line .act-label")).toEqual(["read_log"]);
+    expect(walk!.querySelectorAll(".act-line")).toHaveLength(0);
+    setPreset("all");
+    expect(walk!.querySelectorAll(".act-line")).toHaveLength(2);
+    dispose();
+  });
+});

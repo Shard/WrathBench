@@ -39,12 +39,12 @@ function read(rel: string): string {
 
 describe("nothing a public reader clicks needs the live viewer", () => {
   test("the raw-line link renders nothing in the public build", () => {
-    const src = read("pages/RunDetail.tsx");
+    const src = read("components/FeedRows.tsx");
     // The one anchor at `rawPath` lives in `RawLink`, which bails first.
     expect(src).toMatch(/function RawLink\([^)]*\)[^{]*\{\s*if \(SNAPSHOT_MODE\) return null;/);
     // And it is the only place the raw path is built into a link.
     const users = sources().filter((p) => !p.endsWith(join("api", "client.ts")) && readFileSync(p, "utf8").includes("rawPath("));
-    expect(users.map((p) => p.slice(SRC.length + 1))).toEqual(["pages/RunDetail.tsx"]);
+    expect(users.map((p) => p.slice(SRC.length + 1))).toEqual(["components/FeedRows.tsx"]);
   });
 
   test("no EventSource is opened against a bucket", () => {
