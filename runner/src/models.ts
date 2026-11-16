@@ -71,6 +71,7 @@ import { credentialCarries, providerById, providerOfModel, type Credential } fro
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
 import { parseRouting, routingSchema, type RoutingSpec } from "./routing";
 import { canonicalModelId } from "../../infra/model-catalogue";
+import { entryModelIds, type ProviderOption } from "./provider-options";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
@@ -492,6 +493,8 @@ export interface RosterModel {
   driver?: string;
   /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
   serving?: ServingSpec;
+  /** Its providers in preference order (`provider-options.ts`); absent on a single-provider entry. A run of any is the entry's. */
+  providers?: readonly ProviderOption[];
   apiBase?: string;
   /** The routing block the entry declares, the fleet's default folded in (`routing.ts`). A target counts a run whatever its routing (operator, 2026-11-16). */
   routing?: RoutingSpec;
@@ -837,6 +840,8 @@ export interface ModelState {
   compactWindow?: string;
   /** The entry's local build (`RosterModel.serving`); absent on a hosted entry. */
   serving?: ServingSpec;
+  /** The entry's providers (`RosterModel.providers`); absent on a single-provider entry. */
+  providers?: readonly ProviderOption[];
   /** What the entry launches with (`RosterModel`): its base and routing, and its wiki, which `countsTowardTarget` compares. */
   apiBase?: string;
   routing?: RoutingSpec;
@@ -2145,6 +2150,11 @@ export function isNoProgress(f: RunFact): boolean {
 /** What a run and a roster entry must share for the run to be that entry's. */
 export interface RosterIdentity {
   model: string | null;
+  /**
+   * An entry's providers (`provider-options.ts`): a run of any one of them is
+   * the entry's. Absent on a run, and on a single-provider entry.
+   */
+  providers?: readonly { model?: string | undefined }[] | undefined;
   effort?: string | null | undefined;
   compactWindow?: string | null | undefined;
   /** The driver a run or entry names (absent: the default driver); read for `probeOnly` and the default window. */
@@ -2247,7 +2257,7 @@ export function rosterWindowKey(run: Pick<RosterIdentity, "compactWindow" | "dri
  */
 export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolean {
   return (
-    entry.model === run.model &&
+    (entry.providers === undefined ? entry.model === run.model : run.model !== null && entryModelIds(entry).includes(run.model)) &&
     (entry.effort ?? null) === (run.effort ?? null) &&
     entryOwnsWindow(entry, run.compactWindow) &&
     probeOnlyIdentity(entry) === probeOnlyIdentity(run) &&
@@ -2271,9 +2281,11 @@ export function entryOwnsRun(entry: RosterIdentity, run: RosterIdentity): boolea
  * (`entryOwnsRun`), since another provider cannot serve that id.
  */
 export function sameModel(entry: RosterIdentity, run: RosterIdentity): boolean {
+  const ids = entryModelIds(entry);
   return (
-    (entry.model === run.model || (entry.model !== null && run.model !== null && canonicalModelId(entry.model) === canonicalModelId(run.model))) &&
-    entryOwnsRun({ ...entry, model: run.model }, run)
+    run.model !== null &&
+    ids.some((m) => m === run.model || canonicalModelId(m) === canonicalModelId(run.model!)) &&
+    entryOwnsRun({ ...entry, model: run.model, providers: undefined }, run)
   );
 }
 
@@ -2327,11 +2339,11 @@ export function modelSiblings(roster: readonly (RosterIdentity & { name: string 
  * Arms that differ only by window still never pool: the square is keyed on
  * the arm, and the results on the tuple.
  */
-export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver" | "serving">): boolean {
+export function matchesRoster(f: RunFact, r: Pick<RosterModel, "name" | "model" | "effort" | "compactWindow" | "driver" | "serving" | "providers">): boolean {
   if (f.campaign !== null && f.arm != null && f.ref != null) {
     return (
       f.ref === r.name &&
-      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver, serving: r.serving }, { model: f.model, effort: f.effort, driver: f.driver, serving: f.serving }) &&
+      entryOwnsRun({ model: r.model, effort: r.effort, driver: r.driver, serving: r.serving, providers: r.providers }, { model: f.model, effort: f.effort, driver: f.driver, serving: f.serving }) &&
       (r.compactWindow === undefined || entryOwnsWindow(r, f.compactWindow))
     );
   }
@@ -2602,6 +2614,7 @@ export function projectModel(
     effort: r.effort ?? null,
     ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
     ...(r.serving !== undefined ? { serving: r.serving } : {}),
+    ...(r.providers !== undefined ? { providers: r.providers } : {}),
     ...(r.apiBase !== undefined ? { apiBase: r.apiBase } : {}),
     ...(r.routing !== undefined ? { routing: r.routing } : {}),
     ...(r.wiki !== undefined ? { wiki: r.wiki } : {}),
@@ -2716,7 +2729,9 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
   const lists = input.modelLists ?? readModelListsSidecar(input.runsDir);
   const siblings = modelSiblings(input.roster);
   return input.roster.map((r) => {
-    const gone = modelGoneOf(lists, r);
+    // An entry with providers is gone only when every one of them has dropped it.
+    const goneEach = (r.providers ?? [r]).map((p) => modelGoneOf(lists, { driver: r.driver, model: p.model, apiBase: p.apiBase }));
+    const gone = goneEach.every((g) => g !== undefined) ? goneEach[0] : undefined;
     const state = projectModel(r, runs, policy, { now, clearedAt: sidecar.cleared[r.name], ...(gone !== undefined ? { gone } : {}) });
     const others = siblings.get(r.name);
     return others === undefined ? state : { ...state, siblings: others };

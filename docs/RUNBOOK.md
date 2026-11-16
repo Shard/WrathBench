@@ -456,6 +456,25 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             `credential` — optional: pin this entry's runs to one credential, by id. They take that
               one or wait for it, never another. Normally absent. A pin that cannot carry the entry
               (not configured, another provider's, the other billing side) refuses the entry by name.
+            `providers` — optional: the providers one model may run on, in preference order, in
+              place of the entry's own `apiBase`, `credential` and `routing` (which are refused
+              beside it): `[{ "credential": "opencodego", "apiBase": "https://opencode.ai/inference/go/openai/v1" },
+              { "credential": "openrouter-1", "model": "deepseek/deepseek-v4.1-flash", "routing": "GMICloud" }]`.
+              Each names the credential that pays for it (required, once per list), and may state
+              its `apiBase`, the `model` id that provider knows it by (absent: the entry's `model`)
+              and, on OpenRouter, its `routing` (absent: the fleet's default). The entry's own
+              `model`, `apiBase` and `routing` read as its first provider's. A launch takes the first
+              provider whose credential is enabled, under its usage gate and with a slot, and runs
+              as that provider; a run records the one it used (credential, base, the model id it
+              reported, routing) as every run does. A paused run comes back only on the provider it
+              started on: while that credential has no room it waits, as any paused run waits for
+              its credential, and once the provider is dropped from the list the run is ended, as a
+              run whose ref no longer names its model is; a freeplay character carries on in its
+              next session. Targets, one character per model and the freeplay character are the
+              entry's, whichever provider ran it. Each provider is checked as the entry it launches
+              as, and one that cannot be refuses the entry, named by its credential. The config page
+              shows the list read-only; edit it with `bun wb config set roster/<name>` (operator,
+              2026-11-16).
             `campaignOnly` — `true` or absent. The entry is held from the scored lane, as a
               probe-only driver's entry is: its tier buys no scored run and a queue job naming it
               for a scored or freeplay episode is gated. A probe campaign may assign it, and
@@ -1651,7 +1670,8 @@ pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
 models with no counted run yet first, then shorter episode first, fewest
 counted runs first and roster order, one character per model, each pick on
-the first credential with room ("Credentials"). A model is one model whichever
+the first credential with room ("Credentials"), or for an entry with `providers` on
+the first provider whose credential has room ("Config reference"). A model is one model whichever
 provider serves it (operator, 2026-11-16): roster entries that name it in two
 providers' spellings, at one effort and window (`modelSiblings`,
 `runner/src/models.ts`), count each other's runs toward their targets, each

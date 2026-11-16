@@ -32,7 +32,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { join } from "node:path";
 import { z } from "zod";
 import { parseEntryCompactWindow } from "../src/config";
-import { DEFAULT_DRIVER } from "../src/drivers";
+import { DEFAULT_DRIVER, driverEntry } from "../src/drivers";
 import { entryBilling } from "../src/billing";
 import { configDbPath, readFleetConfig } from "../src/config-store";
 import {
@@ -46,6 +46,7 @@ import {
   entryOwnsWindow,
   sameModel,
   ownedWindows,
+  platformOf,
   schedulability,
   verdictForGroups,
   schedulableView,
@@ -60,6 +61,7 @@ import {
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
 import { canonicalModelId } from "../../infra/model-catalogue";
+import { entryModelIds } from "../src/provider-options";
 import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
 import { rosterEntryRefusal } from "../src/roster-refusal";
@@ -95,6 +97,8 @@ const rosterEntrySchema = z
     compactWindow: z.string().min(1).optional(),
     driver: z.string().min(1).optional(),
     apiBase: z.string().min(1).optional(),
+    /** The entry's providers (`runner/src/provider-options.ts`): read for what owns a run, and the first is the entry's own. */
+    providers: z.array(z.object({ credential: z.string().min(1), apiBase: z.string().min(1).optional(), model: z.string().min(1).optional() }).loose()).min(1).optional(),
     billing: z.enum(["free", "paid"]).optional(),
     /** An objective puts the entry outside the policy (`policyExclusion`). */
     objective: z.string().min(1).optional(),
@@ -273,13 +277,17 @@ export function readFleetRoster(
   for (const [name, e] of Object.entries(parsed.roster)) {
     if (e.tier === undefined) continue;
     const compactWindow = windowOf(e.compactWindow, e.driver);
+    // As the supervisor's parser leaves it: each provider's model stated, the first the entry's own.
+    const providers = e.providers?.map((p) => ({ credential: p.credential, model: p.model ?? e.model, ...(p.apiBase !== undefined ? { apiBase: p.apiBase } : {}) }));
+    const apiBase = providers === undefined ? e.apiBase : providers[0]!.apiBase;
     models.push({
       name,
-      model: e.model,
+      model: providers?.[0]!.model ?? e.model,
       ...(e.effort !== undefined ? { effort: e.effort } : {}),
       ...(compactWindow !== undefined ? { compactWindow } : {}),
       ...(e.driver !== undefined ? { driver: e.driver } : {}),
-      ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+      ...(apiBase !== undefined ? { apiBase } : {}),
+      ...(providers !== undefined ? { providers } : {}),
       ...(e.billing !== undefined ? { billing: e.billing } : {}),
       tier: e.tier,
       ...(e.idle !== undefined ? { idle: e.idle } : {}),
@@ -522,6 +530,10 @@ export function rowOf(
     windows: ownedWindows(state),
     ...(state.siblings !== undefined ? { siblings: [...state.siblings] } : {}),
     platform: state.platform,
+    ...(state.providers !== undefined && state.providers.length > 1
+      ? // An endpoint driver with no base is on OpenRouter, as a single-provider entry's platform reads.
+        { platforms: [...new Set(state.providers.map((p) => platformOf(p.apiBase, driverEntry(state.driver ?? DEFAULT_DRIVER)?.endpoint === true ? undefined : state.driver) ?? "—"))] }
+      : {}),
     harness: state.harness,
     // The reader's verdict, not the scheduler's `state.billing`: a subscription entry reads paid (billing.ts).
     billing: entryBilling(state),
@@ -562,14 +574,14 @@ export function rosterNameOf(
   const outside = new Set(roster.excluded.map((e) => e.name));
   const rows = roster.models.filter((m) => !outside.has(m.name));
   const hit = rows.find(
-    (r) => r.model === model && (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow),
+    (r) => entryModelIds(r).includes(model) && (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow),
   );
   if (hit !== undefined) return hit.name;
-  const own = rows.find((r) => r.model === model);
+  const own = rows.find((r) => entryModelIds(r).includes(model));
   if (own !== undefined) return own.name;
   // The same model on another provider is the same row (operator, 2026-11-16).
   const canonical = canonicalModelId(model);
-  const same = rows.filter((r) => canonicalModelId(r.model) === canonical);
+  const same = rows.filter((r) => entryModelIds(r).some((m) => canonicalModelId(m) === canonical));
   return (same.find((r) => (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow)) ?? same[0])?.name ?? null;
 }
 

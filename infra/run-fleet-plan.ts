@@ -49,6 +49,7 @@ import { scoredWaitFor, stampedCompactWindow, type TerminationReason } from "../
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
 import { EPISODES, isScoredEpisode, isTaskEpisode } from "../runner/src/episodes";
 import { canonicalModelId } from "./model-catalogue";
+import { asProvider, optionOf } from "../runner/src/provider-options";
 import { taskDefinition } from "../runner/src/task-episodes";
 import { taskLaunchFile } from "./task-launch";
 import { classifyLapse, OFFLINE_PAUSE, PARTY_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
@@ -913,7 +914,10 @@ export function jobSpawn(
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
     const copies = copiesOf(r);
     if (copies <= 0) continue;
-    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, deadmines: _deadmines, ...entry } = roster[r]!;
+    const { tier: _tier, idle: _idle, campaignOnly: _campaignOnly, deadmines: _deadmines, ...listed } = roster[r]!;
+    // An entry with providers launches as the one it was placed on (the
+    // credential `placeRef` chose, or a paused run's own), else its first.
+    const entry = listed.providers === undefined ? listed : asProvider(listed, optionOf(listed.providers, job.placed?.[r]?.id) ?? listed.providers[0]!);
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
     const isProbe = probeFile !== undefined;

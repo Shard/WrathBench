@@ -1227,6 +1227,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     ...(row.windows !== undefined ? { windows: [...row.windows] } : {}),
     ...(row.siblings !== undefined ? { siblings: [...row.siblings] } : {}),
     platform: row.platform,
+    ...(row.platforms !== undefined ? { platforms: [...row.platforms] } : {}),
     harness: row.harness,
     billing: row.billing,
     declaredTier: row.declaredTier,
