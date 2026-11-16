@@ -7,11 +7,12 @@
  * client and a fake clock: no game client, no world.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CameraClient, INVISIBLE_LUA, type ClientStatus, type LuaResult } from "./camera/client";
 import { BLANK_RELOG_MS, Director, MIN_FRAME_BYTES, SKIP_CINEMATIC_LUA, STUCK_MS } from "./camera/director";
+import { DEFAULT_LEAD_MS, DEFAULT_RING_MS, DEFAULT_TAIL_MS, Shutter } from "./camera/shutter";
 
 const IN_WORLD: ClientStatus = { state: "InWorld", in_world: true, ui_ready: true };
 const CHAR_SELECT: ClientStatus = { state: "CharSelect", in_world: false, ui_ready: true };
@@ -42,7 +43,13 @@ class ScriptedClient extends CameraClient {
     super("http://127.0.0.1:1", () => "", (() => Promise.reject(new Error("no network in a test"))) as unknown as typeof fetch);
   }
 
+  /** Status polls the client stays down for after a quit, before its container has it at character select again. */
+  restartPolls = 0;
+  /** Quit()s it obeys; after these it ignores Quit() (a client that will not exit). */
+  quitsObeyed = Number.POSITIVE_INFINITY;
+
   override async status(): Promise<ClientStatus | null> {
+    if (this.restartPolls > 0 && --this.restartPolls === 0) this.st = { ...CHAR_SELECT };
     return this.st === null ? null : { ...this.st };
   }
 
@@ -50,6 +57,14 @@ class ScriptedClient extends CameraClient {
     if (this.st === null) return { ok: false, error: "connection refused" };
     this.sent.push(src);
     if (src.includes("EnterWorld()") && this.st.state === "CharSelect") this.st = { ...IN_WORLD };
+    if (src.startsWith("ForceQuit()") || (src.startsWith("Quit()") && this.quitsObeyed-- > 0)) {
+      // The process exits; its container starts it again.
+      this.st = null;
+      this.distance = -1;
+      this.black = false;
+      this.restartPolls = 5;
+      return { ok: true, values: [true] };
+    }
     if (src.startsWith("Logout()")) {
       this.st = { ...CHAR_SELECT };
       this.black = false;
@@ -107,7 +122,7 @@ afterEach(() => {
 });
 
 /** A director over a scripted client, with a clock that moves only by its sleeps, stopping at `untilMs`. */
-function rig(o: { untilMs: number; runsDir?: string; onTick?: (now: number) => void }): Rig {
+function rig(o: { untilMs: number; runsDir?: string; onTick?: (now: number) => void; restartAfterMs?: number }): Rig {
   const runsDir = o.runsDir ?? mkdtempSync(join(tmpdir(), "wb-camera-director-"));
   if (o.runsDir === undefined) dirs.push(runsDir);
   const start = Date.now();
@@ -122,6 +137,7 @@ function rig(o: { untilMs: number; runsDir?: string; onTick?: (now: number) => v
     intervalMs: 10_000,
     race: 1,
     createOnly: false,
+    ...(o.restartAfterMs !== undefined ? { restartAfterMs: o.restartAfterMs } : {}),
     stopping: () => now - start >= o.untilMs,
     log: (l) => logs.push(`${Math.round((now - start) / 1000)}s ${l}`),
     now: () => now,
@@ -304,5 +320,97 @@ describe("a screen stuck black", () => {
     }
     await r.director.live();
     expect(r.client.count("Logout()")).toBe(0);
+  });
+});
+
+/** A session event, appended to the run's session record as the recorder writes it. */
+function writeEvent(run: string, row: Record<string, unknown>): void {
+  const dir = join(run, "session", "events");
+  mkdirSync(dir, { recursive: true });
+  // Any segment name on the 5-minute grid.
+  appendFileSync(join(dir, "1699999800000.jsonl"), `${JSON.stringify(row)}\n`);
+}
+
+describe("the scheduled restart", () => {
+  const HOUR = 60 * 60_000;
+
+  test("quits the client after the interval, logs it as scheduled, and it is taken back in and follows again", async () => {
+    const { runsDir, beat } = liveRun();
+    const r = rig({ untilMs: HOUR + 5 * 60_000, runsDir, onTick: beat, restartAfterMs: HOUR });
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    await r.director.live();
+    const restarts = r.logs.filter((l) => l.includes("scheduled restart: the client has been in the world 60 min"));
+    expect(restarts).toHaveLength(1);
+    expect(r.client.count("Quit()")).toBe(1);
+    expect(r.client.count("ForceQuit()")).toBe(0);
+    expect(r.client.count("EnterWorld()")).toBe(2);
+    expect(r.logs.filter((l) => l.includes("following freeplay-run (Subjectone)"))).toHaveLength(2);
+    // At the interval, give or take a tick.
+    const at = Number(/^(\d+)s/.exec(restarts[0]!)?.[1]);
+    expect(at * 1000).toBeGreaterThanOrEqual(HOUR);
+    expect(at * 1000).toBeLessThan(HOUR + 20_000);
+    appearsOnlyWhileInvisible(r.client);
+  });
+
+  test("waits out an event's burst: never mid-event", async () => {
+    const { runsDir, run, beat } = liveRun();
+    // The rig's clock starts at the wall clock (to the millisecond) and moves only by its sleeps.
+    const wall0 = Date.now();
+    const r = rig({ untilMs: HOUR + 5 * 60_000, runsDir, onTick: beat, restartAfterMs: HOUR });
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    // A level-up just before the restart falls due.
+    r.at(HOUR - 5_000, () => writeEvent(run, { ts: wall0 + r.elapsed(), kind: "level", from: 4, to: 5 }));
+    await r.director.live();
+    expect(r.logs.some((l) => l.includes("event level: reached level 5"))).toBe(true);
+    const restart = r.logs.find((l) => l.includes("scheduled restart:"));
+    expect(restart).toBeDefined();
+    const at = Number(/^(\d+)s/.exec(restart!)?.[1]) * 1000;
+    // Not before the event's tail has left the ring.
+    expect(at).toBeGreaterThanOrEqual(HOUR - 5_000 + DEFAULT_TAIL_MS + DEFAULT_RING_MS);
+  });
+
+  test("an interval of 0 never restarts the client", async () => {
+    const { runsDir, beat } = liveRun();
+    const r = rig({ untilMs: 3 * HOUR, runsDir, onTick: beat, restartAfterMs: 0 });
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    await r.director.live();
+    expect(r.client.count("Quit()")).toBe(0);
+    expect(r.logs.some((l) => l.includes("scheduled restart"))).toBe(false);
+  });
+
+  test("while idle, the client is restarted at the interval all the same", async () => {
+    const r = rig({ untilMs: HOUR + 5 * 60_000, restartAfterMs: HOUR });
+    await r.director.live();
+    expect(r.logs.filter((l) => l.includes("scheduled restart:"))).toHaveLength(1);
+    expect(r.client.count("EnterWorld()")).toBe(2);
+  });
+
+  test("a client that does not exit on Quit() is force-quit", async () => {
+    const r = rig({ untilMs: HOUR + 5 * 60_000, restartAfterMs: HOUR });
+    r.client.quitsObeyed = 0;
+    await r.director.live();
+    expect(r.logs.some((l) => l.includes("did not exit on Quit(); ForceQuit()"))).toBe(true);
+    expect(r.client.count("ForceQuit()")).toBe(1);
+    expect(r.client.count("EnterWorld()")).toBe(2);
+  });
+});
+
+describe("the shutter's quiet moment", () => {
+  test("is not quiet while an event's frames are being kept, and is once its tail has left the ring", () => {
+    const sh = new Shutter({ intervalMs: 10_000 });
+    const t0 = 1_000_000;
+    expect(sh.quiet(t0)).toBe(true);
+    sh.event({ ts: t0, type: "quest", detail: "turned in quest 1" });
+    expect(sh.quiet(t0 - DEFAULT_LEAD_MS)).toBe(false);
+    expect(sh.quiet(t0 + DEFAULT_TAIL_MS)).toBe(false);
+    expect(sh.quiet(t0 + DEFAULT_TAIL_MS + DEFAULT_RING_MS - 1)).toBe(false);
+    expect(sh.quiet(t0 + DEFAULT_TAIL_MS + DEFAULT_RING_MS + 1)).toBe(true);
+  });
+
+  test("start and end marks never hold it", () => {
+    const sh = new Shutter({ intervalMs: 10_000 });
+    sh.event({ ts: 5_000, type: "start", detail: "camera attached" });
+    sh.event({ ts: 5_000, type: "end", detail: "run ended" });
+    expect(sh.quiet(5_000)).toBe(true);
   });
 });

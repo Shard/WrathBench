@@ -3038,6 +3038,8 @@ camera:
   renderer: gpu
   maxConcurrent: 2
   frameKeepHours: 24
+  restartMinutes: 60
+  mallocArenaMax: 2
   clientData:
     claimName: <the PVC>
 ```
@@ -3083,6 +3085,27 @@ hour of play). Size `maxConcurrent` against the PVC's free space.
 **Quota.** Each camera pod requests about 3.25 GiB of memory and 0.3 CPU
 (`gpu`); the sweep's pod 256 MiB while it runs. A camera that does not fit is
 not started, and the shared one is retried every minute.
+
+**Memory.** The client's heap grows with the ground it streams and is not given
+back: about 0.6 to 1.4 GiB an hour on the move, flat while idle or over ground
+it has already loaded, on top of about 1.3 GiB of GPU buffers the cgroup also
+counts. Left alone it reaches the 5 GiB limit in 1.3 to 1.9 hours and the
+`camera` container is OOMKilled (the director survives and takes the client
+back in). Two settings work against it:
+
+- `camera.restartMinutes` (60; 0 is off): after that long in the world the
+  director restarts the client itself, at a moment no event is being filmed
+  (no event's burst still in its ring) or while idle. It logs
+  `scheduled restart: the client has been in the world N min …`, then the
+  usual way back in; one costs about 40 s of footage. A restart with that
+  line before it is this, not a crash; an OOM shows as the `camera`
+  container's `OOMKilled` last state and no such line.
+- `camera.mallocArenaMax` (2; 0 leaves glibc's default): most of the heap sits
+  in glibc's per-thread malloc arenas, which keep what they free.
+
+Whether the arena cap alone flattens the growth is to be measured on the fleet
+(`kubectl top pod … --containers` on a camera following a moving run, over a
+few hours); if it does, the restart interval can be lengthened.
 
 **Disable.** `camera.enabled: false` and a release. The fleet then starts no
 camera and, within a minute of reading the template without one, deletes
