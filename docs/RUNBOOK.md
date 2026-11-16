@@ -171,14 +171,14 @@ flagged. What covers it depends on the run:
   characters is making progress.
 
 A v1 window that is covered is also `STUCK` on a death loop: five or more
-deaths (`--deaths`, the record's `death` rows) after the window's last rise in
-level or xp or turn-in (or in the whole window, with none), whatever moved. A
-corpse run and a graveyard walk move the character, a repair spends money and
-a loot changes the bags, so a character dying at the same camp for an hour
-used to read as progressing; counting from the last gain keeps a level reached
-early in the window from hiding the loop after it. Fewer deaths are only said
-beside the evidence. The `requests` view's stall minutes do not take this
-rule.
+deaths in the window (`--deaths`, the record's `death` rows), whatever moved
+and whatever xp or turn-ins came between them, which the evidence names
+beside the deaths. A corpse run and a graveyard walk move the character, a
+repair spends money and a loot changes the bags, so a character dying at the
+same camp for an hour used to read as progressing; and counting only from the
+last gain let a single kill between deaths hide a loop of nine deaths in three
+hours. Fewer deaths are only said beside the evidence. The `requests` view's
+stall minutes do not take this rule.
 
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint
