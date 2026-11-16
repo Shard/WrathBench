@@ -28,7 +28,8 @@ import {
   type SnapshotArtifact,
   type SnapshotResult,
 } from "../viewer/snapshot";
-import { createApi } from "../viewer/api";
+import { createApi, WINDOW_MAX } from "../viewer/api";
+import { ENTRIES_WINDOW } from "../viewer/public-keys";
 import { emptyState, publishPass, type ObjectStore } from "../../infra/publish-core";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 import type { PositionsResponse, TraceSegment } from "../viewer/api-types";
@@ -541,6 +542,28 @@ describe("renderSnapshot", () => {
       expect(`${a.path}: ${a.body}`).not.toContain(SECRET);
       expect(`${a.path}: ${a.body}`).not.toContain(String(POISON_PID));
     }
+  });
+
+  test("a long feed publishes its last thousand entries, the window the run page loads first", async () => {
+    expect(ENTRIES_WINDOW).toBe(1000);
+    // The viewer serves the whole window, so the publisher's read is not cut short.
+    expect(WINDOW_MAX).toBeGreaterThanOrEqual(ENTRIES_WINDOW);
+    const runs = fixture(false);
+    const extra = 1200;
+    const lines = Array.from({ length: extra }, (_, k) => JSON.stringify({ ts: 1500 + k, t: "response", turn: 2 + k, message: { role: "assistant", content: `step ${k}` } }));
+    appendFileSync(join(runs, DEAD_RUN, "trajectory.jsonl"), lines.join("\n") + "\n");
+    const out = await render(runs, 111);
+    const entries = out.artifacts.find((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`) && a.path.endsWith("/entries.json"));
+    const body = JSON.parse(entries!.body) as { from: number; total: number; entries: { i: number }[] };
+    expect(body.total).toBe(7 + extra);
+    expect(body.entries).toHaveLength(ENTRIES_WINDOW);
+    expect(body.from).toBe(body.total - ENTRIES_WINDOW);
+    expect(body.entries[0]!.i).toBe(body.from);
+    // The private viewer's default page is the same window.
+    const api = createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), moduleUrl: "http://127.0.0.1:1" });
+    const page = (await (await api(new Request(`http://x/api/run/${DEAD_RUN}/entries`))).json()) as { from: number; entries: unknown[] };
+    expect(page.entries).toHaveLength(ENTRIES_WINDOW);
+    expect(page.from).toBe(body.from);
   });
 
   test("the entries window ships the names and the scratchpad ships whole; the prose beside them is gone", async () => {

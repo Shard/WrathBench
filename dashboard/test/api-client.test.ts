@@ -49,7 +49,7 @@ describe("paths", () => {
       "/api/positions",
       "/api/fleet",
       "/api/run/r1",
-      "/api/run/r1/entries?limit=200",
+      "/api/run/r1/entries?limit=1000",
     ]);
   });
 

@@ -27,10 +27,10 @@ import {
 import { paretoSteps } from "../src/lib/pareto";
 import { filterBySeries } from "../src/lib/harness";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
-import { chartGroups, defaultLadderRuns, modelEntries, newestConditions, pickChartGroup } from "../src/lib/ladderfilter";
+import { chartGroups, defaultLadderRuns, modelEntries, pickChartGroup } from "../src/lib/ladderfilter";
 import { conditionOf } from "../../runner/viewer/condition";
 import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
-import { fmtPlaytimeTick } from "../src/lib/format";
+import { effortLabel, fmtPlaytimeTick, windowNote } from "../src/lib/format";
 import {
   CUE_PAD,
   EXPANSION_MAPS,
@@ -78,11 +78,12 @@ import { monogramOf } from "../src/lib/modelmark";
 import { resolvedSummary } from "../src/lib/models";
 import { DUNGEON_CHOICES, EPISODE_CHOICES, dungeonLabel, dungeonParam, dungeonRedirect, episodeParam } from "../src/lib/episodes";
 
-/** An entry key (`entryKeyOf`) as a reader names it: the model, with its effort and window. */
+/** An entry key (`entryKeyOf`) spelt for a test to tell entries apart: the model, with its effort and window. */
 function spelt(key: string): string {
   const [model, id] = key.split("\n");
   const c = JSON.parse(id!) as { effort: string | null; compactWindow: string | null };
-  return pointKey(model!, c.effort, c.compactWindow);
+  const tag = effortLabel(c.effort, c.compactWindow);
+  return tag === null ? model! : `${model!} (${tag})`;
 }
 
 /** A metric bag with the named readings and null everywhere else. */
@@ -656,19 +657,24 @@ describe("ladderPoints", () => {
     expect(free.single).toBe(false);
   });
 
-  test("a claude-code compaction window is a point of its own, labelled after the effort", () => {
+  test("a claude-code compaction window is a point of its own, named like the model and said in its hover (operator, 2026-11-16)", () => {
     const { points } = ladderPoints([
       priced({ runId: "a", model: "claude-haiku-5-5", effort: "max", actualCost: fig(40, "reported"), xpEarned: 900 }),
       priced({ runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", actualCost: fig(8, "reported"), xpEarned: 700 }),
     ]);
+    // Two entries, never pooled.
     expect(points.map((p) => spelt(p.key)).sort()).toEqual(["claude-haiku-5-5 (max · 100k)", "claude-haiku-5-5 (max)"]);
     const small = points.find((p) => p.compactWindow === "100k")!;
+    const big = points.find((p) => p.compactWindow === undefined)!;
     expect(small.x).toBe(8);
-    expect(small.label).toBe("claude-haiku-5-5 (max · 100k)");
-    // `auto` prints nothing and carries no field.
-    expect("compactWindow" in points.find((p) => spelt(p.key) === "claude-haiku-5-5 (max)")!).toBe(false);
-    expect(characterSeriesLabel("claude-haiku-5-5", "max", "100k")).toBe("claude-haiku-5-5 (max · 100k)");
+    // The window is a setting, not a title: both points carry the one name.
+    expect(small.label).toBe("claude-haiku-5-5 (max)");
+    expect(big.label).toBe("claude-haiku-5-5 (max)");
+    // The point keeps the window for its hover and card (`windowNote`); `auto` carries no field.
+    expect(windowNote(small.compactWindow)).toBe("compaction window 100k");
+    expect("compactWindow" in big).toBe(false);
     expect(characterSeriesLabel("claude-haiku-5-5", "max")).toBe("claude-haiku-5-5 (max)");
+    expect(pointKey("claude-sonnet-5-5", null)).toBe("claude-sonnet-5-5");
   });
 
   test("a mixed basis is named, an unpriced or unmeasured entry is omitted and said, unscored runs never enter", () => {
@@ -802,14 +808,16 @@ describe("ladderPoints over another pair of axes", () => {
 
   test("the views: default first, each x a resource and each y a distance, and `?view=` resolves or falls back", () => {
     expect(DEFAULT_VIEW.id).toBe("cost-xp");
-    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "turns-xp", "calls-xp"]);
+    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "calls-xp"]);
     for (const v of LADDER_VIEWS) {
       expect(v.x.better).toBe("lower");
       expect(v.y.better).toBe("higher");
       expect(v.title).toBe(`${v.x.label} × ${v.y.label}`);
     }
-    expect(viewParam("turns-xp").id).toBe("turns-xp");
-    expect(viewParam(["calls-xp", "turns-xp"]).id).toBe("calls-xp");
+    expect(viewParam("calls-xp").id).toBe("calls-xp");
+    expect(viewParam(["calls-xp", "tokens-xp"]).id).toBe("calls-xp");
+    // The withdrawn turns × xp view (operator, 2026-11-16): an old link lands on the default.
+    expect(viewParam("turns-xp")).toBe(DEFAULT_VIEW);
     expect(viewParam("playtime-level")).toBe(DEFAULT_VIEW);
     // The withdrawn cost × level view: an old link lands on the default, not a blank chart.
     expect(viewParam("cost-level")).toBe(DEFAULT_VIEW);
@@ -1222,7 +1230,6 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
     expect([go.condition!.pinned, pinned.condition!.pinned]).toEqual([false, true]);
     expect(entryKeyOf(go)).toBe(entryKeyOf(pinned));
     expect(chartGroups(runs).map((g) => [g.id, g.label, g.entries])).toEqual([["snippet", "snippet loop", 1]]);
-    expect(newestConditions(runs).map((r) => r.runId)).toEqual(["go", "pinned"]);
     expect(defaultLadderRuns(runs).map((r) => r.runId)).toEqual(["go", "pinned"]);
     expect(ladderRows(runs).map((r) => [r.model, r.runs, r.bestLevel, r.bestRunId])).toEqual([["glm", 2, 7, "pinned"]]);
     expect(modelEntries(runs)).toHaveLength(1);

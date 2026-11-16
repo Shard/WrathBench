@@ -35,6 +35,7 @@ import type {
   TrackResponse,
 } from "@viewer/api-types";
 import type { FeedCadence } from "@wrathbench/inspector/views/traceplayer";
+import { ENTRIES_WINDOW } from "@viewer/public-keys";
 import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 
 export type {
@@ -337,7 +338,7 @@ export function createClient(opts: ClientOptions = {}) {
      */
     character: (id: string): Promise<CharacterResponse> =>
       get<CharacterResponse>(`/api/character/${encodeURIComponent(id)}`),
-    entries: (id: string, from?: number, limit = 200): Promise<EntriesResponse> => {
+    entries: (id: string, from?: number, limit = ENTRIES_WINDOW): Promise<EntriesResponse> => {
       const q = new URLSearchParams({ limit: String(limit) });
       if (from !== undefined) q.set("from", String(from));
       return get<EntriesResponse>(`/api/run/${encodeURIComponent(id)}/entries?${q.toString()}`);

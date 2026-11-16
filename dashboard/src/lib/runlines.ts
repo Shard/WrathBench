@@ -111,7 +111,7 @@ export function runLines(runs: readonly ResultRun[]): RunLinesModel {
       effort: r.effort,
       compactWindow: r.compactWindow ?? null,
       entry: entryKeyOf(r),
-      label: characterSeriesLabel(model, r.effort, r.compactWindow),
+      label: characterSeriesLabel(model, r.effort),
       hoverKey: entryKeyOf(r),
       harness: r.harness,
       points,

@@ -106,7 +106,7 @@ export function dungeonPoints(rows: readonly DungeonRowView[]): DungeonPointsMod
   const omitted: DungeonPointsModel["omitted"] = [];
   for (const row of rows) {
     const model = row.model ?? "(unnamed)";
-    const label = characterSeriesLabel(model, row.effort, row.compactWindow ?? null);
+    const label = characterSeriesLabel(model, row.effort);
     const x = row.best.cleared ? row.best.timeToClearMs : row.best.lastBossMs;
     if (x === null) {
       omitted.push({ label, why: row.best.bosses.length === 0 ? "no boss killed" : "no time recorded" });

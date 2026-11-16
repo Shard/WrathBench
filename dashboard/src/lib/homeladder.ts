@@ -12,9 +12,9 @@
  * whose roster entry declared `billing: "free"` is free, a claude-code or codex
  * subscription counts as paid). No model slug is inspected here.
  *
- * Then the ladder page's opening view (`defaultLadderRuns`): each model under
- * its newest condition, on the chart holding the most entries, so the
- * homepage never draws two conditions on one chart either.
+ * Then the ladder page's opening view (`defaultLadderRuns`): every condition
+ * its own row, on the chart holding the most entries, so the homepage never
+ * draws conditions that may not share a chart on one either.
  */
 
 import type { ResultRun } from "../api/client";

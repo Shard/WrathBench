@@ -69,7 +69,7 @@ describe("paretoSteps", () => {
     expectStaircase(steps, better);
   });
 
-  test("turns × xp: the same roster, a different front, read off the specs", () => {
+  test("another x (turns): the same roster, a different front, read off the specs", () => {
     const better = { x: TURNS.better, y: XP.better };
     const { front, steps } = paretoSteps(on("turns"), better);
     expect(front.map((p) => p.k)).toEqual(["free", "dear"]);

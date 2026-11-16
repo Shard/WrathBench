@@ -850,11 +850,12 @@ export function liveListOrder<T extends Parameters<typeof pipName>[0] & { level:
  * stays in the hover, which is where an id belongs.
  */
 export function pipName(
-  p: Pick<AgentPosition, "runId" | "character" | "model"> & { effort?: string | null; compactWindow?: string | null },
+  p: Pick<AgentPosition, "runId" | "character" | "model"> & { effort?: string | null },
 ): string {
   if (p.character !== null && p.character.length > 0) return p.character;
   if (p.model === null || p.model.length === 0) return p.runId;
   const model = modelDisplay(p.model);
-  const tag = effortLabel(p.effort, p.compactWindow);
+  // The effort, never the compaction window: a setting, not a name (operator, 2026-11-16).
+  const tag = effortLabel(p.effort);
   return tag === null ? model : `${model} · ${tag}`;
 }
