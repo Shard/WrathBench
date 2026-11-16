@@ -218,8 +218,9 @@ export default function Models() {
                         </Show>
                         {/* The model's other entries: the same model on another
                             provider, filling these targets. Each name stays an
-                            address (`/models#<name>`). */}
-                        <For each={also}>
+                            address (`/models#<name>`). Operator-facing: a roster
+                            entry is config, so the public build names none. */}
+                        <For each={SNAPSHOT_MODE ? [] : also}>
                           {(a) => (
                             <div
                               class="dim"
