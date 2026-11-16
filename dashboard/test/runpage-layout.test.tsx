@@ -140,7 +140,7 @@ describe("the character's totals on a run page", () => {
     expect(costs.map(label)).toEqual(["cost"]);
     const cost = costs[0]!;
     expect(cost.querySelector(".v")!.textContent).toBe("$1.50*");
-    expect(cost.querySelector(".sub")!.textContent).toBe("actual (1 of 2 attempts) · expected $2.25");
+    expect(cost.querySelector(".sub")!.textContent).toBe("actual 1/2 · expected $2.25");
     expect(cost.querySelector(".info-hint")).not.toBeNull();
     dispose();
   });

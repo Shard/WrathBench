@@ -83,12 +83,13 @@ export function characterCostReading(c: CharacterCost): CostReading {
     return {
       value: `${fmtUsd(c.actualUsd)}${(c.actualBackfilled ?? 0) > 0 ? "*" : ""}`,
       title: backfilledTitle(c.actualBackfilled),
-      sub: `${c.asIfMetered ? "actual, as-if-metered" : "actual"} (${coverage(c.actualAttempts)}) · expected ${expectedShort}`,
+      // Coverage as "1/2" so the line fits a card one line wide; the hint spells it out.
+      sub: `${c.asIfMetered ? "as-if-metered" : "actual"} ${c.actualAttempts}/${c.attempts} · expected ${expectedShort}`,
       hint,
     };
   }
   if (c.expectedUsd !== null) {
-    return { value: fmtUsd(c.expectedUsd), title: "", sub: `expected (${coverage(c.expectedAttempts)}) · no actual`, hint };
+    return { value: fmtUsd(c.expectedUsd), title: "", sub: `expected ${c.expectedAttempts}/${c.attempts} · no actual`, hint };
   }
   return { value: "—", title: "", sub: "unpriced · no actual", hint };
 }
