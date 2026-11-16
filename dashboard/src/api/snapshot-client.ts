@@ -25,8 +25,8 @@
  *   unchanged costs one small request and no re-parse.
  *
  * - **One entries window per run.** The publisher renders the feed's tail
- *   (the last 200 entries, projected and prose-redacted — docs/DATA-AND-LEGAL.md,
- *   "Trajectory logs") as one artifact; `from`/`limit` are accepted and
+ *   (the last `ENTRIES_WINDOW` entries, `@viewer/public-keys`, projected and
+ *   prose-redacted — docs/DATA-AND-LEGAL.md, "Trajectory logs") as one artifact; `from`/`limit` are accepted and
  *   ignored, so "load earlier" has nothing to walk into and the page hides it.
  *
  * What a bucket cannot serve is withheld rather than faked: raw bodies answer

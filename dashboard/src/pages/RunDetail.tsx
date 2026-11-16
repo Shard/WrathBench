@@ -1,7 +1,8 @@
 /**
  * One run, turn by turn.
  *
- * The feed is windowed: the last 200 entries load first and "load earlier"
+ * The feed is windowed: the last `ENTRIES_WINDOW` entries (a thousand,
+ * `@viewer/public-keys`) load first and "load earlier"
  * walks backwards a window at a time, because a `request` entry embeds the
  * whole message array and an `events_served` entry every packet — the server
  * summarises them, but the count is still thousands on a long run. A live run
@@ -15,8 +16,8 @@
  * the generic JSON dump — see `lib/feedview.ts` for both.
  *
  * The public build is this page without the tail and without "load earlier":
- * the publisher renders one window per run — the same last-200 tail this page
- * loads first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
+ * the publisher renders one window per run — the same tail this page loads
+ * first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
  * "Trajectory logs") — and a live run's window advances with the detail poll
  * instead of over SSE. A snapshot from before the window existed answers 404
  * for it, which the panel says plainly rather than failing the page.
@@ -72,6 +73,7 @@ import { actionLines, isActionsEntry, keepLines, moveVerdicts, sameLine, sameVer
 import type { ActionsEntry } from "@viewer/api-types";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
+import { ENTRIES_WINDOW } from "@viewer/public-keys";
 import { modelsHref } from "../lib/models";
 import { linkable } from "../lib/nav";
 import { poll } from "../lib/poll";
@@ -94,7 +96,7 @@ import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
 
-const WINDOW = 200;
+const WINDOW = ENTRIES_WINDOW;
 
 /** How close to the bottom still counts as "following" (px). */
 const FOLLOW_THRESHOLD = 32;
@@ -698,7 +700,7 @@ export default function RunDetail() {
                     </Show>
                     <Show when={SNAPSHOT_MODE && from() > 0}>
                       {" "}
-                      <span class="dim">last {WINDOW} of {total()}</span>
+                      <span class="dim">last {total() - from()} of {total()}</span>
                     </Show>
                     <Show when={feedPublished()}>
                       <label class="filter expand-preset">
