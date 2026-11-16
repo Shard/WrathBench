@@ -446,6 +446,21 @@ the SPA owns everything that is UI.
   entries that do, and `bun wb data catalogue` asks the same of a published
   generation. Recognizing a new model is a data edit, never a code change, and
   the mark appears wherever a model is the row.
+  The catalogue is also a model's identity across providers
+  (`canonicalModelId`): a provider's id resolves to its entry's key through
+  the key or an alias, then through the bare form of a vendor-prefixed id, so
+  OpenCode Go's `deepseek-v4.1-flash` and OpenRouter's
+  `deepseek/deepseek-v4.1-flash` are one model (operator, 2026-11-16;
+  docs/METHODOLOGY.md); an id nothing lists is its bare form. A literally free
+  endpoint (`:free`, `-free`, contributor-free: `isFreeSlug`'s spelling) is the
+  model it serves marked `:free`, never the paid model, and an entry spelled
+  free is its own key. The validator
+  refuses a bare form two entries would share. Everything that groups by model
+  keys on it (the ladder's entries, the models page, the runs filter, the
+  dungeon board, the export's cells), and so does the scheduler's target
+  count, the one thing scheduling reads here; a run keeps the id its provider
+  reported, and what owns a run (its resume, credential and character) still
+  matches that id exactly.
   Weights are per model because a family spans both kinds (Gemini and Gemma,
   GPT and gpt-oss), so an entry states its own; a family may state one for all
   its models only where the company publishes no weights at all (Anthropic).

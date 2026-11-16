@@ -67,8 +67,9 @@ campaigns, and a scored or freeplay launch on it is refused (operator,
 2026-11-14). The adoption did not move the series: a target counts only the
 runs whose tuple names the loop and `yield` its entry now launches, so a
 snippet-loop run in the same series is history, never a copy (operator,
-2026-11-14); the same holds for a routing or wiki other than the entry's
-(operator, 2026-11-14). Scored episodes on the program loop waited until a long-clock
+2026-11-14); the same holds for a wiki other than the entry's (operator,
+2026-11-14), but not for a routing: whichever provider served a model, its
+run counts toward the model's targets (operator, 2026-11-16). Scored episodes on the program loop waited until a long-clock
 program-loop run had been read; that read is done, and scored episodes are open
 (operator, 2026-11-14; read and opened under the operator's delegation, 2026-11-15). The 1.0 series began at the v1 cutover, when the `v1` branches merged
 to master (operator, 2026-11-15): every eval re-arms in it, and the 0.5 rows
@@ -366,6 +367,23 @@ every run so a run always says how it was routed, but it is not a chart
 boundary: runs on any provider, an OpenCode Go run included, share a chart and
 a model's row (operator, 2026-11-16).
 
+**A model served by different providers is one model** (operator,
+2026-11-16), for the reader and for targets. OpenCode Go records DeepSeek V4.1
+Flash as `deepseek-v4.1-flash` and OpenRouter as
+`deepseek/deepseek-v4.1-flash`; both are one ladder entry, one models row, one
+filter value and one export record, and either fills the one target the
+model's roster entries share. The reader is not asked to care which provider
+served it. The provider and the routing stay recorded on every run, as the id
+the provider reported, and a run's page still says how it was served. A
+literally free endpoint is the exception: an OpenRouter `:free` id, a Zen
+`-free` or a contributor-free model stays a model of its own, always marked
+free, and never pools with the paid one; a subscription's usage is not free in
+this sense (operator, 2026-11-16). In the roster a model is one entry, with
+the providers it may be served by listed on it in preference order, not an
+entry per provider: the provider is recorded on every run so a result stays
+traceable to it, and it is not a public comparison dimension for now
+(operator, 2026-11-16).
+
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with
 one is stamped unscored and cannot drift into a chart. A directive pinned by a
@@ -448,6 +466,15 @@ door to the Deadmines evals: the attempts `t2` buys are spent only once a
 counted `e360` reaches level 8, and no tier stands in for that (operator,
 2026-11-15). The model is told neither. Billing buys no runs and costs none;
 it decides only where a run may execute.
+
+**To a reader, free means literally free, and subscription usage is not
+free** (operator, 2026-11-16). A run or a model is marked free, and hidden by
+"exclude free", only when nobody paid for it: an OpenRouter `:free` id, an
+OpenCode `-free` or contributor-free id, or an entry the operator declared
+`billing: "free"`. The operator's own hardware reads free as it always has.
+Claude Code, ChatGPT and OpenCode Go runs read paid wherever a reader sees
+billing, even though the scheduler treats a subscription as outside the
+metered budget.
 
 ## Scoring
 

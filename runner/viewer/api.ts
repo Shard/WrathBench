@@ -1845,8 +1845,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // The refs with a job in flight, off the supervisor's state: the verdict
       // says "running (one character per model)" exactly where --status does.
       const cold = coldRuns(await store.runListing(), now);
-      const running = new Set(readFleet(runsDir, now, cold).jobs.flatMap((j) => j.ref.split("+")));
-      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running, evals: groups.evals });
+      const jobs = readFleet(runsDir, now, cold).jobs;
+      const running = new Set(jobs.flatMap((j) => j.ref.split("+")));
+      // A probe in flight holds only its own entry, never the model's others.
+      const holding = new Set(jobs.filter((j) => j.episode !== "probing").flatMap((j) => j.ref.split("+")));
+      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running, holding, evals: groups.evals });
       /*
        * Cost is attached here rather than in the projection: `runner/src/models.ts`
        * is what the supervisor schedules on and knows nothing about prices, and

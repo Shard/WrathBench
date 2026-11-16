@@ -123,7 +123,8 @@ describe("ogSvgOf", () => {
   });
 
   test("a logo is placed for a family that has one, and a plain disc for one that does not", () => {
-    const svg = ogSvgOf(RUNS, { logoHref: (m) => (m.startsWith("openai/") ? "data:image/svg+xml,%3Csvg%2F%3E" : null) });
+    // Handed the model as the chart keys it (`modelOfRun`): an uncatalogued id by its bare form.
+    const svg = ogSvgOf(RUNS, { logoHref: (m) => (m.startsWith("gpt-") ? "data:image/svg+xml,%3Csvg%2F%3E" : null) });
     expect(count(svg, /<image /g)).toBe(1);
   });
 

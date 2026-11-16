@@ -81,6 +81,12 @@ spec:
           value: {{ ternary "5" "2" $gpu | quote }}
         - name: WOW_DATA
           value: /data/client
+        {{- if gt (int $c.mallocArenaMax) 0 }}
+        # Few malloc arenas: the client's heap otherwise spreads over one per
+        # thread, each keeping what it frees (values.yaml `camera.mallocArenaMax`).
+        - name: MALLOC_ARENA_MAX
+          value: {{ $c.mallocArenaMax | quote }}
+        {{- end }}
         # Noon on the camera's own clock: the scene's light only, client-side.
         # The world's game time, which the agents see, is untouched.
         - name: WOW_CLOCK
@@ -113,6 +119,9 @@ spec:
           value: ""
         - name: CAMERA_INTERVAL_SECONDS
           value: {{ $c.intervalSeconds | quote }}
+        # Minutes in the world before a scheduled client restart; 0 is never.
+        - name: CAMERA_RESTART_MINUTES
+          value: {{ $c.restartMinutes | quote }}
         - name: CAMERA_RUN_DIR
           value: /run/camera
         - name: CAMERA_PORT
