@@ -853,8 +853,15 @@ export interface ModelState {
   /** The entry's driver, which decides the loop its targets count (`countsTowardTarget`). Optional so a state built by hand need not spell it. */
   driver?: Driver;
   status: ModelStatus;
-  /** Free or paid, decided by `model-cost.ts` (or the roster's override). */
+  /**
+   * Free or paid, decided by `model-cost.ts` (or the roster's override): the
+   * SCHEDULER's verdict, which says only which credential may carry a run.
+   * `fleet status` prints it; pages and the snapshot show `entryBilling`
+   * (billing.ts) instead.
+   */
   billing: Billing;
+  /** The roster entry's own `billing`, as written; absent when derived. For the reader's verdict (`entryBilling`), never the scheduler's. */
+  declaredBilling?: Billing;
   /** The tier the config admitted this model to — what an operator wrote. */
   declaredTier: Tier;
   /**
@@ -2535,6 +2542,7 @@ export function projectModel(
     driver: driverOf(r),
     status: "active",
     billing,
+    ...(r.billing !== undefined ? { declaredBilling: r.billing } : {}),
     declaredTier: r.tier,
     tier,
     earnedPromotion,

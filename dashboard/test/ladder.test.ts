@@ -30,6 +30,7 @@ import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from ".
 import { chartGroups, defaultLadderRuns, modelEntries, pickChartGroup } from "../src/lib/ladderfilter";
 import { conditionOf } from "../../runner/viewer/condition";
 import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
+import { runBilling, type BillableRun } from "../../runner/src/billing";
 import { effortLabel, fmtPlaytimeTick, windowNote } from "../src/lib/format";
 import {
   CUE_PAD,
@@ -314,6 +315,29 @@ describe("the ladder's filters", () => {
       "Dwarf Hunter",
       "Human Paladin",
     ]);
+  });
+});
+
+describe("exclude free hides only what nobody paid for (operator, 2026-11-16)", () => {
+  // One run per lane, billed by the runner's own reader verdict, as `results.ts` stamps it.
+  const GO = "https://opencode.ai/inference/go/openai/v1";
+  const lanes: [string, BillableRun][] = [
+    ["claude-code", { model: "claude-opus-5-5", harness: "claude-code", driver: "claude-code" }],
+    ["codex", { model: "gpt-6.1-sol", harness: "codex", driver: "codex" }],
+    ["go", { model: "deepseek-v4.1-flash", apiBase: GO, platform: "opencode.ai", harness: "wrathbench", driver: "openai" }],
+    ["openrouter-paid", { model: "deepseek/deepseek-v4.1-flash", platform: "openrouter", harness: "wrathbench", driver: "openai" }],
+    ["openrouter-free", { model: "nvidia/nemotron-3-super-120b-a12b:free", platform: "openrouter", harness: "wrathbench", driver: "openai" }],
+    ["zen-free", { model: "laguna-s-2.1-free", apiBase: "https://opencode.ai/zen/v1", harness: "wrathbench", driver: "openai" }],
+    ["go-free", { model: "hy3-free", apiBase: GO, harness: "wrathbench", driver: "openai" }],
+    ["contributor-free", { model: "muse-spark-1.2-contributor-free", harness: "wrathbench", driver: "openai" }],
+    ["local", { model: "qwen3.8-27b", apiBase: "http://192.168.1.21:8000/v1", platform: "local", harness: "wrathbench", driver: "openai" }],
+    ["declared-free", { model: "stealth/space-bunny-alpha", platform: "openrouter", harness: "wrathbench", driver: "openai", declaredBilling: "free" }],
+  ];
+  const runs = lanes.map(([runId, b]) => run({ runId, model: b.model, billing: runBilling(b) }));
+
+  test("subscription lanes and metered APIs stay; literally free endpoints and local hardware go", () => {
+    expect(filterRuns(runs, { excludeFree: true }).map((r) => r.runId)).toEqual(["claude-code", "codex", "go", "openrouter-paid"]);
+    expect(filterRuns(runs, { excludeFree: false })).toHaveLength(lanes.length);
   });
 });
 

@@ -449,6 +449,14 @@ counted `e360` reaches level 8, and no tier stands in for that (operator,
 2026-11-15). The model is told neither. Billing buys no runs and costs none;
 it decides only where a run may execute.
 
+**To a reader, free means literally free** (operator, 2026-11-16): a run or a
+model is marked free, and hidden by "exclude free", only when nobody paid for
+it — an OpenRouter `:free` id, an OpenCode `-free` or contributor-free id, an
+entry the operator declared `billing: "free"`, or the operator's own hardware.
+Usage paid for with a subscription is not free: Claude Code, ChatGPT and
+OpenCode Go runs read paid wherever a reader sees billing, even though the
+scheduler treats a subscription as outside the metered budget.
+
 ## Scoring
 
 **The goal prompt is deliberately broad** — progress the character: level,
