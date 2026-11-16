@@ -18,14 +18,15 @@ import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { CharacterView, CostView } from "../../runner/viewer/api-types";
+import type { CharacterView, ClipsResponse, CostView } from "../../runner/viewer/api-types";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
 
 type CardsModule = typeof import("../src/components/CharacterCards");
 type CostModule = typeof import("../src/components/CostCard");
+type ReplayModule = typeof import("../src/components/Replay");
 
-async function load(): Promise<{ cards: CardsModule; cost: CostModule }> {
+async function load(): Promise<{ cards: CardsModule; cost: CostModule; replay: ReplayModule }> {
   const server = await createServer({
     root: dashboardRoot,
     configFile: false,
@@ -38,6 +39,7 @@ async function load(): Promise<{ cards: CardsModule; cost: CostModule }> {
     return {
       cards: (await server.ssrLoadModule("/src/components/CharacterCards.tsx")) as CardsModule,
       cost: (await server.ssrLoadModule("/src/components/CostCard.tsx")) as CostModule,
+      replay: (await server.ssrLoadModule("/src/components/Replay.tsx")) as ReplayModule,
     };
   } finally {
     await server.close();
@@ -146,6 +148,58 @@ describe("the character's totals on a run page", () => {
   });
 });
 
+describe("the replay's chapter list", () => {
+  test("is a pane that starts closed, counts its chapters, and seeks the player a chapter's time is clicked on", async () => {
+    const document = installDom();
+    const { replay } = await load();
+    const clips = {
+      chapters: [
+        { t: 0, part: 0, type: "zone", detail: "entered zone 12", caption: "" },
+        { t: 61, part: 0, type: "level", detail: "reached level 5", caption: "On to the mill." },
+        { t: 185, part: 0, type: "death", detail: "", caption: "" },
+      ],
+    } as unknown as ClipsResponse;
+    const link = replay.createChapterLink();
+    const sought: number[] = [];
+    // Before a player is bound a click goes nowhere, and nothing throws.
+    link.seek(5);
+    link.bind({ at: () => 70, part: () => 0, seek: (t) => void sought.push(t) });
+    const mount = document.createElement("div");
+    document.body.append(mount);
+    const dispose = render(() => createComponent(replay.ChaptersPanel, { clips, link }), mount);
+
+    const pane = mount.querySelector(".collapsible")!;
+    expect(pane.classList.contains("open")).toBe(false);
+    expect(pane.querySelector(".collapsible-toggle")!.getAttribute("aria-expanded")).toBe("false");
+    expect(pane.querySelector(".collapsible-title")!.textContent).toBe("replay chapters");
+    expect(pane.querySelector(".collapsible-summary")!.textContent).toBe("3");
+    const rows = [...pane.querySelectorAll("tr")];
+    expect(rows.map((r) => [...r.querySelectorAll("td")].map((td) => td.textContent!.trim()))).toEqual([
+      ["0:00", "zone", "entered zone 12"],
+      ["1:01", "level", "reached level 5"],
+      ["3:05", "death", "death"],
+    ]);
+    // The chapter the player is in is marked.
+    expect(rows.map((r) => r.className)).toEqual(["", "hovered", ""]);
+
+    (pane.querySelector(".collapsible-toggle") as HTMLElement).click();
+    expect(pane.classList.contains("open")).toBe(true);
+    (rows[2]!.querySelector("a") as HTMLElement).click();
+    expect(sought).toEqual([185]);
+    dispose();
+  });
+
+  test("a run with no chapters has no pane", async () => {
+    const document = installDom();
+    const { replay } = await load();
+    const mount = document.createElement("div");
+    document.body.append(mount);
+    const dispose = render(() => createComponent(replay.ChaptersPanel, { clips: { chapters: [] } as unknown as ClipsResponse, link: replay.createChapterLink() }), mount);
+    expect(mount.querySelector(".collapsible")).toBeNull();
+    dispose();
+  });
+});
+
 describe("the run's cost card", () => {
   test("headlines the actual, keeps the expected with its price month underneath, and hides the notes behind the hint", async () => {
     installDom();
@@ -197,6 +251,10 @@ describe("the run page's sidebar order", () => {
       '<aside class="runview-side"> <div class="cards"> <div class="card">',
     );
     expect(at('<h2 class="section">milestones</h2>')).toBeLessThan(at("<CharacterTotalsPanel"));
+    // The video's chapter list is a pane under the milestones too, not a table under the player.
+    expect(at("<RunVideo")).toBeLessThan(at('<h2 class="section">milestones</h2>'));
+    expect(at('<h2 class="section">milestones</h2>')).toBeLessThan(at("<ChaptersPanel"));
+    expect(at("<ChaptersPanel")).toBeLessThan(at("<CharacterTotalsPanel"));
     expect(src).not.toContain("<CharacterTotalsCard");
   });
 

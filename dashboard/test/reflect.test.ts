@@ -112,6 +112,7 @@ describe("groupTurn", () => {
         snippet: null,
         result: null,
         actions: [],
+        moves: [],
         durationMs: null,
       } as FeedGroup),
     ).toBe(9);
@@ -126,12 +127,13 @@ describe("groupTurn", () => {
         snippet: null,
         result: entry("tool_result", 11),
         actions: [],
+        moves: [],
         durationMs: null,
       } as FeedGroup),
     ).toBe(11);
     // Nothing carried a turn: undefined, which reflectingAt reads as no accent.
     expect(
-      groupTurn({ kind: "call", call: entry("tool_call"), snippet: null, result: null, actions: [], durationMs: null } as FeedGroup),
+      groupTurn({ kind: "call", call: entry("tool_call"), snippet: null, result: null, actions: [], moves: [], durationMs: null } as FeedGroup),
     ).toBeUndefined();
   });
 });

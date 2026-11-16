@@ -359,8 +359,10 @@ bucket as everything else.
 
 - **One player over the parts.** The run page plays the parts back to back
   with one bar, one clock and one total over the whole run; a seek lands in
-  the right part, the chapters are marks on the bar and a list beside it, and
-  the caption under it follows the playhead. On the map's replay of one run
+  the right part, the chapters are marks on the bar, and
+  the caption under it follows the playhead. The chapters as a list are a
+  pane further down the sidebar, under the milestones and closed until
+  opened; a chapter's time there seeks the player. On the map's replay of one run
   the same player sits in the sidebar on the map's clock, both ways: while the
   video plays it moves the map's playhead, otherwise the playhead seeks the
   video to the frame at or before it, and starting either stops the other
@@ -774,6 +776,12 @@ pass leaves out, and who reads what is left:
   `FleetRunFacts`, so the compiler says it reads nothing else. Every other listing field is on
   `results.json` or the run's own `detail.json`, where the page that shows it
   reads it. This was two megabytes that move on every pass with a live run.
+  The page draws that window as the private one does, in two tiers
+  (`dashboard/README.md`, "The run page"): decisions as cards, the actions
+  between them folded to a line of counts, every fold opening on what the
+  window already holds. A `move` entry carries the `callTs` and `routine` an
+  action log does, which is how a call's own moves stay on its card; both are
+  a timestamp and a flag already published on `actions`.
 - **A run's `detail.json` states are the chart's three fields** (`ts`,
   `level`, `xp`, typed as `ChartSample`), and its cost is `actual` and
   `expected`, not a third copy of `expected` beside them. The row drops

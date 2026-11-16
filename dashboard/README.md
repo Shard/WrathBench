@@ -396,14 +396,71 @@ one line, its full text in the hover, so its words changing never move
 anything below. Under the row is a freeplay character's attempt strip, then the
 feed on the left and the sidebar on the right: the model, the character card,
 the camera's still or video, the XP chart, the token and playtime cards and one
-cost card, then the scratchpad and the milestones. After the milestones comes
-the character's totals across every attempt, a pane that stays closed until
-the reader opens it, then fan-out characters, comparability and the server
-footer. A card shows its value and a short line under it; the explanation (how
+cost card, then the scratchpad and the milestones. After the milestones come
+two panes that stay closed until the reader opens them: the replay video's
+chapter list (`ChaptersPanel`, whose times seek the player above through a
+`ChapterLink`; the player itself keeps only the marks on its bar) and the
+character's totals across every attempt. Then fan-out characters,
+comparability and the server footer. A card shows its value and a short line under it; the explanation (how
 tokens were counted, where each cost comes from, the full tok/s) sits behind
 the card's "i" (`components/InfoHint.tsx`). The cost card's headline is the
 provider's actual where there is one, else the list-price expected, with the
 other figure beside the label underneath (`components/CostCard.tsx`).
+
+**The feed is two tiers**, because a long run is mostly things done: a move
+record a step, a routine's action log a minute, state reads, subzones crossed.
+A *decision* keeps a row of its own, as a card: the model's reply, a snippet
+(with its code, its action log and its result), `reflect`, `log_status`, a
+scratchpad or program write, a routine started or stopped, a harness notice, a
+level, a death, a turn-in, the run's end. An *action* is minimised:
+consecutive actions between two decisions are one dashed line of counts
+("21 moves · 12 combat actions · 4 loots"), which opens to a line per action,
+and each line opens to the card it used to be. A run of one is that line. A
+snippet's own action log reads the same way on its card: its counts, opening
+to its dispatches.
+
+| Tier | Rows |
+| --- | --- |
+| decision | turn header, a reply with text, `run_snippet`, `reflect`, `log_status`, `write_scratchpad`/`edit_scratchpad`, `write_file`/`edit_file`/`delete_file`, `start_routine`/`stop_routine`, `login_character`/`logout_character`, a harness notice with text, `program_error`, a CLI's reasoning summary, milestones (level, death, zone, flight, achievement, party, instance), a turn-in, `meta`, `character`, `termination`, `pause`, `resume`, `watchdog`, `limit`, `wind-down`, and any tool or record the tables do not name |
+| action | `move` records, a routine's action log, `state_summary`, `recent_events`, `read_log`, `read_file`, `search_reference`, `list_characters`, `yield`, `wake`, a batch a tool served, state samples, area changes and landings, spells and talents learned, a reply with no text, harness bookkeeping, `routine`, `episodic` and `reflect_window` records, and the CLI drivers' own records (`claude_*`, `codex_*`, `pi_*`) |
+
+Which is which is one module of tables, `src/lib/feedtier.ts`: a tool by its
+name, a record by its type, a milestone by its kind, a dispatched action by
+its name. Filing a new tool is one line there, and one this build has never
+heard of is a decision, so it shows in full until someone does. A run's
+surface (its loop, its harness) can file a tool differently (`SURFACE_TOOLS`);
+nothing does today, since no tool is served under one name with two meanings.
+
+**A failure never hides in a run.** It does not end the run either: twenty
+refused moves are one line, not twenty cards. The line counts what failed (a
+refused dispatch, an errored tool call, a move whose verdict was a refusal, a
+driver's error record) in the error colour, carries the error rule a failed
+card has, and draws the first three failures under its counts without being
+opened. Lines the harness added under an action's result are counted beside
+them as hints. A harness notice addressed to the model is a decision and is
+never folded.
+
+Moves are counted once. A move writes a record at its dispatch and another at
+its verdict, and an action log lists the same dispatch: a run counts its moves
+from the records by move id, and from the action logs only where it holds no
+record. A call's own moves are on its card, as its action lines with their
+verdicts, so their records are held on the card rather than drawn under it
+(`lib/feedgroup.ts`, by the `callTs` the viewer stamps on a `move`); a
+routine's moves and its action log are rows in their own time.
+
+Every row leads with its kind's icon, one small set of inline SVG paths in
+`components/FeedIcon.tsx` drawn in the row's colour: nothing is fetched for
+them. The expand select still sets where every fold starts ("minimal",
+"responses", "snippets", "all"); only "all" opens the runs. Under "minimal"
+and "responses", the default, a `run_snippet` card is closed to its head: its
+line count, "ok" or "error" (an errored one keeps its error rule), and its
+action log's counts with what failed and how many hints the harness added. A
+click on the head opens the card as it was; "snippets" and "all" start it
+open. Every other tool's card is short and is drawn whole. The rows are
+`components/FeedRows.tsx`, the one-line readings `lib/feedline.ts`. The feed
+is a window of 200 entries, so folding the actions shortens what a window
+draws, not what it holds: a window of a walking character is a few turns.
+What a reader opened stays open while a live tail grows the run under it.
 
 ## Structure
 
@@ -443,7 +500,8 @@ pure layer — view maths and pip placement, the API client's paths, encoding an
 error mapping — plus a few focused component checks: the shared chart axis, the
 map's play bar across a route swap, the campaigns page across its routes, the
 run page's scratchpad panel against a hostile pad, its sidebar order, closed
-character pane and single cost card, and the map's quest button
+character and chapter panes and single cost card, its feed's collapsed runs
+and snippet cards and what they open to, and the map's quest button
 and its rows across a counter change.
 Those use the small `happy-dom` harness to mount the components through Vite;
 the rest of the suite does not need a DOM.

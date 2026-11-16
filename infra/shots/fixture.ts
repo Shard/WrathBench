@@ -60,6 +60,7 @@ import {
   type TraceKeyData,
   type TraceRow,
   type EventRow,
+  type RecordedMove,
 } from "@wrathbench/mcp/record";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { loadRunConfig, unscoredStamp } from "../../runner/src/config";
@@ -241,12 +242,12 @@ interface FixtureSession {
 }
 
 /** One drain as the stack's host would hand its writer: the fixture's rows, and a character in the world. */
-function drainOf(spec: Spec, o: { trace?: TraceRow[]; dict?: TraceDict; nearby?: NearbyRow[]; through?: number }): RecordDrain {
+function drainOf(spec: Spec, o: { trace?: TraceRow[]; dict?: TraceDict; nearby?: NearbyRow[]; through?: number; events?: EventRow[]; moves?: RecordedMove[] }): RecordDrain {
   return {
     trace: { rows: o.trace ?? [], dropped: 0, ...(o.dict !== undefined ? { dict: o.dict } : {}) },
-    events: { rows: [], dropped: 0 },
+    events: { rows: o.events ?? [], dropped: 0 },
     nearby: { rows: o.nearby ?? [], dropped: 0, through: o.through ?? 0 },
-    moves: [],
+    moves: o.moves ?? [],
     character: { guid: SELF_GUID, name: spec.character, race: 1, class: 1 },
     stream: { connected: true, events: 0, seq: 0 },
   };
@@ -265,6 +266,185 @@ function openSession(runsDir: string, spec: Spec, fanout = false): FixtureSessio
   const writer = new SessionWriter({ dir, id, stack: { version: "fixture" }, now: () => clock.now ?? Date.now(), log: () => {} });
   writer.open();
   return { writer, clock };
+}
+
+const SCOUT_CODE = `const prey = state.units({ name: "Invented Boar", alive: true });\nreturn prey.length;`;
+
+const GRIND_CODE = `const boars = state.units({ name: "Invented Boar", alive: true }).slice(0, 3);
+for (const boar of boars) {
+  await sdk.moveTo(boar);
+  const fight = await sdk.killTarget(boar);
+  if (fight.status === "killed") await sdk.lootCorpse(boar);
+}
+return state.bag().filter((i) => i.name === "Invented Pelt").length;`;
+
+const ERRAND_CODE = `await sdk.moveTo({ x: -9412, y: 96 });
+const keeper = state.units({ name: "Invented Quartermaster" })[0];
+await sdk.gossipHello(keeper);
+return sdk.turnInQuest(keeper, 9001);`;
+
+/** What the fixture's model says, a turn each; invented, and long enough to fold. */
+const REPLIES = [
+  "The north field still has boars up. Three more pelts finish the quartermaster's order, so I pull the nearest three, loot each, and count what the bag holds before deciding whether to walk back.",
+  "Checking where things stand before the next pull: health, the bag, and whatever the last minute's events say about the wolves by the fence.",
+  "Pelts are done. The plan:\n1. Walk to the quartermaster and turn the order in.\n2. Take the scout's errand by the old mill.\n3. Leave the patrol routine running on the way so nothing chews on me from behind.",
+  "That last pull went badly: two wolves joined and the routine kept walking into them. I am noting it down and changing the route to hug the fence line instead.",
+  "The fence route is quiet. Keeping the patrol routine on it and waiting for the next wake.",
+  "Stepping back for a moment to think about the last half hour before committing to the mill.",
+] as const;
+
+type ActionNote = Parameters<SessionWriter["actions"]>[1][number];
+
+/** One dispatched action of the fixture's, as the sandbox notes it. */
+function note(ts: number, action: string, extra: Partial<ActionNote> = {}): ActionNote {
+  return { ts, action, status: 200, ms: 4, ...extra };
+}
+
+/** A walk of the patrol routine's: `n` moves from `t0`, each a dispatch row and its verdict, the last one's verdict `status`. */
+function patrolMoves(t0: number, n: number, firstId: number, call: number, last = "arrived", name?: string): RecordedMove[] {
+  const rows: RecordedMove[] = [];
+  for (let k = 0; k < n; k++) {
+    const at = t0 + k * 1_500;
+    const base = { at, evalId: call, ...(name === undefined ? { routine: true as const } : { name }), moveId: firstId + k, map: 0, x: -9460 + k * 9, y: 60 + ((k * 37) % 50), z: 57, target: null };
+    rows.push({ ...base, ts: at, status: null });
+    rows.push({ ...base, ts: at + 1_200, status: k === n - 1 ? last : "arrived" });
+  }
+  return rows;
+}
+
+/**
+ * One turn of play, a real run's shape: the model's reply, then what it did.
+ * Most turns are a snippet with its action log; between them the patrol
+ * routine walks (a move record a step, its own action log, the subzones it
+ * crosses), and on its turn of six the model reads state, turns a quest in,
+ * writes its log, or reflects. One snippet in six fails, one walk in six ends
+ * `too_far` with the harness's hint, and the character dies and levels once
+ * each, so a window has every kind of row the feed draws. Returns the call
+ * the patrol routine belongs to, for the next turn.
+ */
+function writeTurn(traj: Trajectory, session: FixtureSession, spec: Spec, turn: number, t: number, at: (ms: number) => void, routineOwner: number): number {
+  const w = session.writer;
+  const phase = turn % 6;
+  let moveId = turn * 100;
+  /** A tool call on both sides: the trajectory's records and the session's `calls` rows. */
+  const call = (ms: number, name: string, args: Record<string, unknown>, result: { text: string; isError?: boolean; durMs?: number; code?: string; actions?: ActionNote[]; moves?: RecordedMove[] }): number => {
+    at(ms);
+    const dispatchTs = t + ms;
+    const id = w.call(name, args, dispatchTs);
+    traj.append({ t: "tool_call", turn, name, args, dispatchTs });
+    if (result.code !== undefined) traj.append({ t: "snippet", turn, code: result.code });
+    at(ms + (result.durMs ?? 40));
+    if (result.moves !== undefined) w.ingest(drainOf(spec, { moves: result.moves }), () => ({ call: id, inCall: true }));
+    if (result.actions !== undefined) w.actions({ call: id, inCall: true }, result.actions);
+    w.result(id, { text: result.text, isError: result.isError });
+    traj.append({ t: result.code !== undefined ? "snippet_result" : "tool_result", turn, name, isError: result.isError === true, text: result.text });
+    return id;
+  };
+  const snippet = (ms: number, code: string, result: { text: string; isError?: boolean; durMs?: number; actions?: ActionNote[]; moves?: RecordedMove[] }): number =>
+    call(ms, "run_snippet", { code }, { ...result, code });
+  /** The patrol routine between two turns: its moves, the subzones crossed, and its own action log. */
+  const patrol = (ms: number, owner: number, steps: number, last = "arrived"): void => {
+    const t0 = t + ms;
+    at(ms + steps * 1_500 + 1_300);
+    const refused = last !== "arrived";
+    w.ingest(
+      drainOf(spec, {
+        moves: patrolMoves(t0, steps, (moveId += 20), owner, last),
+        events: [
+          { kind: "area", ts: t0 + 2_000, from: 9 + (turn % 3), to: 10 + (turn % 3) },
+          { kind: "area", ts: t0 + steps * 1_000, from: 10 + (turn % 3), to: 9 + (turn % 3) },
+        ],
+      }),
+      () => ({ call: owner, routine: true, inCall: true }),
+    );
+    w.actions({ call: owner, routine: true, inCall: true }, [
+      note(t0, "move_to", { args: { x: -9460, y: 60, z: 57 }, moveId, count: steps - (refused ? 1 : 0) }),
+      ...(refused ? [note(t0 + steps * 1_400, "move_to", { args: { x: -9100, y: 410, z: 57 }, status: 400, error: "too_far", hint: "a single moveTo covers about 250 yards; walk it in legs" })] : []),
+      note(t0 + 900, "set_target", { args: { guid: "17379391038838734849" }, names: { target: "Invented Boar" } }),
+      note(t0 + 1_000, "attack_start", { args: { guid: "17379391038838734849" }, names: { target: "Invented Boar" } }),
+      note(t0 + 1_100, "cast_spell", { args: { spellId: 9101, targetGuid: "17379391038838734849" }, names: { spell: "Invented Strike", target: "Invented Boar" }, count: 4 }),
+      note(t0 + 6_000, "loot", { args: { guid: "17379391038838734849" }, names: { target: "Invented Boar" } }),
+      note(t0 + 6_100, "loot_item", { args: { slot: 0 }, names: { item: "Invented Pelt" } }),
+      note(t0 + 6_200, "loot_release", { auto: true }),
+    ]);
+  };
+
+  at(0);
+  traj.append({ t: "events_served", turn, via: "context", count: 3, events: [{ opcode: "SMSG_ATTACKSTART" }, { opcode: "SMSG_LOOT_RESPONSE" }, { opcode: "SMSG_LOG_XPGAIN" }] });
+  traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 + turn * 50 });
+  at(3_000);
+  traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}. ${REPLIES[phase]}` } });
+
+  // The patrol routine belongs to the snippet that last started it, which is seldom this turn's call.
+  let owner = routineOwner;
+  if (phase === 1) {
+    // Reads, then a small pull.
+    call(4_000, "state_summary", {}, { text: "level 7 · 62% health · Invented Field · 4 pelts" });
+    call(4_500, "recent_events", { limit: 20 }, { text: "3 events\nSMSG_ATTACKSTART · SMSG_LOOT_RESPONSE · SMSG_LOG_XPGAIN" });
+    at(4_600);
+    w.eventsServed(undefined, [{ seq: turn * 10, ts: t + 4_500, opcode: "SMSG_ATTACKSTART", data: {} }, { seq: turn * 10 + 1, ts: t + 4_550, opcode: "SMSG_LOOT_RESPONSE", data: {} }]);
+    snippet(5_000, SCOUT_CODE, { text: `ok (12ms)\n=> ${turn % 4}` });
+  } else if (phase === 2) {
+    owner = snippet(4_000, ERRAND_CODE, {
+      text: `ok (9.4s)\n=> { status: "turned_in", quest: 9001 }`,
+      durMs: 9_400,
+      moves: patrolMoves(t + 4_100, 1, moveId, 0, "arrived", "Invented Quartermaster"),
+      actions: [
+        note(t + 4_100, "move_to", { args: { x: -9412, y: 96, z: 57 }, moveId }),
+        note(t + 8_000, "gossip_hello", { args: { guid: "17379391038838734900" }, names: { target: "Invented Quartermaster" } }),
+        note(t + 8_400, "quest_complete", { args: { questId: 9001 }, names: { quest: "An Invented Order" } }),
+        note(t + 8_600, "quest_choose_reward", { args: { questId: 9001, rewardIndex: 0 }, names: { quest: "An Invented Order" } }),
+      ],
+    });
+    at(13_000);
+    w.ingest(drainOf(spec, { events: [{ kind: "quest", ts: t + 12_800, id: 9001 }, ...(turn % 12 === 2 ? [{ kind: "level" as const, ts: t + 12_900, from: 6 + Math.floor(turn / 12), to: 7 + Math.floor(turn / 12), xp: 40 }] : [])] }));
+    call(14_000, "edit_scratchpad", { old: "- [ ] pelts", new: "- [x] pelts" }, { text: "ok" });
+  } else if (phase === 3) {
+    // The pull that goes wrong: a refused cast, an error, and on one turn in twelve a death.
+    owner = snippet(4_000, GRIND_CODE, {
+      text: `error (6.1s)\nError: killTarget: target evaded\n    at grind (snippet:4:23)\n--- harness ---\ncast_spell out_of_range ×3: step inside the spell's range before casting`,
+      isError: true,
+      durMs: 6_100,
+      actions: [
+        note(t + 4_100, "move_to", { args: { x: -9440, y: 71, z: 57 }, names: { target: "Invented Wolf" }, moveId }),
+        note(t + 5_000, "set_target", { args: { guid: "17379391038838735001" }, names: { target: "Invented Wolf" } }),
+        note(t + 5_100, "attack_start", { args: { guid: "17379391038838735001" }, names: { target: "Invented Wolf" } }),
+        note(t + 5_200, "cast_spell", { args: { spellId: 9101, targetGuid: "17379391038838735001" }, names: { spell: "Invented Strike", target: "Invented Wolf" }, status: 400, error: "out_of_range", hint: "step inside the spell's range before casting", count: 3 }),
+      ],
+    });
+    if (turn % 12 === 3) {
+      at(11_000);
+      w.ingest(drainOf(spec, { events: [{ kind: "death", ts: t + 10_800, zone: 12, area: 9, released: false }] }));
+      traj.append({ t: "harness", kind: "session_note", text: "an invented notice" });
+    }
+    call(12_000, "log_status", { text: "Two wolves joined the pull by the fence. Routing along the fence line from here." }, { text: "logged" });
+  } else if (phase === 5) {
+    call(4_000, "reflect", { reason: "half an hour of pelts; is the mill worth the walk?" }, { text: "reflection window open for 2 turns" });
+    call(5_000, "read_log", { limit: 5 }, { text: "5 entries\nturn 3 · L7 · Invented Field: Two wolves joined the pull by the fence." });
+    call(6_000, "log_status", { text: "Pelts first, then the mill; the fence route holds." }, { text: "logged" });
+  } else {
+    owner = snippet(4_000, GRIND_CODE, {
+      text: `ok (14.2s)\n=> ${3 + (turn % 3)}`,
+      durMs: 14_200,
+      actions: [0, 1, 2].flatMap((k) => {
+        const guid = String(17379391038838734849n + BigInt(k));
+        const at0 = t + 4_100 + k * 4_500;
+        return [
+          note(at0, "move_to", { args: { x: -9460 + k * 12, y: 60 + k * 9, z: 57 }, names: { target: "Invented Boar" }, moveId: moveId + k }),
+          note(at0 + 900, "set_target", { args: { guid }, names: { target: "Invented Boar" } }),
+          note(at0 + 1_000, "attack_start", { args: { guid }, names: { target: "Invented Boar" } }),
+          note(at0 + 1_100, "cast_spell", { args: { spellId: 9101, targetGuid: guid }, names: { spell: "Invented Strike", target: "Invented Boar" }, count: 3 }),
+          note(at0 + 3_800, "loot", { args: { guid }, names: { target: "Invented Boar" } }),
+          note(at0 + 3_900, "loot_item", { args: { slot: 0 }, names: { item: "Invented Pelt" } }),
+          note(at0 + 4_000, "loot_release", { auto: true }),
+        ];
+      }),
+    });
+  }
+  // The routine walks until the next turn: a long quiet stretch, and one walk in six that is refused.
+  patrol(22_000, owner, 12, phase === 4 ? "too_far" : "arrived");
+  patrol(42_000, owner, 9);
+  return owner;
 }
 
 /**
@@ -295,37 +475,33 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null, fanout?: Sp
   traj.setCharacter(spec.runId, spec.character);
   writeFileSync(join(dir, "scratchpad.md"), spec.scratchpad);
 
+  // The sessions are open before the turns, which write the game side of each turn into them.
+  const sessions = (fanout ?? [spec]).map((s) => openSession(runsDir, s, fanout !== undefined));
+
   // A turn a minute, from the start. What the character reads is its trace's (`session/`, below).
   const until = ended ?? spec.traceTo;
   let turn = 0;
+  let routineOwner = 0;
   for (let t = spec.startedAt + 30_000; t <= until; t += 60_000) {
-    clock = t;
     ++turn;
-    // A turn of play beside each sample: a snippet, its result, a reply.
-    traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 + turn * 50 });
-    traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}: checking the field for invented boars.` } });
-    const failed = turn === 3;
-    traj.append({ t: "snippet", turn, call: turn * 10, code: `const prey = state.units({ name: "Invented Boar", alive: true });\nreturn prey.length;` });
-    traj.append({
-      t: "snippet_result",
-      turn,
-      call: turn * 10,
-      name: "run_snippet",
-      isError: failed,
-      text: failed ? "error (4ms)\nTypeError: state.units() filter: unknown key \"guid\"" : `ok (12ms)\n=> ${turn % 4}`,
-    });
-    if (turn === 5) {
-      traj.append({ t: "tool_call", turn, call: 51, name: "edit_scratchpad", args: { old: "- [ ] pelts", new: "- [x] pelts" } });
-      traj.append({ t: "tool_result", turn, call: 51, name: "edit_scratchpad", isError: false, text: "ok" });
+    const at = (ms: number): void => {
+      clock = t + ms;
+      for (const session of sessions) session.clock.now = t + ms;
+    };
+    at(0);
+    if (fanout === undefined) routineOwner = writeTurn(traj, sessions[0]!, spec, turn, t, at, routineOwner);
+    else {
+      traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 + turn * 50 });
+      traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}: checking the field for invented boars.` } });
+      traj.append({ t: "snippet", turn, call: turn * 10, code: SCOUT_CODE });
+      traj.append({ t: "snippet_result", turn, call: turn * 10, name: "run_snippet", isError: false, text: `ok (12ms)\n=> ${turn % 4}` });
     }
-    if (turn === 6) traj.append({ t: "harness", kind: "session_note", text: "an invented notice" });
   }
 
-  const sessions = (fanout ?? [spec]).map((s) => {
-    const session = openSession(runsDir, s, fanout !== undefined);
+  (fanout ?? [spec]).forEach((s, i) => {
+    const session = sessions[i]!;
     session.clock.now = s.traceTo;
     session.writer.ingest(drainOf(s, { trace: traceRows(s, s.traceFrom, s.traceTo), dict: DICT }));
-    return session;
   });
   if (ended !== null) {
     clock = ended;
