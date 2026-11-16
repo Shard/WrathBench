@@ -7,11 +7,11 @@
  * client and a fake clock: no game client, no world.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CameraClient, INVISIBLE_LUA, type ClientStatus, type LuaResult } from "./camera/client";
-import { Director, STUCK_MS } from "./camera/director";
+import { BLANK_RELOG_MS, Director, MIN_FRAME_BYTES, SKIP_CINEMATIC_LUA, STUCK_MS } from "./camera/director";
 
 const IN_WORLD: ClientStatus = { state: "InWorld", in_world: true, ui_ready: true };
 const CHAR_SELECT: ClientStatus = { state: "CharSelect", in_world: false, ui_ready: true };
@@ -24,6 +24,18 @@ class ScriptedClient extends CameraClient {
   invisible: unknown[] = [true];
   /** The subject's distance in the camera's view. */
   distance = -1;
+  /**
+   * The intro cinematic, as the client has it: latched (it starts once the
+   * world is up), playing, or none. A stop sent while it is only latched leaves
+   * the screen black for good, as the real client does.
+   */
+  cinematic: "none" | "latched" | "playing" = "none";
+  /** The screen is stuck black: a fade nobody lifts until the client leaves the world. */
+  black = false;
+  /** How big a frame is while the screen is not black. */
+  frameBytes = 0;
+  /** When set, the size of each drawn frame in turn (a dark scene's, under the blank threshold). */
+  sizes: (() => number) | null = null;
   readonly sent: string[] = [];
 
   constructor() {
@@ -38,10 +50,23 @@ class ScriptedClient extends CameraClient {
     if (this.st === null) return { ok: false, error: "connection refused" };
     this.sent.push(src);
     if (src.includes("EnterWorld()") && this.st.state === "CharSelect") this.st = { ...IN_WORLD };
-    if (src.startsWith("Logout()")) this.st = { ...CHAR_SELECT };
+    if (src.startsWith("Logout()")) {
+      this.st = { ...CHAR_SELECT };
+      this.black = false;
+    }
+    // A bare stop, sent without asking whether a cinematic plays.
+    if (src.includes("StopCinematic") && src !== SKIP_CINEMATIC_LUA && this.cinematic === "latched") {
+      this.cinematic = "none";
+      this.black = true;
+    }
     if (src.includes(".appear ")) this.distance = 5;
     const value = ((): unknown => {
       if (src === INVISIBLE_LUA) return this.invisible.length > 1 ? this.invisible.shift() : this.invisible[0];
+      if (src === SKIP_CINEMATIC_LUA) {
+        if (this.cinematic !== "playing") return false;
+        this.cinematic = "none";
+        return true;
+      }
       if (src.includes("GetNumCharacters")) return 1;
       if (src.includes("GetZoneText")) return "Elwynn Forest";
       if (src.includes("UIParent:IsShown")) return false;
@@ -52,7 +77,8 @@ class ScriptedClient extends CameraClient {
   }
 
   override async screenshot(): Promise<Uint8Array | null> {
-    return null;
+    if (this.st?.in_world !== true || this.frameBytes === 0) return null;
+    return new Uint8Array(this.black ? 25_827 : (this.sizes?.() ?? this.frameBytes));
   }
 
   /** The GM commands it said, in order. */
@@ -109,6 +135,20 @@ function rig(o: { untilMs: number; runsDir?: string; onTick?: (now: number) => v
     },
   });
   return { client, director, logs, elapsed: () => now - start, at: (at, fn) => timers.push({ at, fn }) };
+}
+
+/** A live freeplay run on the shared world, its heartbeat kept fresh by the fake clock. */
+function liveRun(): { runsDir: string; run: string; beat: (now: number) => void } {
+  const runsDir = mkdtempSync(join(tmpdir(), "wb-camera-director-runs-"));
+  dirs.push(runsDir);
+  const run = join(runsDir, "freeplay-run");
+  mkdirSync(join(run, "session"), { recursive: true });
+  writeFileSync(join(run, "meta.json"), JSON.stringify({ startedAt: Date.now(), config: { character: "Subjectone" } }));
+  writeFileSync(join(run, "session", "session.json"), JSON.stringify({ id: "freeplay-run" }));
+  writeFileSync(join(run, "heartbeat"), "host 1");
+  const beat = (now: number): void => utimesSync(join(run, "heartbeat"), now / 1000, now / 1000);
+  beat(Date.now());
+  return { runsDir, run, beat };
 }
 
 /** Every `.appear` (and every other GM command) came after an invisibility check that read true, with no login in between. */
@@ -188,5 +228,81 @@ describe("invisibility", () => {
     expect(r.client.count("EnterWorld()")).toBe(1);
     expect(r.client.gmSent()).toEqual([]);
     expect(r.director.refusedForGood).toBe(true);
+  });
+});
+
+describe("a new character's intro cinematic", () => {
+  test("is skipped only once it plays, so the screen never sticks black", async () => {
+    const r = rig({ untilMs: 60_000 });
+    // A first login: the server triggers the intro, which the client starts a moment after the zone text is up.
+    r.client.cinematic = "latched";
+    r.at(2_000, () => (r.client.cinematic = "playing"));
+    await r.director.live();
+    expect(r.client.black).toBe(false);
+    expect(r.client.cinematic as string).toBe("none");
+    expect(r.logs.filter((l) => l.includes("skipped the intro cinematic"))).toHaveLength(1);
+    expect(r.client.sent.filter((s) => s.includes("StopCinematic") && s !== SKIP_CINEMATIC_LUA)).toEqual([]);
+  });
+
+  test("with none, the login goes on after a short look", async () => {
+    const r = rig({ untilMs: 60_000 });
+    await r.director.live();
+    expect(r.logs.some((l) => l.includes("skipped the intro cinematic"))).toBe(false);
+    const entered = r.logs.find((l) => l.includes("in the world, invisible"));
+    expect(entered).toBeDefined();
+    expect(Number(/^(\d+)s/.exec(entered!)?.[1])).toBeLessThanOrEqual(10);
+  });
+
+  test("one that starts after the login looked is skipped while following", async () => {
+    const { runsDir, beat } = liveRun();
+    const r = rig({ untilMs: 2 * 60_000, runsDir, onTick: beat });
+    r.client.frameBytes = 120_000;
+    r.at(30_000, () => (r.client.cinematic = "playing"));
+    await r.director.live();
+    expect(r.client.cinematic as string).toBe("none");
+    expect(r.logs.filter((l) => l.includes("skipped the intro cinematic"))).toHaveLength(1);
+  });
+});
+
+describe("a screen stuck black", () => {
+  test("is cleared by logging out and in again, and frames are kept after", async () => {
+    const { runsDir, run, beat } = liveRun();
+    const r = rig({ untilMs: BLANK_RELOG_MS + 3 * 60_000, runsDir, onTick: beat });
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    r.client.black = true;
+    await r.director.live();
+    expect(r.logs.filter((l) => l.includes("the screen is stuck; logging out and in again"))).toHaveLength(1);
+    expect(r.client.count("Logout()")).toBe(1);
+    expect(r.client.count("EnterWorld()")).toBe(2);
+    expect(r.logs.filter((l) => l.includes("following freeplay-run (Subjectone)"))).toHaveLength(2);
+    // Frames once the screen is back, none of them blank.
+    const index = readFileSync(join(run, "camera", "frames.jsonl"), "utf8").trim().split("\n");
+    expect(index.length).toBeGreaterThan(0);
+    appearsOnlyWhileInvisible(r.client);
+  });
+
+  test("a dark scene's small frames, each a different size, are never taken for one", async () => {
+    const { runsDir, beat } = liveRun();
+    const r = rig({ untilMs: BLANK_RELOG_MS + 3 * 60_000, runsDir, onTick: beat });
+    let n = 0;
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    r.client.sizes = () => 24_000 + (n++ % 50) * 100;
+    await r.director.live();
+    expect(r.logs.some((l) => l.includes("skip: a blank frame"))).toBe(true);
+    expect(r.client.count("Logout()")).toBe(0);
+  });
+
+  test("a frame between blanks restarts the count: no logout", async () => {
+    const { runsDir, beat } = liveRun();
+    const r = rig({ untilMs: BLANK_RELOG_MS + 2 * 60_000, runsDir, onTick: beat });
+    r.client.frameBytes = MIN_FRAME_BYTES * 4;
+    r.client.black = true;
+    // A drawn frame now and then (a dark spell, not a stuck screen).
+    for (let t = 60_000; t < BLANK_RELOG_MS + 2 * 60_000; t += 2 * 60_000) {
+      r.at(t, () => (r.client.black = false));
+      r.at(t + 2_000, () => (r.client.black = true));
+    }
+    await r.director.live();
+    expect(r.client.count("Logout()")).toBe(0);
   });
 });
