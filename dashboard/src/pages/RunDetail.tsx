@@ -1,22 +1,24 @@
 /**
  * One run, turn by turn.
  *
- * The feed is windowed: the last 200 entries load first and "load earlier"
+ * The feed is windowed: the last `ENTRIES_WINDOW` entries (a thousand,
+ * `@viewer/public-keys`) load first and "load earlier"
  * walks backwards a window at a time, because a `request` entry embeds the
  * whole message array and an `events_served` entry every packet — the server
  * summarises them, but the count is still thousands on a long run. A live run
  * follows the same file over the viewer's SSE tail, which also heartbeats every
  * second so a quiet run can be told from a dead connection.
  *
- * Long blocks fold to a few lines with a click to expand, and the expand
- * preset over the feed ("minimal / responses / snippets / all", remembered in
- * localStorage) sets where they all start; a per-block click still overrides
- * it. State samples and harness notices get their own compact rows rather than
- * the generic JSON dump — see `lib/feedview.ts` for both.
+ * The feed is two tiers: decisions as cards, and the actions between two of
+ * them folded to one line of counts that opens (`lib/feedtier.ts` for which is
+ * which, `components/FeedRows.tsx` for the rows). Long blocks fold to a few
+ * lines with a click to expand, and the expand preset over the feed ("minimal
+ * / responses / snippets / all", remembered in localStorage) sets where every
+ * fold starts; a per-block click still overrides it.
  *
  * The public build is this page without the tail and without "load earlier":
- * the publisher renders one window per run — the same last-200 tail this page
- * loads first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
+ * the publisher renders one window per run — the same tail this page loads
+ * first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
  * "Trajectory logs") — and a live run's window advances with the detail poll
  * instead of over SSE. A snapshot from before the window existed answers 404
  * for it, which the panel says plainly rather than failing the page.
@@ -26,7 +28,6 @@ import { A, useLocation, useParams } from "@solidjs/router";
 import {
   For,
   Show,
-  createContext,
   createEffect,
   createMemo,
   createSignal,
@@ -35,18 +36,15 @@ import {
   onCleanup,
   onMount,
   runWithOwner,
-  useContext,
 } from "solid-js";
 import { subscribeTail } from "../api/live";
 import {
   api,
   ApiError,
-  rawPath,
   SNAPSHOT_MODE,
   type ApiInfoResponse,
   type ClipsResponse,
   type ComparabilityView,
-  type EventsServedEntry,
   type FeedEntry,
   type RunDetailResponse,
   type TokenTotals,
@@ -63,28 +61,23 @@ import { Coins, QuestCount } from "../components/CharacterFacts";
 import { InventoryPanel, XpBar, createInspectorClient } from "@wrathbench/inspector/views";
 import { FanoutCharacters } from "../components/FanoutCharacters";
 import { ScratchpadPanel } from "../components/Scratchpad";
-import { LiveFrame, RunVideo } from "../components/Replay";
+import { ChaptersPanel, LiveFrame, RunVideo, createChapterLink } from "../components/Replay";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
-import { fmtAge, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtDuration, fmtItems, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";
-import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
-import { actionLines, isActionsEntry, keepLines, moveVerdicts, sameLine, sameVerdicts, type MoveVerdict } from "../lib/actionlog";
-import type { ActionsEntry } from "@viewer/api-types";
-import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
+import { groupFeed, type FeedGroup } from "../lib/feedgroup";
+import type { Surface } from "../lib/feedtier";
+import { moveVerdicts, sameVerdicts } from "../lib/actionlog";
+import { FeedList, MoveVerdicts, RunStart } from "../components/FeedRows";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
+import { ENTRIES_WINDOW } from "@viewer/public-keys";
 import { modelsHref } from "../lib/models";
 import { linkable } from "../lib/nav";
 import { poll } from "../lib/poll";
 import {
   EXPAND_LABELS,
   EXPAND_PRESETS,
-  expandedBy,
-  harnessFields,
-  isHarnessEntry,
-  noticeView,
   readExpandPref,
-  splitNotices,
-  stateLine,
   writeExpandPref,
   type ExpandPreset,
 } from "../lib/feedview";
@@ -94,7 +87,7 @@ import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
 
-const WINDOW = 200;
+const WINDOW = ENTRIES_WINDOW;
 
 /** How close to the bottom still counts as "following" (px). */
 const FOLLOW_THRESHOLD = 32;
@@ -299,7 +292,7 @@ export default function RunDetail() {
       const model = d.run.model ?? "(unnamed)";
       // The line is named for the model, not the character;
       // the name rides along for the hover.
-      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null, d.run.comparability?.compactWindow);
+      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null);
       const last = st.runs[st.runs.length - 1];
       if (last === undefined) {
         return { series: [], omitted: [{ characterId: st.characterId, label, why: "no attempt served" }] };
@@ -519,7 +512,18 @@ export default function RunDetail() {
    * value so settled groups keep their object identity and `<For>` reuses
    * their DOM instead of rebuilding every row per tail append.
    */
+  /** What joins the chapter list under the milestones to the player above it. */
+  const chapterLink = createChapterLink();
   const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
+  /** What the run was driven with, for the rows a surface files differently (`lib/feedtier.ts`). */
+  const surface = createMemo<Surface>(
+    () => {
+      const run = detail()?.run;
+      return { loop: run?.comparability?.loop ?? "snippet", harness: run?.harness ?? null };
+    },
+    {},
+    { equals: (x, y) => x.loop === y.loop && x.harness === y.harness },
+  );
   /** The window's `move` verdicts, for the action lines of the moves they end. */
   const verdicts = createMemo(() => moveVerdicts(entries()), undefined, { equals: sameVerdicts });
 
@@ -698,7 +702,7 @@ export default function RunDetail() {
                     </Show>
                     <Show when={SNAPSHOT_MODE && from() > 0}>
                       {" "}
-                      <span class="dim">last {WINDOW} of {total()}</span>
+                      <span class="dim">last {total() - from()} of {total()}</span>
                     </Show>
                     <Show when={feedPublished()}>
                       <label class="filter expand-preset">
@@ -765,38 +769,13 @@ export default function RunDetail() {
                       <Show when={groups().length === 0}>
                         <p class="dim">Nothing in this window of the trajectory.</p>
                       </Show>
-                      <For each={groups()}>
-                        {(g) => {
-                          /*
-                           * The accent is asked of the run's windows, not of the
-                           * loaded entries: the `open` that starts a window can
-                           * sit far above whatever slice the feed has, and a
-                           * turn is either inside a window or it is not.
-                           */
-                          const rf = (): boolean => reflectingAt(d().reflections, groupTurn(g));
-                          switch (g.kind) {
-                            case "turn":
-                              return <TurnRow g={g} runId={run().runId} reflecting={rf()} />;
-                            case "response":
-                              return <ResponseRow g={g} runId={run().runId} preset={expand()} reflecting={rf()} />;
-                            case "call":
-                              return <CallCard g={g} runId={run().runId} preset={expand()} reflecting={rf()} />;
-                            default:
-                              // The two records with a shape worth drawing rather
-                              // than dumping; everything else is still generic.
-                              if (g.entry.t === "state") {
-                                return <StateRow entry={g.entry} runId={run().runId} preset={expand()} />;
-                              }
-                              if (isHarnessEntry(g.entry)) {
-                                return <NoticeRow entry={g.entry} runId={run().runId} preset={expand()} />;
-                              }
-                              if (isActionsEntry(g.entry)) {
-                                return <ActionsRow entry={g.entry} runId={run().runId} preset={expand()} />;
-                              }
-                              return <Entry entry={g.entry} runId={run().runId} preset={expand()} />;
-                          }
-                        }}
-                      </For>
+                      <FeedList
+                        groups={groups()}
+                        runId={run().runId}
+                        preset={expand()}
+                        surface={surface()}
+                        reflections={d().reflections}
+                      />
                       {/*
                         The other end of the seam: this attempt stopped, and the
                         character kept playing somewhere else. Only for an
@@ -940,7 +919,7 @@ export default function RunDetail() {
                   <Show when={!SNAPSHOT_MODE && live()}>
                     <LiveFrame runId={params.id} now={now()} />
                   </Show>
-                  <Show when={clips()}>{(c) => <RunVideo clips={c()} />}</Show>
+                  <Show when={clips()}>{(c) => <RunVideo clips={c()} link={chapterLink} />}</Show>
 
                   <div class="cards">
                     {/*
@@ -1034,6 +1013,8 @@ export default function RunDetail() {
 
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />
+                  {/* The video's chapter list, folded away down here; the player above keeps the marks on its bar. */}
+                  <Show when={clips()}>{(c) => <ChaptersPanel clips={c()} link={chapterLink} />}</Show>
 
                   {/* The character across every attempt, closed until opened, since it is not this run and it is long. */}
                   <Show when={d().character}>{(st) => <CharacterTotalsPanel character={st()} runId={run().runId} />}</Show>
@@ -1276,517 +1257,5 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
         </dl>
       )}
     </Show>
-  );
-}
-
-/** The one-line summary of an events batch, shared by plain rows and turn headers. */
-function eventsHead(e: EventsServedEntry): string {
-  const more = (e.moreOpcodes ?? 0) > 0 ? ` +${e.moreOpcodes} kinds` : "";
-  return `${e.count ?? 0} events · ${(e.opcodes ?? []).join(" ")}${more}`;
-}
-
-/**
- * The text an entry type puts in its body and head. Only types that still
- * reach the plain `Entry` renderer belong here — stray events batches,
- * meta/terminations/watchdogs, and whatever record kind ships next. Requests,
- * responses and tool calls are always routed to the composite rows
- * (lib/feedgroup.ts); `state` and `notice` have their own rows below. All of
- * them reach `detailOf` for the expanded long form, which is why the field
- * drop lives there.
- */
-function bodyOf(e: FeedEntry): { text: string; head: string } {
-  if (e.t === "events_served") return { text: "", head: eventsHead(e as EventsServedEntry) };
-  // Everything else renders as the summary the server built, minus the
-  // bookkeeping fields.
-  return { text: detailOf(e), head: "" };
-}
-
-/**
- * The whole summary an entry carries, minus the bookkeeping the head already
- * shows. The compact rows below expand to exactly this, so a field the one-line
- * form does not name is still one click away rather than gone.
- */
-function detailOf(e: FeedEntry): string {
-  const { i, t, ts, start, end, clipped, ...rest } = e as Record<string, unknown>;
-  void i;
-  void t;
-  void ts;
-  void start;
-  void end;
-  void clipped;
-  return JSON.stringify(rest, null, 1);
-}
-
-const FOLD_LINES = 3;
-
-/**
- * A foldable pre block — the body treatment every card shares.
- *
- * `defaultOpen` is the whole-feed preset's say (lib/feedview.ts) and `over` is
- * this reader's, which wins while it is set. Changing the preset clears the
- * override, so the choice at the top of the feed always means what it says —
- * without it, a block clicked once would ignore every later preset change and
- * the control would look broken on exactly the rows someone had touched.
- */
-function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
-  const [over, setOver] = createSignal<boolean | null>(null);
-  createEffect(on(() => props.defaultOpen, () => setOver(null), { defer: true }));
-  const open = (): boolean => over() ?? props.defaultOpen === true;
-  const setOpen = (v: boolean): void => void setOver(v);
-  // Counted without splitting: bodies run to many KB and the array of line
-  // substrings would be built only to read its length.
-  const lines = createMemo(() => {
-    let n = 1;
-    for (let at = props.text.indexOf("\n"); at !== -1; at = props.text.indexOf("\n", at + 1)) n++;
-    return n;
-  });
-  const foldable = (): boolean => lines() > FOLD_LINES;
-  return (
-    <>
-      <pre class={`block ${foldable() && !open() ? "fold" : ""}`}>{props.text}</pre>
-      <Show when={foldable()}>
-        <button class="toggle" onClick={() => setOpen(!open())}>
-          {open() ? "collapse" : `expand · ${lines()} lines`}
-        </button>
-      </Show>
-    </>
-  );
-}
-
-/**
- * The raw-line link for one constituent of a composite row.
- *
- * Nothing in the public build: raw trajectory lines are never published, so
- * the link would be a 404 into the bucket. One guard here rather than at the
- * ten call sites, which is also why they can stay written as they are.
- */
-function RawLink(props: { runId: string; i: number; label?: string }) {
-  if (SNAPSHOT_MODE) return null;
-  return (
-    <a href={rawPath(props.runId, props.i)} target="_blank" rel="noreferrer">
-      {props.label ?? "raw"}
-    </a>
-  );
-}
-
-/**
- * One formatter for every row's clock cell: `toLocaleTimeString` builds a
- * fresh `Intl.DateTimeFormat` per call, and this cell is on every row.
- * Still used for the hover title, and for a run whose start is unknown.
- */
-const TIME_FMT = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-  second: "2-digit",
-});
-
-/**
- * When the run began, for the feed's per-row clock.
- *
- * A context rather than a prop threaded through six row components: every row
- * asks the same question of the same run, and the value changes only when the
- * page swaps runs. Null is a run row with no `startedAt` — the cell falls back
- * to the wall clock rather than counting from the epoch.
- */
-const RunStart = createContext<() => number | null>(() => null);
-
-/**
- * The window's move verdicts by move id (`lib/actionlog.ts`), for the one
- * outcome an action line draws: how a `move_to` ended. A context for the same
- * reason as `RunStart` — every action block asks the same question of the
- * same window.
- */
-const MoveVerdicts = createContext<() => Map<number, MoveVerdict[]>>(() => new Map());
-
-/**
- * The timestamp cell every head row ends with: how far into the run this
- * happened, with the absolute time on hover. Elapsed rather than wall clock
- * because "03:41:22" is not a question anyone reading a trajectory has, and
- * because it is the figure that reads the same across two runs compared side
- * by side (`fmtElapsed`).
- */
-function When(props: { ts: number }) {
-  const start = useContext(RunStart);
-  const from = (): number | null => start();
-  return (
-    <span title={stamp(props.ts)}>
-      {from() === null ? TIME_FMT.format(props.ts) : fmtElapsed(props.ts - from()!)}
-    </span>
-  );
-}
-
-function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
-  const parts = createMemo(() => bodyOf(props.entry));
-  return (
-    <div class="entry">
-      <div class="head">
-        <span class="t">{props.entry.t}</span>
-        <Show when={props.entry.turn !== undefined}>
-          <span>turn {props.entry.turn}</span>
-        </Show>
-        <span>{parts().head}</span>
-        <span class="spacer" />
-        <When ts={props.entry.ts} />
-        <Show when={props.entry.clipped === true}>
-          <RawLink runId={props.runId} i={props.entry.i} />
-        </Show>
-      </div>
-      <Show when={parts().text.length > 0}>
-        <div class="body">
-          <FoldBlock text={parts().text} defaultOpen={expandedBy(props.preset, "detail")} />
-        </div>
-      </Show>
-    </div>
-  );
-}
-
-/**
- * One turn's header: the request and the context events that were packed
- * inside it, as a single head-only line. Everything in a `request` body is
- * text the reader has already scrolled past (the whole re-sent history), so
- * the row carries only the counts — the full messages stay one click away
- * behind the raw links.
- */
-function TurnRow(props: { g: TurnGroup; runId: string; reflecting: boolean }) {
-  const req = (): TurnGroup["request"] => props.g.request;
-  return (
-    <div class={`entry ${props.reflecting ? "reflecting" : ""}`}>
-      <div class="head">
-        <span class="t">turn {req().turn ?? "?"}</span>
-        {/* The turn header is where the window is named; the rows under it
-            carry the border alone, or the word would repeat down the feed. */}
-        <Show when={props.reflecting}>
-          <span class="reflect-tag">Zz reflecting</span>
-        </Show>
-        <span>
-          {req().messageCount ?? "?"} msgs · {fmtTokens(req().promptChars ?? null)} chars
-        </span>
-        <Show when={props.g.events}>{(ev) => <span>{eventsHead(ev())}</span>}</Show>
-        <span class="spacer" />
-        <When ts={req().ts} />
-        <Show when={props.g.events?.clipped === true}>
-          <RawLink runId={props.runId} i={props.g.events!.i} label="raw events" />
-        </Show>
-        <Show when={req().clipped === true}>
-          <RawLink runId={props.runId} i={req().i} label="raw request" />
-        </Show>
-      </div>
-    </div>
-  );
-}
-
-/** The model's reply, with how long the model took to produce it. */
-function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPreset; reflecting: boolean }) {
-  const e = (): ResponseGroup["entry"] => props.g.entry;
-  return (
-    <div class={`entry ${props.reflecting ? "reflecting" : ""}`}>
-      <div class="head">
-        <span class="t">response</span>
-        <Show when={e().turn !== undefined}>
-          <span>turn {e().turn}</span>
-        </Show>
-        <Show when={props.g.latencyMs !== null}>
-          <span class="lat">{fmtLatency(props.g.latencyMs)}</span>
-        </Show>
-        <span>{(e().tools ?? []).join(", ")}</span>
-        <span class="spacer" />
-        <When ts={e().ts} />
-        <Show when={e().clipped === true}>
-          <RawLink runId={props.runId} i={e().i} />
-        </Show>
-      </div>
-      <Show when={(e().text ?? "").length > 0}>
-        <div class="body">
-          <FoldBlock text={e().text ?? ""} defaultOpen={expandedBy(props.preset, "response")} />
-        </div>
-      </Show>
-    </div>
-  );
-}
-
-/**
- * One tool call as one card: the input on top, the result under a dashed rule.
- * For run_snippet the input is the snippet's code and the call's args are not
- * shown — they are the same code again, which is exactly the duplication this
- * card exists to remove. The duration is `result.ts − call.ts` and only shown
- * when the writer recorded the call before running it (see lib/feedgroup.ts).
- */
-function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; reflecting: boolean }) {
-  const g = (): CallGroup => props.g;
-  /** The input text: the snippet's code, else the call's args. */
-  const input = createMemo((): string => {
-    const snip = g().snippet;
-    if (snip !== null) return snip.code ?? "";
-    const args = g().call?.args;
-    if (args === undefined) return "";
-    return typeof args === "string" ? args : JSON.stringify(args);
-  });
-  const name = (): string =>
-    g().call?.name ?? g().result?.name ?? (g().snippet !== null ? "run_snippet" : "?");
-  const turn = (): number | undefined => (g().call ?? g().snippet ?? g().result)?.turn;
-  const anyTs = (): number => g().call?.ts ?? g().snippet?.ts ?? g().result?.ts ?? 0;
-  return (
-    <div class={`entry ${g().result?.isError === true ? "bad" : ""} ${props.reflecting ? "reflecting" : ""}`}>
-      <div class="head">
-        <span class="t">{name()}</span>
-        {/* The surface's own three tools, named where a reader will look for
-            them: they are why a window exists, and they read as ordinary tool
-            calls otherwise. Independent of the accent — a `reflect` that was
-            refused opens no window and is still one of these. */}
-        <Show when={isReflectTool(name())}>
-          <span class="reflect-tag">reflection</span>
-        </Show>
-        <Show when={turn() !== undefined}>
-          <span>turn {turn()}</span>
-        </Show>
-        <Show when={g().call?.call !== undefined}>
-          <span>call {g().call!.call}</span>
-        </Show>
-        <Show when={g().durationMs !== null}>
-          <span class="lat">{fmtLatency(g().durationMs)}</span>
-        </Show>
-        <span class="spacer" />
-        <When ts={anyTs()} />
-        <Show when={g().call?.clipped === true}>
-          <RawLink runId={props.runId} i={g().call!.i} label="raw call" />
-        </Show>
-        <Show when={g().snippet?.clipped === true}>
-          <RawLink runId={props.runId} i={g().snippet!.i} label="raw code" />
-        </Show>
-        <Show when={g().result?.clipped === true}>
-          <RawLink runId={props.runId} i={g().result!.i} label="raw result" />
-        </Show>
-      </div>
-      <Show when={input().length > 0}>
-        <div class="body">
-          <FoldBlock text={input()} defaultOpen={expandedBy(props.preset, "call")} />
-        </div>
-      </Show>
-      <Show when={g().actions.length > 0}>
-        <ActionLines records={g().actions} preset={props.preset} />
-      </Show>
-      <Show
-        when={g().result}
-        fallback={
-          // A live tail that has the call but not yet the result — or a run
-          // that died mid-call and never wrote one.
-          <div class="body pending">no result yet</div>
-        }
-      >
-        {(r) => {
-          /*
-           * The harness's own lines are lifted out of the result text and drawn
-           * as a callout: they are the harness talking to the model, not the
-           * tool's output, and inside a folded console dump they were invisible
-           * to a reader looking for exactly them (lib/feedview.ts).
-           */
-          const split = createMemo(() => splitNotices(r().text ?? ""));
-          return (
-            <>
-              <Show when={split().body.length > 0}>
-                <div class="body">
-                  <FoldBlock text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
-                </div>
-              </Show>
-              <Show when={split().notices.length > 0}>
-                <div class="body notices">
-                  <NoticeCallout lines={split().notices} />
-                </div>
-              </Show>
-            </>
-          );
-        }}
-      </Show>
-    </div>
-  );
-}
-
-/** An action line, and whether the call it came from was a routine's. */
-type RoutineLine = ReturnType<typeof actionLines>[number] & { routine: boolean };
-
-/** How many action lines show before the block folds. */
-const ACTION_FOLD_LINES = 8;
-
-/**
- * What a snippet put on the wire, one line per dispatch (`lib/actionlog.ts`).
- * Folds like every other block, under the same preset as the code above it.
- * A refused dispatch reads in the error colour, the SDK's own client-parity
- * traffic dimmed; the module's hint and the timing are on the hover.
- */
-function ActionLines(props: { records: readonly ActionsEntry[]; preset: ExpandPreset }) {
-  const verdicts = useContext(MoveVerdicts);
-  // The previous lines kept where they read the same, so `<For>` redraws only a line whose verdict moved.
-  const lines = createMemo<RoutineLine[]>(
-    (prev) =>
-      keepLines(
-        prev,
-        props.records.flatMap((r) => actionLines(r, verdicts()).map((l) => ({ ...l, routine: r.routine === true }))),
-        (a, b) => sameLine(a, b) && a.routine === b.routine,
-      ),
-    [],
-  );
-  const [over, setOver] = createSignal<boolean | null>(null);
-  createEffect(on(() => props.preset, () => setOver(null), { defer: true }));
-  const open = (): boolean => over() ?? expandedBy(props.preset, "call");
-  const shown = () => (open() ? lines() : lines().slice(0, ACTION_FOLD_LINES));
-  return (
-    <div class="body actions">
-      <For each={shown()}>
-        {(l) => (
-          <div class="action-line" classList={{ err: l.failed, dim: l.auto }} title={l.title}>
-            <Show when={l.routine}>
-              <span class="dim">routine · </span>
-            </Show>
-            {l.text}
-          </div>
-        )}
-      </For>
-      <Show when={lines().length > ACTION_FOLD_LINES}>
-        <button class="toggle" onClick={() => setOver(!open())}>
-          {open() ? "collapse" : `expand · ${lines().length} actions`}
-        </button>
-      </Show>
-    </div>
-  );
-}
-
-/**
- * An action-log record no call in the window owns: its call is off the top,
- * or it was dispatched outside every snippet (an event callback).
- */
-function ActionsRow(props: { entry: ActionsEntry; runId: string; preset: ExpandPreset }) {
-  return (
-    <div class="entry">
-      <div class="head">
-        <span class="t">actions</span>
-        <Show when={props.entry.routine === true}>
-          <span>routine</span>
-        </Show>
-        <Show when={props.entry.turn !== undefined}>
-          <span>turn {props.entry.turn}</span>
-        </Show>
-        <span class="spacer" />
-        <When ts={props.entry.ts} />
-        <Show when={props.entry.clipped === true}>
-          <RawLink runId={props.runId} i={props.entry.i} />
-        </Show>
-      </div>
-      <ActionLines records={[props.entry]} preset={props.preset} />
-    </div>
-  );
-}
-
-/**
- * The harness speaking to the model, as a callout rather than a footnote.
- *
- * One line per deduped (action, status) group, exactly as the harness wrote
- * it — `moveTo too_far ×21: a single moveTo covers ~250y — …`. Nothing is
- * reformatted: the count and the wording are what the model was handed, and a
- * page that rephrased them would be showing something the run did not contain.
- * Always open: there are at most a handful of lines, and a notice nobody
- * expands is a notice nobody reads.
- */
-function NoticeCallout(props: { lines: string[] }) {
-  return (
-    <div class="notice-callout">
-      <span class="notice-tag">harness</span>
-      <div class="notice-lines">
-        <For each={props.lines}>{(l) => <div class="notice-line">{l}</div>}</For>
-      </div>
-    </div>
-  );
-}
-
-/**
- * A `harness` record: the harness's own voice in the feed.
- *
- * One type carries two things (see `lib/feedview.ts`). A record with text is
- * addressed to the model — a sandbox restart, a truncated turn — and gets the
- * callout. A record without is bookkeeping the run needed to state, and gets
- * one quiet line with its fields behind the same toggle every other row uses:
- * shouting `resolved_model` on every run would train the reader to skip
- * exactly the rows this treatment exists for.
- *
- * Read defensively throughout, so a writer landing with fields this build does
- * not know about renders with its full record one click away, never as an error.
- */
-function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
-  const n = createMemo(() => noticeView(props.entry));
-  return (
-    <div class="entry harness" classList={{ notice: !n().bookkeeping }}>
-      <div class="head">
-        <span class="t">harness</span>
-        <span classList={{ "notice-kind": !n().bookkeeping, dim: n().bookkeeping }}>{n().kind}</span>
-        <Show when={n().count !== null}>
-          <span class="dim">×{n().count}</span>
-        </Show>
-        <Show when={props.entry.turn !== undefined}>
-          <span class="dim">turn {props.entry.turn}</span>
-        </Show>
-        {/* Bookkeeping says its whole content on the head line. */}
-        <Show when={n().bookkeeping}>
-          <span class="state-line mono">{harnessFields(props.entry)}</span>
-        </Show>
-        <span class="spacer" />
-        <When ts={props.entry.ts} />
-        <Show when={props.entry.clipped === true}>
-          <RawLink runId={props.runId} i={props.entry.i} />
-        </Show>
-      </div>
-      <Show when={!n().bookkeeping}>
-        <div class="body notices">
-          <NoticeCallout lines={n().text.split("\n")} />
-        </div>
-        {/*
-          The rest of the record, and only when there is one: a notice whose
-          whole content is its text would otherwise print that text twice.
-        */}
-        <Show when={harnessFields(props.entry).length > 0}>
-          <div class="body">
-            <FoldBlock text={detailOf(props.entry)} defaultOpen={expandedBy(props.preset, "detail")} />
-          </div>
-        </Show>
-      </Show>
-    </div>
-  );
-}
-
-/**
- * One state sample as one line, with the full record behind a toggle.
- *
- * The ticker writes one every few seconds, so these are the most numerous rows
- * in a long feed and the least worth reading in full: what the reader wants
- * scanning past them is the shape of the run — the level climbing, the zone
- * changing, the money moving. `stateLine` is that line (lib/feedview.ts); the
- * JSON is unchanged underneath, and under the "all" preset it starts open.
- */
-function StateRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
-  const line = createMemo(() => stateLine(props.entry));
-  const [open, setOpen] = createSignal<boolean | null>(null);
-  createEffect(on(() => props.preset, () => setOpen(null), { defer: true }));
-  const shown = (): boolean => open() ?? expandedBy(props.preset, "detail");
-  return (
-    <div class="entry state">
-      <div class="head">
-        <span class="t">state</span>
-        <Show when={props.entry.turn !== undefined}>
-          <span class="dim">turn {props.entry.turn}</span>
-        </Show>
-        <span class="state-line mono">{line()}</span>
-        <span class="spacer" />
-        <button class="toggle" onClick={() => setOpen(!shown())}>
-          {shown() ? "less" : "detail"}
-        </button>
-        <When ts={props.entry.ts} />
-        <Show when={props.entry.clipped === true}>
-          <RawLink runId={props.runId} i={props.entry.i} />
-        </Show>
-      </div>
-      <Show when={shown()}>
-        <div class="body">
-          <pre class="block">{detailOf(props.entry)}</pre>
-        </div>
-      </Show>
-    </div>
   );
 }

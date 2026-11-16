@@ -171,14 +171,14 @@ flagged. What covers it depends on the run:
   characters is making progress.
 
 A v1 window that is covered is also `STUCK` on a death loop: five or more
-deaths (`--deaths`, the record's `death` rows) after the window's last rise in
-level or xp or turn-in (or in the whole window, with none), whatever moved. A
-corpse run and a graveyard walk move the character, a repair spends money and
-a loot changes the bags, so a character dying at the same camp for an hour
-used to read as progressing; counting from the last gain keeps a level reached
-early in the window from hiding the loop after it. Fewer deaths are only said
-beside the evidence. The `requests` view's stall minutes do not take this
-rule.
+deaths in the window (`--deaths`, the record's `death` rows), whatever moved
+and whatever xp or turn-ins came between them, which the evidence names
+beside the deaths. A corpse run and a graveyard walk move the character, a
+repair spends money and a loot changes the bags, so a character dying at the
+same camp for an hour used to read as progressing; and counting only from the
+last gain let a single kill between deaths hide a loop of nine deaths in three
+hours. Fewer deaths are only said beside the evidence. The `requests` view's
+stall minutes do not take this rule.
 
 Only that verdict flags a run. Beside it, each marked tripped or not with its
 count: the same error repeated (digits folded), the harness-delivered hint
@@ -442,8 +442,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               300k runs since. Its targets, its paused run and its character are therefore what
               they were, while results still group on the tuple: `auto` and `300k` runs of one
               entry are two rows, which in 0.5 only a freeplay character or a probe can show,
-              since its scored runs all stay on `auto`. Pages show a run's window after the effort
-              (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
+              since its scored runs all stay on `auto`. Pages show a run's window as a setting
+              (the runs table's effort column, `max · 100k`, the run page's tuple, a tooltip on a
+              model's name), never in a model's name (operator, 2026-11-16). Mechanics:
+              runner/README.md, "The compaction window".
             `apiBase` — openai and pi entries: the endpoint (absent: OpenRouter). Its host is the
               entry's credential provider (`providerOfModel`, runner/src/credential-slots.ts): a host the
               provider table owns, over https, or a self-hosted host the deployment lists in
@@ -3143,9 +3145,17 @@ kubectl -n <ns> logs <release>-camera-<id> -c camera --tail=50
 - A camera pod `Pending`: no free `devic.es/dri` claim. No world waits on it.
 - No adapter: the client's log names the Vulkan device it picked; `llvmpipe`
   on a `gpu` camera means the device was not visible in the container.
-- `skip: a blank frame`: the client answered with a flat image (seen once
-  on the Intel GPU, in a client's first minutes in the world). Blank frames
-  are never kept; if it persists, switch `renderer` to `software`.
+- `skip: a blank frame`: the client answered with a flat image, never kept.
+  A run of them is a screen held black by a fade the client never lifted: a
+  world per eval's camera makes a new character, whose first login plays its
+  race's intro, and a stop sent before the intro starts leaves its fade at
+  black. The director skips an intro only once it plays (`skipped the intro
+  cinematic`), and after three minutes of the same blank frame (one size,
+  byte for byte; a dark scene's frames vary) with the subject in view it logs
+  the client out and in again, which clears any fade
+  (`the screen is stuck; logging out and in again`). The renderer is not the
+  cause; a frame from the client's own port shows it (`GET /screenshot` with
+  the bearer in `/run/camera/token`, from the `camera-director` container).
 - `login: refused (World(39), 0x27)` in the client's log: the world's realm
   row is missing or flagged offline, so the client was handed another realm.
   A world's row is the launcher's; a release no longer prunes it.

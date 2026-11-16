@@ -22,7 +22,7 @@ import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { EntryCard, createCardHover } from "./EntryCard";
 import { InfoHint } from "./InfoHint";
-import { COST_BASIS_NOTE, fmtDuration, fmtTokens, fmtUsd } from "../lib/format";
+import { COST_BASIS_NOTE, fmtDuration, fmtTokens, fmtUsd, windowNote } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
 const M = { top: 16, right: 24, bottom: 40, left: 64 };
@@ -107,8 +107,10 @@ export function hoverText(p: LadderPoint, episode: string, view: LadderView = DE
     if (spec === null || v === null || k === view.x.key || k === view.y.key) return [];
     return [`${spec.label} ${fmtHover(spec, v)}`];
   });
+  const window = windowNote(p.compactWindow);
   return [
     `${p.key} — ${over}`,
+    ...(window !== null ? [window] : []),
     axisLine(p, p.x, view.x, episode),
     axisLine(p, p.y, view.y, episode),
     ...(also.length > 0 ? [`also: ${also.join(", ")}`] : []),

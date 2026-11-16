@@ -187,6 +187,16 @@ harness never holds, backs off or stops it for repeating itself, and a
 snippet is a one-off that leaves nothing running. A continued freeplay
 session carries the program's files and memory, never a running routine.
 
+**killTarget only auto-attacks, and fights at range with the client's
+ranged auto-attack** (operator decision, 2026-11-16). Its description and
+the prompt say it casts nothing but its auto-attack and that `castSpell`
+runs in the model's own code alongside it, and its `range` stops the
+approach within that distance and fires what the ranged slot's button would
+(Auto Shot, Shoot or Throw), swinging in melee while the target is inside
+the melee reach where the server holds that shot, as a client's auto-attack
+does; spell choice stays the model's, so there is no rotation or spells
+option.
+
 **Softening: repair the deterministic, explain the rest.** Most early
 model-facing failures were feedback failures, and weak models burned episodes
 blind-retrying. The harness repairs an input only when exactly one valid
@@ -507,10 +517,9 @@ rules, and the operator's runner image carries the program.
 the sweep, not the models. A scored ladder row is one condition — series,
 episode, harness, effort, wiki, compaction window, loop and `yield`, never the
 prompt hash, which a patch moves within a series, nor the routing (operator,
-2026-11-16) — and by default
-each model at each effort and window shows its newest condition with counted runs, so a row
-moves with its evidence and two conditions never pool; no chart holds
-conditions this document keeps apart (operator, 2026-11-14). The freeplay ladder is an overview, not a
+2026-11-16) — so two conditions never pool, and no chart holds conditions
+this document keeps apart (operator, 2026-11-14). Each condition is its own
+row (operator, 2026-11-16). The freeplay ladder is an overview, not a
 leaderboard (2026-08-29): the whole active field, paused and in-progress
 characters included, one row per character across attempts with its
 milestones, with the reader's filters applied, the series included (operator, 2026-11-15).

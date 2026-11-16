@@ -1,6 +1,6 @@
 /**
- * Where the public site's session-side objects live in the bucket, and how far
- * back its nearby windows reach: the publisher's choices about the
+ * Where the public site's session-side objects live in the bucket, how far
+ * back its nearby windows reach and how much of a feed a run page holds: the publisher's choices about the
  * inspector's packed windows (`@wrathbench/inspector/codec/trace` and
  * `codec/nearby`), shared by the renderer, the publisher's engine and
  * verifier, and the dashboard's snapshot client, so none of them can drift.
@@ -57,3 +57,15 @@ export function clipMediaKey(runId: string, name: string, hash: string, ext: "mp
 
 /** `clipMediaKey`'s shape, read back: run id, clip name, hash, extension. */
 export const CLIP_MEDIA_KEY = /^v1\/run\/([A-Za-z0-9._-]+)\/clip\/([A-Za-z0-9_-]{1,80})-([0-9a-f]{12})\.(mp4|jpg)$/;
+
+/**
+ * How many feed entries a run page loads first, and the one window per run
+ * the publisher renders (`snapshot.ts`): the feed's tail, the same window in
+ * both builds. The private page's "load earlier" walks back a window at a
+ * time, and the viewer serves no larger one (`WINDOW_MAX`).
+ *
+ * A thousand since 2026-11-16, from two hundred: the feed folds a turn's
+ * routine actions into one line, so two hundred entries were two or three
+ * turns of a run.
+ */
+export const ENTRIES_WINDOW = 1000;

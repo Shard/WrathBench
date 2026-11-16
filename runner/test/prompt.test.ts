@@ -228,23 +228,25 @@ describe("episode sentence", () => {
     // losing the promotion bar (operator, 2026-11-14) moved the e90 six and
     // no other. acceptQuestFrom's line saying its result carries the quest's
     // objective areas (operator, 2026-11-15), in the shared body, moved all
-    // of them.
+    // of them. killTarget's line saying it only auto-attacks and that
+    // castSpell can run alongside it (operator, 2026-11-16), in the shared
+    // body, moved all of them.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:3b53e60aa70c8ff8", off: "sha256:aad48c080133dcf1" },
-        "claude-code": { on: "sha256:c344120762b5e1d7", off: "sha256:d9541b88fde52550" },
-        cli: { on: "sha256:8c0267737e060765", off: "sha256:cc30a11c673e7edf" },
+        wrathbench: { on: "sha256:585cb0df9adc9463", off: "sha256:ec6fca61a761caa5" },
+        "claude-code": { on: "sha256:cf59fb6b5fc60b8b", off: "sha256:9e9496fcc252e4e1" },
+        cli: { on: "sha256:527f9d0fe0575c30", off: "sha256:ae06ad31592d0a31" },
       },
       e90: {
-        wrathbench: { on: "sha256:3db84a2917729c99", off: "sha256:383610d47f8ac606" },
-        "claude-code": { on: "sha256:0d52f60daf277e34", off: "sha256:1717fc13ba3d7a44" },
-        cli: { on: "sha256:7cca9ec0f412aa53", off: "sha256:7fd1635db670fdff" },
+        wrathbench: { on: "sha256:85619e83e1e9504d", off: "sha256:71e3905020d72427" },
+        "claude-code": { on: "sha256:ae68b64f38d8fb61", off: "sha256:8998884eddf5bcd2" },
+        cli: { on: "sha256:d17b0f0cfd1f32d8", off: "sha256:a906674c75084c68" },
       },
       e360: {
-        wrathbench: { on: "sha256:4ba8c320c3664ac0", off: "sha256:45475499921d0d0b" },
-        "claude-code": { on: "sha256:edde7f5084216cb5", off: "sha256:c2c117a928787411" },
-        cli: { on: "sha256:3a664a71e5b50308", off: "sha256:5d4b86ad8eb24823" },
+        wrathbench: { on: "sha256:07575711c77330c9", off: "sha256:8ee431d95d5d3838" },
+        "claude-code": { on: "sha256:990b24f263624bad", off: "sha256:f4a08581cac14cbe" },
+        cli: { on: "sha256:8f7bb8d91ab93d73", off: "sha256:cc8806f99e883253" },
       },
     };
     const episodes = [
@@ -337,6 +339,8 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
   });
 
   test("objective-bearing renderings hash as pinned", () => {
+    // Moved with the pins above by killTarget's line saying it only
+    // auto-attacks (operator, 2026-11-16), which is in the shared body.
     const { promptHash } = require("../src/comparability");
     const got = {
       probing4h: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "wrathbench", true, 14_400_000)),
@@ -345,10 +349,10 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
       freeplay: promptHash(buildSystemPrompt("walk to Ironforge", "freeplay", "wrathbench", true)),
     };
     expect(got).toEqual({
-      probing4h: "sha256:4cfdee771431c29b",
-      probing4hCli: "sha256:874e58bdffc5c06a",
-      e90: "sha256:461a0ec4db6cd300",
-      freeplay: "sha256:18e1987c6cb13b23",
+      probing4h: "sha256:ead906c2f45044cc",
+      probing4hCli: "sha256:e4b8de00c2447854",
+      e90: "sha256:5000b7712350abe2",
+      freeplay: "sha256:678565fcfc545543",
     });
   });
 });
