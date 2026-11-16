@@ -100,7 +100,21 @@ files' sizes and mtimes are unchanged, its listing row as the viewer served it
 (not the few fields `runs.json` publishes of it) is unchanged, and so are
 the rows of every attempt in its character. The bucket must also still hold
 every object the row names, by the engine's record. A failed PUT or a pruned
-version therefore puts the run back in the render.
+version therefore puts the run back in the render. A skipped row's keys go
+to the engine as `reused`, which registers them with the flip exactly as if
+they had streamed: the version may have been written by a pass that failed
+before its flip, and only the keep window keeps the prune off it. A key the
+engine does not hold stops the flip.
+
+A run whose new version trips the publisher's secret scan is held back
+rather than holding up the site. The engine scans a streamed run's new
+objects before writing any of them. On a finding it writes none of that
+version (objects, trace windows or clips) and tells the renderer through the
+sink, which points the run's row at the version the bucket already holds, or
+at nothing for a run never published. The rest of the pass flips. The run is
+re-rendered and re-scanned every pass while its data trips the scan, and no
+PUT is spent on it. A finding anywhere else (an aggregate, `live.json`) still
+stops the flip, as does an aggregate that names a held-back version.
 
 Some inputs the fingerprint cannot see:
 

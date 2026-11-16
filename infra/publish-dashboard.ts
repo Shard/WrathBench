@@ -31,8 +31,10 @@
  * Secret scan: every body is scanned before it is written (`SecretScanner`,
  * runner/src/secret-scan.ts), against the credentials in this process's own
  * environment, every run's session token, and the credential shapes. A body
- * with a finding is withheld and the pass does not flip (publish-core.ts);
- * the log and the state file's `secretScan` say which object and which rule,
+ * with a finding is withheld (publish-core.ts): a run's new version with one
+ * is held back whole, its row kept at the version already published, and the
+ * pass flips without it; anything else withheld stops the flip. The log and
+ * the state file's `secretScan` say which object, which run and which rule,
  * never the value.
  *
  * Cache-control: the artifact contract carries a per-object header, but Bun's

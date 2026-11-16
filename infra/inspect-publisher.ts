@@ -14,7 +14,8 @@
  * the engine's own `parseState`. What is printed: when the state was written,
  * the generation the manifest last flipped to, versions per run, object and
  * trace-window counts, the last pass's secret scan with every withheld path and
- * its rules (a finding names a rule, never a value), and the last few passes'
+ * its rules (a finding names a rule, never a value) and every run whose new
+ * version it held back at the version already published, and the last few passes'
  * log lines. With a run id: that run's versions, objects and trace windows.
  */
 
@@ -68,6 +69,8 @@ interface Scan {
   at: number;
   scanned: number;
   withheld: { path: string; findings: ScanFinding[] }[];
+  /** Runs whose new version the pass held back, and the version it kept (`SecretScanStatus.heldBack`). */
+  heldBack: { runId: string; version: string; kept: string | null }[];
 }
 
 function scanOf(raw: unknown): Scan | null {
@@ -76,7 +79,12 @@ function scanOf(raw: unknown): Scan | null {
   const withheld = Array.isArray(s.withheld)
     ? s.withheld.filter((w): w is Scan["withheld"][number] => typeof w?.path === "string" && Array.isArray(w.findings))
     : [];
-  return { at: s.at, scanned: typeof s.scanned === "number" ? s.scanned : 0, withheld };
+  const heldBack = Array.isArray(s.heldBack)
+    ? s.heldBack.filter(
+        (h): h is Scan["heldBack"][number] => typeof h?.runId === "string" && typeof h.version === "string" && (h.kept === null || typeof h.kept === "string"),
+      )
+    : [];
+  return { at: s.at, scanned: typeof s.scanned === "number" ? s.scanned : 0, withheld, heldBack };
 }
 
 function windows(runs: readonly [number, number][]): number {
@@ -118,7 +126,15 @@ export function report(text: string, writtenAt: number | null, logLines: readonl
   const scan = scanOf(raw);
   if (scan === null) say("scan", "no scan recorded (a publisher that does not scan, or one that has not passed yet)");
   else {
-    say("scan", `${iso(scan.at)} (${fmtAge(now - scan.at)} ago): ${scan.scanned} bodies scanned, ${scan.withheld.length} withheld`);
+    say(
+      "scan",
+      `${iso(scan.at)} (${fmtAge(now - scan.at)} ago): ${scan.scanned} bodies scanned, ${scan.withheld.length} withheld` +
+        (scan.heldBack.length > 0 ? `, ${scan.heldBack.length} run(s) held back` : ""),
+    );
+    for (const h of scan.heldBack.slice(0, MAX_WITHHELD)) {
+      out.push(cap(`           held back ${h.runId}: new version ${h.version} withheld, kept ${h.kept ?? "nothing (never published)"}`, WIDTH));
+    }
+    if (scan.heldBack.length > MAX_WITHHELD) out.push(`           (+${scan.heldBack.length - MAX_WITHHELD} more held back)`);
     for (const w of scan.withheld.slice(0, MAX_WITHHELD)) out.push(cap(`           withheld ${w.path}: ${describeFindings(w.findings)}`, WIDTH));
     if (scan.withheld.length > MAX_WITHHELD) out.push(`           (+${scan.withheld.length - MAX_WITHHELD} more withheld)`);
   }
@@ -147,6 +163,8 @@ export function report(text: string, writtenAt: number | null, logLines: readonl
       }
       const held = scan?.withheld.filter((w) => w.path.startsWith(prefix)) ?? [];
       if (held.length > 0) say("withheld", held.map((w) => `${w.path.slice(prefix.length)}: ${describeFindings(w.findings)}`).join("; "));
+      const back = scan?.heldBack.find((h) => h.runId === runId);
+      if (back !== undefined) say("held back", `new version ${back.version} withheld by the secret scan; the manifest keeps ${back.kept ?? "nothing (never published)"}`);
     }
   }
   return out;

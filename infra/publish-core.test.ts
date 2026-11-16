@@ -837,6 +837,263 @@ describe("a body the secret scan refuses is never written", () => {
   });
 });
 
+// ------------------------------------------------- secret scan: a held-back run
+
+describe("a streamed run the secret scan refuses is held back, and the rest of the pass flips", () => {
+  const LEAK = ["sk", "or", "v1", "0123456789abcdef".repeat(4)].join("-");
+  const scanner = new SecretScanner();
+  const scan = (body: string): ReturnType<SecretScanner["scan"]> => scanner.scan(body);
+
+  interface Spec {
+    id: string;
+    ver: string;
+    /** The entries body's text: a leak here is what trips the scan. */
+    entries?: string;
+  }
+
+  /**
+   * A renderer shaped like the real one: each run's detail, track and entries
+   * stream through the sink one run at a time, and `runs.json` is built after
+   * the stream, naming each run's objects by key, from what the sink answered.
+   * `ignore` makes it a renderer that does not listen.
+   */
+  function renderer(runs: Spec[], ignore = false): PassRenderer {
+    return async (sink) => {
+      const rows: { runId: string; entries: string | null }[] = [];
+      for (const r of runs) {
+        const base = `v1/run/${r.id}/${r.ver}`;
+        const held = await sink([
+          json(`${base}/detail.json`, { detail: r.ver }),
+          json(`${base}/track.json`, { track: r.ver }),
+          json(`${base}/entries.json`, { entries: r.entries ?? r.ver }),
+        ]);
+        const h = ignore ? undefined : held.find((x) => x.runId === r.id);
+        const ver = h === undefined ? r.ver : h.previous;
+        rows.push({ runId: r.id, entries: ver === null ? null : `v1/run/${r.id}/${ver}/entries.json` });
+      }
+      const runsBody = JSON.stringify({ runs: rows });
+      const runsKey = `v1/snap/${hashBody(runsBody).slice(0, 12)}/runs.json`;
+      const gen = hashBody(runsKey).slice(0, 12);
+      return {
+        gen,
+        snap: { "runs.json": runsKey },
+        artifacts: [
+          { path: runsKey, body: runsBody, contentType: "application/json", cacheControl: IMMUTABLE },
+          json(LIVE_PATH, { gen }, MUTABLE),
+          json(MANIFEST_PATH, { gen, artifacts: { "runs.json": runsKey } }, MUTABLE),
+        ],
+      };
+    };
+  }
+
+  /** What the bucket's manifest says each run points at. */
+  const named = (store: FakeStore): Record<string, string | null> => {
+    const manifest = JSON.parse(store.objects.get(MANIFEST_PATH)!) as { artifacts: Record<string, string> };
+    const rows = (JSON.parse(store.objects.get(manifest.artifacts["runs.json"]!)!) as { runs: { runId: string; entries: string | null }[] }).runs;
+    return Object.fromEntries(rows.map((r) => [r.runId, r.entries]));
+  };
+  const under = (store: FakeStore, prefix: string): string[] => [...store.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+
+  test("a run with a published version whose new entries body is withheld stays at that version; the others advance", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publishPass(renderer([{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state, { scan });
+
+    const lines: string[] = [];
+    const report = await publishPass(
+      renderer([
+        { id: "runA", ver: "v2" },
+        { id: "runB", ver: "v2", entries: `the model printed ${LEAK}` },
+        { id: "runC", ver: "v1" },
+      ]),
+      store,
+      state,
+      { scan, log: (l) => lines.push(l) },
+    );
+
+    expect(report.flipped).toBe(true);
+    expect(report.heldBack).toEqual(["runB"]);
+    expect(named(store)).toEqual({
+      runA: "v1/run/runA/v2/entries.json",
+      runB: "v1/run/runB/v1/entries.json",
+      runC: "v1/run/runC/v1/entries.json",
+    });
+    // None of runB's new version was written, not even its clean objects; the published one is whole.
+    expect(under(store, "v1/run/runB/")).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/entries.json", "v1/run/runB/v1/track.json"]);
+    expect(Object.keys(state.uploaded).filter((k) => k.startsWith("v1/run/runB/v2/"))).toEqual([]);
+    expect(state.runVersions["runB"]).toEqual(["v1"]);
+    for (const body of store.objects.values()) expect(body.includes(LEAK)).toBe(false);
+    // One line for the run, naming the object and the rule, never the value.
+    expect(lines).toContain(
+      "publish: run runB held back at v1 — its new version v2 is withheld by the secret scan (entries.json: openrouter-key ×1); the rest of the pass goes on",
+    );
+    expect(lines.join("\n").includes(LEAK)).toBe(false);
+    expect(state.secretScan?.heldBack).toEqual([{ runId: "runB", version: "v2", kept: "v1" }]);
+    expect(state.secretScan?.withheld).toEqual([{ path: "v1/run/runB/v2/entries.json", findings: [{ rule: "openrouter-key", count: 1 }] }]);
+    expect(JSON.stringify(state).includes(LEAK)).toBe(false);
+    expect(describeReport(report)).toContain("1 run(s) held back by the secret scan");
+  });
+
+  test("the outage's shape: a failed pass wrote part of the new version, the run left and came back; it stays put, and the next pass writes nothing of it", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const clean: Spec[] = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }];
+    await publishPass(renderer(clean), store, state, { scan });
+    const prior = named(store)["runB"] ?? null;
+
+    // The engine before this change: the whole pass fails, and runB/v2's clean
+    // objects are already in the bucket.
+    const dirty: Spec[] = [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v2", entries: LEAK }];
+    await expect(publish(snapshotOf(dirty), store, state, { scan })).rejects.toThrow(PublishError);
+    expect(state.uploaded["v1/run/runB/v2/detail.json"]).toBeDefined();
+    // runB is archived for a while: it is not rendered, and the pass flips without it.
+    await publishPass(renderer([{ id: "runA", ver: "v2" }]), store, state, { scan });
+    expect(state.runVersions["runB"]?.at(-1)).toBe("v1");
+
+    // The archived pass's prune took the stray v2 objects. Back, still dirty: held at v1, nothing of v2 written.
+    store.reset();
+    const back = await publishPass(renderer(dirty), store, state, { scan });
+    expect(back.flipped).toBe(true);
+    expect(named(store)).toEqual({ runA: "v1/run/runA/v2/entries.json", runB: prior });
+    expect(under(store, "v1/run/runB/")).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/entries.json", "v1/run/runB/v1/track.json"]);
+    expect(store.puts().filter((p) => p.startsWith("v1/run/runB/"))).toEqual([]);
+
+    // And every pass after: held again, no PUT and no DELETE under runB.
+    store.reset();
+    const again = await publishPass(renderer(dirty), store, state, { scan });
+    expect(again.flipped).toBe(true);
+    expect(again.heldBack).toEqual(["runB"]);
+    expect(store.calls.filter((c) => c.path.startsWith("v1/run/runB/"))).toEqual([]);
+    expect(named(store)["runB"]).toBe(prior);
+  });
+
+  test("a run never published comes out pointerless", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const report = await publishPass(renderer([{ id: "runA", ver: "v1" }, { id: "runD", ver: "v1", entries: LEAK }]), store, state, { scan });
+    expect(report.flipped).toBe(true);
+    expect(named(store)).toEqual({ runA: "v1/run/runA/v1/entries.json", runD: null });
+    expect(under(store, "v1/run/runD/")).toEqual([]);
+    expect(state.runVersions["runD"]).toBeUndefined();
+    expect(state.secretScan?.heldBack).toEqual([{ runId: "runD", version: "v1", kept: null }]);
+  });
+
+  test("a renderer that still names the held-back version does not flip", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publishPass(renderer([{ id: "runB", ver: "v1" }]), store, state, { scan });
+    const err = await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }], true), store, state, { scan }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PublishError);
+    expect(errorText(err)).toContain("names a run version the secret scan held back");
+    expect(named(store)["runB"]).toBe("v1/run/runB/v1/entries.json");
+    expect(under(store, "v1/run/runB/v2/")).toEqual([]);
+  });
+
+  test("a genuine upload failure still fails the pass, held-back run or not", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publishPass(renderer([{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state, { scan });
+    const before = store.objects.get(MANIFEST_PATH);
+    store.failPuts.add("v1/run/runA/v2/track.json");
+    const err = await publishPass(
+      renderer([
+        { id: "runA", ver: "v2" },
+        { id: "runB", ver: "v2", entries: LEAK },
+      ]),
+      store,
+      state,
+      { scan },
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PublishError);
+    expect((err as PublishError).failures.map((f) => f.path)).toEqual(["v1/run/runA/v2/track.json"]);
+    expect(store.objects.get(MANIFEST_PATH)).toBe(before);
+  });
+
+  test("with a delay, the held-back run keeps the version its held pass names", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const DELAY = 10;
+    await publishPass(renderer([{ id: "runB", ver: "v1" }]), store, state, { scan, delayMs: DELAY, now: () => 0 });
+    // Rendered while the first pass is still held: runB's kept version is that pass's.
+    const report = await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }]), store, state, { scan, delayMs: DELAY, now: () => 20 });
+    expect(report.heldBack).toEqual(["runB"]);
+    expect(state.secretScan?.heldBack).toEqual([{ runId: "runB", version: "v2", kept: "v1" }]);
+    await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }]), store, state, { scan, delayMs: DELAY, now: () => 40 });
+    expect(named(store)["runB"]).toBe("v1/run/runB/v1/entries.json");
+    expect(under(store, "v1/run/runB/")).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/entries.json", "v1/run/runB/v1/track.json"]);
+  });
+
+  /** The same runs as one array, the way `publish` takes them: today's fail-closed path. */
+  function snapshotOf(runs: Spec[]): SnapshotResult {
+    const artifacts = runs.flatMap((r) => {
+      const base = `v1/run/${r.id}/${r.ver}`;
+      return [json(`${base}/detail.json`, { detail: r.ver }), json(`${base}/track.json`, { track: r.ver }), json(`${base}/entries.json`, { entries: r.entries ?? r.ver })];
+    });
+    return { gen: "array", snap: {}, artifacts: [...artifacts, json(LIVE_PATH, {}, MUTABLE), json(MANIFEST_PATH, {}, MUTABLE)] };
+  }
+});
+
+// ------------------------------------------- a skipped run after a failed pass
+
+describe("what a skipped run names is the flip's, whatever passes failed before it", () => {
+  /** A pass that streams `streamed` and names `reused` without handing it over, as a cold skip does. */
+  function pass(gen: string, streamed: RunSpec[], reused: string[] = []): PassRenderer {
+    const full = snapshot(gen, streamed);
+    return async (sink) => {
+      await sink(full.artifacts.filter((a) => classifyPath(a.path).kind === "run"));
+      return { ...full, artifacts: full.artifacts.filter((a) => classifyPath(a.path).kind !== "run"), ...(reused.length > 0 ? { reused } : {}) };
+    };
+  }
+  const objectsOf = (id: string, ver: string): string[] => [`v1/run/${id}/${ver}/detail.json`, `v1/run/${id}/${ver}/track.json`];
+
+  test("a version a failed pass wrote and the next pass names without re-sending survives that flip's prune", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publishPass(pass("gen1", [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state);
+
+    // Every run re-keys; runB's PUT fails, so the pass does not flip, and runA/v2 is written but in no keep window.
+    store.failPuts.add("v1/run/runB/v2/detail.json");
+    await expect(publishPass(pass("gen2", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v2" }]), store, state)).rejects.toThrow(PublishError);
+    expect(state.uploaded["v1/run/runA/v2/detail.json"]).toBeDefined();
+    expect(state.runVersions["runA"]).toEqual(["v1"]);
+
+    // The next pass skips runA (its keys are in the bucket) and names v2 all the same.
+    store.failPuts.clear();
+    store.reset();
+    const report = await publishPass(pass("gen3", [{ id: "runB", ver: "v2" }], objectsOf("runA", "v2")), store, state);
+    expect(report.flipped).toBe(true);
+    for (const key of objectsOf("runA", "v2")) expect(store.objects.has(key)).toBe(true);
+    expect(store.deletes()).not.toContain("v1/run/runA/v2/detail.json");
+    expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
+    // Named again, v2 is all runA keeps.
+    await publishPass(pass("gen4", [{ id: "runB", ver: "v2" }], objectsOf("runA", "v2")), store, state);
+    expect(state.runVersions["runA"]).toEqual(["v2"]);
+    expect(under(store, "v1/run/runA/")).toEqual(objectsOf("runA", "v2").sort());
+  });
+
+  test("a skipped run's clip a failed pass wrote is registered with the flip too", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const clip = "v1/run/runA/clip/part-000-0123456789ab.mp4";
+    state.uploaded[clip] = "h";
+    store.objects.set(clip, "video");
+    await publishPass(pass("gen1", [], [clip]), store, state);
+    expect(state.clipVersions?.["runA/part-000.mp4"]).toEqual(["0123456789ab"]);
+    expect(store.objects.has(clip)).toBe(true);
+  });
+
+  test("a pass that names a skipped key the bucket does not hold does not flip", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const err = await publishPass(pass("gen1", [], objectsOf("runA", "v9")), store, state).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PublishError);
+    expect(errorText(err)).toContain("the bucket does not hold it");
+    expect(store.puts()).not.toContain(MANIFEST_PATH);
+  });
+
+  const under = (store: FakeStore, prefix: string): string[] => [...store.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+});
+
 // ----------------------------------------------------------------------- pruning
 
 describe("planPrune", () => {
