@@ -490,6 +490,8 @@ export function rowOf(
   policy: SchedulingPolicy = DEFAULT_POLICY,
   /** The evals group (`runner/viewer/groups.ts`): off, owing a counted run reads as free, as the supervisor treats it. */
   evals = true,
+  /** Those of `running` that hold the model's other entries (`schedulability`); absent, every one does. */
+  holding: ReadonlySet<string> = running,
 ): ModelRowView {
   const mine = runs
     .filter((f) => entryOwnsRun(state, f))
@@ -532,7 +534,7 @@ export function rowOf(
     earnedPromotion: state.earnedPromotion,
     earnedDeadmines: state.earnedDeadmines,
     idle: state.idle,
-    schedulable: schedulableView(verdictForGroups(schedulability(state, running, policy), evals), state),
+    schedulable: schedulableView(verdictForGroups(schedulability(state, running, policy, holding), evals), state),
     runs: mine.map(runView),
     newestRunId: mine.length > 0 ? mine[0]!.runId : null,
     lastError,
@@ -580,6 +582,8 @@ export function modelsResponse(opts: {
   harness?: HarnessView | "all";
   /** Roster refs with a job in flight (the supervisor's state), for the verdict. */
   running?: ReadonlySet<string>;
+  /** Those whose job holds the model's other entries: scored or freeplay, never a probe (`schedulability`). */
+  holding?: ReadonlySet<string>;
   /** The evals group; absent is on. */
   evals?: boolean;
 }): ModelsResponse {
@@ -596,7 +600,7 @@ export function modelsResponse(opts: {
   const states = byHarness.filter((s) => !outside.has(s.name));
   // A sibling the page lists no row for (excluded, or another harness) is not named.
   const listed = new Set(states.map((s) => s.name));
-  const rows = states.map((s) => rowOf(s, opts.runs, opts.runsDir, opts.running ?? new Set(), opts.roster.policy, opts.evals ?? true));
+  const rows = states.map((s) => rowOf(s, opts.runs, opts.runsDir, opts.running ?? new Set(), opts.roster.policy, opts.evals ?? true, opts.holding));
   for (const row of rows) {
     if (row.siblings === undefined) continue;
     const kept = row.siblings.filter((n) => listed.has(n));

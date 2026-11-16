@@ -613,6 +613,8 @@ export function formatModels(
   evals = true,
   /** What the tick does with each model this time (`plannedVerdicts`), said after its verdict. */
   planned: ReadonlyMap<string, PlannedVerdict> = new Map(),
+  /** Those of `running` whose run holds the model's other entries: scored or freeplay, never a probe (`schedulability`). */
+  holding: ReadonlySet<string> = running,
 ): string[] {
   // One model, one row (operator, 2026-11-16): an entry's siblings — the
   // same model on another provider (`ModelState.siblings`) — follow it as
@@ -666,7 +668,7 @@ export function formatModels(
     // the whole reason the verdict stopped being a pair of booleans: `free` is
     // where probe campaigns and idle work draw from.
     const verdictWord = { eval: "yes", free: "free", blocked: "no" } as const;
-    const verdict = verdictForGroups(schedulability(s, running, policy), evals);
+    const verdict = verdictForGroups(schedulability(s, running, policy, holding), evals);
     const decided = planned.get(s.name);
     // The tick's own decision wins the word: a model the projection would schedule but the tick holds is held.
     const word = decided?.held === true && verdict.verdict !== "blocked" ? "held" : verdictWord[verdict.verdict];
@@ -1208,6 +1210,8 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
     // reads its real reason (tainted, cooling, free), not "running". A live
     // fleet run no alive job owns holds its model too, as on the tick.
     const running = new Set([...runningRefsOf(aliveJobs), ...(plan?.unownedRefs ?? [])]);
+    // A probe in flight holds only its own entry, never the model's others.
+    const holding = new Set([...runningRefsOf(new Map([...aliveJobs].filter(([, j]) => j.episode !== "probing"))), ...(plan?.unownedRefs ?? [])]);
     // The projection the tick plans with: after its ends, its resumes holding their models' scored episodes.
     const states = plan?.states ?? projected;
     const excluded = new Map<string, string>();
@@ -1215,7 +1219,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
       const why = policyExclusion(config, name);
       if (why !== undefined) excluded.set(name, why);
     }
-    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals, plan !== undefined ? plannedVerdicts(plan) : undefined)) console.log(`  ${line}`);
+    for (const line of formatModels(states, running, Date.now(), excluded, config.policy, groups.evals, plan !== undefined ? plannedVerdicts(plan) : undefined, holding)) console.log(`  ${line}`);
     // What the next tick holds back, beside what it launches (the table above): the queue's own skips are in its block below.
     for (const line of formatHeld(plan?.holds.filter((h) => h.by !== "queue") ?? [])) console.log(`  ${line}`);
     for (const line of formatModelLists(readModelListsSidecar(RUNS_DIR), Date.now())) console.log(`  ${line}`);
@@ -1718,7 +1722,8 @@ export function printDryRun(
     if (why !== undefined) excluded.set(name, why);
   }
   // Every run in flight holds its model, owned or not, as the plan does.
-  for (const line of formatModels(plan.states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals, plannedVerdicts(plan))) console.log(line);
+  const holding = new Set(inFlight.filter((r) => r.episode !== "probing").flatMap((r) => r.refs));
+  for (const line of formatModels(plan.states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy, groups.evals, plannedVerdicts(plan), holding)) console.log(line);
   for (const line of formatHeld(plan.holds.filter((h) => h.by !== "pinned" && h.by !== "queue"))) console.log(line);
   for (const line of formatPaused(plan.resumes.listed, pauseDetailOf())) console.log(line);
   for (const line of formatEnded(plan.ends, false)) console.log(line);

@@ -654,6 +654,15 @@ describe("one model on two providers, as the tick and its reports read it (opera
     ]);
   });
 
+  test("a job in flight under one entry holds the other's e90, unless it is a probe", () => {
+    const runs = [goRun(1), orRun(2)];
+    const inFlight = (refs: string[], episode: "e90" | "probing") => planOf(twoProviders(), { now: NOW, stamp: STAMP, runs, running: [{ name: `${refs[0]}-${episode}`, account: "RUNNER4", refs, episode }] });
+    // ds-go plays its e90: ds-or launches none beside it.
+    expect(inFlight(["ds-go"], "e90").picks.map((p) => p.job.name)).toEqual([]);
+    // ds-or plays a probe: ds-go's e90 goes ahead.
+    expect(inFlight(["ds-or"], "probing").picks.map((p) => `${p.job.name} on ${p.account}`)).toEqual(["ds-go-e90 on RUNNER"]);
+  });
+
   test("owing one between them, one e90 launches, under the first entry with room", () => {
     const owed = report(twoProviders(), [goRun(1), orRun(2)]);
     expect(owed.picks).toEqual(["ds-go-e90 on RUNNER"]);

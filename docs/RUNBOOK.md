@@ -1655,7 +1655,7 @@ two such entries that both owe, the pick goes to the first in priority and
 roster order; when its credential has no room it is held, with why, and the
 next entry of the model takes the pick on that tick. While one entry plays
 the model, scored or freeplay, the other launches no scored episode beside
-it. What stays per entry: the attempt numbers in its run ids, its defer
+it; a probe holds only its own entry, as before. What stays per entry: the attempt numbers in its run ids, its defer
 ladder (a refusal is evidence about its endpoint, not the model), its paused
 runs and its freeplay character, which is resumed only on the entry and
 credential it recorded. A sibling's freeplay holds no other entry's freeplay.

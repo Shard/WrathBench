@@ -2758,6 +2758,11 @@ export function schedulability(
   s: ModelState,
   running: ReadonlySet<string> = new Set(),
   policy: SchedulingPolicy = DEFAULT_POLICY,
+  /**
+   * Those of `running` whose run in flight holds the model's other entries:
+   * a scored or freeplay one, never a probe. Absent, every one does.
+   */
+  holding: ReadonlySet<string> = running,
 ): Verdict {
   const blocked = (why: string): Verdict => ({ verdict: "blocked", why });
   if (s.gone !== undefined) return blocked(`retired: ${s.retired?.reason ?? goneReason(s.gone)} — back by itself once it is listed again`);
@@ -2793,7 +2798,7 @@ export function schedulability(
   // same target (operator, 2026-11-16): while one plays, or was picked this
   // tick, none launches a scored episode beside it.
   if (v.verdict === "eval") {
-    const busy = s.siblings?.find((n) => running.has(n));
+    const busy = s.siblings?.find((n) => holding.has(n));
     if (busy !== undefined) return blocked(`running (one character per model): ${busy} runs it`);
     if (s.siblingPlaying !== undefined) {
       return blocked(`running (one character per model): ${s.siblingPlaying.runId} ${s.siblingPlaying.resuming === true ? "resumes" : "plays"} it under another entry`);
@@ -2922,6 +2927,12 @@ export interface NextJobsOptions {
   /** The scheduling policy; only the parts `schedulability` reads. */
   policy?: SchedulingPolicy;
   /**
+   * Those of `running` whose run in flight holds the model's other entries
+   * (`schedulability`): a scored or freeplay one, never a probe. Absent,
+   * every one does.
+   */
+  holding?: ReadonlySet<string>;
+  /**
    * Whether the deployment's evals group is on (`runner/viewer/groups.ts`).
    * Off, the policy picks no scored episode and no campaign work, and a model
    * that would owe a counted run is treated as owing none, so its idle work
@@ -2970,7 +2981,7 @@ export function planNextJobs(
   const gated: HeldPick[] = [];
   const rehearsalHeld: HeldPick[] = [];
   states.forEach((s, order) => {
-    const sched = schedulability(s, running, policy);
+    const sched = schedulability(s, running, policy, opts.holding ?? running);
     const open = verdictForGroups(sched, evals);
     // Owed episodes a rehearsal has not cleared (`rehearsalHold`) are said
     // and passed over; a model that owes nothing else does what a model

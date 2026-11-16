@@ -1575,6 +1575,16 @@ describe("one model served by two providers fills one target (operator, 2026-11-
     expect(schedulability(live[1]!).why).toBe("running (one character per model): go-2 plays it under another entry");
   });
 
+  test("a sibling's probe in flight holds nothing of this entry: a probe was never one character per model", () => {
+    const states = statesOf([goRun(1)]);
+    // ds-or plays a probe: running, but not holding.
+    expect(schedulability(states[0]!, new Set(["ds-or"]), policy, new Set()).verdict).toBe("eval");
+    expect(planNextJobs(states, ["A1"], new Set(["ds-or"]), { holding: new Set() }).jobs.map((j) => [j.name, j.episode])).toEqual([["ds-go", "e90"]]);
+    // A probe on disk, live, is not `siblingPlaying` either.
+    const probing = statesOf([goRun(1), orRun(2, { episode: "probing", live: true, endedAt: null, terminationReason: null })]);
+    expect(probing[0]!.siblingPlaying).toBeUndefined();
+  });
+
   test("freeplay stays one character per entry: a sibling's freeplay holds this entry's scored episodes, never its freeplay", () => {
     const idle = (r: RosterModel): RosterModel => ({ ...r, idle: "unlimited" });
     const met = [goRun(1), goRun(2), goRun(3)];
