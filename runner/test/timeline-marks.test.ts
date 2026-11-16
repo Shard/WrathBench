@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { BOSS_RANK, CHAPTER_KINDS, chaptersOf, isBossKill, isChapter, levelBands, levelUpsOf, markRole, runMarks, startLevelOf } from "../viewer/timeline-marks";
+import { BOSS_RANK, CHAPTER_KINDS, bossKillsOf, chaptersOf, isBossKill, isChapter, levelBands, levelUpsOf, markRole, runMarks, startLevelOf } from "../viewer/timeline-marks";
 
 describe("the marker rule", () => {
   test("a level and a boss kill are chapters, a death is an event, and nothing else is marked", () => {
@@ -31,6 +31,27 @@ describe("the marker rule", () => {
     expect(isBossKill({ entry: 644, rank: 1 }, new Set([644]))).toBe(true);
     expect(isBossKill({ entry: null, rank: 1 }, new Set([644]))).toBe(false);
     expect(isBossKill({})).toBe(false);
+  });
+});
+
+describe("a run's boss kills", () => {
+  test("are its rank-3 and named victims, each once, oldest first, named where the cache knows the entry", () => {
+    const kills = [
+      { ts: 900, victimGuid: "b", entry: 7, rank: 3 },
+      // A party's kill is told to every member in range, and a restarted recorder can be told again.
+      { ts: 500, victimGuid: "a", entry: 644, rank: 1 },
+      { ts: 520, victimGuid: "a", entry: 644, rank: 1 },
+      { ts: 600, victimGuid: "c", entry: 12, rank: 1 },
+      { ts: 700, victimGuid: "d", entry: null },
+      { ts: 950, victimGuid: "e", entry: null, rank: 3 },
+    ];
+    expect(bossKillsOf(kills, new Set([644]), new Map([[644, "Invented Foreman"]]))).toEqual([
+      { ts: 500, entry: 644, name: "Invented Foreman" },
+      { ts: 900, entry: 7, name: null },
+      { ts: 950, entry: null, name: null },
+    ]);
+    expect(bossKillsOf(kills, new Set()).map((b) => b.entry)).toEqual([7, null]);
+    expect(bossKillsOf([], new Set([644]))).toEqual([]);
   });
 });
 

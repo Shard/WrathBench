@@ -296,7 +296,7 @@ export default function RunDetail() {
   let video: { pause(): void } | undefined;
   const marks = createMemo(() => {
     const d = detail();
-    return d === undefined ? [] : runMarks({ leveling: d.leveling, states: d.states, deaths: d.deaths });
+    return d === undefined ? [] : runMarks({ leveling: d.leveling, states: d.states, deaths: d.deaths, bosses: d.bosses });
   });
 
   /*

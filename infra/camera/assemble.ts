@@ -13,7 +13,11 @@
  * and a half before its events. An event's burst is thinned to the twelve
  * seconds around its moment (`BURST_LEAD_MS`, `BURST_TAIL_MS`), one video
  * frame each, and the moment itself is held a second (`HOLD_TICKS`): about
- * two and a half seconds of video per level, quest, death, zone or boss.
+ * two and a half seconds of video per level, boss kill or death
+ * (`MOMENT_TYPES`). Of those a level and a boss kill are chapters in
+ * `clips.json` (`CHAPTER_TYPES`); a death is shown the same and listed
+ * nowhere, and an event the camera no longer takes (a turn-in, a zone, in the
+ * frames of an older run) is a frame like any other.
  *
  * A part closes when the next frame would take it past six hours of run time
  * (`PART_MS`). Every part but the last is closed, and a closed part is never
@@ -35,6 +39,7 @@ import { modelNameOf, readRunWords, saidAt, BENCHMARK_NAME, type Said } from "./
 import {
   cameraDir,
   CHAPTER_TYPES,
+  MOMENT_TYPES,
   CLIPS_DIR,
   CLIPS_FILE,
   FRAME_HEIGHT,
@@ -71,9 +76,9 @@ const BURST_GAP_MS = 5_000;
 export interface Shot {
   frame: FrameLine;
   ticks: number;
-  /** The first shot of an event's window opens its chapter. */
+  /** The first shot of a moment's window: its detail goes on screen here, and a chapter opens if it is one. */
   chapter?: { event: CameraEvent; moment: number };
-  /** The event's own frame, held: the chapter's detail is on screen until it ends. */
+  /** The event's own frame, held: the moment's detail is on screen until it ends. */
   moment?: true;
 }
 
@@ -87,7 +92,7 @@ export function planShots(all: readonly FrameLine[], o: { intervalMs: number }):
   let burst: number[] = [];
   const close = (): void => {
     const first = frames[burst[0] ?? -1];
-    if (first?.event !== undefined && CHAPTER_TYPES.includes(first.event.type)) {
+    if (first?.event !== undefined && MOMENT_TYPES.includes(first.event.type)) {
       // The shutter's window is lead then tail: the event sits three quarters in.
       const moment = ms(frames[burst[Math.min(burst.length - 1, Math.floor(burst.length * 0.75))]!]!);
       const w = { event: first.event, moment, from: moment - BURST_LEAD_MS, to: moment + BURST_TAIL_MS };
@@ -173,7 +178,9 @@ export function timelineOf(part: readonly Shot[], index: number, offset: number,
     out.points.push([v, r]);
     if (s.ticks > 1) out.points.push([offset + (tick + s.ticks - 1) / VIDEO_FPS, r]);
     if (s.chapter !== undefined) {
-      out.chapters.push({ t: v, part: index, type: s.chapter.event.type, detail: s.chapter.event.detail, caption: saidAt(said, s.chapter.moment) });
+      if (CHAPTER_TYPES.includes(s.chapter.event.type)) {
+        out.chapters.push({ t: v, part: index, type: s.chapter.event.type, detail: s.chapter.event.detail, caption: saidAt(said, s.chapter.moment) });
+      }
       if (open !== null) out.details.push({ from: open.from, to: local, text: open.text });
       open = { from: local, text: s.chapter.event.detail };
     }

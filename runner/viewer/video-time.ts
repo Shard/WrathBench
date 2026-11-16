@@ -11,8 +11,13 @@
  */
 
 import type { CaptionCueView, ChapterType, ChapterView } from "./api-types";
+import { isChapter } from "./timeline-marks";
 
-/** The kinds of moment a chapter marks. */
+/**
+ * Every kind a `clips.json` has ever listed, which is what a body is checked
+ * against. What a reader is handed is narrower (`fitTimeline`): only the
+ * kinds that are chapters, a level and a boss kill (`timeline-marks.ts`).
+ */
 export const CHAPTER_TYPES: readonly ChapterType[] = ["level", "quest", "death", "zone", "boss"];
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -152,7 +157,8 @@ export function fitTimeline(
     if (!isRecord(c) || !finiteAtLeast0(c["t"]) || c["t"] > total) continue;
     const part = c["part"];
     if (typeof part !== "number" || !Number.isInteger(part) || part < 0 || part >= parts.length) continue;
-    if (!CHAPTER_TYPES.includes(c["type"] as ChapterType)) continue;
+    // A video cut before 2026-11-16 lists its turn-ins, zones and deaths: it still plays, and they are not chapters.
+    if (!CHAPTER_TYPES.includes(c["type"] as ChapterType) || !isChapter(c["type"] as string)) continue;
     chapters.push({
       t: c["t"],
       part,

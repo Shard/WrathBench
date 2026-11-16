@@ -590,6 +590,10 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
 - **The safe core ships, less what no page reads** ("What is published", below):
   the `ResultRun` layer is ids, numbers and model identifiers — levels, XP,
   areas and achievements as ids, taxi facts, costs, tokens.
+- **A run's boss kills ship** on its `detail.json`, for the timeline's
+  chapters: each one's time and creature entry, and no name. Only a run that
+  has one carries the field, so no other run is re-keyed by it. The kills of a
+  party member's block already carried the same times and entries.
 - **Deaths are public** (operator, 2026-10-18), everywhere a page shows them.
   A run's death count, its releases and resurrects and each death's turn ship
   on its `detail.json` (`projectDeaths`; a death site's position and zone stay

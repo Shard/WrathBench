@@ -736,6 +736,7 @@ describe("projectRunDetail", () => {
           }),
         ],
       }),
+      bosses: [smuggle({ ts: 1700, entry: 644, name: "Invented Foreman" })],
       tps: { overall: 12.5, recent: 20, replies: 4, recentReplies: 2 },
       reflections: [smuggle({ fromTurn: 5, toTurn: 9 }), smuggle({ fromTurn: 12, toTurn: null })],
     });
@@ -765,6 +766,9 @@ describe("projectRunDetail", () => {
         "deaths",
         ...under("deaths", ["deaths", "releases", "resurrects", "sites"]),
         "deaths.sites[].turn",
+        // The timeline's boss chapters: when and which entry; the name is withheld.
+        "bosses",
+        ...under("bosses[]", ["ts", "entry", "name"]),
         "tps",
         ...under("tps", TPS_KEYS),
         "reflections",
@@ -779,6 +783,9 @@ describe("projectRunDetail", () => {
       { fromTurn: 12, toTurn: null },
     ]);
     expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ turn: 3 }] } as DeathFacts);
+    expect(out.bosses).toEqual([{ ts: 1700, entry: 644, name: null }]);
+    // A run with no boss kill carries no field, so its published key does not move.
+    expect("bosses" in projectRunDetail({ ...input, bosses: [] })).toBe(false);
     expect(out.rosterName).toBe("alpha-low");
   });
 

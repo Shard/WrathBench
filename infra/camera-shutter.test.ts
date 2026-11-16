@@ -32,12 +32,9 @@ const eventsOf = (rows: SessionEventRow[]): TimedEvent[] => rows.map((r) => came
 describe("session rows to camera events", () => {
   test("a recorded solo session: gains only, never a baseline", async () => {
     const events = eventsOf(await soloRows());
+    // Its three turn-ins and its zone crossed are no events: only what the timeline marks is (`timeline-marks.ts`).
     expect(events.map((e) => [e.ts, e.type, e.detail])).toEqual([
-      [1762000400250, "quest", "turned in quest 101"],
       [1762000530250, "level", "reached level 6"],
-      [1762000680250, "quest", "turned in quest 102"],
-      [1762000800250, "zone", "entered zone 40"],
-      [1762000920250, "quest", "turned in quest 103"],
       [1762001100250, "level", "reached level 7"],
     ]);
   });
@@ -104,11 +101,11 @@ describe("the shutter", () => {
     expect(kept.find((k) => k.frame.ts === t0 + 86_000)).toBeUndefined();
   });
 
-  test("a level-up and the turn-in that caused it are one burst, the level-up's", () => {
+  test("a level-up and the death in the same moment are one burst, the level-up's", () => {
     const t0 = 1_762_000_000_000;
-    const quest: TimedEvent = { ts: t0 + 60_000, type: "quest", detail: "turned in quest 33" };
+    const death: TimedEvent = { ts: t0 + 60_000, type: "death", detail: "died" };
     const level: TimedEvent = { ts: t0 + 60_000, type: "level", detail: "reached level 3" };
-    const kept = capture(new Shutter({ intervalMs: 10_000 }), t0, t0 + 150_000, [quest, level], 2_000);
+    const kept = capture(new Shutter({ intervalMs: 10_000 }), t0, t0 + 150_000, [death, level], 2_000);
     const burst = kept.filter((k) => k.kind === "event");
     expect(burst.length).toBe(41);
     expect(new Set(burst.map((k) => k.event?.detail))).toEqual(new Set(["reached level 3"]));

@@ -25,13 +25,13 @@ const T0 = Date.parse("2026-11-15T10:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
 
 /** A 1 fps capture's kept frames: interval every 10 s, and a level-up burst 30 s before to 10 s after. */
-function frameLines(levelAt: number): FrameLine[] {
+function frameLines(levelAt: number, event: NonNullable<FrameLine["event"]> = { type: "level", detail: "reached level 6" }): FrameLine[] {
   const out: FrameLine[] = [];
   let seq = 0;
   let last = -Infinity;
   for (let t = T0; t <= T0 + 120_000; t += 1000) {
     const inBurst = t >= levelAt - 30_000 && t <= levelAt + 10_000;
-    if (inBurst) out.push({ seq, t: iso(t), file: frameFile(seq++), kind: "event", event: { type: "level", detail: "reached level 6" } });
+    if (inBurst) out.push({ seq, t: iso(t), file: frameFile(seq++), kind: "event", event });
     else if (t - last >= 10_000) out.push({ seq, t: iso(t), file: frameFile(seq++), kind: "interval" });
     else continue;
     last = t;
@@ -96,6 +96,32 @@ describe("the video's plan", () => {
     // Outside the window, the burst's frames are thinned like interval frames: about one per interval.
     const lead = shots.filter((s) => at(s) >= levelAt - 30_000 && at(s) < levelAt - 8_000);
     expect(lead.length).toBeLessThanOrEqual(3);
+  });
+
+  test("a death is a moment the video holds and no chapter lists; a boss kill is both", () => {
+    const moment = T0 + 60_000;
+    const said = saidOf(trajectory());
+    const death = planShots(frameLines(moment, { type: "death", detail: "died" }), { intervalMs: 10_000 });
+    // Shown as a level is: the window whole, the moment held, its detail on our own line.
+    expect(death.filter((s) => s.ticks > 1).map((s) => s.ticks)).toEqual([1 + HOLD_TICKS]);
+    const line = timelineOf(death, 0, 0, said, null);
+    expect(line.details.map((d) => d.text)).toEqual(["died"]);
+    expect(line.chapters).toEqual([]);
+    const boss = timelineOf(planShots(frameLines(moment, { type: "boss", detail: "killed boss 644" }), { intervalMs: 10_000 }), 0, 0, said, null);
+    expect(boss.chapters.map((c) => [c.type, c.detail])).toEqual([["boss", "killed boss 644"]]);
+  });
+
+  test("the frames of a run filmed before the rule: a turn-in's and a zone's bursts are frames like any other", () => {
+    const moment = T0 + 60_000;
+    for (const event of [{ type: "quest" as const, detail: "turned in quest 33" }, { type: "zone" as const, detail: "entered zone 12" }]) {
+      const shots = planShots(frameLines(moment, event), { intervalMs: 10_000 });
+      expect(shots.some((s) => s.chapter !== undefined || s.ticks > 1)).toBe(false);
+      // Thinned to about one a capture interval, as if the camera had never burst.
+      expect(shots.length).toBeLessThanOrEqual(14);
+      const line = timelineOf(shots, 0, 0, [], null);
+      expect(line.chapters).toEqual([]);
+      expect(line.details).toEqual([]);
+    }
   });
 
   test("start and end marks make no chapter", () => {

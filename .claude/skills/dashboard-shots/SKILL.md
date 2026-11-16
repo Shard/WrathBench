@@ -54,7 +54,9 @@ await rig.close();
 
 `rig.page()` pages also have `select(character)`, `page.eval(js)`,
 `page.clickAt`, `page.wheel` and `page.facts`; `rig.publish()` runs another
-publisher pass.
+publisher pass. `seek(fraction)` presses the timeline's bar, on a run page or
+a replay. `rig.long` is the fixture's run of more than three days, the one
+whose timeline can be zoomed.
 
 ## A real run
 

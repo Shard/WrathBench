@@ -1286,6 +1286,9 @@ export interface ActiveSegment {
   end: number | null;
 }
 
+import type { BossKill } from "./timeline-marks";
+export type { BossKill };
+
 export interface RunDetailResponse extends SnapshotEnvelope {
   run: RunRow;
   states: StatePoint[];
@@ -1329,6 +1332,15 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    */
   leveling?: LevelUpFacts | null;
   deaths?: DeathFacts | null;
+  /**
+   * The boss kills the server reported to this run (`bossKillsOf`): a victim
+   * of creature rank 3, or one of a five-man dungeon's bosses by entry, once
+   * each, oldest first. The timeline's boss chapters. Absent where there is
+   * none, which a run from before the `kill` record, and a viewer or snapshot
+   * from before the field, also read as. Publicly the name is null: it is the
+   * client cache's.
+   */
+  bosses?: BossKill[];
   /**
    * Spells learned, talent points spent and trades completed this run; null is
    * "not recorded", never zero. Optional for the reason `achievements` is.
@@ -1424,6 +1436,8 @@ export interface PartyKillMark {
   name: string | null;
   /** This member landed the killing blow. */
   self: boolean;
+  /** The victim's creature rank where the record carried one (3 is a boss); the viewer's own, never served. */
+  rank?: number;
 }
 
 /** One line this member said in party chat, as its trace recorded the server's echo. */

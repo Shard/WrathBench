@@ -20,6 +20,7 @@
  */
 
 import { join } from "node:path";
+import { CHAPTER_KINDS, MARK_KINDS } from "../../runner/viewer/timeline-marks";
 
 export const CAMERA_DIR = "camera";
 export const FRAMES_DIR = "frames";
@@ -31,10 +32,23 @@ export const FRAME_WIDTH = 1280;
 export const FRAME_HEIGHT = 720;
 export const JPEG_QUALITY = 75;
 
+/**
+ * Every event a frame has ever been tagged with. `quest` and `zone` are no
+ * longer taken (`shutter.ts`): they are here so the frames of a run filmed
+ * before 2026-11-16 still read.
+ */
 export const EVENT_TYPES = ["level", "quest", "death", "zone", "boss", "start", "end"] as const;
 export type CameraEventType = (typeof EVENT_TYPES)[number];
-/** The event kinds that make a chapter; `start` and `end` only mark frames. */
-export const CHAPTER_TYPES: readonly CameraEventType[] = ["level", "quest", "death", "zone", "boss"];
+/**
+ * The one rule for what a run's timeline marks (`runner/viewer/timeline-marks.ts`),
+ * as the camera reads it. A **moment** is an event whose burst the video
+ * keeps and holds: a level, a boss kill, a death. A **chapter** is a moment
+ * `clips.json` lists: a level or a boss kill. A death is shown and not
+ * listed; the pages mark it from the run's own records. `start` and `end`
+ * only mark frames.
+ */
+export const MOMENT_TYPES: readonly CameraEventType[] = MARK_KINDS;
+export const CHAPTER_TYPES: readonly CameraEventType[] = CHAPTER_KINDS;
 
 export interface CameraEvent {
   type: CameraEventType;

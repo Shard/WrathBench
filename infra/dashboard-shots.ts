@@ -48,7 +48,7 @@ import { createRenderer } from "../runner/viewer/snapshot";
 import { ALL_GROUPS, groupsFromEnv, type Groups } from "../runner/viewer/groups";
 import { ConfigStore } from "../runner/src/config-store";
 import { findChromium, launch, type Browser, type Page, type PageOptions } from "./shots/cdp";
-import { E90_DUNGEON_RUN, ENDED_RUN, FREEPLAY_FRESH, LIVE_RUN, writeFixture, type Fixture } from "./shots/fixture";
+import { E90_DUNGEON_RUN, ENDED_RUN, FREEPLAY_FRESH, LIVE_RUN, LONG_RUN, writeFixture, type Fixture } from "./shots/fixture";
 import { describeReport, emptyState, publishPass, type ObjectStore } from "./publish-core";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -89,6 +89,8 @@ export interface Rig {
   /** A run the viewer reads as live, and one that ended, when the runs have them. */
   live: string | null;
   ended: string | null;
+  /** The fixture's run of more than three days, whose timeline can be zoomed; null over copied runs. */
+  long: string | null;
   /** The live run's character, as the map's sidebar names it. */
   liveCharacter: string | null;
   /** A page on one site, its third parties answered as the rig was told. */
@@ -155,7 +157,7 @@ async function build(outDir: string, flags: Record<string, string>): Promise<voi
 }
 
 /** Which of the runs read as live and as ended, from their rows. */
-async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live: string | null; ended: string | null; liveCharacter: string | null }> {
+async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live: string | null; ended: string | null; long: string | null; liveCharacter: string | null }> {
   const res = await handle(new Request("http://127.0.0.1/api/runs"));
   const body = (await res.json()) as unknown;
   const rows = (Array.isArray(body) ? body : ((body as { runs?: unknown[] }).runs ?? [])) as {
@@ -171,6 +173,7 @@ async function pick(handle: (req: Request) => Promise<Response>): Promise<{ live
   return {
     live: live?.runId ?? null,
     ended: ended?.runId ?? null,
+    long: rows.find((r) => r.runId === LONG_RUN)?.runId ?? null,
     liveCharacter: live?.character ?? null,
   };
 }
@@ -319,6 +322,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
     bucketUrl,
     live: picked.live,
     ended: picked.ended,
+    long: picked.long,
     liveCharacter: picked.liveCharacter,
     publish,
     async page(site, popts = {}) {

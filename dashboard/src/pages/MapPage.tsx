@@ -2132,7 +2132,7 @@ export default function MapPage() {
     const t = single();
     const d = replayDetail();
     if (t === undefined) return [];
-    return d !== null && d !== undefined && d.run.runId === t.runId ? runMarks({ leveling: d.leveling, states: d.states, deaths: d.deaths }) : runMarks({ states: t.points });
+    return d !== null && d !== undefined && d.run.runId === t.runId ? runMarks({ leveling: d.leveling, states: d.states, deaths: d.deaths, bosses: d.bosses }) : runMarks({ states: t.points });
   });
   const startLevel = (): number | null => {
     const t = single();

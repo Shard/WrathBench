@@ -1658,12 +1658,14 @@ export function killMarkOf(rec: Record<string, unknown>): PartyKillMark | null {
   const victim = rec["victimGuid"];
   if (typeof victim !== "string" || victim === "") return null;
   const entry = rec["entry"];
+  const rank = rec["rank"];
   return {
     ts: observedTsOf(rec),
     victimGuid: victim,
     entry: typeof entry === "number" ? entry : null,
     name: null,
     self: rec["self"] === true,
+    ...(typeof rank === "number" ? { rank } : {}),
   };
 }
 

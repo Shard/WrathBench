@@ -90,7 +90,9 @@ list), `map-live-selected` (the live character's row clicked: framed, with its
 sheet), `map-live-nearby` (then zoomed in on it) and `map-replay`. The fixture
 has four live characters at different levels, one of them on Kalimdor and one in
 the Deadmines, so the list has an order to show and a pick a map to cross to, and
-a live fan-out run whose three characters are a pip each on the private map; `--run` with only
+a live fan-out run whose three characters are a pip each on the private map,
+and an ended run of more than three days (`rig.long`) whose timeline can be
+zoomed; `--run` with only
 ended runs gives the map with nobody live.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
@@ -531,7 +533,10 @@ a death is an event, and nothing else is marked. The chapters are the bar
 itself, a band per level, numbered where there is room; a death is a red
 tick; a pause is a gap; the rule under the bar is the stretch the feed holds.
 The levels come from the run's level marks, or from its state samples where a
-detail carries none (the public one).
+detail carries none (the public one). A boss kill is the detail's `bosses`: a
+victim of creature rank 3, or a five-man dungeon's boss by entry. The public
+detail carries no time for a death, so the public bar has levels and boss
+kills and no death ticks.
 
 **A run of more than a day can be zoomed**: the wheel or a pinch over the bar,
 or the two buttons, about the time under the pointer, down to ten minutes
