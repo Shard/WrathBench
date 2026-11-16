@@ -2719,6 +2719,14 @@ export interface ModelRowView {
    * snapshot from before the field, which reads as the declared window alone.
    */
   windows?: string[];
+  /**
+   * The other roster entries of this model, in roster order: the same model on
+   * another provider (`modelSiblings`, runner/src/models.ts). Its counts are
+   * theirs too, since they fill one target (operator, 2026-11-16), and the
+   * models page draws them as one row. Absent when the entry is alone on its
+   * model, and on a snapshot from before the field.
+   */
+  siblings?: string[];
   platform: string | null;
   /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;

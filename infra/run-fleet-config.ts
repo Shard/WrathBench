@@ -1347,8 +1347,8 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
             ...(e.driver !== undefined ? { driver: e.driver } : {}),
             ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
             ...(e.serving !== undefined ? { serving: e.serving } : {}),
-            // What a target compares a run against (`countsTowardTarget`): the
-            // routing a launch sends, the fleet's default folded in, and the wiki.
+            // What a launch sends: the routing, the fleet's default folded in,
+            // and the wiki, which a target compares (`countsTowardTarget`).
             ...(e.routing !== undefined ? { routing: e.routing } : {}),
             ...(e.wiki !== undefined ? { wiki: e.wiki } : {}),
             tier: e.tier,

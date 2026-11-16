@@ -12,7 +12,9 @@
  * ladder, which is what the cooling and retired notes are reporting.
  *
  * The row key is the roster name, and it is also the anchor: run pages and results
- * rows link to `/models#<name>`, so a name is an address.
+ * rows link to `/models#<name>`, so a name is an address. A model on two
+ * providers is one row (operator, 2026-11-16), keyed on its first entry,
+ * and its other entries' names stay addresses that open it.
  */
 
 import { A } from "@solidjs/router";
@@ -21,7 +23,7 @@ import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../a
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { effortLabel, fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId, titleOf, windowNote } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle, windowParam } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, modelTableRows, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle, windowParam, type ModelTableRow } from "../lib/models";
 import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
@@ -40,8 +42,8 @@ const POLL_MS = 120_000;
 export default function Models() {
   const feed = poll(() => api.models(), POLL_MS);
   const body = (): ModelsResponse | undefined => feed.latest;
-  // Copied before sorting: the array is the poll signal's own payload.
-  const rows = (): ModelRowView[] => [...(body()?.models ?? [])].sort(compareModelRows);
+  // One row per model, its entries on other providers folded in (`modelTableRows`).
+  const rows = (): ModelTableRow[] => modelTableRows(body()?.models ?? []);
   // The freeplay column reads the ladder's own character rows, unfiltered by
   // series: a paused character from an older harness version is still the
   // model's freeplay state.
@@ -57,10 +59,6 @@ export default function Models() {
     const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
     if (hash.length > 0) setOpen(hash);
   });
-
-  const toggle = (name: string): void => {
-    setOpen(open() === name ? null : name);
-  };
 
   /*
    * What the roster's rules are, as one hover rather than the paragraph this
@@ -165,11 +163,14 @@ export default function Models() {
                 </tr>
               </Show>
               <For each={rows()}>
-                {(row) => (
+                {({ row, also }) => {
+                  const names = [row.name, ...also.map((a) => a.name)];
+                  const isOpen = (): boolean => names.includes(open() ?? "");
+                  return (
                   <>
                     <tr
                       id={row.name}
-                      onClick={() => toggle(row.name)}
+                      onClick={() => setOpen(isOpen() ? null : row.name)}
                       class="clickable"
                       title="show this model's runs"
                     >
@@ -215,13 +216,28 @@ export default function Models() {
                             </div>
                           )}
                         </Show>
+                        {/* The model's other entries: the same model on another
+                            provider, filling these targets. Each name stays an
+                            address (`/models#<name>`). Operator-facing: a roster
+                            entry is config, so the public build names none. */}
+                        <For each={SNAPSHOT_MODE ? [] : also}>
+                          {(a) => (
+                            <div
+                              class="dim"
+                              id={a.name}
+                              title={`${a.name}: the same model on ${a.platform ?? "another provider"}, whose runs fill these targets — ${a.status}, ${tierOf(a)}; ${schedulableOf(a)}`}
+                            >
+                              as {a.name}
+                            </div>
+                          )}
+                        </For>
                         </div>
                         </div>
                       </td>
                       <td class="mono" title={tierTitle(row)}>
                         {tierOf(row)}
                       </td>
-                      <td class="dim">{row.platform ?? "—"}</td>
+                      <td class="dim">{[...new Set([row, ...also].map((r) => r.platform ?? "—"))].join(", ")}</td>
                       <td>
                         <HarnessTag harness={row.harness} />
                       </td>
@@ -246,7 +262,7 @@ export default function Models() {
                         }}
                       </For>
                       <td title={`idle: ${row.idle}`}>
-                        <Show when={freeplayOf(row, characters())} fallback={<span class="dim">—</span>}>
+                        <Show when={[row, ...also].map((r) => freeplayOf(r, characters())).find((c) => c !== null)} fallback={<span class="dim">—</span>}>
                           {(s) => (
                             <A
                               href={`/run/${encodeURIComponent(s().latest.runId)}`}
@@ -268,7 +284,7 @@ export default function Models() {
                         </Show>
                       </td>
                       <td class="right mono dim" title={schedulableOf(row)}>
-                        {extrasOf(row)}
+                        {[row, ...also].reduce((n, r) => n + extrasOf(r), 0)}
                       </td>
                       <td class={row.retired !== undefined ? "err" : row.cooling !== undefined ? "warn" : "dim"}>
                         {noteOf(row) ?? "—"}
@@ -279,7 +295,7 @@ export default function Models() {
                         </Show>
                       </td>
                     </tr>
-                    <Show when={open() === row.name}>
+                    <Show when={isOpen()}>
                       <tr>
                         <td colSpan={MODEL_COLUMNS.length}>
                           <Detail row={row} />
@@ -287,7 +303,8 @@ export default function Models() {
                       </tr>
                     </Show>
                   </>
-                )}
+                  );
+                }}
               </For>
             </tbody>
           </table>

@@ -16,7 +16,10 @@
  *   way, so two roster entries sharing all three would legitimately show
  *   the same runs, as would an entry with no window beside a copy stating its
  *   driver's default. The rows are not deduped: that is the honest reading,
- *   and hiding it would make one of the two look idle.
+ *   and hiding it would make one of the two look idle. Counts go one step
+ *   further: they are the model's under any of its entries, whichever provider
+ *   served it (`sameModel`, operator 2026-11-16), and a row names the entries
+ *   it shares them with (`siblings`), which the page draws as one row.
  * - **Counted is spelled once.** The run ids behind a count use `isCounted`
  *   from `runner/src/models.ts` — the same predicate that produced
  *   `EpisodeStats` — so the list and the count cannot differ.
@@ -41,6 +44,7 @@ import {
   policyExclusion,
   entryOwnsRun,
   entryOwnsWindow,
+  sameModel,
   ownedWindows,
   schedulability,
   verdictForGroups,
@@ -55,6 +59,7 @@ import {
   IDLE_MODES,
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
+import { canonicalModelId } from "../../infra/model-catalogue";
 import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
 import { rosterEntryRefusal } from "../src/roster-refusal";
@@ -486,15 +491,19 @@ export function rowOf(
   policy: SchedulingPolicy = DEFAULT_POLICY,
   /** The evals group (`runner/viewer/groups.ts`): off, owing a counted run reads as free, as the supervisor treats it. */
   evals = true,
+  /** Those of `running` that hold the model's other entries (`schedulability`); absent, every one does. */
+  holding: ReadonlySet<string> = running,
 ): ModelRowView {
   const mine = runs
     .filter((f) => entryOwnsRun(state, f))
     .slice()
     .sort((a, b) => b.startedAt - a.startedAt);
+  // What its counts count: the model's runs under any of its entries (`sameModel`).
+  const ofModel = runs.filter((f) => sameModel(state, f)).sort((a, b) => b.startedAt - a.startedAt);
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
   for (const [id, stats] of Object.entries(state.perEpisode)) {
     const ep = id as EpisodeIdView;
-    const tier = mine.filter((f) => f.episode === ep);
+    const tier = ofModel.filter((f) => f.episode === ep);
     // `stillborn` stays a scheduler-side stat (it feeds the defer ladder and
     // `--status`); it is not part of the API, because a zero-response run is
     // archived at exit and the viewer never has one to show.
@@ -511,6 +520,7 @@ export function rowOf(
     effort: state.effort,
     ...(state.compactWindow !== undefined ? { compactWindow: state.compactWindow } : {}),
     windows: ownedWindows(state),
+    ...(state.siblings !== undefined ? { siblings: [...state.siblings] } : {}),
     platform: state.platform,
     harness: state.harness,
     // The reader's verdict, not the scheduler's `state.billing`: a subscription entry reads paid (billing.ts).
@@ -526,7 +536,7 @@ export function rowOf(
     earnedPromotion: state.earnedPromotion,
     earnedDeadmines: state.earnedDeadmines,
     idle: state.idle,
-    schedulable: schedulableView(verdictForGroups(schedulability(state, running, policy), evals), state),
+    schedulable: schedulableView(verdictForGroups(schedulability(state, running, policy, holding), evals), state),
     runs: mine.map(runView),
     newestRunId: mine.length > 0 ? mine[0]!.runId : null,
     lastError,
@@ -555,7 +565,12 @@ export function rosterNameOf(
     (r) => r.model === model && (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow),
   );
   if (hit !== undefined) return hit.name;
-  return rows.find((r) => r.model === model)?.name ?? null;
+  const own = rows.find((r) => r.model === model);
+  if (own !== undefined) return own.name;
+  // The same model on another provider is the same row (operator, 2026-11-16).
+  const canonical = canonicalModelId(model);
+  const same = rows.filter((r) => canonicalModelId(r.model) === canonical);
+  return (same.find((r) => (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow)) ?? same[0])?.name ?? null;
 }
 
 /** The whole response, given the projection and the facts it was built from. */
@@ -569,6 +584,8 @@ export function modelsResponse(opts: {
   harness?: HarnessView | "all";
   /** Roster refs with a job in flight (the supervisor's state), for the verdict. */
   running?: ReadonlySet<string>;
+  /** Those whose job holds the model's other entries: scored or freeplay, never a probe (`schedulability`). */
+  holding?: ReadonlySet<string>;
   /** The evals group; absent is on. */
   evals?: boolean;
 }): ModelsResponse {
@@ -583,8 +600,17 @@ export function modelsResponse(opts: {
    */
   const outside = new Set(opts.roster.excluded.map((e) => e.name));
   const states = byHarness.filter((s) => !outside.has(s.name));
+  // A sibling the page lists no row for (excluded, or another harness) is not named.
+  const listed = new Set(states.map((s) => s.name));
+  const rows = states.map((s) => rowOf(s, opts.runs, opts.runsDir, opts.running ?? new Set(), opts.roster.policy, opts.evals ?? true, opts.holding));
+  for (const row of rows) {
+    if (row.siblings === undefined) continue;
+    const kept = row.siblings.filter((n) => listed.has(n));
+    if (kept.length > 0) row.siblings = kept;
+    else delete row.siblings;
+  }
   return {
-    models: states.map((s) => rowOf(s, opts.runs, opts.runsDir, opts.running ?? new Set(), opts.roster.policy, opts.evals ?? true)),
+    models: rows,
     roster: {
       path: opts.roster.path,
       shape: opts.roster.shape,

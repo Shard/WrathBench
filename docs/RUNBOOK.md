@@ -632,7 +632,12 @@ itself: its own user agent, `x-opencode-session` set to the run id, and never
 the headers of OpenCode's own client. Go picks the backend and the request
 cannot name one, so a Go run stamps unpinned routing, keyed apart in the
 tuple from a pinned run of the same model, though the ladder shows both in one
-row. Go no longer names the backend in its response
+row. Go records a model under its bare id (`deepseek-v4.1-flash`) where
+OpenRouter prefixes the vendor (`deepseek/deepseek-v4.1-flash`); the two are
+one model (`canonicalModelId`, infra/model-catalogue.ts; docs/METHODOLOGY.md,
+"A model served by different providers is one model"), so a Go entry and an
+OpenRouter entry of it fill one target ("The scheduling policy"). A `-free`
+Go slug, like an OpenRouter `:free` id, stays a free model of its own. Go no longer names the backend in its response
 headers, so the run records the slug only. A `-free` Go slug derives free and
 runs on a free `opencode-go` credential; any other derives paid, runs on the
 paid one with its usage budget, and is priced by an `opencode-go` endpoint
@@ -991,7 +996,11 @@ last. What the supervisor does with it, per tick:
     that session ends having named a character it is the head, and the next
     fresh launch on the old account wipes the orphan in ordinary hygiene.
 - **One character per model+effort.** An `unlimited` ref has exactly one
-  character at a time. The older ended sessions of a character are parked
+  character at a time. Two refs of one model on two providers (`deepseek-v4.1-flash`
+  on Go, `deepseek/deepseek-v4.1-flash` on OpenRouter) keep a character each:
+  the character is the ref's, resumed on the credential its run recorded, and
+  one's freeplay holds the other's scored episodes but not its freeplay
+  ("The scheduling policy"). The older ended sessions of a character are parked
   with `archive.ts --run-ids` ("Archiving runs"), which is a decision about
   listings and nothing else: the character is untouched and the scheduler
   still reads the archived runs.
@@ -1642,7 +1651,21 @@ pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
 models with no counted run yet first, then shorter episode first, fewest
 counted runs first and roster order, one character per model, each pick on
-the first credential with room ("Credentials"). Scored episodes can be held
+the first credential with room ("Credentials"). A model is one model whichever
+provider serves it (operator, 2026-11-16): roster entries that name it in two
+providers' spellings, at one effort and window (`modelSiblings`,
+`runner/src/models.ts`), count each other's runs toward their targets, each
+under its own tier, and launch one scored episode toward them at a time. Of
+two such entries that both owe, the pick goes to the first in priority and
+roster order; when its credential has no room it is held, with why, and the
+next entry of the model takes the pick on that tick. While one entry plays
+the model, scored or freeplay, the other launches no scored episode beside
+it; a probe holds only its own entry, as before. What stays per entry: the attempt numbers in its run ids, its defer
+ladder (a refusal is evidence about its endpoint, not the model), its paused
+runs and its freeplay character, which is resumed only on the entry and
+credential it recorded. A sibling's freeplay holds no other entry's freeplay.
+`--status` and `--dry-run` print such a model as one row, its first entry
+with the counts, and a `└` line per other entry with what is its own. Scored episodes can be held
 by one line, `SCORED_EPISODES_WAIT` in `runner/src/config.ts`, set to the
 reason (none today: the wait for a long-clock program-loop run to be read
 ended once it was, docs/METHODOLOGY.md). While they are held, no scored
@@ -1698,11 +1721,10 @@ will not be scheduled until cleared; `pinned` is outside the policy (a pinned
 ref or a probe). A launch that produced no model response never counts toward
 a target but does climb the ladder, so a dead provider costs at most ten
 launches over about 11 hours before it is retired. Nor does a run of another condition than the one its entry
-launches now count: another loop or `yield`, another routing (the entry's own
-block, or the fleet's default folded into it) or another wiki
-(`countsTowardTarget`). So editing an entry's routing, or the fleet's routing
-default, starts the target over for the runs under it, and the older runs stay
-on the ladder as their own condition.
+launches now count: another loop or `yield`, or another wiki
+(`countsTowardTarget`). The routing is not compared: a run counts whichever
+provider served it (operator, 2026-11-16), so editing an entry's routing, or
+the fleet's routing default, keeps its target where it was.
 
 `retired` has a second cause that needs no launch at all: the model's
 provider no longer lists it. The supervisor reads the model list of every

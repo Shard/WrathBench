@@ -69,6 +69,7 @@ import {
   characterSeriesLabel,
   conditionOfRun,
   entryKeyOf,
+  modelOfRun,
   pointKey,
   timeTicks,
   xpEarnedOf,
@@ -190,8 +191,12 @@ describe("the resolved model id on a ladder row", () => {
       ids: ["claude-sonnet-4-5", "claude-sonnet-5"],
       mixed: true,
     });
-    // A slug served as itself says nothing a row does not already print.
-    expect(resolvedSummary("z-ai/glm-5.2", by.get("z-ai/glm-5.2")!.resolvedModels)).toBeNull();
+    // A slug served as itself says nothing a row does not already print. The
+    // row keys the model as every grouping does (`modelOfRun`): this id is
+    // uncatalogued, so by its bare form.
+    expect(resolvedSummary("glm-5.2", by.get("glm-5.2")!.resolvedModels)).toBeNull();
+    // Two providers' spellings of one model are not drift (operator, 2026-11-16).
+    expect(resolvedSummary("deepseek/deepseek-v4.1-flash", ["deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"])).toBeNull();
     // A run that recorded none reads as "not recorded", never as its config string.
     expect(by.get("opus")!.resolvedModels).toEqual([]);
     expect(resolvedSummary("opus", by.get("opus")!.resolvedModels)).toBeNull();
@@ -1261,6 +1266,27 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
     expect(pickChartGroup(chartGroups(runs), "snippet-unpinned")).toBe("snippet");
   });
 
+  test("a Go run and an OpenRouter run of DeepSeek, recorded under two ids, are one entry and one model (operator, 2026-11-16)", () => {
+    const base = { harnessSeries: "0.5", episode: "e90" as const, harness: "wrathbench" as const };
+    const at = (runId: string, model: string, routing: Record<string, unknown> & { allowFallbacks: boolean }, maxLevel: number, startedAt: number): ResultRun =>
+      run({ ...base, runId, model, maxLevel, startedAt, xpEarned: maxLevel * 100, condition: conditionOf({ series: "0.5", episode: "e90", harness: "wrathbench", tuple: { effort: null, routing } }) });
+    const go = at("go", "deepseek-v4.1-flash", { ...OPENCODE_GO_ROUTING }, 5, 200);
+    const or = at("or", "deepseek/deepseek-v4.1-flash", { order: ["GMICloud"], allowFallbacks: false }, 7, 100);
+    const runs = [go, or];
+    // Each run keeps the id its provider reported.
+    expect(runs.map((r) => r.model)).toEqual(["deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"]);
+    expect(modelOfRun(go)).toBe("deepseek/deepseek-v4.1-flash");
+    expect(entryKeyOf(go)).toBe(entryKeyOf(or));
+    expect(ladderRows(runs).map((r) => [r.model, r.runs, r.bestLevel, r.bestRunId])).toEqual([["deepseek/deepseek-v4.1-flash", 2, 7, "or"]]);
+    // No cost reading here, so the chart names the one entry rather than placing it.
+    expect(ladderPoints(runs).omitted.map((o) => [o.key, o.label])).toEqual([[entryKeyOf(go), "deepseek-v4.1-flash"]]);
+    expect(modelEntries(runs)).toHaveLength(1);
+    // A literally free endpoint of it is its own entry, always labelled free.
+    const free = at("free", "deepseek/deepseek-v4.1-flash:free", { order: ["Chutes"], allowFallbacks: false }, 3, 50);
+    expect(entryKeyOf(free)).not.toBe(entryKeyOf(go));
+    expect(ladderPoints([...runs, free]).omitted.map((o) => o.label).sort()).toEqual(["deepseek-v4.1-flash", "deepseek-v4.1-flash (free)"]);
+  });
+
   test("a row from a viewer that predates the field reads as the snippet loop, pinned, with its wiki", () => {
     const c = conditionOfRun(run({ runId: "a", model: "m", harnessSeries: "0.5", episode: "e90", effort: "low", wiki: false }));
     expect(c).toMatchObject({ loop: "snippet", yield: false, pinned: true, wiki: false });
@@ -1737,7 +1763,7 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
       { x: 90 * MIN, y: 3000 },
     ]);
     expect(l.endLevel).toBe(4);
-    expect(spelt(l.entry)).toBe("fixture/m (high)");
+    expect(spelt(l.entry)).toBe("m (high)");
     expect(l.hoverKey).toBe(l.entry);
     expect(l.harness).toBe("wrathbench");
   });
