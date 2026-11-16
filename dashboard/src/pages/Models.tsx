@@ -20,7 +20,7 @@ import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { effortLabel, fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { effortLabel, fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId, titleOf, windowNote } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle, windowParam } from "../lib/models";
 import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
@@ -194,9 +194,9 @@ export default function Models() {
                             ↑{highestTierOf(row)}
                           </span>
                         </Show>
-                        <div class="dim" title={row.model}>
+                        <div class="dim" title={titleOf(row.model, windowNote(row.compactWindow))}>
                           {modelDisplay(row.model)}
-                          <Show when={effortLabel(row.effort, row.compactWindow)}>{(l) => <> · {l()}</>}</Show>
+                          <Show when={effortLabel(row.effort)}>{(l) => <> · {l()}</>}</Show>
                         </div>
                         {/* The row stays grouped by the roster's model string —
                             that is the unit the scheduler counts in — and this

@@ -301,7 +301,7 @@ export default function RunDetail() {
       const model = d.run.model ?? "(unnamed)";
       // The line is named for the model, not the character;
       // the name rides along for the hover.
-      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null, d.run.comparability?.compactWindow);
+      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null);
       const last = st.runs[st.runs.length - 1];
       if (last === undefined) {
         return { series: [], omitted: [{ characterId: st.characterId, label, why: "no attempt served" }] };

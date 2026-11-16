@@ -192,10 +192,10 @@ export function keepLabels(candidates: readonly LabelBox[], reserved: readonly R
 /** SVG text is markup: a model slug is not, but it is a string from the wire. */
 const esc = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** The name over a frontier mark: the site's own display name, with the effort it was run at. */
-function labelOf(p: { model: string; effort: string | null; compactWindow?: string | null }): string {
+/** The name over a frontier mark: the site's own display name, with the effort it was run at; never the window, a setting. */
+function labelOf(p: { model: string; effort: string | null }): string {
   const name = modelDisplay(p.model);
-  const tag = effortLabel(p.effort, p.compactWindow);
+  const tag = effortLabel(p.effort);
   return tag === null ? name : `${name} (${tag})`;
 }
 

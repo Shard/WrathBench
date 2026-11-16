@@ -84,7 +84,7 @@ import {
 } from "../lib/ladderfilter";
 import { resolvedSummary } from "../lib/models";
 import { type ReferenceMark, type ReferenceScale, scriptedReference, scriptedReferenceScale } from "../lib/reference";
-import { effortLabel, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { effortLabel, fmtDuration, fmtWhen, modelDisplay, shortRunId, titleOf, windowNote } from "../lib/format";
 import { statusTitle, statusTone } from "../lib/runs";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
@@ -570,8 +570,8 @@ export default function Ladder() {
                   >
                     <td>
                       <ModelIcon model={row.model} />
-                      <span title={row.model}>{modelDisplay(row.model)}</span>
-                      <Show when={effortLabel(row.effort, row.compactWindow)}>
+                      <span title={titleOf(row.model, windowNote(row.compactWindow))}>{modelDisplay(row.model)}</span>
+                      <Show when={effortLabel(row.effort)}>
                         {(tag) => <span class="dim"> · {tag()}</span>}
                       </Show>
                       {/* A local build names itself beside the model: the quantisation and runtime it was served at. */}
@@ -692,7 +692,7 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice }
 function DungeonRow(props: { row: DungeonRowView; hovered: string | null; onHover: (key: string | null) => void }) {
   const r = (): DungeonRowView => props.row;
   const key = (): string => boardRowKey(props.row);
-  const effort = (): string | null => effortLabel(r().effort, r().compactWindow ?? null);
+  const effort = (): string | null => effortLabel(r().effort);
   return (
     <tr
       classList={{ hovered: props.hovered === key() }}
@@ -704,7 +704,7 @@ function DungeonRow(props: { row: DungeonRowView; hovered: string | null; onHove
     >
       <td>
         <ModelIcon model={r().model} />
-        {modelDisplay(r().model ?? "(unnamed)")}
+        <span title={titleOf(r().model, windowNote(r().compactWindow))}>{modelDisplay(r().model ?? "(unnamed)")}</span>
         <Show when={effort()}>{(e) => <span class="dim"> · {e()}</span>}</Show>
       </td>
       <td>

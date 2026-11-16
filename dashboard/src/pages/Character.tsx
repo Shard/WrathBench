@@ -33,7 +33,7 @@ import { XpChart } from "../components/XpChart";
 import { characterIsLive, characterSessionSeries, sessionCount } from "../lib/character";
 import { displayError } from "../lib/errors";
 import { useFeeds } from "../lib/feeds";
-import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp, titleOf, windowNote } from "../lib/format";
 import { RUNGS, characterMilestones, characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { linkable } from "../lib/nav";
 import { Coins, LevelXp } from "../components/CharacterFacts";
@@ -93,7 +93,7 @@ export default function Character() {
     const model = st.model ?? "(unnamed)";
     // The line is named for the model, not the character;
     // the name rides along for the hover.
-    const label = characterSeriesLabel(model, st.effort, st.compactWindow);
+    const label = characterSeriesLabel(model, st.effort);
     const { points, endX, broke } = stitchCharacter(st.runs);
     const why = broke ?? (points.length === 0 ? "no level mark carries an active-time reading" : null);
     if (why !== null) return { series: [], omitted: [{ characterId: st.characterId, label, why }] };
@@ -184,9 +184,8 @@ export default function Character() {
               <h1>{st().name ?? shortRunId(st().characterId)}</h1>
               <div class="dim">
                 <ModelIcon model={st().model ?? ""} />
-                <span title={st().model ?? ""}>{modelDisplay(st().model ?? "(unnamed)")}</span>
+                <span title={titleOf(st().model, windowNote(st().compactWindow))}>{modelDisplay(st().model ?? "(unnamed)")}</span>
                 <Show when={st().effort}>{(e) => <> · {e()}</>}</Show>
-                <Show when={st().compactWindow}>{(w) => <> · {w()}</>}</Show>
                 <Show when={st().driver}>{(dr) => <> · {dr()}</>}</Show>
                 {/* The harness the NEWEST attempt ran under: a character can
                     outlive a patch, and the run page lists each attempt's own. */}

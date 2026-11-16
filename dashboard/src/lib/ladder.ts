@@ -384,13 +384,14 @@ export interface LadderOmission {
 }
 
 /**
- * An entry's drawn name: the model, and its effort and window where it has
- * them. A label, never a key — two conditions that differ only in what the
- * label does not say (a routing, a loop on another chart) are still two
- * entries (`entryKeyOf`).
+ * An entry's drawn name: the model, and its effort where it has one. A
+ * label, never a key — two conditions that differ only in what the label
+ * does not say (the compaction window, a routing, a loop on another chart)
+ * are still two entries (`entryKeyOf`). The window is a comparability
+ * setting, not a title (operator, 2026-11-16): the hover and the card say it.
  */
-export function pointKey(model: string, effort: string | null, compactWindow?: string | null): string {
-  const tag = effortLabel(effort, compactWindow);
+export function pointKey(model: string, effort: string | null): string {
+  const tag = effortLabel(effort);
   return tag === null ? model : `${model} (${tag})`;
 }
 
@@ -446,7 +447,7 @@ export function ladderPoints(
       // different runs is its own case, and named as such.
       omitted.push({
         key,
-        label: pointKey(modelDisplay(g.model), g.effort, g.compactWindow),
+        label: pointKey(modelDisplay(g.model), g.effort),
         why: !anyX ? `no ${x.label} reading` : !anyY ? `no ${y.label} reading` : `no run with both ${x.label} and ${y.label}`,
       });
       continue;
@@ -463,7 +464,7 @@ export function ladderPoints(
     const bases = new Set(costs.map((c) => c.basis));
     points.push({
       key,
-      label: pointLabel(pointKey(modelDisplay(g.model), g.effort, g.compactWindow), n),
+      label: pointLabel(pointKey(modelDisplay(g.model), g.effort), n),
       single: n === 1,
       model: g.model,
       effort: g.effort,
@@ -1640,8 +1641,8 @@ export function stitchCharacter(attempts: readonly CharacterAttemptLike[]): Stit
  * is not in it: the question a reader brings to the
  * freeplay chart is which model is which line.
  */
-export function characterSeriesLabel(model: string, effort: string | null, compactWindow?: string | null): string {
-  return pointKey(modelDisplay(model), effort, compactWindow);
+export function characterSeriesLabel(model: string, effort: string | null): string {
+  return pointKey(modelDisplay(model), effort);
 }
 
 export function characterSeries(rows: readonly CharacterRow[], runs: readonly ResultRun[]): CharacterChartModel {
@@ -1652,7 +1653,7 @@ export function characterSeries(rows: readonly CharacterRow[], runs: readonly Re
   const startedOf = new Map(rows.map((r) => [r.characterId, r.startedAt]));
 
   for (const row of rows) {
-    const label = characterSeriesLabel(row.model, row.effort, row.compactWindow);
+    const label = characterSeriesLabel(row.model, row.effort);
     const attempts = row.chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
     if (attempts.length === 0) {
       omitted.push({ characterId: row.characterId, label, why: "no attempt served" });

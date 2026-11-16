@@ -442,8 +442,10 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               300k runs since. Its targets, its paused run and its character are therefore what
               they were, while results still group on the tuple: `auto` and `300k` runs of one
               entry are two rows, which in 0.5 only a freeplay character or a probe can show,
-              since its scored runs all stay on `auto`. Pages show a run's window after the effort
-              (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
+              since its scored runs all stay on `auto`. Pages show a run's window as a setting
+              (the runs table's effort column, `max · 100k`, the run page's tuple, a tooltip on a
+              model's name), never in a model's name (operator, 2026-11-16). Mechanics:
+              runner/README.md, "The compaction window".
             `apiBase` — openai and pi entries: the endpoint (absent: OpenRouter). Its host is the
               entry's credential provider (`providerOfModel`, runner/src/credential-slots.ts): a host the
               provider table owns, over https, or a self-hosted host the deployment lists in

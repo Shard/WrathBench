@@ -19,7 +19,7 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { LEVEL_START_XP, levelOfXp } from "../lib/axes";
 import { type LadderPoint } from "../lib/ladder";
-import { effortLabel, modelDisplay } from "../lib/format";
+import { effortLabel, modelDisplay, windowNote } from "../lib/format";
 import { type Frame, cardPlacement } from "@wrathbench/inspector/views/popover";
 import { Coins, LevelXp, QuestCount } from "./CharacterFacts";
 import { HarnessTag } from "./HarnessTag";
@@ -70,7 +70,7 @@ export function EntryCard(props: {
   });
   const xp = (): number | null => props.xp ?? props.point.metrics.xp;
   const level = (): number | null => (xp() === null ? null : levelOfXp(xp()!));
-  const effort = (): string | null => effortLabel(props.point.effort, props.point.compactWindow);
+  const effort = (): string | null => effortLabel(props.point.effort);
   const quests = (): number | null => {
     const q = props.point.metrics.quests;
     return q === null ? null : Math.round(q * 10) / 10;
@@ -89,6 +89,8 @@ export function EntryCard(props: {
         <Show when={effort()}>{(e) => <span class="dim">{e()}</span>}</Show>
         <For each={props.point.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
       </div>
+      {/* The window is a setting, said here rather than in the name (operator, 2026-11-16). */}
+      <Show when={windowNote(props.point.compactWindow)}>{(w) => <div class="dim">{w()}</div>}</Show>
       <div class="charline">
         <LevelXp level={level()} xp={xp() === null ? null : Math.round(xp()! - (LEVEL_START_XP[level()!] ?? 0))} />
         <Coins copper={props.point.gold === null ? null : Math.round(props.point.gold)} />
