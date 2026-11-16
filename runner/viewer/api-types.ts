@@ -2728,6 +2728,12 @@ export interface ModelRowView {
    */
   siblings?: string[];
   platform: string | null;
+  /**
+   * Where each of the entry's providers serves it, in its preference order
+   * (`runner/src/provider-options.ts`), when it has more than one; `platform`
+   * is the first. Absent on a single-provider entry.
+   */
+  platforms?: string[];
   /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;
   /**

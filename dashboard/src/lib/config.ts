@@ -101,6 +101,26 @@ export function fieldValue(entry: RosterEntry, field: EditableField): string {
   return typeof v === "string" ? v : "";
 }
 
+/**
+ * An entry's providers as the page lists them, one line each in preference
+ * order (`runner/src/provider-options.ts`): `credential · base · model ·
+ * routing`, saying only what the option states. Null for a single-provider
+ * entry. Read-only: the list is edited in the config store
+ * (`bun wb config set roster/<name>`), and the page's routing field is the
+ * entry's own, which an entry with providers does not have.
+ */
+export function providerLines(entry: RosterEntry): string[] | null {
+  const raw = entry["providers"];
+  if (!Array.isArray(raw)) return null;
+  return raw.map((o: unknown) => {
+    const p = (typeof o === "object" && o !== null ? o : {}) as Record<string, unknown>;
+    const parts = [String(p["credential"] ?? "?")];
+    for (const key of ["apiBase", "model"] as const) if (typeof p[key] === "string") parts.push(p[key] as string);
+    if (p["routing"] !== undefined) parts.push(formatRouting(p["routing"]));
+    return parts.join(" · ");
+  });
+}
+
 /** Every editable field of an entry, as the form holds them. */
 export function formOf(entry: RosterEntry): Record<EditableField, string> {
   return {

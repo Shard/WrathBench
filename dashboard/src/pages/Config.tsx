@@ -66,6 +66,7 @@ import {
   newEntryDoc,
   promoteBody,
   promoteFormOf,
+  providerLines,
   rosterWrite,
   type DraftFilter,
   type EditableField,
@@ -494,7 +495,9 @@ function RosterRow(props: {
             type="text"
             class="routing"
             value={form().routing}
-            placeholder="author's own"
+            placeholder={providerLines(props.entry) === null ? "author's own" : "per provider"}
+            disabled={providerLines(props.entry) !== null}
+            title={providerLines(props.entry) === null ? undefined : "this entry's routing is each provider's: edit the list with bun wb config set"}
             onInput={(e) => set("routing", e.currentTarget.value)}
           />
         </td>
@@ -508,6 +511,8 @@ function RosterRow(props: {
           <Show when={typeof props.entry["credential"] === "string"}>
             <div>{String(props.entry["credential"])}</div>
           </Show>
+          {/* Read-only: the providers in preference order. */}
+          <For each={providerLines(props.entry) ?? []}>{(line) => <div title={line}>{line}</div>}</For>
         </td>
         <td>
           <button type="button" disabled={busy()} onClick={() => void save()}>

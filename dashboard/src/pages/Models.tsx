@@ -237,7 +237,7 @@ export default function Models() {
                       <td class="mono" title={tierTitle(row)}>
                         {tierOf(row)}
                       </td>
-                      <td class="dim">{[...new Set([row, ...also].map((r) => r.platform ?? "—"))].join(", ")}</td>
+                      <td class="dim">{[...new Set([row, ...also].flatMap((r) => r.platforms ?? [r.platform ?? "—"]))].join(", ")}</td>
                       <td>
                         <HarnessTag harness={row.harness} />
                       </td>

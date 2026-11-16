@@ -378,7 +378,11 @@ the provider reported, and a run's page still says how it was served. A
 literally free endpoint is the exception: an OpenRouter `:free` id, a Zen
 `-free` or a contributor-free model stays a model of its own, always marked
 free, and never pools with the paid one; a subscription's usage is not free in
-this sense (operator, 2026-11-16).
+this sense (operator, 2026-11-16). In the roster a model is one entry, with
+the providers it may be served by listed on it in preference order, not an
+entry per provider: the provider is recorded on every run so a result stays
+traceable to it, and it is not a public comparison dimension for now
+(operator, 2026-11-16).
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the prompt at one fixed place, so any run with

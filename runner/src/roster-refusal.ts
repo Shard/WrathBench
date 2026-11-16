@@ -30,7 +30,7 @@ import { LOCAL_WITHOUT_SERVING, parseServing, parseServingLabels, SERVING_OFF_LO
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase",
   "billing", "credential", "race", "class", "chooseStart", "watchdogs", "maxToolCalls",
-  "routing", "wiki", "compactWindow", "campaignOnly", "serving", "servingLabels", "deadmines",
+  "routing", "wiki", "compactWindow", "campaignOnly", "serving", "servingLabels", "deadmines", "providers",
 ] as const;
 
 export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "credential"] as const;
@@ -86,6 +86,8 @@ export interface RosterEntryRefusal {
  * - **a key the harness does not read** (`ROSTER_ENTRY_KEYS`);
  * - **a base no credential provider serves**, or one its provider's key may
  *   not go to (`rosterProviderRefusal`, runner/src/credential-slots.ts);
+ *   for an entry with `providers` (`runner/src/provider-options.ts`), any one
+ *   of them, named by its credential, as the entry it launches as;
  * - **a pinned credential that cannot carry it** — not configured, another
  *   provider's, the other billing side (`credentialCandidates`). A pinned
  *   credential that is merely disabled is no refusal: the entry waits for it;
@@ -97,12 +99,35 @@ export interface RosterEntryRefusal {
  * effect, and a rejected re-read would make every other flag in the file inert.
  */
 export function rosterEntryRefusal(
-  e: { model?: unknown; driver?: unknown; apiBase?: unknown; billing?: unknown; credential?: unknown; serving?: unknown; servingLabels?: unknown },
+  e: { model?: unknown; driver?: unknown; apiBase?: unknown; billing?: unknown; credential?: unknown; serving?: unknown; servingLabels?: unknown; providers?: unknown },
   credentials: readonly Credential[],
   env: Record<string, string | undefined> = process.env,
 ): RosterEntryRefusal | null {
   const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
   if (keys.length > 0) return { kind: "unknown-key", why: strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS) };
+  // Each provider is the entry as it launches there; the first that is refused refuses the entry, by name.
+  if (Array.isArray(e.providers)) {
+    for (const o of e.providers as unknown[]) {
+      const opt = (typeof o === "object" && o !== null ? o : {}) as { credential?: unknown; apiBase?: unknown; model?: unknown };
+      const { providers: _p, apiBase: _a, ...rest } = e;
+      const r = providerRefusal({ ...rest, model: opt.model ?? e.model, apiBase: opt.apiBase, credential: opt.credential }, credentials, env);
+      if (r !== null) return { kind: r.kind, why: `provider ${String(opt.credential)}: ${r.why}` };
+    }
+  } else {
+    const r = providerRefusal(e, credentials, env);
+    if (r !== null) return r;
+  }
+  const serving = servingRefusal(e, env);
+  if (serving !== null) return { kind: "serving", why: serving };
+  return null;
+}
+
+/** The provider and pinned-credential rules of `rosterEntryRefusal`, for one provider. */
+function providerRefusal(
+  e: { model?: unknown; driver?: unknown; apiBase?: unknown; billing?: unknown; credential?: unknown },
+  credentials: readonly Credential[],
+  env: Record<string, string | undefined>,
+): RosterEntryRefusal | null {
   const provider = rosterProviderRefusal(e, env);
   if (provider !== null) return { kind: "provider", why: provider };
   if (e.credential !== undefined) {
@@ -118,8 +143,6 @@ export function rosterEntryRefusal(
     );
     if (fit.why !== undefined) return { kind: "credential", why: fit.why };
   }
-  const serving = servingRefusal(e, env);
-  if (serving !== null) return { kind: "serving", why: serving };
   return null;
 }
 

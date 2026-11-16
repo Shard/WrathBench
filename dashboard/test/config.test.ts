@@ -15,6 +15,7 @@ import {
   RoutingParseError,
   auditVerb,
   formOf,
+  providerLines,
   isReadOnlyKey,
   isRosterName,
   jsonEditorKeys,
@@ -241,5 +242,21 @@ describe("the unseeded banner", () => {
     const page = await Bun.file(new URL("../src/pages/Config.tsx", import.meta.url)).text();
     expect(page).toContain("<code>bun wb config seed</code>");
     expect(page).not.toContain("config-store.ts seed");
+  });
+});
+
+describe("providerLines — an entry's providers, read-only (operator, 2026-11-16)", () => {
+  test("one line per provider in preference order, saying only what each states; none for a single-provider entry", () => {
+    expect(
+      providerLines({
+        model: "deepseek-v4.1-flash",
+        tier: "t1",
+        providers: [
+          { credential: "opencodego", apiBase: "https://opencode.ai/inference/go/openai/v1" },
+          { credential: "openrouter-1", model: "deepseek/deepseek-v4.1-flash", routing: "GMICloud" },
+        ],
+      }),
+    ).toEqual(["opencodego · https://opencode.ai/inference/go/openai/v1", "openrouter-1 · deepseek/deepseek-v4.1-flash · GMICloud"]);
+    expect(providerLines({ model: "m", tier: "t0", apiBase: "https://x.example/v1" })).toBeNull();
   });
 });
