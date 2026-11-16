@@ -166,7 +166,7 @@ It streams every request and assembles the events back into the body a
 non-streaming call returns, so the trajectory, usage and cost records are the
 same shapes either way; a provider that answers with plain JSON is read as
 before. Streaming is there for the clock: an attempt fails after 120 s with no
-data (keep-alive comments do not count) or at a 5-minute ceiling however
+data (keep-alive comments do not count) or at a 10-minute ceiling however
 steady it is, rather than after 120 s in total, so a slow model that keeps
 producing is never cut for being slow. A failed attempt, a cut stream
 included, is retried whole, and attempts start only inside a 5-minute budget.

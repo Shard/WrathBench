@@ -36,20 +36,23 @@
  *   shape, and a server that sends its heartbeats as data (the self-hosted
  *   omlx server sends an empty delta every ~10 s while it queues or prefills)
  *   is bounded by the ceiling, not by the silence.
- * - Ceiling, `REQUEST_CEILING_MS` (5 minutes): one attempt, however steady,
- *   ends there, so a stream that trickles forever cannot live inside
- *   complete(). It is about twice the slowest turn the harness has had to
- *   carry (an 8k-token turn at 70 tokens/s is ~2 minutes plus prefill).
+ * - Ceiling, `REQUEST_CEILING_MS` (10 minutes, operator, 2026-11-16): one
+ *   attempt, however steady, ends there, so a stream that trickles forever
+ *   cannot live inside complete(). It was 5 minutes until a locally served
+ *   model at about 60–100 tokens/s had two runs ended `adapter-error` by it
+ *   while it was steadily producing long turns; 10 minutes carries such a
+ *   turn and still ends a stream that never finishes.
  *
  * The retry budget below gates only the START of an attempt, never one in
  * flight, so a streaming request that is making progress is not cut by it.
  * The longest one complete() can take is therefore the budget, one backoff and
- * one ceiling: 5 + 0.5 + 5 = 10.5 minutes, about half the 20-minute idle
- * watchdog of every episode tier (`episodes.ts`); the 10-minute default a
- * run gets with no tier and no override sits just under it. Nothing inside complete() is read by a
- * watchdog — the fixed loop reads them at the turn boundary, and a success
- * resets `idle` before the next read — so this bound is what keeps that
- * boundary, the place a stop or a watchdog can act, from receding.
+ * one ceiling: 5 + 0.5 + 10 = 15.5 minutes, about three quarters of the
+ * 20-minute idle watchdog of every episode tier (`episodes.ts`); the 10-minute
+ * idle a run gets with no tier and no override is shorter than it. Neither
+ * can fire inside complete(): nothing inside it is read by a watchdog — the
+ * fixed loop reads them at the turn boundary, and a success resets `idle`
+ * before the next read — so this bound is what keeps that boundary, the place
+ * a stop or a watchdog can act, from receding.
  *
  * A timer firing, a stream that breaks mid-read, a malformed chunk, or a
  * stream that ends with neither `[DONE]` nor a `finish_reason` (a cut
@@ -677,7 +680,7 @@ function isProviderBlip(text: string): boolean {
 /** See "Streaming and the request clock" above. */
 export const SILENCE_TIMEOUT_MS = 120_000;
 /** See "Streaming and the request clock" above. */
-export const REQUEST_CEILING_MS = 300_000;
+export const REQUEST_CEILING_MS = 600_000;
 
 type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => v !== null && typeof v === "object" && !Array.isArray(v);
