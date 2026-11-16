@@ -192,8 +192,10 @@ ranged auto-attack** (operator decision, 2026-11-16). Its description and
 the prompt say it casts nothing but its auto-attack and that `castSpell`
 runs in the model's own code alongside it, and its `range` stops the
 approach within that distance and fires what the ranged slot's button would
-(Auto Shot, Shoot or Throw); spell choice stays the model's, so there is no
-rotation or spells option.
+(Auto Shot, Shoot or Throw), swinging in melee while the target is inside
+the melee reach where the server holds that shot, as a client's auto-attack
+does; spell choice stays the model's, so there is no rotation or spells
+option.
 
 **Softening: repair the deterministic, explain the rest.** Most early
 model-facing failures were feedback failures, and weak models burned episodes
