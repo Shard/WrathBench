@@ -744,7 +744,9 @@ run's session record (`record-feed.ts`): the `events` stream's milestones and
 turn-ins and the `calls` stream's action log, movement intentions and served
 event batches, each restated in the trajectory record shape the feed has
 always drawn, given the turn in flight by timestamp, and merged into the
-entries by time. Such an entry has no byte range in the trajectory: it keeps
+entries by time. A movement intention says whose it is as an action log does
+(`callTs`, the call's dispatch stamp, and `routine`), which is how the run
+page keeps a call's own moves on its card. Such an entry has no byte range in the trajectory: it keeps
 a locator into its segment instead, and `raw` reads it again from there. What
 the first v1 builds still mirrored into their trajectory (milestones,
 turn-ins, actions, moves, tool-served batches) is skipped, so nothing shows

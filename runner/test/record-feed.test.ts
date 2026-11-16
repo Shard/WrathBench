@@ -9,6 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { feedRecordOf } from "../viewer/record-feed";
 import { TrajectoryTail } from "../viewer/tail";
 import { materialiseV1p1, V1P1_RUN } from "./fixtures/v1p1";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -45,5 +46,20 @@ describe("the run page's feed over a v1 run", () => {
     const b = new TrajectoryTail(join(dir, "trajectory.jsonl"));
     await b.scan();
     expect(b.entries.map((e) => [e.t, e.ts])).toEqual(a.entries.map((e) => [e.t, e.ts]));
+  });
+});
+
+describe("a move row as the feed's record", () => {
+  const row = { ts: 2000, kind: "move" as const, at: 1990, moveId: 4, map: 0, x: 1, y: 2, z: 3, target: null, status: "arrived" };
+
+  test("it says whose move it is, as an action log does: the call's stamp, and a routine's mark", () => {
+    expect(feedRecordOf({ ...row, origin: { type: "tool", call: 1000 } }, 7, "calls")).toEqual({
+      t: "move", ts: 2000, turn: 7, callTs: 1000, moveId: 4, map: 0, x: 1, y: 2, z: 3, target: null, status: "arrived",
+    });
+    expect(feedRecordOf({ ...row, origin: { type: "routine", call: 1000 } }, null, "calls")).toMatchObject({ callTs: 1000, routine: true });
+    expect(feedRecordOf({ ...row, origin: { type: "program", call: 1000, routine: "patrol" } }, null, "calls")).toMatchObject({ callTs: 1000, routine: true });
+    // The SDK's own traffic belongs to no call.
+    const own = feedRecordOf({ ...row, origin: { type: "client" } }, null, "calls")!;
+    expect("callTs" in own || "routine" in own).toBe(false);
   });
 });

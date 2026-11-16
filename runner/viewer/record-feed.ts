@@ -117,7 +117,8 @@ export function readRecordRow(sessionDir: string, loc: RecordLoc): EventRow | Ca
  * - `calls` `actions`: the action log record, `callTs` the call's id (its
  *   dispatch stamp, which the trajectory's `tool_call` carries as
  *   `dispatchTs`), `routine` when a call's routine sent it.
- * - `calls` `move`: the intention, the target by its client-cache name.
+ * - `calls` `move`: the intention, the target by its client-cache name, with
+ *   the same `callTs` and `routine` as an `actions` record.
  * - `calls` `events`: the batch a tool served, `via: "tool"`.
  */
 export function feedRecordOf(row: EventRow | CallRow, turn: number | null, stream: FeedStream): Record<string, unknown> | null {
@@ -141,7 +142,21 @@ export function feedRecordOf(row: EventRow | CallRow, turn: number | null, strea
         ...(c.dropped !== undefined ? { dropped: c.dropped } : {}),
       };
     case "move":
-      return { t: "move", ts: c.ts, ...turnOf, moveId: c.moveId, map: c.map, x: c.x, y: c.y, z: c.z, target: c.name ?? null, status: c.status };
+      return {
+        t: "move",
+        ts: c.ts,
+        ...turnOf,
+        // Whose move it is, as an `actions` record says it: the feed draws a call's own moves on its card.
+        ...(c.origin.call !== undefined ? { callTs: c.origin.call } : {}),
+        ...(c.origin.type === "routine" || c.origin.type === "program" ? { routine: true } : {}),
+        moveId: c.moveId,
+        map: c.map,
+        x: c.x,
+        y: c.y,
+        z: c.z,
+        target: c.name ?? null,
+        status: c.status,
+      };
     case "events":
       return { t: "events_served", ts: c.ts, ...turnOf, via: "tool", count: c.count, events: c.events, ...(c.folded !== undefined ? { folded: c.folded } : {}) };
     default:
