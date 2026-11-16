@@ -97,7 +97,7 @@ describe("the external harness — an agent loop that is not ours", () => {
   });
 
   test("its own chart group, probe-only, never a roster entry, and never launched here", () => {
-    expect(chartGroupOf({ loop: "snippet", pinned: true, wiki: true, subject: "external" }).id).toBe("external");
+    expect(chartGroupOf({ loop: "snippet", wiki: true, subject: "external" }).id).toBe("external");
     const facts = (agent: { name: string | null; version: string | null }) => ({ series: "0.5", episode: "probing", harness: "external", tuple: { agent, subject: "external" } });
     expect(conditionKey(facts({ name: "a", version: "1" }))).not.toBe(conditionKey(facts({ name: "a", version: "2" })));
     expect(conditionOf(facts({ name: "a", version: "1" })).subject).toBe("external");

@@ -913,16 +913,16 @@ The bubbles read the trace's `chat` events (above) and nothing else.
 ## What the ladder shows
 
 A row is one model under one condition (operator, 2026-11-14): the series,
-episode, harness, effort, requested routing, wiki, compaction window, loop and
-`yield`, and never the prompt hash, which every in-series prompt patch moves.
+episode, harness, effort, wiki, compaction window, loop and `yield`, and never
+the prompt hash, which every in-series prompt patch moves, nor the requested
+routing: a model's runs on any provider are one row (operator, 2026-11-16).
 The key is `conditionKey` in `runner/viewer/condition.ts`, read off the stamped
 tuple, with an absent field read as its default, so a run stamped before a
 field existed is the snippet loop with nothing to state. A table row, a
 scatter point, a mean line and the shared highlight are all keyed on that
 entry, so no two conditions ever pool. The public row carries the condition's
-loop, `yield`, whether its routing was pinned, and its wiki, with the id
-renumbered per artifact (`c1`, `c2`, …): the private id spells the routing,
-which names providers.
+loop, `yield`, whether the run's routing was pinned, and its wiki, with the id
+renumbered per artifact (`c1`, `c2`, …).
 
 Each row's headline numbers are still maxima over a model's counted runs, and
 the page is plain about that. Beside them it shows the spread those runs
@@ -934,14 +934,15 @@ playtime each was reached at (operator, 2026-11-15).
 ### The controls
 
 - **condition** chips, shown only when the tier holds more than one chart
-  group. Conditions that differ in the loop, in pinned against unpinned
-  routing, or in the wiki never share a chart: METHODOLOGY keeps pinned and
-  unpinned runs apart, makes the wiki and the loop keys of the tuple, and
-  calls effort and the window comparable rows, so those, the harness tag and
-  `yield` (which follows the harness) share one. The default is the group
-  with the most entries, and `?group=` picks another (`chartGroups` in
-  `dashboard/src/lib/ladderfilter.ts`). An OpenCode Go row, routed with
-  fallbacks allowed, is on the unpinned chart.
+  group. Conditions that differ in the loop or in the wiki never share a
+  chart: METHODOLOGY makes the wiki and the loop keys of the tuple, and calls
+  effort and the window comparable rows, so those, the harness tag and
+  `yield` (which follows the harness) share one. Routing is not a boundary
+  (operator, 2026-11-16): an OpenCode Go run sits on its loop's chart in the
+  same model's row. The default is the group with the most entries, and
+  `?group=` picks another (`chartGroups` in
+  `dashboard/src/lib/ladderfilter.ts`); an older `-unpinned` id, such as
+  `snippet-unpinned`, opens its loop's chart.
 - **newest condition**, **on by default** (operator, 2026-11-14). Each model
   at each effort and compaction window shows only its newest condition: the one whose latest counted
   run started last, over the whole tier before the chart group is chosen, so a

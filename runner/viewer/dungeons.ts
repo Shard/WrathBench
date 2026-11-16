@@ -71,8 +71,8 @@ export function countedRow(r: ResultRun): boolean {
 
 /**
  * What a row is keyed on: the model, and the ladder's condition
- * (`condition.ts`: series, harness, effort, routing, wiki, window, loop and
- * `yield`) with the episode left out, so a row of either id names its
+ * (`condition.ts`: series, harness, effort, wiki, window, loop and `yield`)
+ * with the episode left out, so a row of either id names its
  * condition as the level ladders name theirs.
  */
 export function boardKey(r: Pick<ResultRun, "model" | "harnessSeries" | "harness" | "effort" | "compactWindow" | "wiki" | "condition">): string {

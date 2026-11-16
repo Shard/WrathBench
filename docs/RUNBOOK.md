@@ -626,8 +626,9 @@ An OpenCode Go model is an openai entry with `apiBase`
 every text model it lists over chat completions. The adapter identifies as
 itself: its own user agent, `x-opencode-session` set to the run id, and never
 the headers of OpenCode's own client. Go picks the backend and the request
-cannot name one, so a Go run stamps unpinned routing, keyed apart from a
-pinned run of the same model. Go no longer names the backend in its response
+cannot name one, so a Go run stamps unpinned routing, keyed apart in the
+tuple from a pinned run of the same model, though the ladder shows both in one
+row. Go no longer names the backend in its response
 headers, so the run records the slug only. A `-free` Go slug derives free and
 runs on a free `opencode-go` credential; any other derives paid, runs on the
 paid one with its usage budget, and is priced by an `opencode-go` endpoint

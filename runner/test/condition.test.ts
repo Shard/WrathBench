@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { chartGroupOf, conditionKey, conditionOf, type ConditionFacts } from "../viewer/condition";
+import { chartGroupOf, conditionKey, conditionOf, currentChartGroupId, type ConditionFacts } from "../viewer/condition";
+import { OPENCODE_GO_ROUTING } from "../src/routing";
 
 const facts = (tuple: ConditionFacts["tuple"], over: Partial<ConditionFacts> = {}): ConditionFacts => ({
   series: "0.5",
@@ -14,7 +15,6 @@ describe("conditionKey — one string per condition", () => {
     const base = conditionKey(facts({ effort: "low" }));
     for (const other of [
       facts({ effort: "high" }),
-      facts({ effort: "low", routing: { allowFallbacks: false, order: ["Z.AI"] } }),
       facts({ effort: "low", wiki: false }),
       facts({ effort: "low", compactWindow: "100k" }),
       facts({ effort: "low", loop: "program" }),
@@ -39,10 +39,16 @@ describe("conditionKey — one string per condition", () => {
     expect(conditionKey(facts({ effort: null, wiki: true, compactWindow: null }))).toBe(old);
   });
 
-  test("routing keys in any order spell one key; the provider order itself still matters", () => {
-    const one = conditionKey(facts({ routing: { allowFallbacks: false, order: ["a", "b"] } }));
-    expect(conditionKey(facts({ routing: { order: ["a", "b"], allowFallbacks: false } }))).toBe(one);
-    expect(conditionKey(facts({ routing: { allowFallbacks: false, order: ["b", "a"] } }))).not.toBe(one);
+  test("routing is not in it: a run on any provider, pinned or not, is the same condition (operator, 2026-11-16)", () => {
+    const none = conditionKey(facts({ effort: "low" }));
+    for (const routing of [
+      { allowFallbacks: false, order: ["Z.AI"] },
+      { allowFallbacks: false, order: ["b", "a"] },
+      { allowFallbacks: true },
+      { ...OPENCODE_GO_ROUTING },
+    ]) {
+      expect(conditionKey(facts({ effort: "low", routing }))).toBe(none);
+    }
   });
 });
 
@@ -54,15 +60,23 @@ describe("conditionOf and chartGroupOf", () => {
     ).toMatchObject({ loop: "program", yield: true, pinned: false, wiki: false });
   });
 
-  test("the loop, unpinned routing and no wiki each make a chart of their own; effort, window and yield do not", () => {
+  test("the loop and no wiki each make a chart of their own; effort, window, yield and routing do not", () => {
     const of = (t: ConditionFacts["tuple"]) => chartGroupOf(conditionOf(facts(t))).id;
     expect(of(null)).toBe("snippet");
     expect(of({ effort: "high", compactWindow: "100k", yield: true })).toBe("snippet");
     expect(of({ loop: "program", yield: true })).toBe("program");
     expect(of({ loop: "program" })).toBe("program");
-    expect(of({ routing: { allowFallbacks: true } })).toBe("snippet-unpinned");
+    expect(of({ routing: { allowFallbacks: true } })).toBe("snippet");
+    expect(of({ routing: { ...OPENCODE_GO_ROUTING }, loop: "program" })).toBe("program");
     expect(of({ routing: { allowFallbacks: false, order: ["x"] } })).toBe("snippet");
     expect(of({ wiki: false, loop: "program" })).toBe("program-nowiki");
-    expect(chartGroupOf({ loop: "program", pinned: false, wiki: false }).label).toBe("program loop · unpinned · no wiki");
+    expect(chartGroupOf({ loop: "program", wiki: false }).label).toBe("program loop · no wiki");
+  });
+
+  test("a group id from before routing left the chart names its loop's group", () => {
+    expect(currentChartGroupId("snippet-unpinned")).toBe("snippet");
+    expect(currentChartGroupId("program-unpinned-nowiki")).toBe("program-nowiki");
+    expect(currentChartGroupId("program")).toBe("program");
+    expect(currentChartGroupId("external")).toBe("external");
   });
 });

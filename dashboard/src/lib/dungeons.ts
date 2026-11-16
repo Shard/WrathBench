@@ -65,7 +65,7 @@ export function attemptTitle(a: DungeonAttemptView): string {
 /** What a board row is keyed on, for the chart and the table to light together: the model and the condition's public dimensions. */
 export function boardRowKey(row: DungeonRowView): string {
   const c = row.condition;
-  return JSON.stringify([row.model ?? "", row.effort ?? "", row.compactWindow ?? "", row.harness ?? "", row.series ?? "", c.loop, c.yield, c.pinned, c.wiki]);
+  return JSON.stringify([row.model ?? "", row.effort ?? "", row.compactWindow ?? "", row.harness ?? "", row.series ?? "", c.loop, c.yield, c.wiki]);
 }
 
 /** Where a row's best attempt opens: its party's page on five agents, its run on one. */

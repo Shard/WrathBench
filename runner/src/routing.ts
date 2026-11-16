@@ -241,9 +241,9 @@ export function routingLabel(routing: RoutingSpec): string {
  * OpenRouter's own endpoint for the vendor, and from Go's own — and a request
  * has no way to name or pin one. So the run is unpinned by construction, the
  * shape an unpinned OpenRouter run has (no `order`), with fallbacks on because
- * nothing stops any backend from serving it, and the route named. A KEY like
- * every routing: a Go run never shares a chart with a pinned run of the same
- * model elsewhere. Which backend actually answered is recorded per response
+ * nothing stops any backend from serving it, and the route named. A KEY in the
+ * tuple like every routing, though the ladder charts a Go run beside the same
+ * model's other runs (operator, 2026-11-16). Which backend actually answered is recorded per response
  * from Go's headers (`openCodeServedOf`, adapter.ts).
  */
 export const OPENCODE_GO_ROUTING: RoutingSpec = { via: "OpenCode Go", allowFallbacks: true };

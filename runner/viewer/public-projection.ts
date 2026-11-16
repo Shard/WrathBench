@@ -689,9 +689,9 @@ function projectResultExpected(c: CostFigure): CostFigure {
 
 /**
  * Public condition ids, one per distinct condition in a response, numbered in
- * the order the private ids sort. The private id spells the requested
- * routing, which names providers; the public row keeps only whether it was
- * pinned, and the number still keeps two routings of one model two rows.
+ * the order the private ids sort. The private id is canonical JSON of the
+ * condition, which is not the public row's to carry; the number keeps two
+ * conditions of one model two rows.
  *
  * Ids already public sort by their number, so a published body is a fixed
  * point of its own projection, which is what `bun wb site verify` checks: in
