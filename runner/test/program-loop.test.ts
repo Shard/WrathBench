@@ -1178,6 +1178,31 @@ describe("the fixed loop on the program loop", () => {
     expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call for \d+ms: 4 wakes in a row answered without one$/);
   });
 
+  test("a settled wipe is one wake answered, and a model that only talks through wipes still ends idle on the idle window's clock, not sooner", async () => {
+    const talk = { content: "They died again.", toolCalls: [] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 80 }, () => talk)]);
+    // A wipe every minute: three deaths four seconds apart, inside one settle window.
+    for (let k = 1; k <= 40; k++) {
+      ["Alfa", "Bravo", "Charlie"].forEach((name, i) => s.clock.schedule(k * 60_000 + i * 4_000, () => s.wake.onDeath(s.clock.now(), name)));
+    }
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "idle" });
+    s.options.trajectory.close();
+    const records = readTrajectory(s.dir);
+    const died = records.filter((r) => r.t === "wake" && r["fired"] === "died");
+    // Every wipe reached the model whole, as one wake: none was split across two.
+    expect(died.length).toBeGreaterThan(4);
+    for (const w of died) expect(String(w["block"]).split("\n")[0]).toEndWith("woke for: Alfa, Bravo, Charlie died]");
+    // Four wakes in a row came within minutes; the verdict waited for twenty of no tool call, and counted each wipe once.
+    const detail = String(records.find((r) => r.t === "watchdog")?.["detail"]);
+    const m = /^no tool call for (\d+)ms: (\d+) wakes in a row answered without one$/.exec(detail);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(20 * 60_000);
+    expect(Number(m![2])).toBeLessThanOrEqual(died.length);
+    expect(Number(m![2])).toBeGreaterThanOrEqual(died.length - 1);
+  });
+
   test("a model that yields at every wake has acted, however long its routine plays", async () => {
     const yieldTurn = { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 300 } }] };
     const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => yieldTurn)], { yield: true });
