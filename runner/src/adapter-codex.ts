@@ -1386,6 +1386,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
                 if (threadId !== undefined) {
                   thread?.reset();
                   program?.forgetShown();
+                  programWake?.forgetShown();
                 }
                 trajectory.append({ t: "codex_thread", turn, threadId: id });
                 // The supervisor's sweep keeps the rollout of the thread this names.
@@ -1546,6 +1547,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // routine errors and values results showed go with it.
       if (followed.compactions.length > 0 || followed.failed === true) {
         program?.forgetShown();
+        programWake?.forgetShown();
         thread?.reset();
       }
       if (!resolvedModel && followed.model !== undefined) {

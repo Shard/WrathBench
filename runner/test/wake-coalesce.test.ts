@@ -102,6 +102,17 @@ describe("the settle window: deaths and refusals that land together are one wake
     }
   });
 
+  test("a driver's queued notice keeps its own two seconds while a death settles", async () => {
+    const c = fakeClock();
+    const w = new Waker();
+    let queued = 0;
+    c.schedule(60_000, () => w.note(reason("died", c.now(), "Alfa")));
+    c.schedule(62_000, () => (queued = 1));
+    const r = await sleepUntilWake({ waker: w, ...sleepOpts, queuedNotices: () => queued, now: c.now, sleep: c.sleep });
+    expect(r).toEqual({ fired: "notice", sleptMs: 64_000 });
+    expect(w.peek().map((x) => x.key)).toEqual(["died", "notice"]);
+  });
+
   test("the cap, or a yield's own seconds, is never moved by a settle", async () => {
     const c = fakeClock();
     const w = new Waker();
@@ -145,11 +156,10 @@ describe("fan-out: each character's death cause and condition", () => {
       return d;
     });
     wake.onSample({ seats: FIVE.map((character) => ({ character, level: 18, connected: true })) });
+    const KILLERS = ["Rhahk'Zor", "Defias Miner", "Defias Miner", "Goblin Woodcarver", "Defias Miner"];
     FIVE.forEach((name, k) =>
       c.schedule(30_000 + k * 1_500, () => {
-        // The Mage fell from a ledge: a latch with no hit. The Healer's seat latched nothing.
-        if (name === "Magepartyd") latch.set(name, { ts: c.now(), damage: [] });
-        else if (name !== "Healpartyc") latch.set(name, { ts: c.now(), killer: k === 0 ? "Rhahk'Zor" : "Defias Miner", damage: DEFIAS });
+        latch.set(name, { ts: c.now(), killer: KILLERS[k]!, damage: DEFIAS });
         wake.onDeath(c.now(), name);
       }),
     );
@@ -163,8 +173,8 @@ describe("fan-out: each character's death cause and condition", () => {
       "  Tankpartyb: killed by Rhahk'Zor, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
       "  Palapartyf: killed by Defias Miner, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
       "  Roguepartye: killed by Defias Miner, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
-      "  Healpartyc: cause not seen",
-      "  Magepartyd: no hit in the 10s before",
+      "  Healpartyc: killed by Goblin Woodcarver, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
+      "  Magepartyd: killed by Defias Miner, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
     ]);
     expect(asked.sort()).toEqual([...FIVE].sort());
     // Taken: the next wake, with no death, has no death lines and reads no latch.
@@ -172,6 +182,19 @@ describe("fan-out: each character's death cause and condition", () => {
     const next = await wake.sleep(fakeProgram(), { via: "yield", turn: 2, capMs: 20_000, floorMs: 3_000, stopped: () => false, kept: true, hud: true });
     expect(next.block).not.toContain("deaths:");
     expect(asked).toEqual([]);
+  });
+
+  test("every character that died has its line: a fall says no hit landed, a seat that latched nothing says the cause was not seen", async () => {
+    const c = fakeClock();
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    wake.useDeathCause(async (character) => (character === "Alfa" ? { ts: c.now(), damage: [] } : null));
+    wake.onSample({ seats: [{ character: "Alfa", level: 4, connected: true }, { character: "Bravo", level: 4, connected: true }] });
+    c.schedule(10_000, () => {
+      wake.onDeath(c.now(), "Alfa");
+      wake.onDeath(c.now() + 1, "Bravo");
+    });
+    const woke = await wake.sleep(fakeProgram(), { via: "yield", turn: 1, ...sleepOpts, kept: true });
+    expect(woke.block).toContain("deaths:\n  Alfa: no hit in the 10s before\n  Bravo: cause not seen");
   });
 
   test("a latch from another death than the character's last on the record is not its cause", async () => {
@@ -333,6 +356,20 @@ describe("routine rows long ended and already shown are left out", () => {
       if (kept) expect(second).toContain("routines: 1 that ended earlier, shown before");
       else expect(second).toContain("party stopped");
     }
+  });
+
+  test("a conversation that lost what it was shown lists the row again, once, then counts it", async () => {
+    const c = fakeClock(NOW);
+    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    p.routines = [party];
+    const opts = { via: "turn-end" as const, capMs: 20_000, floorMs: 3_000, stopped: () => false, kept: true };
+    await wake.sleep(p, { ...opts, turn: 1 });
+    expect((await wake.sleep(p, { ...opts, turn: 2 })).block).not.toContain("party stopped");
+    // A compaction, a new session or thread, a trim: what the model was shown is gone.
+    wake.forgetShown();
+    expect((await wake.sleep(p, { ...opts, turn: 3 })).block).toContain("party stopped");
+    expect((await wake.sleep(p, { ...opts, turn: 4 })).block).toContain("routines: 1 that ended earlier, shown before");
   });
 
   test("a routine tool that showed a run ended counts as shown", async () => {

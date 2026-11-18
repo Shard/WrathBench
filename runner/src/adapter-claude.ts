@@ -813,6 +813,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     if (sessionId !== undefined && sessionId !== id) {
       thread?.reset();
       program?.forgetShown();
+      programWake?.forgetShown();
     }
     sessionId = id;
   };
@@ -1461,6 +1462,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               // on this driver one turn can hold several compactions.
               thread?.reset();
               program?.forgetShown();
+              programWake?.forgetShown();
               // The boundary arrives once the compaction is done, so it began
               // its duration earlier.
               const at = Date.now() - (compaction.durationMs ?? 0);

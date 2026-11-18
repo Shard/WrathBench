@@ -731,7 +731,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           onRoutinesShown: (text) => {
             programWake.routinesShown(program.routines());
             // The window keeps a result's head (`capWindowMessage`): routine lines past the cap were never seen, so none count as shown.
-            if (text.length > CONTEXT_POLICY.WINDOW_MESSAGE_CHARS) program.forgetShown();
+            if (text.length > CONTEXT_POLICY.WINDOW_MESSAGE_CHARS) {
+              program.forgetShown();
+              programWake.forgetShown();
+            }
           },
           // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
           onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
@@ -885,6 +888,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         lastCut = cut;
         // The results that showed routine errors and values may be gone or folded: the next lines show them whole.
         program?.forgetShown();
+        programWake?.forgetShown();
       }
       lastFold = fold;
       const contextText = await builder.build(turn, pendingNotices, currentWake);

@@ -288,10 +288,10 @@ next wake), the program's own `wake(reason)`, a death, a
 sandbox restart, the event stream closing or a harness notice, and after five
 minutes at the latest; gaining a level or completing a quest does not wake it,
 and a program that wants either calls `wake()`. A wake waits two seconds after
-its first reason so a cascade is one wake, and ten after a death or a refusal,
-so the deaths and refusals of a wipe that land together reach the model as one
-wake listing all of them; a `wake()` call, the cap and a `yield`'s own seconds
-are never held by it (operator, 2026-11-18). What it was already shown in
+its first reason so a cascade is one wake. A death or a refusal settles for ten
+instead, so the deaths and refusals of a wipe that land together reach the
+model as one wake listing all of them, and a `wake()` call, the cap and a
+`yield`'s own seconds are never held by that settle (operator, 2026-11-18). What it was already shown in
 a tool result wakes no later sleep. The wake block is facts in fixed wording:
 every routine as it stands, new errors and refusals with their hints, what
 changed for the character, and the routines' last console lines, capped. A

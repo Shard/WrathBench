@@ -386,7 +386,8 @@ export async function sleepUntilWake(o: SleepOptions): Promise<SleepResult> {
   for (;;) {
     if (o.stopped()) return { fired: "stopped", sleptMs: slept() };
     const now = o.now();
-    if ((o.queuedNotices?.() ?? 0) > 0 && o.waker.first() === undefined) {
+    // A driver's queued notice is its own reason, so it keeps its two seconds while a death settles.
+    if ((o.queuedNotices?.() ?? 0) > 0 && !o.waker.peek().some((r) => r.key === "notice")) {
       o.waker.note({ key: "notice", ts: now, text: "a harness notice", inContext: true });
     }
     let due: { at: number; key: WakeKey } | undefined;
@@ -1021,13 +1022,13 @@ export class ProgramWake {
   /**
    * A death line for every character that died since the last wake, from its
    * seat's latch, oldest death first; a latch from another death than the
-   * record's last for that character is not this one's cause. Taken here, so
-   * the next wake has only the deaths after it. Fan-out only.
+   * record's last for that character is not this one's cause. `diedSince`
+   * is taken as the wake takes its reasons, so the next wake has only the
+   * deaths after it. Fan-out only.
    */
-  private async fanoutDeaths(): Promise<string[]> {
-    const died = [...this.diedSince].sort((a, b) => a[1] - b[1]);
+  private async fanoutDeaths(diedSince: ReadonlyMap<string, number>): Promise<string[]> {
+    const died = [...diedSince].sort((a, b) => a[1] - b[1]);
     if (died.length === 0) return [];
-    this.diedSince = new Map();
     const lines = await Promise.all(
       died.map(async ([character, ts]) => {
         let cause: DeathCause | null = null;
@@ -1084,6 +1085,16 @@ export class ProgramWake {
       this.wornReported.set(character, now);
     }
     return out;
+  }
+
+  /**
+   * The conversation lost what it was shown (a CLI compaction, a new
+   * session or thread, a trim, a result the window cut): ended runs are no
+   * longer known shown, so their rows are listed again until a kept block
+   * shows them. Beside every `ProgramHost.forgetShown`.
+   */
+  forgetShown(): void {
+    this.endedShown.clear();
   }
 
   /** Remember the ended runs among `rows` as shown ended; bounded, the oldest forgotten first. */
@@ -1146,6 +1157,9 @@ export class ProgramWake {
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
     const reasons = withoutDeathRefusals(this.waker.take());
+    // Taken with the reasons, before any await: a death row landing during one waits, line and reason alike, for the next wake.
+    const died = this.diedSince;
+    this.diedSince = new Map();
     this.n++;
     const after = this.reading();
     const now = this.now();
@@ -1169,7 +1183,7 @@ export class ProgramWake {
             ...(reasons.some((r) => r.key === "died") || progress.deaths > 0 ? await this.deathLines() : []),
             ...(o.hud === true ? [] : conditionLines(this.lastSample, this.lastDeathTs, now)),
           ]
-        : [...(await this.fanoutDeaths()), ...fanoutConditionLines(seats, worn, this.deathTsOf, now, o.hud === true)];
+        : [...(await this.fanoutDeaths(died)), ...fanoutConditionLines(seats, worn, this.deathTsOf, now, o.hud === true)];
     const shownDetails = program.shownDetails();
     const fresh = freshRoutines(facts.routines, now, shownDetails, this.endedShown);
     const block = this.o.trajectory.scrub(
