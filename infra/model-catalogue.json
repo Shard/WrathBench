@@ -678,6 +678,26 @@
         "openrouter": { "openai/gpt-6.1-terra": { "windows": [{ "input": 1, "output": 5, "cacheRead": 0.05, "cacheWrite": 1.25 }] } }
       }
     },
+    "openai/gpt-6.2-astra": {
+      "family": "openai",
+      "name": "GPT-6.2 Astra",
+      "weights": "closed",
+      "source": "https://developers.openai.com/api/docs/models (API only; the openai Hugging Face org holds gpt-oss alone, checked 2026-11-18)",
+      "aliases": ["gpt-6.2-astra"],
+      "prices": {
+        "openrouter": { "openai/gpt-6.2-astra": { "windows": [{ "input": 8, "output": 40, "cacheRead": 0.4, "cacheWrite": 10 }] } }
+      }
+    },
+    "openai/gpt-6.2-sol": {
+      "family": "openai",
+      "name": "GPT-6.2 Sol",
+      "weights": "closed",
+      "source": "https://developers.openai.com/api/docs/models (API only; the openai Hugging Face org holds gpt-oss alone, checked 2026-11-18)",
+      "aliases": ["gpt-6.2-sol"],
+      "prices": {
+        "openrouter": { "openai/gpt-6.2-sol": { "windows": [{ "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 }] } }
+      }
+    },
     "openai/gpt-oss-120b": {
       "family": "openai",
       "name": "gpt-oss-120b",
@@ -737,6 +757,17 @@
             "asOf": "2026-09-04",
             "windows": [{ "input": 0.99, "output": 1.49, "cacheRead": 0.99, "cacheWrite": 0.99 }]
           }
+        }
+      }
+    },
+    "qwen/qwen4-max": {
+      "family": "qwen",
+      "name": "Qwen4 Max",
+      "weights": "unknown",
+      "source": "https://openrouter.ai/qwen/qwen4-max (served by Alibaba only, no Hugging Face id, no word on weights); no Qwen4 repository in the Qwen Hugging Face org, checked 2026-11-18",
+      "prices": {
+        "openrouter": {
+          "qwen/qwen4-max": { "windows": [{ "input": 1.425, "output": 4.275, "cacheRead": 0.07125, "cacheWrite": 1.78125 }] }
         }
       }
     },

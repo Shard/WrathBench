@@ -746,11 +746,14 @@ and differs only where the CLI does:
   the model's row in the ChatGPT catalogue, not these flags. `gpt-5.5` keeps
   `request_user_input`, `view_image`, `apply_patch` and the goal tools, inert
   under read-only in an empty cwd. GPT-6 models (`gpt-6-astra`, `gpt-6.1-sol`,
-  `gpt-6-luna`) are also given the CLI's code mode (`functions.exec`, a
-  JavaScript runtime with timers, a store and the clock, and `functions.wait`)
-  and its collaboration tools (`spawn_agent` and the rest), with developer
-  messages describing them, a skills list and an environment block carrying
-  the date and timezone; `--disable multi_agent` does not remove them. That
+  `gpt-6-luna`, `gpt-6.2-astra`, `gpt-6.2-sol`) are also given the CLI's code
+  mode (`functions.exec`, a JavaScript runtime with timers, a store and the
+  clock, and `functions.wait`), `request_user_input_async` (and on GPT-6.2
+  `send_message_to_user_async`) and its collaboration tools (`spawn_agent` and
+  the rest), with developer messages describing them, a skills list, a line
+  naming `mcp__wrathbench` as a deferred tool namespace (since 0.169) and an
+  environment block carrying the date and timezone; `--disable multi_agent`
+  does not remove them. That
   per-model surface cannot be configured out, so it is part of what the
   `codex` label means (docs/METHODOLOGY.md, principle 3), and the driver runs
   those models with it rather than refusing them. Every game action still goes through our MCP tools, under the
@@ -804,8 +807,8 @@ and differs only where the CLI does:
   compaction window" has what it is as a run dimension) reaches the CLI as
   the integer `-c model_auto_compact_token_limit=<tokens>` (`codexArgs`):
   `200k` is `200000`, a bare TOML integer, which the pinned CLI reads as an
-  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.163.0`, as at
-  `rust-v0.159.3`). It
+  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.169.1`, as at
+  `rust-v0.163.0` and `rust-v0.159.3`). It
   replaces the catalogue's own limit for the model, and the CLI then compacts
   at the smaller of it and 90% of the catalogue window
   (`ModelInfo::auto_compact_token_limit`), measured against the full active
