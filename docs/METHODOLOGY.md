@@ -151,8 +151,7 @@ while the server's mmaps are built walkable to 60 degrees for NPC pathing. So
 the drop guard keeps its 50 degree climb limit, and before a refusal stands
 the module re-plans with ground steeper than the client walks weighted up,
 so a route the guard would refuse goes round the face where the mesh has a way
-(operator decision, 2026-11-18). Rebuilding the mesh at 50 degrees would also
-change creature pathing, and is not done.
+(operator decision, 2026-11-18).
 
 **The benchmark's own clauses.** The contracts' authoritative text is the
 stack's, and this document keeps the clauses that are the benchmark's
