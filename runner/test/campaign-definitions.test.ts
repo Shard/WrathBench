@@ -102,6 +102,21 @@ describe("the checked-in definitions", () => {
     expect(rest(v5)).toEqual(rest(v4));
   });
 
+  test("deadmines@6, the codex rehearsal, is @5 with one attempt and the scored deadmines-solo task, and its codex assignment runs the program loop", () => {
+    const v5 = checkedIn("deadmines@5");
+    const v6 = checkedIn("deadmines@6");
+    expect(v6.maxAttemptsPerCell).toBe(1);
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", maxAttemptsPerCell: 0 });
+    expect(rest(v6)).toEqual(rest(v5));
+    const solo = JSON.parse(readFileSync(join(CAMPAIGNS_DIR, "..", "episodes", "deadmines-solo.json"), "utf8")) as CampaignDefinition;
+    const task = (d: CampaignDefinition) => ({ objective: d.objective, start: d.start, end: d.end, budget: d.budget, cells: d.cells, party: d.party, wiki: d.wiki, wikiCoords: d.wikiCoords, agents: d.arms.map((a) => a.agents) });
+    expect(task(v6)).toEqual(task(solo));
+    const roster: Record<string, PairRosterEntry & { model: string }> = { astra: { model: "gpt-6.2-astra", driver: "codex" } };
+    const c = { name: v6.id, version: v6.version, arms: v6.arms, assignments: [{ model: "astra", runsPerCell: 1 }] };
+    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
+    expect(launchLoopOf({ driver: "codex", fanout: true }, {}).loop).toBe("program");
+  });
+
   test("program-shakedown-party@1 is deadmines@5's first three members, one agent, ending on Rhahk'Zor", () => {
     const party = checkedIn("program-shakedown-party@1");
     const v5 = checkedIn("deadmines@5");
