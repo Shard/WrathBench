@@ -1073,7 +1073,7 @@ async function main(): Promise<void> {
   /** A fan-out run's roster, on that sandbox: its seats, their leases and their records (`fanout-run.ts`). */
   const roster: CharacterRoster | undefined =
     config.fanout !== undefined && fanoutSignals !== undefined
-      ? openFanout({ fanout: config.fanout, moduleUrl: config.moduleUrl, runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), sandbox, secrets: trajectory, signals: fanoutSignals })
+      ? openFanout({ fanout: config.fanout, moduleUrl: config.moduleUrl, runDir, runsDir: config.runsDir, ...(config.world !== undefined ? { world: config.world } : {}), sandbox, secrets: trajectory, signals: fanoutSignals, ownGuids: launchContext?.ownGuids ?? [] })
       : undefined;
   /** Stop the sandbox, then close the record it was draining into: bounded, and never the reason an exit fails. */
   const stopSandbox = async (): Promise<void> => {

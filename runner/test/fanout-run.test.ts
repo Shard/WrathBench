@@ -15,18 +15,19 @@ import { join } from "node:path";
 import { SessionReader, validateSession, type CallRow } from "@wrathbench/mcp/record";
 import { Scratchpad } from "@wrathbench/mcp/scratchpad";
 import { assertNoTenantAccount, fanoutConfigSchema, loadRunConfig } from "../src/config";
-import { fanoutSessionNote, knownCharacters, openFanout, readRoster, ROSTER_FILE } from "../src/fanout-run";
+import { fanoutOwnGuids, fanoutSessionNote, knownCharacters, openFanout, readRoster, ROSTER_FILE } from "../src/fanout-run";
 import { ContextBuilder } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
 import { ClosedWindowReflectGate } from "../src/reflect";
 import { configFromArgs, fanoutFromArgs } from "../src/run";
 import { RunArgsError } from "../src/run-flags";
 import { SandboxHost } from "../src/sandbox/host";
-import { characterSessionDir, characterSessionDirs, RecordSignals, removeSessionRing, SESSION_DIR, SESSIONS_DIR } from "../src/session-record";
+import { characterSessionDir, characterSessionDirs, openSessionRecord, RecordSignals, removeSessionRing, SESSION_DIR, SESSIONS_DIR } from "../src/session-record";
 import { callTool, TOOLS, toolsFor, type ToolContext } from "../src/tools";
 import { Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { PORT_SECRET, startStub } from "./fixtures/fanout-module";
+import { recordDrain } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -259,4 +260,27 @@ describe("a fan-out run, end to end", () => {
     expect(readRoster(r.runDir).map((e) => e.in)).toEqual([false]);
     r.trajectory.close();
   }, 60_000);
+});
+
+describe("the deployment's own guids a fan-out run's records count", () => {
+  test("the staged characters' and, in a run pod, the launcher's: a sibling run's member then keeps its guid in the record", async () => {
+    const fanout = { characters: 2, accounts: ["PARTY1", "PARTY2"], staged: [{ character: "Aldric", account: "PARTY1", guid: "7" }, { character: "Brenna", account: "PARTY2" }] };
+    expect(fanoutOwnGuids(fanout)).toEqual(["7"]);
+    expect(fanoutOwnGuids(fanout, ["12", "7"])).toEqual(["7", "12"]);
+
+    // A pod's runs directory holds its own run and nothing else: guid 12, a
+    // sibling run's character on the same world, is known only to the launcher.
+    const kill = (runDir: string, runsDir: string, launched?: readonly string[]) => {
+      const { writer } = openSessionRecord({ runDir, runsDir, token: "seat-token-aldric", scrub: (t) => t, character: "Aldric", ownGuids: fanoutOwnGuids(fanout, launched) });
+      writer.ingest(recordDrain({ character: { guid: "7", name: "Aldric", race: 1, class: 1 }, events: [{ ts: Date.now(), kind: "kill", killerGuid: "12", victimGuid: "4000", entry: 639, rank: 1, self: false, member: true } as never] }));
+      return writer.close().then(() => new SessionReader(characterSessionDir(runDir, "Aldric")).rows("events").filter((r) => r.kind === "kill"));
+    };
+    const without = tempDir("wrathbench-fanout-own-");
+    const foreign = await kill(join(without, "run"), without);
+    expect(foreign).toHaveLength(1);
+    expect(foreign[0]).toMatchObject({ victimGuid: "4000", member: true });
+    expect(foreign[0]).not.toHaveProperty("killerGuid");
+    const withLauncher = tempDir("wrathbench-fanout-own-");
+    expect((await kill(join(withLauncher, "run"), withLauncher, ["12"]))[0]).toMatchObject({ killerGuid: "12", member: true });
+  });
 });
