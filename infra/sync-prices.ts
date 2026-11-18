@@ -49,16 +49,17 @@
  * next window begins", which is what makes every run already on disk price
  * exactly as it did before windows existed.
  *
- * One hole this does not close: an id the catalogue *drops* has its windows
- * emptied, so a delisted model's runs go unpriced rather than keeping the
- * rates they really billed at (an entry's `delisted` says why an id has
- * none). That is the 2026-08-29 delisting decision standing as it was; whether
- * a delisted id should keep its history is a question about what a blank
- * means, and the operator's. The emptied id stays on its entry, so it is asked
- * for again on every sync and a relisting is picked up rather than needing to
- * be noticed. Nothing else in the file is touched: the sync rewrites only
- * `prices.openrouter` blocks and the provider's `asOf`, in the file's one
- * spelling (`formatCatalogue`).
+ * **History only grows.** An id the catalogue no longer lists keeps every
+ * window it had, untouched: its runs billed at those rates, and a blank would
+ * say they cost nothing knowable. The sync names such ids on its output and
+ * never clears them. This replaces the earlier rule (2026-08-29) under which a
+ * dropped id's windows were emptied; the ids emptied under it stay empty, an
+ * entry's `delisted` saying why where one does, because there is no rate left
+ * to restore. A kept id stays on its entry, so it is asked for again on every
+ * sync and a relisting at a new rate appends a window like any other change.
+ * Nothing else in the file is touched: the sync writes only `prices.openrouter`
+ * blocks and the provider's `asOf`, in the file's one spelling
+ * (`formatCatalogue`).
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -106,12 +107,13 @@ export function sameRates(a: SyncedPrice, b: SyncedPrice): boolean {
  * the catalogue now quotes something else.
  *
  * Pure, so the interesting behaviour is testable without a catalogue. Rules, in
- * order: an id the catalogue no longer prices is dropped (see the header); a
- * suffixless id quoted at 0/0 keeps the windows it had and gains none
- * (`isZeroQuote`); an unchanged rate leaves the id's windows byte-identical; a
- * changed rate appends `{ ...fresh, from: today }`; and a change on a day that
- * already has a window replaces it, so a second sync in one day corrects
- * rather than stacks.
+ * order: an id the catalogue no longer prices keeps the windows it had (see
+ * the header); a suffixless id quoted at 0/0 keeps the windows it had and gains
+ * none (`isZeroQuote`); an unchanged rate leaves the id's windows
+ * byte-identical; a changed rate appends `{ ...fresh, from: today }`; and a
+ * change on a day that already has a window replaces it, so a second sync in
+ * one day corrects rather than stacks. A window dated before today is never
+ * removed or rewritten.
  */
 export function mergeWindows(
   existing: Readonly<Record<string, readonly SyncedWindow[]>> | undefined,
@@ -119,6 +121,10 @@ export function mergeWindows(
   today: string,
 ): Record<string, SyncedWindow[]> {
   const out: Record<string, SyncedWindow[]> = {};
+  for (const [id, prior] of Object.entries(existing ?? {})) {
+    // No longer listed: every window it had, as it was.
+    if (fresh[id] === undefined && prior.length > 0) out[id] = prior.map((w) => ({ ...w }));
+  }
   for (const id of Object.keys(fresh).sort()) {
     const price = fresh[id]!;
     const prior = existing?.[id] ?? [];
@@ -237,12 +243,12 @@ export function catalogueWindows(doc: Doc): Record<string, SyncedWindow[]> {
  * Write a sync's windows onto the catalogue's entries. Pure: the document in,
  * a new document and the ids it could not place out.
  *
- * `windows` is `mergeWindows`'s answer: every id the OpenRouter catalogue
- * priced. An id with windows goes onto the entry it resolves to (its key or an
- * alias, as every reader compares ids); an id with none that already has a
- * block is emptied, its `delisted` note kept; an id with none and no block
- * stays absent. An id with windows no entry lists is returned, never written.
- * Nothing but `prices.openrouter` blocks and the provider's `asOf` changes.
+ * `windows` is `mergeWindows`'s answer: every id the file should price. An id
+ * with windows goes onto the entry it resolves to (its key or an alias, as
+ * every reader compares ids); an id absent from `windows` keeps its block
+ * exactly as it was, so nothing the sync is not told about is ever cleared. An
+ * id with windows no entry lists is returned, never written. Nothing but
+ * `prices.openrouter` blocks and the provider's `asOf` changes.
  */
 export function applyOpenRouterWindows(doc: Doc, windows: Readonly<Record<string, SyncedWindow[]>>, asOf: string): { doc: Doc; unlisted: string[] } {
   const next = structuredClone(doc);
@@ -250,10 +256,6 @@ export function applyOpenRouterWindows(doc: Doc, windows: Readonly<Record<string
   for (const [key, e] of Object.entries(next.models)) {
     index.set(normalizeModelId(key), key);
     for (const a of e.aliases ?? []) index.set(normalizeModelId(a), key);
-  }
-  // Ids the OpenRouter catalogue no longer prices: empty them where they are.
-  for (const e of Object.values(next.models)) {
-    for (const [id, row] of Object.entries(e.prices?.openrouter ?? {})) if (windows[id] === undefined) row.windows = [];
   }
   const unlisted: string[] = [];
   for (const id of Object.keys(windows).sort()) {
@@ -311,14 +313,17 @@ export async function main(): Promise<void> {
     .filter(([id, price]) => isZeroQuote(id, price))
     .map(([id]) => id);
   const appended = Object.entries(windows)
-    .filter(([, ws]) => ws[ws.length - 1]?.from === today)
+    .filter(([id, ws]) => models[id] !== undefined && ws[ws.length - 1]?.from === today)
     .map(([id]) => id);
+  // Wanted, not quoted, and already holding windows: kept as they are.
+  const kept = missing.filter((id) => windows[id] !== undefined);
+  const unpriced = missing.filter((id) => windows[id] === undefined);
 
   const { doc: out, unlisted } = applyOpenRouterWindows(doc, windows, today);
   const written = formatCatalogue(out);
   parseCatalogue(written, OUT);
   await Bun.write(OUT, written);
-  console.log(`${OUT}: ${Object.keys(windows).length - unlisted.length} OpenRouter ids priced of ${wanted.size} wanted, from ${rows.length} catalogue rows`);
+  console.log(`${OUT}: ${Object.keys(windows).filter((id) => models[id] !== undefined && !unlisted.includes(id)).length} OpenRouter ids priced of ${wanted.size} wanted, from ${rows.length} catalogue rows`);
   if (appended.length > 0) {
     // A rate moved. Earlier runs keep the window they billed at; only runs from
     // today forward read the new one.
@@ -333,10 +338,15 @@ export async function main(): Promise<void> {
     // Priced by OpenRouter, but nobody has said who made it: no row is written.
     console.log(`priced by OpenRouter but not in the model catalogue (no row written; add an entry to ${OUT}, then sync again): ${unlisted.join(", ")}`);
   }
-  if (missing.length > 0) {
+  if (kept.length > 0) {
+    // Gone from OpenRouter, but their runs billed at the rates on file: every
+    // window stays, and a relisting is picked up on a later sync.
+    console.log(`no longer priced by OpenRouter (every window kept): ${kept.join(", ")}`);
+  }
+  if (unpriced.length > 0) {
     // Most of these are OpenCode Zen / local ids, which OpenRouter never
     // carries — they are free or local and priced by rule, not by table.
-    console.log(`not in the OpenRouter catalogue (left unpriced): ${missing.join(", ")}`);
+    console.log(`not in the OpenRouter catalogue (left unpriced): ${unpriced.join(", ")}`);
   }
 }
 

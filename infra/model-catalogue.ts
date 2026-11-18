@@ -104,7 +104,7 @@ export interface CatalogueProvider {
   subscription?: boolean;
 }
 
-/** One OpenRouter id's synced windows. An empty list is an id the catalogue no longer prices. */
+/** One OpenRouter id's synced windows. A sync only appends; an empty list is an id emptied before it kept history. */
 export interface OpenRouterPrice {
   windows: readonly RateWindow[];
   /** Why the id is unpriced for good: OpenRouter delisted it, so no sync can bring a rate back. */
@@ -413,8 +413,8 @@ export function priceTables(cat: ModelCatalogue): {
     const p = entry.prices;
     if (p === undefined) continue;
     for (const [id, row] of Object.entries(p.openrouter ?? {})) {
-      // An emptied id is one the catalogue stopped pricing: asked for again on
-      // every sync, and read as having no row at all.
+      // An empty list (an id emptied before the sync kept history) is asked
+      // for again on every sync, and read as having no row at all.
       if (row.windows.length > 0) synced[id] = row.windows;
       if (row.delisted !== undefined) delisted[id] = row.delisted;
     }
