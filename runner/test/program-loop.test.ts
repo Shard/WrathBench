@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, withoutDeathRefusals, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
+import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, withoutDeathRefusals, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
 import type { DeathCause } from "../src/sandbox/snippet-delta";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
@@ -701,12 +701,24 @@ describe("ProgramWake", () => {
     const second = c.now();
     const repeats = records.filter((r) => r["t"] === "program_error");
     expect(repeats).toEqual([
-      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 4, since: start, at: first },
-      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 2, since: first, at: second },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 4, since: start, at: first },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 2, since: first, at: second },
       { t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 1, since: first, at: second },
     ]);
     expect(first).toBeGreaterThan(start);
     expect(second).toBeGreaterThan(first + 7_000);
+  });
+
+  test("a refusal's action and status are read off its signature from the right; an error's or memory's signature yields none", () => {
+    expect(refusalOfSignature("grind||castSpell|not_ready")).toEqual({ action: "castSpell", status: "not_ready" });
+    expect(refusalOfSignature("party|Tankpartyb|moveTo|superseded")).toEqual({ action: "moveTo", status: "superseded" });
+    // A routine whose name holds a pipe still gives only the last two words.
+    expect(refusalOfSignature("my|routine|Tankpartyb|moveTo|too_far")).toEqual({ action: "moveTo", status: "too_far" });
+    expect(refusalOfSignature("grind|TypeError|routines/grind.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|routines/x.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|")).toEqual({});
+    expect(refusalOfSignature("|SyntaxError|")).toEqual({});
+    expect(refusalOfSignature("memory|save")).toEqual({});
   });
 
   test("a wake that stays in the conversation marks the routine values it showed; a fixed-loop turn-end wake, never kept, does not", async () => {

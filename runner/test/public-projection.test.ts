@@ -2344,7 +2344,7 @@ describe("the action log in a public window", () => {
     const records = [
       { t: "program_error", ts: 50, kind: "refusal", signature, name: routine, character: CHARACTER_NAME, seat: "poison-seat", action: "castSpell", status: "not_ready", deploy: 2, at: 49, [POISON.smuggled]: 1 },
       { t: "program_error", ts: 51, kind: "error", signature: `${routine}|TypeError|routines/grind.ts:42`, name: routine, character: CHARACTER_NAME, error: `TypeError: ${POISON.lastErrorMessage}`, frames: [{ file: POISON.configPath, line: 42 }], deploy: 2, at: 50 },
-      { t: "program_error", ts: 52, kind: "repeat", signature, count: 12, since: 30, at: 52 },
+      { t: "program_error", ts: 52, kind: "repeat", signature, action: "castSpell", status: "not_ready", count: 12, since: 30, at: 52 },
       // Prose under a listed name is not a word, and stays out.
       { t: "program_error", ts: 53, kind: "refusal", signature, name: routine, action: `castSpell ${POISON.objective}`, status: { code: POISON.smuggled }, at: "53" },
     ];
@@ -2355,11 +2355,11 @@ describe("the action log in a public window", () => {
     expect(out.map((o) => keyPaths(o))).toEqual([
       allow(["i", "t", "ts", "kind", "action", "status", "at"]),
       allow(["i", "t", "ts", "kind", "at"]),
-      allow(["i", "t", "ts", "kind", "count", "since", "at"]),
+      allow(["i", "t", "ts", "kind", "action", "status", "count", "since", "at"]),
       allow(["i", "t", "ts", "kind"]),
     ]);
     expect(out[0]).toMatchObject({ kind: "refusal", action: "castSpell", status: "not_ready", at: 49 });
-    expect(out[2]).toMatchObject({ kind: "repeat", count: 12, since: 30, at: 52 });
+    expect(out[2]).toMatchObject({ kind: "repeat", action: "castSpell", status: "not_ready", count: 12, since: 30, at: 52 });
     // A fixed point, as the publisher's acceptance check re-projects it.
     expect(out.map((o) => projectEntry(o))).toEqual(out);
   });

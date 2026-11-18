@@ -483,7 +483,7 @@ function writeTurn(traj: Trajectory, session: FixtureSession, spec: Spec, turn: 
     // A wake after the patrol, and its count of what the routine kept hitting since the last.
     at(58_000);
     traj.append({ t: "wake", via: "yield", turn, fired: "cap", sleptMs: 30_000, maxMs: 300_000, n: turn });
-    traj.append({ t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 9 + (turn % 5), since: t, at: t + 58_000 });
+    traj.append({ t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 9 + (turn % 5), since: t, at: t + 58_000 });
     if (phase === 4) traj.append({ t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 2, since: t, at: t + 58_000 });
   }
   return owner;
