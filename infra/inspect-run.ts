@@ -2177,6 +2177,14 @@ function fmtUsd(usd: number): string {
   return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
 }
 
+/** A run's tokens at one price row: the prompt less its cache at the input rate (runner/viewer/pricing.ts `costOf`). */
+function listUsd(u: Pick<UsageTotals, "input" | "output" | "cacheRead" | "cacheWrite">, p: RequestPrice): number {
+  const read = u.cacheRead ?? 0;
+  const write = u.cacheWrite ?? 0;
+  const fresh = Math.max(0, u.input - read - write);
+  return (fresh * p.input + read * p.cacheRead + write * p.cacheWrite + u.output * p.output) / 1e6;
+}
+
 /** Input with its cache figures in brackets, where any were reported. */
 function inputText(input: number, cacheRead: number | null, cacheWrite: number | null): string {
   const cache = [cacheRead !== null ? `cache read ${fmtTokens(cacheRead)}` : null, cacheWrite !== null ? `write ${fmtTokens(cacheWrite)}` : null].filter((b) => b !== null);
@@ -2191,7 +2199,20 @@ function inputText(input: number, cacheRead: number | null, cacheWrite: number |
  * an opening-snapshot output. `live`: the record's last driver turn is still
  * running, so its messages are in flight rather than cut short.
  */
-export function costLine(c: CostTally, o: { claude?: boolean; live?: boolean } = {}): string {
+export function costLine(
+  c: CostTally,
+  o: {
+    claude?: boolean;
+    live?: boolean;
+    /**
+     * A paid run on a subscription endpoint (OpenCode Go, `subscriptionBase`):
+     * its price row, or why it has none. Its `usage.cost` is the allowance's
+     * $0 or Extra Usage past it, never the run's cost, so the line leads with
+     * the tokens at list, as the viewer does (pricing.ts `subscriptionActual`).
+     */
+    subscription?: RequestPrice | { none: string };
+  } = {},
+): string {
   const u = c.usage;
   const k = c.claude;
   const claude = o.claude === true || c.cli.size > 0 || k.results > 0;
@@ -2225,13 +2246,29 @@ export function costLine(c: CostTally, o: { claude?: boolean; live?: boolean } =
     if (u.responses > u.reported) parts.push(`${u.responses} response records, ${u.reported} with usage (one per message; the rest are its earlier envelopes)`);
     return `over the run: ${usd} · ${parts.join(" · ")}`;
   }
-  const charged: string[] = [];
-  if (u.usd !== null) charged.push(`${fmtUsd(u.usd)} reported by the provider on ${u.costed} of ${u.responses} responses`);
-  const usd = charged.length === 0 ? "no charge reported by the provider (the viewer prices the tokens at list)" : charged.join(" + ");
   const tokens =
     u.reported === 0
       ? `no tokens reported on ${u.responses} responses`
       : `tokens ${inputText(u.input, u.cacheRead, u.cacheWrite)}, out ${fmtTokens(u.output)}, reported on ${u.reported} of ${u.responses} responses`;
+  const sub = o.subscription;
+  if (sub !== undefined) {
+    const listed =
+      "none" in sub
+        ? `no list price here (${sub.none}; the viewer's figure is the one)`
+        : u.reported === 0
+          ? `no tokens to price at list (${sub.id})`
+          : `${fmtUsd(listUsd(u, sub))} at list (${sub.id}), as-if-metered: a subscription endpoint, so no actual`;
+    const allowance =
+      u.usd === null
+        ? "no usage.cost reported"
+        : u.usd > 0
+          ? `usage.cost ${fmtUsd(u.usd)} on ${u.costed} of ${u.responses} responses: Extra Usage past a spent allowance, a real charge on top of the plan`
+          : `usage.cost $0 on ${u.costed} of ${u.responses} responses: inside the allowance, not the run's cost`;
+    return `over the run: ${listed} · ${allowance} · ${tokens}`;
+  }
+  const charged: string[] = [];
+  if (u.usd !== null) charged.push(`${fmtUsd(u.usd)} reported by the provider on ${u.costed} of ${u.responses} responses`);
+  const usd = charged.length === 0 ? "no charge reported by the provider (the viewer prices the tokens at list)" : charged.join(" + ");
   return `over the run: ${usd} · ${tokens}`;
 }
 
@@ -2415,7 +2452,13 @@ export async function inspectRun(runId: string, opts: Ctx & Window, out: Out): P
       // A v1 run's milestones and turn-ins are its record's `events` rows, not trajectory records; a fan-out run's are each character's, below.
       const marks = [["pause", "resume", "termination", "quest_complete", "milestone"].filter((t) => k(t) > 0).map((t) => `${t} ${k(t)}`).join(", "), v1 ? eventMarks(join(dir, "session"), opts) : ""];
       if (marks.some((m) => m !== "")) say("marks", marks.filter((m) => m !== "").join(" · "));
-      say("cost", costLine(cost ?? (await storeCost(via.store!, runId, claude)), { claude, live: owned && row?.ended_at == null }));
+      const subRun = { model: row?.model ?? str(config["model"]), driver, apiBase: str(config["apiBase"]), resolvedModel: str(obj(meta?.["resolved"])["model"]), billing: str(config["billing"]) };
+      const { cat } = catalogueAt(null);
+      const subscription = !claude && subscriptionBase(cat, subRun) ? requestPrice(cat, subRun, started ?? opts.now) : undefined;
+      say(
+        "cost",
+        costLine(cost ?? (await storeCost(via.store!, runId, claude)), { claude, live: owned && row?.ended_at == null, ...(subscription !== undefined ? { subscription } : {}) }),
+      );
     }
     say("files", fileLine(dir));
     const session = sessionDir(dir);
@@ -4651,6 +4694,17 @@ function sameBase(a: string | null, b: unknown): boolean {
 }
 
 /**
+ * A paid run on an endpoint the catalogue marks `subscription` (OpenCode Go):
+ * runner/viewer/pricing.ts `isSubscriptionRun`. A free slug or a declared-free
+ * launch on the same base is free, not a subscription's.
+ */
+export function subscriptionBase(cat: Record<string, unknown> | null, run: { model: string | null; apiBase: string | null; billing: string | null }): boolean {
+  if (cat === null || run.apiBase === null || run.billing === "free") return false;
+  if (/(?::free$|-free$)/.test(run.model ?? "")) return false;
+  return Object.values(obj(cat["providers"])).some((p) => obj(p)["subscription"] === true && sameBase(run.apiBase, obj(p)["apiBase"]));
+}
+
+/**
  * The run's price row out of the model catalogue (infra/model-catalogue.json),
  * at the rate window in force at `at`: the part of runner/viewer/pricing.ts
  * `priceFor` that names a metered row, matched the same way, and pinned to it
@@ -4685,6 +4739,18 @@ export function requestPrice(
         const w = rateAt(pr["windows"], at);
         if (w !== null) return row(`${str(at0["label"]) ?? provider}/${model}`, w, `${provider} endpoint row, ${when(w, pr["asOf"])}`)!;
       }
+    }
+    // A subscription endpoint (OpenCode Go) with no row of its own: its catalogue
+    // entry's OpenRouter row, through the entry's key or aliases, as-if-metered
+    // (pricing.ts `subscriptionListPrice`). Never a 0/0 window: a paid run does not read free.
+    if (subscriptionBase(cat, run)) {
+      const id = model.trim().toLowerCase();
+      const key = Object.keys(models).find((k) => k.toLowerCase() === id || (Array.isArray(obj(models[k])["aliases"]) && (obj(models[k])["aliases"] as string[]).some((a) => a.toLowerCase() === id)));
+      if (key === undefined) return { none: `no listed price for ${model} on this subscription endpoint: no catalogue entry has it as a key or alias` };
+      const p = obj(obj(obj(models[key])["prices"])["openrouter"])[key];
+      const w = p === undefined ? null : rateAt(obj(p)["windows"], at);
+      if (w === null || (w.input === 0 && w.output === 0)) return { none: `no listed price for ${key}: its entry has no paid OpenRouter row` };
+      return row(key, w, `${key}'s OpenRouter row${key === model ? "" : ` (${model} is its alias)`}, ${when(w, obj(providers["openrouter"])["asOf"])}; as-if-metered (a subscription endpoint)`)!;
     }
     let host = "";
     try {
@@ -5196,6 +5262,9 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
           : "; each turn's usage is the driver's own per-turn delta"),
     );
     notes.push("codex: responses per wake counts the response records, one per item the model answered with (a tool call, a message); several items can share one model call");
+  }
+  if (subscriptionBase(cat, { model: row?.model ?? str(config["model"]), apiBase: str(config["apiBase"]), billing: str(config["billing"]) })) {
+    notes.push("a subscription endpoint (OpenCode Go): cost reported is its usage.cost, $0 inside the allowance and Extra Usage past it, never the run's cost; cost priced is, at list and as-if-metered");
   }
   notes.push("uncached input is the prompt less its cache reads (cache writes are in it); reasoning, where reported, is part of output");
   if (scan.pauses.length > 0) notes.push(`${scan.pauses.length} pause(s): paused time is left out of every minute and per-hour figure, and of the --at-minutes cuts`);
