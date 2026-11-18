@@ -17,6 +17,9 @@ rules that keep it off a file the server will still write to are in
 files/log-retention.pl. The secret is for GET /health only (the server's
 start time is one of the two rules) and never reaches a manifest or argv.
 
+With `networkPolicy` on, the pod may reach DNS and the module's port and
+nothing else (templates/networkpolicy.yaml).
+
 With `worlds` on, the same pass prunes each world's console log, saved at
 its teardown under the `worlds` subPath, by the same window.
 
