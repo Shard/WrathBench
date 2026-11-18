@@ -81,6 +81,23 @@ export interface OpenFanoutOptions {
   signals: RecordSignals;
   /** Where the port secret is read from; the process's own environment by default. */
   env?: Record<string, string | undefined>;
+  /**
+   * The guids the other runs on the run's world had recorded at launch, as a
+   * run pod's launcher read them (`LaunchContext.ownGuids`): a pod sees no
+   * other run, so its records cannot find them in the runs directory.
+   */
+  ownGuids?: readonly string[];
+}
+
+/**
+ * The guids every character's record of a fan-out run counts as the
+ * deployment's own before its index of the other runs' records: its staged
+ * characters' (the stager's report), and what its launcher read (`ownGuids`),
+ * as a single character's record takes `partyOwnGuids` and the launcher's.
+ */
+export function fanoutOwnGuids(fanout: FanoutConfig, launched: readonly string[] = []): string[] {
+  const staged = (fanout.staged ?? []).flatMap((s) => (s.guid !== undefined ? [s.guid] : []));
+  return [...new Set([...staged, ...launched])];
 }
 
 /**
@@ -95,7 +112,7 @@ export function openFanout(o: OpenFanoutOptions): CharacterRoster {
   const known = knownCharacters(o.fanout, readRoster(o.runDir));
   for (const e of known) o.secrets.redact(e.token);
   const module = moduleIdentity(o.moduleUrl, moduleAuthHeaders());
-  const ownGuids = (o.fanout.staged ?? []).flatMap((s) => (s.guid !== undefined ? [s.guid] : []));
+  const ownGuids = fanoutOwnGuids(o.fanout, o.ownGuids);
   const roster: CharacterRoster = new CharacterRoster({
     grant: { maxCharacters: o.fanout.characters, accounts: o.fanout.accounts },
     moduleUrl: o.moduleUrl,
