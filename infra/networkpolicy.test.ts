@@ -5,7 +5,9 @@
  * the set of destinations, not the YAML: the fleet and run pods reach the
  * module, DNS, TCP 443 off-LAN and the self-hosted model servers; only the
  * fleet reaches the API server and MySQL; neither reaches ClickHouse or the
- * viewer; and the switch defaults off, so shipping the chart changes nothing.
+ * viewer; the log-retention CronJob reaches DNS and the module's /health and
+ * nothing else; and the switch defaults off, so shipping the chart changes
+ * nothing.
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -28,7 +30,8 @@ type Policy = {
   metadata: { name: string };
   spec: { podSelector: { matchLabels: Record<string, string> }; policyTypes: string[]; egress?: Rule[]; ingress?: IngressRule[] };
 };
-type Doc = { kind?: string; metadata?: { name?: string; labels?: Record<string, string> }; spec?: { template?: { metadata?: { labels?: Record<string, string> } } }; data?: Record<string, string> } | null;
+type Template = { metadata?: { labels?: Record<string, string> } };
+type Doc = { kind?: string; metadata?: { name?: string; labels?: Record<string, string> }; spec?: { template?: Template; jobTemplate?: { spec?: { template?: Template } } }; data?: Record<string, string> } | null;
 
 const BASE = ["--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=harness-0.5-1-gabcdef0"];
 const KUBE_API = ["--set", "networkPolicy.kubeApi[0].cidr=10.43.0.1/32", "--set", "networkPolicy.kubeApi[0].port=443", "--set", "networkPolicy.kubeApi[1].cidr=192.0.2.10/32", "--set", "networkPolicy.kubeApi[1].port=6443"];
@@ -118,12 +121,15 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
   test("select the pods they are about: each workload's pod template, and a run pod whatever image or command its arm names", () => {
     const { code, docs } = render(ON);
     expect(code).toBe(0);
-    expect(policies(docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-fleet", "wrathbench-publisher", "wrathbench-run", "wrathbench-viewer"]);
+    expect(policies(docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-fleet", "wrathbench-log-retention", "wrathbench-publisher", "wrathbench-run", "wrathbench-viewer"]);
     for (const name of ["fleet", "viewer", "publisher", "collector"]) {
       const dep = docs.find((d) => d?.kind === "Deployment" && d.metadata?.name === `wrathbench-${name}`);
       const labels = dep!.spec!.template!.metadata!.labels!;
       for (const [k, v] of Object.entries(policy(docs, name).spec.podSelector.matchLabels)) expect([name, k, labels[k]]).toEqual([name, k, v]);
     }
+    const cron = docs.find((d) => d?.kind === "CronJob" && d.metadata?.name === "wrathbench-log-retention");
+    const cronLabels = cron!.spec!.jobTemplate!.spec!.template!.metadata!.labels!;
+    for (const [k, v] of Object.entries(policy(docs, "log-retention").spec.podSelector.matchLabels)) expect(["log-retention", k, cronLabels[k]]).toEqual(["log-retention", k, v]);
     const cm = docs.find((d) => d?.kind === "ConfigMap" && d.metadata?.name === "wrathbench-run-pod-template");
     const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
     const pod = buildRunPod(tpl, {
@@ -147,7 +153,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       expect(p.spec.policyTypes).toEqual(["Ingress", "Egress"]);
       expect(p.spec.ingress ?? []).toEqual([]);
     }
-    for (const name of ["viewer", "publisher", "collector"]) expect(policy(docs, name).spec.policyTypes).toEqual(["Egress"]);
+    for (const name of ["viewer", "publisher", "collector", "log-retention"]) expect(policy(docs, name).spec.policyTypes).toEqual(["Egress"]);
   }, HELM_TEST_MS);
 
   test("let the fleet and run pods reach the module, DNS, TCP 443 off the LAN and the self-hosted model server, and nothing in the cluster but that", () => {
@@ -176,6 +182,8 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
     for (const api of [{ ip: "10.43.0.1", port: 443 }, { ip: "192.0.2.10", port: 6443 }]) {
       expect([api.ip, admits(fleet, api), admits(run, api)]).toEqual([api.ip, true, false]);
     }
+    // Kept: the worlds' realm rows and schemas, the party stager and a gate
+    // smoke's fixture all write MySQL from the fleet pod.
     expect(admits(fleet, { component: "db", port: 3306 })).toBe(true);
     expect(admits(run, { component: "db", port: 3306 })).toBe(false);
   }, HELM_TEST_MS);
@@ -194,6 +202,19 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       expect([p.metadata.name, admits(p, { ip: "192.0.2.20", port: 1234 })]).toEqual([p.metadata.name, false]);
     }
     expect([admits(collector, { component: "worldserver", port: 8086 }), admits(collector, { ip: PUBLIC, port: 443 })]).toEqual([false, false]);
+  }, HELM_TEST_MS);
+
+  test("let the log-retention CronJob reach DNS and the module's /health and nothing else, and render no policy when retention is off", () => {
+    const { docs } = render(ON);
+    const p = policy(docs, "log-retention");
+    expect([admits(p, { component: "worldserver", port: 8086 }), admits(p, { ...DNS, protocol: "UDP" }), admits(p, { ...DNS, protocol: "TCP" })]).toEqual([true, true, true]);
+    for (const d of [...IN_CLUSTER_SERVICES, { component: "db", port: 3306 }, { component: "world", port: 8086 }]) expect([d.component, admits(p, d)]).toEqual([d.component, false]);
+    expect([admits(p, { ip: PUBLIC, port: 443 }), admits(p, { ip: "192.0.2.20", port: 1234 })]).toEqual([false, false]);
+    // Retention off renders no CronJob, and so no policy for it.
+    const off = render([...ON, "--set", "worldserver.logRetention.days=0"]);
+    expect(off.code).toBe(0);
+    expect(off.docs.some((d) => d?.kind === "CronJob" && d.metadata?.name === "wrathbench-log-retention")).toBe(false);
+    expect(policies(off.docs).some((x) => x.metadata.name === "wrathbench-log-retention")).toBe(false);
   }, HELM_TEST_MS);
 
   test("party staging off renders no worldserver policy and no SOAP rule anywhere", () => {
@@ -215,7 +236,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       expect(ws.spec.policyTypes).toEqual(["Ingress"]);
       const dep = docs.find((d) => d?.kind === "Deployment" && d.metadata?.name === "wrathbench-worldserver");
       for (const [k, v] of Object.entries(ws.spec.podSelector.matchLabels)) expect([k, dep!.spec!.template!.metadata!.labels![k]]).toEqual([k, v]);
-      for (const component of ["fleet", "runner", "run", "viewer", "publisher", "collector", "authserver"]) {
+      for (const component of ["fleet", "runner", "run", "viewer", "publisher", "collector", "log-retention", "authserver"]) {
         // Unchanged: 8085 and 8086 from any pod, as with no policy.
         expect([component, admitsIn(ws, { component }, 8085), admitsIn(ws, { component }, 8086)]).toEqual([component, true, true]);
         expect([component, admitsIn(ws, { component }, 7878)]).toEqual([component, component === "fleet" || component === "runner"]);
@@ -229,9 +250,9 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
     }
     // The egress half: the fleet may dial SOAP, a run pod and the rest may not.
     const { docs } = render([...ON, ...STAGING]);
-    expect(policies(docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-fleet", "wrathbench-publisher", "wrathbench-run", "wrathbench-viewer", "wrathbench-worldserver"]);
+    expect(policies(docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-fleet", "wrathbench-log-retention", "wrathbench-publisher", "wrathbench-run", "wrathbench-viewer", "wrathbench-worldserver"]);
     expect(admits(policy(docs, "fleet"), { component: "worldserver", port: 7878 })).toBe(true);
-    for (const name of ["run", "viewer", "publisher", "collector"]) {
+    for (const name of ["run", "viewer", "publisher", "collector", "log-retention"]) {
       expect([name, admits(policy(docs, name), { component: "worldserver", port: 7878 })]).toEqual([name, false]);
     }
     // The fleet's other destinations are what they were.
@@ -251,6 +272,6 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
     // Without the fleet there is no fleet or run policy, and no API to name.
     const noFleet = render(["--set", "networkPolicy.enabled=true", "--set", "fleet.enabled=false"]);
     expect(noFleet.code).toBe(0);
-    expect(policies(noFleet.docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-publisher", "wrathbench-viewer"]);
+    expect(policies(noFleet.docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-log-retention", "wrathbench-publisher", "wrathbench-viewer"]);
   }, HELM_TEST_MS);
 });

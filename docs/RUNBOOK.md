@@ -2838,7 +2838,9 @@ the key restart onto it with the fleet drained. On the quickstart stack it is
 
 The chart can put NetworkPolicies on the pods that run model-driven code: the
 fleet pod and the run pods. Each gets an egress allow-list and no ingress. The
-viewer, publisher and collector get egress allow-lists too. The switch is
+viewer, publisher, collector and the log-retention CronJob get egress
+allow-lists too; log-retention's is DNS and the module on 8086, for the
+`/health` its pass reads. The switch is
 `networkPolicy.enabled`, off by default. `templates/networkpolicy.yaml`
 says what each policy admits and why. In short, the fleet and run pods may
 reach:
@@ -2851,8 +2853,10 @@ reach:
   be written as IPv4:port.
 
 Only the fleet may reach the Kubernetes API, for the run-pod launcher, and
-MySQL, for a gate smoke that stages a fixture (none does today). Neither may
-reach ClickHouse, the viewer or any other address on the LAN.
+MySQL, which it writes directly with `worlds` on (each world's realm row and
+schema) and with `staging` on (the party stager), and for a gate smoke that
+stages a fixture (none does today). Neither may reach ClickHouse, the viewer
+or any other address on the LAN.
 
 **Turning it on is a release step of its own.** Ship the chart first, with the
 switch off, which changes nothing. Then set the values in a separate GitOps
@@ -2874,7 +2878,7 @@ the policies on with the fleet quiet, and check the result before resuming:
 
 ```
 bun wb fleet drain                   # switch set, every run parked, fleet at 0
-#  ...the values commit lands; `kubectl -n wrathbench get networkpolicy` lists five, plus the worldserver's with staging on and the worlds' with worlds on
+#  ...the values commit lands; `kubectl -n wrathbench get networkpolicy` lists six (one more each with staging and worlds on)
 kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1   # if the upgrade has not; it comes up paused
 kubectl -n wrathbench exec deploy/wrathbench-fleet -- bun -e '
 for (const u of ["http://worldserver:8086/health", "https://openrouter.ai/api/v1/models",
@@ -2887,11 +2891,15 @@ bun wb fleet resume
 
 Every line but the last two should print an HTTP status: any status means the
 connection was made. ClickHouse and the viewer should print `TimeoutError`.
-Resume as soon as it passes. After the resume, watch three things with the
-fleet live:
+Resume as soon as it passes. After the resume, watch these with the fleet
+live:
 
 - the next preflight gate pass, and the next `bun wb smoke suite` (kill-credit's
   fixture staging uses MySQL from the runner pod);
+- with `worlds` on, the first world created and ended, and with `staging` on,
+  the first staged launch: both write MySQL from the fleet pod;
+- the next log-retention pass: its log says `server start unknown` if it could
+  not reach `/health`;
 - each driver's first episode, through its first model call and first module
   call;
 - the first run pod.
