@@ -173,6 +173,18 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("a resume after one that restarted the wakes at 1 continues past both: the next wake is the run's count plus one", () => {
+    // As a paused freeplay run had it: wakes 1–9, a resume from before the count continued, wakes 1–2.
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    for (let n = 1; n <= 9; n++) traj.append({ t: "wake", n, block: `[wake ${n}]` });
+    traj.append({ t: "resume", turnOffset: 304 });
+    for (let n = 1; n <= 2; n++) traj.append({ t: "wake", n, block: `[wake ${n}]` });
+    const { wakesBefore } = traj.appendResume("run", { harnessVersion: "t" });
+    expect(wakesBefore).toBe(11);
+    traj.close();
+  });
+
   test("termination and pause reasons are recorded", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
