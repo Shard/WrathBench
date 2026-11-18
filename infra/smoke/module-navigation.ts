@@ -45,15 +45,20 @@
  *     through trigger 78 into the Deadmines, a walk to (-178, -418, 56), then
  *     to (-240.8, -489.9, 55.3), 4.8y over the corridor floor. The core settled
  *     that end on a surface 1.4y under the request and the last segment read
- *     as a 5.4y climb. The guard's verdict is the first answer: the move is
- *     dispatched, not `drop`, with `meshZ` at the floor (about 50.5), however
- *     the walk then ends. The Defias on the way attack the level-80
- *     character (hundreds of swings a run on harness-1.0-41) and a stun or a
- *     knock ends a walk `stunned` or `interrupted`, so each walk is
+ *     as a 5.4y climb. The leg is VERDICT-ONLY: the move to the corridor is
+ *     dispatched, not `drop`, with `meshZ` at the floor (about 50.5) and a
+ *     route of about SNEED_PATH_YARDS, and is walked once; how that walk ends
+ *     is printed and never asserted. The Defias on the route attack the
+ *     level-80 character and it does not survive them: both walks' paths run
+ *     within 1y of standing spawns and Rhahk'Zor's patrol, a dungeon's
+ *     creatures never leash, and the train killed it (9.5k health to 0 in
+ *     about 45 s) on harness-1.0-41 and 1.0-49 alike, so arrival in the
+ *     corridor is not something a smoke character can show without a GM's
+ *     hand (gear, an instance bind), which the smoke does not use. The walk
+ *     to the leg's start must still arrive, since the verdict is judged from
+ *     there: a stun or a knock ends it `stunned` or `interrupted`, so it is
  *     re-issued from where it stopped, as a player would, up to
- *     MESH_WALK_TRIES times, and must then arrive. The trash is neither
- *     fought nor cleared: nothing short of a GM's hand would clear it, and
- *     the leg is about the route, which a level-80 character survives.
+ *     MESH_WALK_TRIES times, and a death on it fails the leg as a death.
  * `bun wb smoke` does not carry the variable into the runner pod, so pin the
  * legs there with
  * `kubectl -n wrathbench exec deploy/wrathbench-runner -- env
@@ -73,7 +78,16 @@
  * through the real CMSG_CHAR_DELETE path before creating this run's (the same
  * pattern as quest-accept-status.ts / kill-credit.ts), and only logs out at
  * the end — a disconnected character lingers 60s in the core's
- * WorldSession::expireTime, during which a delete is silently ignored.
+ * WorldSession::expireTime, during which a delete is silently ignored, so a
+ * re-run inside that minute waits it out (lib/transient.ts,
+ * `deleteThroughLinger`): about 70 s before the first move.
+ *
+ * Every walk that must arrive is walked once more, announced with RETRY:, when
+ * it ends `interrupted` with the character alive and the server having carried
+ * it MOVE_ACCEPTED_YARDS or more (lib/transient.ts, `moveRetryReason` with a
+ * start): a world tick stall of about 3 s stops the walker's heartbeats and
+ * trips its 15y drift check mid-walk (harness-1.0-49, the after-failure walk to
+ * the courtyard, 10.6y in). One that never left its start stays a failure.
  *
  * Run standalone (defaults to the PROBE account):
  *   bun wb smoke module-navigation
@@ -89,6 +103,7 @@ import { failOnce } from "./lib/fail";
 import { applyScenario, type FixtureContext } from "./lib/fixture";
 import { moduleBase, moduleWsBase } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { deleteThroughLinger, moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -135,8 +150,13 @@ async function req(method: string, path: string, body?: unknown): Promise<{ stat
 
 const events: any[] = [];
 
-/** A logged-in session's token and the events its socket has seen: the main legs' unless a leg opens its own. */
-type Leg = { token: string; events: any[] };
+type Vec = { x: number; y: number; z: number };
+/**
+ * A logged-in session's token, the events its socket has seen, and where the
+ * server last put the character (login, then each move's answer): the main
+ * legs' unless a leg opens its own.
+ */
+type Leg = { token: string; events: any[]; at?: Vec };
 const MAIN: Leg = { token: TOKEN, events };
 
 function openEvents(leg: Leg = MAIN): Promise<WebSocket> {
@@ -167,21 +187,15 @@ async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: strin
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 async function deletePreviousCharacter(): Promise<void> {
-  for (let attempt = 0; attempt < 4; ++attempt) {
-    const r = await req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER });
-    if (r.json?.deleted === true) {
-      log(`deleted last run's ${CHARACTER}: ${JSON.stringify(r.json)}`);
-      return;
-    }
-    if (r.json?.error === "character_not_found") {
-      log(`no previous ${CHARACTER} to delete (first run on this realm)`);
-      return;
-    }
-    log(`character-delete attempt ${attempt}: ${r.status} ${JSON.stringify(r.json)}`);
-    if (r.status !== 504) break;
-    await Bun.sleep(2000);
-  }
-  fail(`could not delete last run's ${CHARACTER}`);
+  const r = await deleteThroughLinger({
+    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
+    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
+    character: CHARACTER,
+    log,
+  });
+  if (!r.ok) fail(`could not delete last run's ${CHARACTER}: ${r.why}`);
+  const waited = r.retries > 0 ? ` after ${r.retries} retr${r.retries === 1 ? "y" : "ies"} over ${Math.round(r.waitedMs / 1000)}s` : "";
+  log(r.deleted ? `deleted last run's ${CHARACTER}${waited}` : `no previous ${CHARACTER} to delete (first run on this realm)`);
 }
 
 /** Issue move_to and return the terminal WB_MOVE_RESULT data for it. */
@@ -200,7 +214,22 @@ async function move(target: { x: number; y: number; z: number; guid?: string }, 
       (result.data.reachedPos ? ` reachedPos=${JSON.stringify(result.data.reachedPos)}` : "") +
       (result.data.dz !== undefined ? ` dz=${result.data.dz}` : ""),
   );
+  if (result.data.pos) leg.at = result.data.pos;
   return result.data;
+}
+
+/**
+ * A walk that must arrive: `move`, and once more from where it stopped when
+ * `moveRetryReason` says the stop was the world thread's and not the walk's
+ * (alive, mid-walk; header). Its caller asserts on the last answer as before.
+ */
+async function arrive(target: Vec & { guid?: string }, what: string, timeoutMs = 60000, leg: Leg = MAIN): Promise<any> {
+  const from = leg.at;
+  const r = await move(target, timeoutMs, leg);
+  const why = moveRetryReason(r, { alive: selfHealth(leg.events) !== 0, inSession: true, target, from });
+  if (why === undefined) return r;
+  log(`${RETRY_MARK} ${what} ${why}`);
+  return move(target, timeoutMs, leg);
 }
 
 async function main() {
@@ -222,6 +251,7 @@ async function main() {
   }
   const verify = await waitFor((e) => e.opcode === "SMSG_LOGIN_VERIFY_WORLD", 5000, "SMSG_LOGIN_VERIFY_WORLD");
   let here = { x: verify.data.x, y: verify.data.y, z: verify.data.z };
+  MAIN.at = here;
   log(`in world at (${here.x.toFixed(1)}, ${here.y.toFixed(1)}, ${here.z.toFixed(1)}) map ${verify.data.map}`);
 
   // Two walkable landmarks ~37m apart (human start, abbey courtyard). A reused
@@ -229,7 +259,7 @@ async function main() {
   const HOME = { x: -8949.95, y: -132.49, z: 83.53 };
   const COURTYARD = { x: -8913.2, y: -137.6, z: 80.9 };
   if (dist2d(here, HOME) > 10) {
-    const home = await move(HOME, 120000);
+    const home = await arrive(HOME, "the walk home", 120000);
     if (home.status !== "arrived") fail(`walk-home result ${JSON.stringify(home)}`);
     here = home.pos;
   }
@@ -241,7 +271,7 @@ async function main() {
   //    point on 2026-08-23: +2 and +5 arrive with meshZ, +10 and +30 are
   //    target_off_mesh (+15/+20 come back path_incomplete off a nearby roof
   //    poly).
-  const high = await move({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z + 5 });
+  const high = await arrive({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z + 5 }, "the z+5 walk");
   if (high.status !== "arrived") fail(`z+5 request should arrive (mesh resolves z), got ${JSON.stringify(high)}`);
   if (dist2d(high.pos, COURTYARD) > 4) fail(`z+5 arrived ${dist2d(high.pos, COURTYARD).toFixed(1)}m from target`);
   if (typeof high.meshZ !== "number") fail(`z+5 arrival carries no meshZ: ${JSON.stringify(high)}`);
@@ -257,9 +287,9 @@ async function main() {
   //     landings in one run). The module now ends the walk at the mesh's own
   //     height: `arrived`, `meshZ` at the ground, and the server's position
   //     on it — never a `drop`, never a z below the ground.
-  const back2 = await move(HOME);
+  const back2 = await arrive(HOME, "the walk home before the under-ground leg");
   if (back2.status !== "arrived") fail(`walk home before the under-ground leg: ${JSON.stringify(back2)}`);
-  const low = await move({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z - 5 });
+  const low = await arrive({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z - 5 }, "the z-5 walk");
   if (low.status !== "arrived") fail(`z-5 request should arrive on the ground (endpoint lifted to the mesh), got ${JSON.stringify(low)}`);
   if (dist2d(low.pos, COURTYARD) > 4) fail(`z-5 arrived ${dist2d(low.pos, COURTYARD).toFixed(1)}m from target`);
   if (typeof low.meshZ !== "number" || Math.abs(low.meshZ - COURTYARD.z) > 3) fail(`z-5 arrival should carry the ground meshZ (~${COURTYARD.z}): ${JSON.stringify(low)}`);
@@ -271,7 +301,7 @@ async function main() {
   //    resolves the ground height at x,y after that verdict (the z-ladder in
   //    front of the cause ladder (part 3): terrain a client has
   //    too) and walks there, reporting meshZ relative to the z asked for.
-  const sky = await move({ x: HOME.x, y: HOME.y, z: HOME.z + 100 });
+  const sky = await arrive({ x: HOME.x, y: HOME.y, z: HOME.z + 100 }, "the z+100 walk");
   if (sky.status !== "arrived") fail(`z+100 request should arrive on the ground-z fallback, got ${JSON.stringify(sky)}`);
   if (dist2d(sky.pos, HOME) > 4) fail(`z+100 arrived ${dist2d(sky.pos, HOME).toFixed(1)}m from target`);
   if (typeof sky.meshZ !== "number" || Math.abs(sky.meshZ - HOME.z) > 3) fail(`z+100 arrival should carry the ground meshZ (~${HOME.z}): ${JSON.stringify(sky)}`);
@@ -291,7 +321,7 @@ async function main() {
     .filter((u) => dist2d(u.pos, HOME) < 60)
     .sort((a, b) => dist2d(a.pos, HOME) - dist2d(b.pos, HOME))[0];
   if (!npc) fail("no unit in view within 60y of the start to use as a guid target");
-  const toNpc = await move({ x: npc.pos.x, y: npc.pos.y, z: npc.pos.z, guid: npc.guid });
+  const toNpc = await arrive({ x: npc.pos.x, y: npc.pos.y, z: npc.pos.z, guid: npc.guid }, "the walk to the unit");
   if (toNpc.status !== "arrived") fail(`move_to with guid ${npc.guid} should arrive, got ${JSON.stringify(toNpc)}`);
   if (dist2d(toNpc.pos, npc.pos) > 4) fail(`guid move arrived ${dist2d(toNpc.pos, npc.pos).toFixed(1)}m from the unit`);
   log(`PASS unit target (guid ${npc.guid}) -> arrived`);
@@ -302,7 +332,7 @@ async function main() {
   //     all and the point must be replaced with one that is not (steep valley
   //     wall, inside a wall) — that is a probe defect, not a module one.
   const OFF_MESH = { x: -8897, y: 100, z: 98 };
-  const walkBack = await move(HOME);
+  const walkBack = await arrive(HOME, "the walk back to HOME before the off-mesh probe");
   if (walkBack.status !== "arrived") fail(`walk back to HOME before the off-mesh probe: ${JSON.stringify(walkBack)}`);
   const before = { ...walkBack.pos };
   const off = await move(OFF_MESH);
@@ -334,9 +364,9 @@ async function main() {
   //     branches send a client's MSG_MOVE_STOP when the server still has the
   //     character flagged moving (a97c3c8 part 4); a following run must be
   //     accepted as normal. HOME is the landmark proven to carry no meshZ.
-  const hop = await move(COURTYARD);
+  const hop = await arrive(COURTYARD, "the walk to the courtyard after too_far");
   if (hop.status !== "arrived") fail(`walk to the courtyard after too_far should arrive, got ${JSON.stringify(hop)}`);
-  const back = await move(HOME);
+  const back = await arrive(HOME, "the walk back");
   if (back.status !== "arrived") fail(`walk back should arrive, got ${JSON.stringify(back)}`);
   if (back.meshZ !== undefined) fail(`plain arrival should not carry meshZ: ${JSON.stringify(back)}`);
   log("PASS plain walk after the failures -> arrived, no meshZ");
@@ -360,7 +390,7 @@ async function main() {
         ];
   let dropSeen: string | undefined;
   for (const cand of LEDGE_CANDIDATES) {
-    const stand = await move(HOME);
+    const stand = await arrive(HOME, "the walk home before the ledge candidate");
     if (stand.status !== "arrived") fail(`walk home before the ledge candidate: ${JSON.stringify(stand)}`);
     const from = { ...stand.pos };
     const r = await move(cand, 30000);
@@ -381,7 +411,7 @@ async function main() {
   }
   if (!dropSeen) log(pinned ? "FAIL-SOFT optional leg: pinned NAV_LEDGE did not produce drop" : "optional leg: no candidate produced drop; pin NAV_LEDGE=x,y,z once a ledge is known");
   if (pinned && !dropSeen) fail("NAV_LEDGE was pinned, so the drop leg is load-bearing and it did not produce drop");
-  const home2 = await move(HOME);
+  const home2 = await arrive(HOME, "the walk home after the ledge leg");
   if (home2.status !== "arrived") fail(`walk home after the ledge leg: ${JSON.stringify(home2)}`);
 
   // 6. Every status on the record is in the documented vocabulary.
@@ -412,25 +442,34 @@ type MeshLeg = (typeof MESH_LEGS)[number];
 const SNEED_FROM = { x: -178, y: -418, z: 56 };
 const SNEED_TO = { x: -240.8, y: -489.9, z: 55.3 };
 const SNEED_FLOOR_Z = 50.5;
-/** How many times a mesh-z leg's walk is issued before a stop that is not the route's (`stunned`, `interrupted`, `rooted`) fails it. */
+/** The route the module plans from the leg's start to the corridor request: 134.9y on harness-1.0-41 and 1.0-49 alike. */
+const SNEED_PATH_YARDS = 134.9;
+/** How many times the walk to the Deadmines leg's start is issued before a stop that is not the route's (`stunned`, `interrupted`, `rooted`) fails it. */
 const MESH_WALK_TRIES = 5;
 const WALK_STOPS = new Set(["stunned", "interrupted", "rooted"]);
 
 /**
  * A walk a fight may stop: re-issued from where it stopped, after a pause a
  * stun wears off in, until it ends any other way or the tries run out.
- * Returns the first answer (the guard's verdict on the route from where the
- * leg began) and the last.
+ * Returns the last answer. A death ends it at once, named as one: a corpse is
+ * rooted, and every walk after it would be refused `rooted` (header).
  */
-async function walkThrough(target: { x: number; y: number; z: number }, leg: Leg, what: string): Promise<{ first: any; last: any }> {
-  const first = await move(target, 120000, leg);
-  let last = first;
-  for (let tries = 1; WALK_STOPS.has(last.status) && tries < MESH_WALK_TRIES; ++tries) {
-    log(`  ${what}: ${last.status} at (${last.pos.x.toFixed(1)}, ${last.pos.y.toFixed(1)}); walking on (${tries + 1}/${MESH_WALK_TRIES})`);
+async function walkThrough(target: Vec, leg: Leg, what: string): Promise<any> {
+  const died = (r: any, walks: number) => {
+    if (selfHealth(leg.events) !== 0) return;
+    const at = r.pos ? ` at (${r.pos.x.toFixed(1)}, ${r.pos.y.toFixed(1)}, ${r.pos.z.toFixed(1)})` : "";
+    fail(`${what}: the character died${at} (health 0) on walk ${walks}, which ended ${r.status}: the trash on the route killed it, so the walk cannot arrive — not a navigation verdict`);
+  };
+  let last = await move(target, 120000, leg);
+  let walks = 1;
+  for (; WALK_STOPS.has(last.status) && walks < MESH_WALK_TRIES; ++walks) {
+    log(`  ${what}: ${last.status} at (${last.pos.x.toFixed(1)}, ${last.pos.y.toFixed(1)}), health ${selfHealth(leg.events) ?? "?"}; walking on (${walks + 1}/${MESH_WALK_TRIES})`);
     await Bun.sleep(4000);
+    died(last, walks);
     last = await move(target, 120000, leg);
   }
-  return { first, last };
+  if (last.status !== "arrived") died(last, walks);
+  return last;
 }
 
 /**
@@ -468,8 +507,9 @@ async function meshZLegs(): Promise<MeshLeg[]> {
     const at = (await waitFor((e) => e.opcode === "SMSG_LOGIN_VERIFY_WORLD", 5000, "SMSG_LOGIN_VERIFY_WORLD", leg)).data;
     const want = SCENARIOS[scenario].position;
     if (at.map !== want.map || dist2d(at, want) > 8) fail(`${name}: scenario ${scenario} did not land: map ${at.map} (${at.x}, ${at.y}, ${at.z})`);
+    leg.at = { x: at.x, y: at.y, z: at.z };
     if (name === "kharanos") {
-      const r = await move(NAV_KHARANOS_JARVEN, 60000, leg);
+      const r = await arrive(NAV_KHARANOS_JARVEN, "kharanos: the walk down the cellar stairs", 60000, leg);
       if (r.status !== "arrived") fail(`kharanos: the walk down the cellar stairs to Jarven should arrive, got ${JSON.stringify(r)}`);
       if (dist2d(r.pos, NAV_KHARANOS_JARVEN) > 4) fail(`kharanos: arrived ${dist2d(r.pos, NAV_KHARANOS_JARVEN).toFixed(1)}y from Jarven`);
       if (Math.abs(r.pos.z - NAV_KHARANOS_JARVEN.z) > 2) fail(`kharanos: arrived off the cellar floor: server z ${r.pos.z} vs ${NAV_KHARANOS_JARVEN.z}`);
@@ -482,17 +522,20 @@ async function meshZLegs(): Promise<MeshLeg[]> {
       if (inbound.status !== "transferred") fail(`sneed: the move to trigger 78 should transfer onto map 36, got ${JSON.stringify(inbound)}`);
       await waitFor((e) => e.opcode === "SMSG_NEW_WORLD" && e.data?.map === 36, 20000, "SMSG_NEW_WORLD onto map 36", leg);
       await Bun.sleep(1500);
-      const from = (await walkThrough(SNEED_FROM, leg, "sneed: the walk to the leg's start")).last;
+      const from = await walkThrough(SNEED_FROM, leg, "sneed: the walk to the leg's start");
       if (from.status !== "arrived") fail(`sneed: the walk to the leg's start ${JSON.stringify(SNEED_FROM)} should arrive within ${MESH_WALK_TRIES} tries, got ${JSON.stringify(from)}`);
-      const { first, last: r } = await walkThrough(SNEED_TO, leg, "sneed: the walk to the corridor");
-      // The guard's verdict, whatever stopped the walk: dispatched, and to the floor.
-      if (first.status === "drop" || first.pathLength === undefined) fail(`sneed: the move 4.8y over the corridor floor should be dispatched, not refused: ${JSON.stringify(first)}`);
-      if (typeof first.meshZ !== "number" || Math.abs(first.meshZ - SNEED_FLOOR_Z) > 1.5) fail(`sneed: the move should resolve to the floor, meshZ ~${SNEED_FLOOR_Z}: ${JSON.stringify(first)}`);
-      log(`PASS mesh-z sneed verdict -> dispatched to meshZ ${first.meshZ.toFixed(1)}, path ${first.pathLength.toFixed(1)}y (first walk ended ${first.status})`);
-      if (r.status !== "arrived") fail(`sneed: the request 4.8y over the corridor floor should arrive within ${MESH_WALK_TRIES} tries, got ${JSON.stringify(r)}`);
-      if (dist2d(r.pos, SNEED_TO) > 4) fail(`sneed: arrived ${dist2d(r.pos, SNEED_TO).toFixed(1)}y from the request`);
-      if (typeof r.meshZ !== "number" || Math.abs(r.meshZ - SNEED_FLOOR_Z) > 1.5) fail(`sneed: the arrival should carry meshZ at the floor (~${SNEED_FLOOR_Z}): ${JSON.stringify(r)}`);
-      log(`PASS mesh-z sneed -> arrived on the corridor floor, meshZ ${r.meshZ.toFixed(1)}, server z ${r.pos.z.toFixed(1)}`);
+      // The guard's verdict, the leg's whole assertion: dispatched, to the floor, on the route it always plans.
+      const r = await move(SNEED_TO, 120000, leg);
+      if (r.status === "drop" || r.pathLength === undefined) fail(`sneed: the move 4.8y over the corridor floor should be dispatched, not refused: ${JSON.stringify(r)}`);
+      if (typeof r.meshZ !== "number" || Math.abs(r.meshZ - SNEED_FLOOR_Z) > 1.5) fail(`sneed: the move should resolve to the floor, meshZ ~${SNEED_FLOOR_Z}: ${JSON.stringify(r)}`);
+      if (Math.abs(r.pathLength - SNEED_PATH_YARDS) > 10) fail(`sneed: the route to the corridor should be about ${SNEED_PATH_YARDS}y, got ${r.pathLength.toFixed(1)}y: ${JSON.stringify(r)}`);
+      log(`PASS mesh-z sneed verdict -> dispatched to meshZ ${r.meshZ.toFixed(1)}, path ${r.pathLength.toFixed(1)}y`);
+      // How the one walk ended, as information only (header).
+      const hp = selfHealth(leg.events);
+      log(
+        `  sneed: the walk ended ${r.status}${r.pos ? ` at (${r.pos.x.toFixed(1)}, ${r.pos.y.toFixed(1)}, ${r.pos.z.toFixed(1)})` : ""}, health ${hp ?? "?"}` +
+          (r.status === "arrived" ? "" : "; arrival not asserted: Deadmines trash on the route kills a smoke character"),
+      );
     }
     const out = await req("DELETE", "/session", { token: leg.token });
     if (out.status !== 200 || !out.json?.ok) fail(`${name}: session delete failed: ${out.status} ${JSON.stringify(out.json)}`);

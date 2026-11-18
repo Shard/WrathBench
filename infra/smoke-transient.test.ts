@@ -3,7 +3,7 @@
  * each retried only for its own reason, within its own bound, and announced.
  */
 import { describe, expect, test } from "bun:test";
-import { DELETE_LINGER_BUDGET_MS, deleteThroughLinger, moveRetryReason, RETRY_MARK, type DeleteReply } from "./smoke/lib/transient";
+import { DELETE_LINGER_BUDGET_MS, deleteThroughLinger, MOVE_ACCEPTED_YARDS, moveRetryReason, RETRY_MARK, selfHealth, type DeleteReply } from "./smoke/lib/transient";
 
 /** A fake module: each attempt returns the next reply, and each takes `stepMs` of a fake clock (the module's own 20 s wait). */
 function fakeDeletes(replies: DeleteReply[], stepMs = 22_000) {
@@ -86,5 +86,51 @@ describe("moveRetryReason", () => {
     for (const status of ["arrived", "target_off_mesh", "start_off_mesh", "too_far", "rooted", "stopped", "superseded", "path_incomplete"]) {
       expect(moveRetryReason({ status }, alive)).toBeUndefined();
     }
+  });
+
+  // module-navigation's after-failure leg, harness-1.0-49: a ~3 s world tick
+  // stall stopped the walker's heartbeats at 10.6y from HOME, and the drift
+  // check ended the walk there. The regression the leg pins ends the same way
+  // with the character still at HOME, because the server never took the run.
+  const home = { x: -8949.95, y: -132.49 };
+  const courtyard = { x: -8913.2, y: -137.6 };
+
+  test("with a start, a walk the server carried mid-way is walked once more", () => {
+    const why = moveRetryReason(
+      { status: "interrupted", pos: { x: -8939.39, y: -133.884, z: 83.6455 } },
+      { alive: true, inSession: true, target: courtyard, from: home },
+    );
+    expect(why).toContain("26.5y short");
+  });
+
+  test("with a start, an interrupted walk the server never moved is a failure, not a retry", () => {
+    const at = (dx: number) => ({ status: "interrupted", pos: { x: home.x + dx, y: home.y, z: 83.5 } });
+    expect(moveRetryReason(at(0), { ...alive, target: courtyard, from: home })).toBeUndefined();
+    expect(moveRetryReason(at(MOVE_ACCEPTED_YARDS - 0.1), { ...alive, target: courtyard, from: home })).toBeUndefined();
+    expect(moveRetryReason({ status: "interrupted" }, { ...alive, target: courtyard, from: home })).toBeUndefined();
+    expect(moveRetryReason(at(MOVE_ACCEPTED_YARDS + 0.1), { ...alive, target: courtyard, from: home })).toBeDefined();
+  });
+});
+
+describe("selfHealth", () => {
+  const create = (guid: string, health: number, self = false) => ({
+    opcode: "SMSG_UPDATE_OBJECT",
+    data: { objects: [{ update: "create", guid, objectType: self ? "player" : "unit", ...(self ? { self: true } : {}), fields: { health } }] },
+  });
+  const values = (guid: string, health: number) => ({ opcode: "SMSG_UPDATE_OBJECT", data: { objects: [{ update: "values", guid, fields: { health } }] } });
+
+  test("follows the self unit named by its create block, ignoring every other unit", () => {
+    expect(selfHealth([])).toBeUndefined();
+    expect(selfHealth([create("79168", 1500), values("1161", 9000)])).toBeUndefined();
+    const ev = [create("1161", 9531, true), create("79168", 1500), values("79168", 0), values("1161", 502)];
+    expect(selfHealth(ev)).toBe(502);
+    // The Deadmines leg's death, 06:17:24 on harness-1.0-49.
+    expect(selfHealth([...ev, { opcode: "WB_MOVE_RESULT", data: { status: "stunned" } }, values("1161", 0)])).toBe(0);
+  });
+
+  test("a values block without health leaves the last reading, and a later self create replaces it", () => {
+    const noHealth = { opcode: "SMSG_UPDATE_OBJECT", data: { objects: [{ update: "values", guid: "1161", fields: { level: 80 } }] } };
+    expect(selfHealth([create("1161", 9531, true), values("1161", 4000), noHealth])).toBe(4000);
+    expect(selfHealth([create("1161", 9531, true), values("1161", 0), create("1161", 9531, true)])).toBe(9531);
   });
 });
