@@ -22,6 +22,12 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 - Patch bumps are deliberate; the pin rationale is in CLAUDE.md's toolchain section.
 - Bumping: change every place above in one commit, regenerate `bun.lock` with the new Bun, run `bun run test` and `bun run typecheck` under it, and build the runner image. Two effects reach past the checkout. The minimap transcoder's encoder id names the Bun build (`minimap/src/transcode.ts`), so the next transcode re-encodes every served tile; the tile publish skips by content hash, so only tiles whose bytes the new encoder changed upload again. And the module's `/events` socket is only exercised against the live stack, so run the smokes after a bump that touches WebSocket behaviour (1.4.4 changed the client's close codes and close timing).
 
+## Codex CLI
+
+- Version: 0.169.1 (2026-11-18, from 0.163.0), the `CODEX_VERSION` build arg in `infra/docker/runner.Dockerfile`, installed as the `@openai/codex@<version>-linux-x64` platform package. Earlier bumps are recorded in that Dockerfile's comment and their commits.
+- Why this version: the lowest release whose bundled model catalogue lists `gpt-6.2-astra` and `gpt-6.2-sol` (0.164.0 to 0.169.0 do not). A CLI that does not know a model runs it on fallback metadata, with the wrong window and tool surface.
+- Bumping: check the new binary against the driver before the bump lands. `codex exec --help`, `codex exec resume --help` and `codex features list` must still accept every flag and `--disable` name `codexArgs` passes, since an unknown feature name is a launch error. `codex debug models` with an empty `CODEX_HOME` shows the bundled rows (window, efforts, tool mode). Diff the request body against the old version's over a loopback stub endpoint with the driver's exact flags: our system prompt and no Codex preamble, the `mcp__wrathbench` server started, and any new model-visible text named in the commit. Re-read the exec JSONL events, the usage-limit message, the rollout's `token_count`, `rate_limits` and `compacted` items, and `ModelInfo::auto_compact_token_limit` across the two tags. Update the version citations in `runner/` to name the versions they were checked against.
+
 ## ClickHouse
 
 - Image: `clickhouse/clickhouse-server:25.8`, pinned in `infra/compose.yml` and
