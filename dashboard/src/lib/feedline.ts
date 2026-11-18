@@ -9,9 +9,9 @@
 
 import type { ActionsEntry, EventsServedEntry, FeedEntry } from "@viewer/api-types";
 import type { FeedGroup } from "./feedgroup";
-import { FAILED_RECORDS, callName, kindOf, moveRefused, tallyLabel, tallyNotes, tsOf, type FeedKind, type Surface } from "./feedtier";
+import { FAILED_RECORDS, callName, kindOf, moveRefused, repeatCount, tallyLabel, tallyNotes, tsOf, type FeedKind, type Surface } from "./feedtier";
 import { harnessFields, noticeView, splitNotices, stateLine } from "./feedview";
-import { fmtDuration } from "./format";
+import { fmtDuration, stamp } from "./format";
 
 export interface LineView {
   kind: FeedKind;
@@ -21,6 +21,8 @@ export interface LineView {
   failed: boolean;
   ts: number;
   turn: number | undefined;
+  /** What the line leaves out that a reader may hover for. */
+  title?: string | undefined;
 }
 
 const LINE_MAX = 160;
@@ -121,6 +123,62 @@ function firstLine(text: string): string {
   return at === -1 ? text : text.slice(0, at);
 }
 
+/** " (routine grind, Tankpartyb)", or as much of it as there is. */
+function whose(routine: string | undefined, who: string | undefined): string {
+  const parts = [routine !== undefined ? `routine ${routine}` : undefined, who].filter((p): p is string => p !== undefined);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
+/**
+ * A `program_error` record in words: a fresh refusal or error, or a wake's
+ * count of the further occurrences of one since the previous wake. A refusal,
+ * fresh or repeated, carries its `action` and `status`; the private viewer
+ * also has the signature (`<routine>|<character or seat>|<action>|<status>`
+ * for a refusal, `<routine>|<error name>|<file:line>` for an error,
+ * `memory|<what>`), which names the routine and the error. A public window
+ * carries the words and counts alone, and a record written before a repeat
+ * carried its action reads as the count it is, never as a placeholder.
+ */
+export function programErrorLine(entry: FeedEntry): { label: string; text: string; title?: string | undefined } {
+  const e = entry as unknown as Record<string, unknown>;
+  const signature = str(e["signature"]);
+  const action = str(e["action"]);
+  const status = str(e["status"]);
+  const refused = action !== undefined && status !== undefined ? `${action} ${status}` : undefined;
+  const repeats = repeatCount(entry);
+  if (repeats !== null) {
+    const more = `×${repeats.toLocaleString("en-US")} more`;
+    const since = num(e["since"]);
+    const at = num(e["at"]);
+    const title = [signature, since !== undefined && at !== undefined ? `${stamp(since)} – ${stamp(at)}` : undefined].filter((p) => p !== undefined).join(" · ");
+    const span = title.length > 0 ? title : undefined;
+    const parts = (signature ?? "").split("|");
+    if (refused !== undefined) {
+      // The routine and the character are the signature's leading parts, on the private viewer only.
+      const who = parts.length >= 4 ? whose(str(parts.slice(0, -3).join("|")), str(parts[parts.length - 3]!)) : "";
+      return { label: "refused", text: `${refused} ${more}${who}`, title: span };
+    }
+    if (parts.length === 4) {
+      const [routine, who, a, st] = parts as [string, string, string, string];
+      return { label: "refused", text: `${a} ${st} ${more}${whose(str(routine), str(who))}`, title: span };
+    }
+    if (parts.length === 2 && parts[0] === "memory") return { label: "program error", text: `memory ${parts[1]} ${more}`, title: span };
+    if (parts.length === 3) {
+      const [routine, name, place] = parts as [string, string, string];
+      return { label: routine.length > 0 ? "routine error" : "program error", text: `${name}${place.length > 0 ? ` at ${place}` : ""} ${more}${whose(str(routine), undefined)}`, title: span };
+    }
+    return { label: "repeated", text: signature !== undefined ? `${signature} ${more}` : more, title: span };
+  }
+  // A public window's skeleton: the type and the time, nothing else.
+  if (e["kind"] === undefined) return { label: "program error", text: "" };
+  const routine = str(e["name"]);
+  const who = str(e["seat"]) ?? str(e["character"]);
+  if (e["kind"] === "refusal") return { label: "refused", text: `${refused ?? ""}${whose(routine, who)}`.trim(), title: signature };
+  // A public window has neither the routine nor the error's text: the label alone says what happened.
+  const error = str(e["error"]);
+  return { label: routine !== undefined ? "routine error" : "program error", text: `${error !== undefined ? clip(firstLine(error)) : ""}${whose(routine, who)}`.trim(), title: signature };
+}
+
 /** One row as one line. */
 export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
   const kind = kindOf(g, surface);
@@ -158,6 +216,10 @@ export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
         case "notice": {
           const n = noticeView(entry);
           return { ...base, label: "harness", text: clip(n.bookkeeping ? [n.kind, harnessFields(entry)].filter((s) => s.length > 0).join(" · ") : `${n.kind} · ${n.text}`) };
+        }
+        case "program_error": {
+          const p = programErrorLine(entry);
+          return { ...base, label: p.label, text: clip(p.text), failed: repeatCount(entry) === null && e["kind"] !== undefined, title: p.title };
         }
         case "wake": {
           const reasons = Array.isArray(e["reasons"]) ? (e["reasons"] as unknown[]).filter((x): x is string => typeof x === "string") : [];

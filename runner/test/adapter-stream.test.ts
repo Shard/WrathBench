@@ -502,22 +502,50 @@ describe("OpenAiChatAdapter request clock", () => {
       expect(settled).toBe(true);
       expect(elapsedMs).toBeGreaterThanOrEqual(REQUEST_CEILING_MS);
       expect(elapsedMs).toBeLessThan(REQUEST_CEILING_MS + 60_000);
-      await expect(p).rejects.toThrow(/body read failed: the request passed its 600 s ceiling/);
+      // Its own clock ended it: a provider that did not finish, paused like one that sent nothing.
+      const out = await p;
+      expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
+      expect(out.kind === "pause" && out.detail).toMatch(/body read failed: the request passed its 600 s ceiling/);
     } finally {
       jest.useRealTimers();
     }
   });
 
-  test("a stalled stream times out on silence, is cancelled, and ends as an adapter error when it keeps stalling", async () => {
+  test("a stalled stream times out on silence, is cancelled, and pauses the run as provider-unresponsive when it keeps stalling", async () => {
     let cancelled = 0;
     const { adapter } = adapterServing(
       () => Promise.resolve(streamed([data(chunk({ content: "a" }))], { hang: true, onCancel: () => cancelled++ })),
       { maxAttempts: 2, silenceTimeoutMs: 40, requestCeilingMs: 5_000 },
     );
     const started = Date.now();
-    await expect(adapter.complete(req)).rejects.toThrow(/failed after 2 attempt\(s\): body read failed: no data from the model API for 0\.04 s/);
+    const out = await adapter.complete(req);
+    // A body-read timeout is the provider gone quiet, as a network timeout is (operator, 2026-11-18): never a counted failure.
+    expect(out).toEqual({
+      kind: "pause",
+      reason: "provider-unresponsive",
+      detail: "persistent body-read timeout after 2 attempt(s): body read failed: no data from the model API for 0.04 s",
+    });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(cancelled).toBe(2);
+  });
+
+  test("a read that fails mid-body on its own, no timer involved, still ends as an adapter error", async () => {
+    const reset = (): Response => {
+      let sent = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(ctl) {
+          if (!sent) {
+            sent = true;
+            ctl.enqueue(enc.encode(data(chunk({ content: "a" }))));
+            return;
+          }
+          ctl.error(new Error("socket reset by peer"));
+        },
+      });
+      return new Response(body, { status: 200, headers: SSE });
+    };
+    const { adapter } = adapterServing(() => Promise.resolve(reset()), { maxAttempts: 2, silenceTimeoutMs: 5_000, requestCeilingMs: 10_000 });
+    await expect(adapter.complete(req)).rejects.toThrow(/failed after 2 attempt\(s\): body read failed: .*socket reset by peer/);
   });
 
   test("a slow but steady stream outlives many silence windows", async () => {
@@ -539,7 +567,8 @@ describe("OpenAiChatAdapter request clock", () => {
       silenceTimeoutMs: 100,
       requestCeilingMs: 5_000,
     });
-    await expect(adapter.complete(req)).rejects.toThrow(/body read failed: no data from the model API/);
+    const out = await adapter.complete(req);
+    expect(out.kind === "pause" && out.detail).toMatch(/body read failed: no data from the model API/);
   });
 
   test("the wait for headers is covered by the silence timer", async () => {
@@ -565,7 +594,9 @@ describe("OpenAiChatAdapter request clock", () => {
       requestCeilingMs: 150,
     });
     const started = Date.now();
-    await expect(adapter.complete(req)).rejects.toThrow(/body read failed: the request passed its 0\.15 s ceiling/);
+    const out = await adapter.complete(req);
+    expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
+    expect(out.kind === "pause" && out.detail).toMatch(/body read failed: the request passed its 0\.15 s ceiling/);
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(cancelled).toBe(true);
   });

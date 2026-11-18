@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
+import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
 import type { DeathCause } from "../src/sandbox/snippet-delta";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
@@ -613,6 +613,9 @@ function fakeProgram() {
       pending = { ...pending, facts: [...pending.facts, f] };
       wake.onFact(f);
     },
+    repeat(signature: string, count: number, ts: number) {
+      pending = { ...pending, repeats: [...pending.repeats, { signature, count, ts }] };
+    },
     console(text: string) {
       pending = { ...pending, console: { lines: [...pending.console.lines, { ts: 1, level: "log", routine: "grind", text, count: 1 }], total: pending.console.total + 1 } };
     },
@@ -678,6 +681,44 @@ describe("ProgramWake", () => {
     expect(records.find((r) => r.t === "deploy")).toMatchObject({ ok: true, by: "save", deploy: 2 });
     expect(records.find((r) => r.t === "routine")).toMatchObject({ event: "ended", name: "trip", state: "returned" });
     expect(records.find((r) => r.t === "wake")).toMatchObject({ via: "turn-end", turn: 3, fired: "routine_ended", sleptMs: 42_000, maxMs: WAKE_CAP_MS, reasons: ["routine_ended"] });
+  });
+
+  test("a wake's repeat records say which span their count covers: from the previous wake (or the start) to this one", async () => {
+    const c = fakeClock();
+    const records: Record<string, unknown>[] = [];
+    const start = c.now();
+    const wake = new ProgramWake({ trajectory: { append: (r) => void records.push(r), scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const sleep = () => wake.sleep(p, { via: "yield", turn: 1, capMs: 10_000, floorMs: 3_000, stopped: () => false, kept: true });
+    p.repeat("grind||castSpell|not_ready", 4, start + 1_000);
+    await sleep();
+    const first = c.now();
+    // Counted while the model was awake, drained as the next sleep starts: still the next wake's.
+    c.advance(7_000);
+    p.repeat("grind||castSpell|not_ready", 2, c.now());
+    p.repeat("grind|TypeError|routines/grind.ts:42", 1, c.now());
+    await sleep();
+    const second = c.now();
+    const repeats = records.filter((r) => r["t"] === "program_error");
+    expect(repeats).toEqual([
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 4, since: start, at: first },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 2, since: first, at: second },
+      { t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 1, since: first, at: second },
+    ]);
+    expect(first).toBeGreaterThan(start);
+    expect(second).toBeGreaterThan(first + 7_000);
+  });
+
+  test("a refusal's action and status are read off its signature from the right; an error's or memory's signature yields none", () => {
+    expect(refusalOfSignature("grind||castSpell|not_ready")).toEqual({ action: "castSpell", status: "not_ready" });
+    expect(refusalOfSignature("party|Tankpartyb|moveTo|superseded")).toEqual({ action: "moveTo", status: "superseded" });
+    // A routine whose name holds a pipe still gives only the last two words.
+    expect(refusalOfSignature("my|routine|Tankpartyb|moveTo|too_far")).toEqual({ action: "moveTo", status: "too_far" });
+    expect(refusalOfSignature("grind|TypeError|routines/grind.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|routines/x.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|")).toEqual({});
+    expect(refusalOfSignature("|SyntaxError|")).toEqual({});
+    expect(refusalOfSignature("memory|save")).toEqual({});
   });
 
   test("a wake that stays in the conversation marks the routine values it showed; a fixed-loop turn-end wake, never kept, does not", async () => {
@@ -1099,6 +1140,27 @@ function programSetup(script: ConstructorParameters<typeof StubAdapter>[0], o: {
 const userOf = (req: ChatRequest): string => String(req.messages[req.messages.length - 1]!.content);
 
 describe("the fixed loop on the program loop", () => {
+  test("a model that answers every wake in words alone ends idle once it has not acted for the idle window (operator, 2026-11-18)", async () => {
+    const talk = { content: "The party did not clear the Deadmines.", toolCalls: [] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => talk)]);
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "idle" });
+    s.options.trajectory.close();
+    const records = readTrajectory(s.dir);
+    // Four five-minute wakes answered without a tool call, then the sleep that found the verdict.
+    expect(records.filter((r) => r.t === "wake").map((w) => w["fired"])).toEqual(["cap", "cap", "cap", "cap", "stopped"]);
+    expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call for \d+ms: 4 wakes in a row answered without one$/);
+  });
+
+  test("a model that yields at every wake has acted, however long its routine plays", async () => {
+    const yieldTurn = { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 300 } }] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => yieldTurn)], { yield: true });
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "stub-complete" });
+  });
+
   test("a reply with no tool call sleeps; the wake opens every request until the next sleep", async () => {
     const s = programSetup([
       { content: "starting", toolCalls: [{ name: "start_routine", arguments: { name: "trip" } }] },

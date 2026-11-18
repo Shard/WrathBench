@@ -22,7 +22,11 @@ the operator's figure in GitHub issue #66.
   inside its allowance). Go's figure is not read as the run's cost: Go is a
   subscription, so a paid Go run has no actual and its cost is the list-price
   estimate from its `opencode-go` endpoint row, marked as-if-metered, the way a
-  codex run's is (operator's decision, 2026-11-16). Read as an actual, the
+  codex run's is (operator's decision, 2026-11-16). A Go model with no endpoint
+  row reads its catalogue entry's OpenRouter row instead, found through the
+  entry's aliases (Go's `glm-5.3` is `z-ai/glm-5.3`): the one price lookup that
+  goes through an alias, because a flat plan has no per-host bill for the
+  alias to get wrong, only the model's listed price. Read as an actual, the
   allowance's zero made every Go run look free. Overage past a spent allowance
   is a real charge, so a non-zero sum is named in the cost's note rather than
   dropped; a `-free` Go slug stays free. The catalogue marks the provider

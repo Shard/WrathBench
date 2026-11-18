@@ -445,6 +445,18 @@ world, invisible to the agent under the observation contract; a run that had
 one is labelled `camera`, which is never part of the condition (operator,
 2026-11-15).
 
+**A model that has stopped acting is idle** (operator, 2026-11-18). The idle
+watchdog ends a run whose model went silent, and on the program loop time
+asleep is not silence. A model that has given up answers every five-minute
+wake in a few words, so it was never silent and held its world to the clock.
+A run whose model answers wakes in a row without a tool call therefore ends
+`idle` as well, once it has done so for the idle window: as many wakes as fit
+the window at the five-minute cap (four at twenty minutes), with no tool call
+across the whole window, sleep included. The window, not the count alone, is
+what keeps a burst of wakes seconds apart from reading as idleness. Any tool
+call is acting, `yield` included: a model that yields while its routine plays
+has acted.
+
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and
 what happens next is the lane's property. Scored lanes end it and the model
@@ -458,7 +470,10 @@ mechanism the scheduler has per model, which consecutive failures climb and
 the operator's clear resets — evidence about an endpoint, not a model
 (operator, 2026-11-14) — a fleet stop or an offline gap is harness weather, and a transport failure mid-episode
 (`adapter-error`) ended the run on the endpoint's clock, so it is never scored
-(2026-08-30).
+(2026-08-30). A response that timed out after its headers arrived is not
+such a failure: a streamed request's timeout nearly always lands there, so,
+like a request that got no answer at all, it pauses the run
+`provider-unresponsive`, a provider's pause (operator, 2026-11-18).
 
 **The tier is the evidence budget.** How much a model runs is one word on its
 roster entry, denominated in runs, and the only thing that sets a run count:

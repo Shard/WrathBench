@@ -61,6 +61,7 @@ export type FeedKind =
   | "state"
   | "area"
   | "sleep"
+  | "repeat"
   | "record"
   | "other";
 
@@ -107,6 +108,7 @@ export const KINDS: Readonly<Record<FeedKind, KindDef>> = {
   state: a("state sample"),
   area: a("area change"),
   sleep: a("wait"),
+  repeat: a("repeated failure"),
   record: a("record"),
   other: a("other action"),
 };
@@ -169,6 +171,7 @@ export const RECORDS: Readonly<Record<string, FeedKind>> = {
   limit: "end",
   "wind-down": "end",
   quest_complete: "quest",
+  // A fresh error or refusal; a wake's count of repeats of one is read further below.
   program_error: "notice",
   // A CLI's own reasoning summary is the model's text.
   codex_reasoning: "response",
@@ -282,6 +285,14 @@ export function moveRefused(status: unknown): boolean {
   return typeof status === "string" && MOVE_REFUSED.has(status);
 }
 
+/** How many occurrences a wake's `program_error` repeat record counts, or null for any other record. */
+export function repeatCount(entry: FeedEntry): number | null {
+  const e = entry as unknown as Record<string, unknown>;
+  if (entry.t !== "program_error" || e["kind"] !== "repeat") return null;
+  const n = e["count"];
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 /* -------------------------------------------------------- classification */
 
 export function toolKind(name: string | null | undefined, surface: Surface = {}, overrides: typeof SURFACE_TOOLS = SURFACE_TOOLS): FeedKind {
@@ -301,6 +312,13 @@ export function entryKind(entry: FeedEntry): FeedKind {
     case "notice":
       // The harness speaking to the model is never folded away; its bookkeeping is.
       return (str(e["text"]) ?? "").length > 0 ? "notice" : "record";
+    case "program_error":
+      // Each wake writes how many more times every known error and refusal
+      // happened since the last: a rollup of failures already shown, not news.
+      // A public window ships the record's skeleton alone, which says nothing
+      // a reader could act on, so it folds with the actions around it.
+      if (e["kind"] === "repeat") return "repeat";
+      return e["kind"] === undefined ? "record" : "notice";
     default:
       return RECORDS[entry.t] ?? "unknown";
   }
@@ -416,7 +434,8 @@ export function tallyRun(items: readonly FeedGroup[], surface: Surface = {}): Ta
       logs.push(g.entry);
       continue;
     }
-    c.add(kindOf(g, surface));
+    // A repeat record counts its occurrences, never as failed: the first of each was its own notice row.
+    c.add(kindOf(g, surface), g.kind === "plain" ? (repeatCount(g.entry) ?? 1) : 1);
     if (g.kind === "call") {
       if (g.result?.isError === true) c.failed++;
       c.hints += hintCount(g.result?.text);

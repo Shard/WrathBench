@@ -96,7 +96,7 @@ export type WatchdogOverride = z.infer<typeof watchdogOverrideSchema>;
 
 /** Reasons a run can end. Named, closed set; the trajectory records one. */
 export const TERMINATION_REASONS = [
-  "idle", // watchdog: no model output
+  "idle", // watchdog: no model output, or wakes answered without a tool call for as long
   "no-xp", // watchdog: no XP/level progress in the window
   "episode-limit", // watchdog: wall clock
   // A probe campaign's stopping rule: the first server-observed level at or

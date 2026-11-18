@@ -235,7 +235,8 @@ function cardDue(result: SnapshotResult): SnapshotArtifact | undefined | null {
 
 /**
  * The preview series this pass's `info.json` names, which the card leaves out
- * as the homepage does (`homeLadderRuns`); null when it names none.
+ * as the homepage's default view does (`homeLadderRuns`, no series picked);
+ * null when it names none.
  */
 function previewOf(result: SnapshotResult): string | null {
   const info = result.artifacts.find((a) => a.path.endsWith("/info.json"));

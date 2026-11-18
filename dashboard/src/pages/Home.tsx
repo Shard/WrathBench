@@ -7,7 +7,7 @@ import { For, Show, createSignal } from "solid-js";
 import { api } from "../api/client";
 import { LadderChart } from "../components/LadderChart";
 import { ModelIcon } from "../components/ModelIcon";
-import { HOME_EPISODE, homeLadderRuns } from "../lib/homeladder";
+import { HOME_EPISODE, homeLadderHref, homeLadderRuns } from "../lib/homeladder";
 import { poll } from "../lib/poll";
 import { STALE_MS } from "../lib/mapview";
 import { runPageHref } from "../lib/mapstate";
@@ -324,7 +324,8 @@ function LoopDiagram() {
 
 /** The e90 ladder, full-bleed; mounted only where the evals group is on. */
 function HomeLadder() {
-  // The e90 ladder, fixed: latest series present (never a preview one), free runs always out (`lib/homeladder.ts`);
+  // The e90 ladder under the shell's series, as `/ladder` applies it (latest, never a preview, until the
+  // reader picks one), free runs always out (`lib/homeladder.ts`);
   // the one control draws the Pareto front of cost against XP over the field
   // (`lib/pareto.ts`) — the same treatment as the ladder page's toggle, so the
   // words mean one thing on both. It used to filter to the front; the field
@@ -332,7 +333,11 @@ function HomeLadder() {
   const ladder = poll(() => api.ladder(HOME_EPISODE).then((r) => r.runs), LADDER_POLL_MS);
   const [pareto, setPareto] = createSignal(readBoolPref(PARETO_KEY, false));
   const feeds = useFeeds();
-  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], true, feeds.seriesPreview());
+  const ladderRuns = () =>
+    homeLadderRuns(ladder.latest ?? [], true, feeds.seriesPreview(), {
+      choice: feeds.seriesChoice(),
+      available: feeds.seriesAvailable(),
+    });
   // Full-bleed: the one thing on the page that wants the whole width.
   return (
     <section class="home-bleed">
@@ -340,7 +345,7 @@ function HomeLadder() {
         <div class="ladder-controls">
           <span class="dim">
             <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play from a fresh level-1 character ·{" "}
-            <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
+            <A href={homeLadderHref(feeds.seriesChoice())}>full ladder</A>
           </span>
           <div class="ladder-filters">
           <label class="filter check" title="Draw the Pareto front: the entries no other entry beats on both axes, cheaper per run and more XP earned. Every point stays; the dominated ones are dimmed.">
