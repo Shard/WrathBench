@@ -16,8 +16,10 @@
  *    first error of each signature since the last load, the first refusal of
  *    each character, action and status in the run whatever routine made it
  *    (`Waker`), a `wake(reason)` call, and a sandbox restart the program came
- *    back from; a refusal a death caused is not named in the wake that
- *    carries the death (`withoutDeathRefusals`);
+ *    back from. What the stack does not count as a refusal never arrives
+ *    as one: a move the code itself replaced or stopped, a note on a move
+ *    that went ahead, and a call the character's death refused or cut short
+ *    (operator, 2026-11-18);
  *  - from the runner: a death (the session record's `death` row), the event
  *    stream closing (the state sample), and a harness notice.
  *
@@ -91,7 +93,7 @@ export const WAKE_CONSOLE_SHOWN = 20;
 export const WAKE_CONSOLE_CHARS = 2_000;
 /** Pre-emptions and `wake` calls shown in one wake, each. */
 export const WAKE_EVENTS_SHOWN = 8;
-/** Refusal signatures a `Waker` remembers as told; the stack mints at most 500 per load. */
+/** Refusal signatures a `Waker` remembers as told, by character, action and status; past it the oldest is forgotten. */
 const KNOWN_SIGNATURES_KEPT = 5_000;
 /** Characters a grouped refusal line names before it counts the rest, as the stack's hint lines do. */
 const WAKE_SEATS_SHOWN = 4;
@@ -124,10 +126,8 @@ export interface WakeReason {
    * routine's end, the run that ended, by its start (`routinesShown`).
    */
   routine?: { name: string; character?: string | undefined; startedAt?: number | undefined } | undefined;
-  /** At fan-out, the character a death or a closed stream is one of; a death's refusal, the character refused. */
+  /** At fan-out, the character a death or a closed stream is one of. */
   character?: string | undefined;
-  /** A refusal a death caused (`dead`, or a move `interrupted` because the character died): a wake that carries the death does not name it. */
-  byDeath?: true | undefined;
 }
 
 /**
@@ -139,20 +139,6 @@ export interface WakeReason {
 export function refusalPairOf(signature: string): string {
   const at = signature.indexOf("|");
   return at < 0 ? signature : signature.slice(at + 1);
-}
-
-/** The hint the SDK gives a move `interrupted` by the character's death. */
-const DIED_INTERRUPT = "because the character died";
-
-/**
- * The reasons a wake names: a refusal a death caused is left out of a wake
- * that carries that death (at fan-out, the same character's), since the
- * death says it. It still shows, counted, among the wake's refusals. Pure.
- */
-export function withoutDeathRefusals(reasons: readonly WakeReason[]): WakeReason[] {
-  const died = reasons.filter((r) => r.key === "died");
-  if (died.length === 0) return [...reasons];
-  return reasons.filter((r) => r.byDeath !== true || !died.some((d) => d.character === undefined || d.character === r.character));
 }
 
 /** A routine's name and character as one key. */
@@ -190,18 +176,14 @@ export function wakeReasonOf(fact: ProgramFact): WakeReason | null {
       };
     case "error":
       return { key: "error", ts: fact.ts, text: `new error (${label(fact)}: ${fact.error.name})`, inContext: false };
-    case "refusal": {
-      const byDeath = fact.status === "dead" || (fact.status === "interrupted" && fact.hint.includes(DIED_INTERRUPT));
-      const character = fact.seat ?? fact.character;
+    case "refusal":
       return {
         key: "refusal",
         ts: fact.ts,
         text: `new refusal (${label(fact)}: ${fact.action} ${fact.status}${seatTag(fact.seat)})`,
         inContext: false,
         signature: fact.signature,
-        ...(byDeath ? { byDeath: true as const, ...(character !== undefined ? { character } : {}) } : {}),
       };
-    }
     case "wake":
       return {
         key: "wake",
@@ -947,7 +929,7 @@ export class ProgramWake {
     }
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
-    const reasons = withoutDeathRefusals(this.waker.take());
+    const reasons = this.waker.take();
     this.n++;
     const after = this.reading();
     const now = this.now();
