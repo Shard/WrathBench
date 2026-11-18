@@ -27,9 +27,9 @@ else each kind of change needs.
 
 ## A change in the stack
 
-The agent stack (`module/`, `sdk/`, `mcp/`) is the `wrath-mcp/` submodule, its
-own repository with its own `CLAUDE.md`, and its `sdk/` and `mcp/` are
-workspaces here.
+The agent stack (`module/`, `sdk/`, `mcp/`, `inspector/`) is the `wrath-mcp/`
+submodule, its own repository with its own `CLAUDE.md`, and its `sdk/`, `mcp/`
+and `inspector/` are workspaces here.
 
 - Edit `wrath-mcp/` in place: this repository's suite runs against the edit
   at once. Never run `bun install` inside `wrath-mcp/`; the suite refuses a
