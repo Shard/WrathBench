@@ -788,8 +788,9 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     if (entry === undefined || !entry.roster) {
       fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (${ROSTER_DRIVERS.join(" | ")})`);
     }
-    // Which model family the driver may carry: claude models only via
-    // claude-code, and never through the openai or codex entries.
+    // What the driver's CLI can serve: claude-code claude models only, codex
+    // none. A claude model on an endpoint driver is the credentials' call
+    // (`subscriptionFamilyRefusal`, runner/src/roster-refusal.ts), per entry.
     const family = entry.claudeModels;
     if (family !== undefined && family.only !== isClaudeFamily(e.model)) {
       fail(`${where}: entry ${e.model}: ${family.refusal}`);

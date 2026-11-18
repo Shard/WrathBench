@@ -16,6 +16,7 @@ import {
   RUN_COLUMNS,
   columnClass,
   costOf,
+  runListCost,
   filterLabel,
   filterParams,
   filterRuns,
@@ -154,13 +155,17 @@ describe("readings", () => {
     expect(kindOf(run())).toBe("scored");
   });
 
-  test("turns prefer reported usage turns and fall back to model responses; cost is actual or nothing", () => {
+  test("turns prefer reported usage turns and fall back to model responses; cost is the actual, else the estimate, else nothing", () => {
     expect(turnsOf(run())).toBe(3);
     expect(turnsOf(run({ tokens: { source: "reported", contextTokens: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cacheReadTokens: null, cacheWriteTokens: null, turns: 12 } }))).toBe(12);
     expect(costOf(run())).toBeNull();
     const fig = { usd: 1.5, basis: "reported" as const, asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "" };
-    expect(costOf(run({ actualCost: fig }))).toBe(1.5);
+    const est = { ...fig, usd: 0.75, basis: "list-price" as const, asIfMetered: true, asOf: "2026-11-01" };
+    expect(costOf(run({ actualCost: fig, expectedCost: est }))).toBe(1.5);
+    expect(costOf(run({ actualCost: { ...fig, basis: "none", usd: null }, expectedCost: est }))).toBe(0.75);
+    expect(runListCost(run({ actualCost: { ...fig, basis: "none", usd: null }, expectedCost: est }))).toMatchObject({ estimate: true, text: "~$0.750" });
     expect(costOf(run({ actualCost: { ...fig, basis: "none", usd: null } }))).toBeNull();
+    expect(runListCost(run())).toMatchObject({ text: "—", title: "no cost recorded for this run" });
   });
 });
 
@@ -181,6 +186,20 @@ describe("sort", () => {
     expect(sortRuns(rows, { column: "level", dir: "desc" }).map((r) => r.runId)).toEqual(["c", "a", "d", "b"]);
     expect(sortRuns(rows, { column: "level", dir: "asc" }).map((r) => r.runId)).toEqual(["d", "c", "a", "b"]);
     expect(sortRuns(rows, { column: "model", dir: "asc" }).map((r) => r.runId)).toEqual(["b", "c", "d", "a"]);
+  });
+
+  test("cost sorts on the figure the column shows: an estimate interleaves with the actuals, an unpriced run sorts last", () => {
+    const fig = { usd: 0, basis: "reported" as const, asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "" };
+    const none = { ...fig, basis: "none" as const, usd: null };
+    const est = (usd: number) => ({ ...fig, usd, basis: "list-price" as const, asIfMetered: true, asOf: "2026-11-01" });
+    const costed = [
+      run({ runId: "or-actual", startedAt: 1, actualCost: { ...fig, usd: 2 }, expectedCost: est(9) }),
+      run({ runId: "go-est", startedAt: 2, actualCost: none, expectedCost: est(3) }),
+      run({ runId: "codex-est", startedAt: 3, actualCost: none, expectedCost: est(1) }),
+      run({ runId: "unpriced", startedAt: 4, actualCost: none, expectedCost: none }),
+    ];
+    expect(sortRuns(costed, { column: "cost", dir: "desc" }).map((r) => r.runId)).toEqual(["go-est", "or-actual", "codex-est", "unpriced"]);
+    expect(sortRuns(costed, { column: "cost", dir: "asc" }).map((r) => r.runId)).toEqual(["codex-est", "or-actual", "go-est", "unpriced"]);
   });
 
   test("the URL round-trips, and the default spells as no params", () => {

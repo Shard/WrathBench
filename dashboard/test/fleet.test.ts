@@ -182,11 +182,11 @@ describe("the rows", () => {
       level: 4,
       xp: 546,
       tokens: 103_744,
-      costUsd: 0.42,
+      cost: { usd: 0.42, text: "$0.420" },
       elapsedMs: 60_000,
     });
     // A run the runs feed has not caught up with still gets its row.
-    expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, costUsd: null, elapsedMs: null, tps: null });
+    expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, cost: { usd: null, text: "—" }, elapsedMs: null, tps: null });
   });
 
   test("the fleet feed's own run figures fill the rows, with no runs index read", () => {
@@ -201,15 +201,26 @@ describe("the rows", () => {
       paused: [{ runId: "paused-1", model: "m", account: "RUNNER2", reason: "rate-limited", since: 1, pauseCount: 1, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w" }],
     });
     const rows = fleetRows(f, f.runFacts ?? []);
-    expect(rows.find((r) => r.job !== null)).toMatchObject({ level: 4, xp: 546, tokens: 103_744, costUsd: 0.42, elapsedMs: 60_000 });
+    expect(rows.find((r) => r.job !== null)).toMatchObject({ level: 4, xp: 546, tokens: 103_744, elapsedMs: 60_000, cost: { usd: 0.42 } });
     expect(rows.find((r) => r.runId === "paused-1")).toMatchObject({ state: "paused", level: 7, xp: 10, tokens: 9, elapsedMs: 5_000 });
   });
 
-  test("cost is the actual figure only: an unreported or absent cost is null, never the estimate", () => {
-    const at = (r: RunListRow): number | null => fleetRows(fleet(), [r])[0]!.costUsd;
-    expect(at(run({ cost: { usd: 0.5, actual: { usd: null, basis: "none", note: "provider reports no cost" } } } as unknown as Partial<RunListRow>))).toBeNull();
-    expect(at(run({ cost: null } as Partial<RunListRow>))).toBeNull();
-    expect(at(run({ tokens: null } as Partial<RunListRow>))).toBe(0.42);
+  test("cost is the actual where there is one, else the marked list-price estimate, else a blank", () => {
+    const at = (r: RunListRow) => fleetRows(fleet(), [r])[0]!.cost;
+    const none = { usd: null, basis: "none", note: "a subscription endpoint, so no actual" };
+    // An OpenCode Go or codex run: no actual, the estimate with its tilde and the run page's line.
+    expect(
+      at(run({ cost: { actual: none, expected: { usd: 0.5, basis: "list-price", asIfMetered: true, asOf: "2026-11-01" } } } as unknown as Partial<RunListRow>)),
+    ).toMatchObject({ usd: 0.5, estimate: true, text: "~$0.500", title: "expected, as-if-metered, 2026-11 prices · no actual\na subscription endpoint, so no actual" });
+    // An unpriced model, or a row from a viewer that sent no estimate: a blank.
+    expect(at(run({ cost: { actual: none } } as unknown as Partial<RunListRow>))).toMatchObject({ usd: null, estimate: false, text: "—" });
+    expect(at(run({ cost: null } as Partial<RunListRow>))).toMatchObject({ usd: null, text: "—" });
+    // A claude-code run's own figure is as-if-metered: an estimate, though reported.
+    expect(
+      at(run({ cost: { actual: { usd: 0.031, basis: "reported", asIfMetered: true, note: "the CLI's own" } } } as unknown as Partial<RunListRow>)),
+    ).toMatchObject({ usd: 0.031, estimate: true, text: "~$0.031", title: "as-if-metered, the CLI's own total_cost_usd · no charge\nthe CLI's own" });
+    // A reported actual shows as it always has.
+    expect(at(run({ tokens: null } as Partial<RunListRow>))).toMatchObject({ usd: 0.42, estimate: false, text: "$0.420" });
   });
 
   test("accounts holding nothing are idle rows below the working ones, the pool's before the pinned", () => {

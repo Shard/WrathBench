@@ -38,11 +38,11 @@ export interface RunCostReading {
  * The cost of one run for the chart: what the provider charged when it said,
  * else the price table applied to the run's own tokens.
  *
- * The runs table shows only the provider's figure, because a listing of what
- * runs cost may not show a guess. The chart's x-axis is an average, and a
- * free or local model has no provider figure ever — its honest cost is the
- * $0 the price table says. So the fallback is taken here, and the point
- * carries its basis so the caption can say which runs were priced how.
+ * The same fallback the runs table's cost cell takes (`listCost`), which marks
+ * the estimate with a `~`. The chart's x-axis is an average, and a free or
+ * local model has no provider figure ever — its honest cost is the $0 the
+ * price table says. The point carries its basis so the caption can say which
+ * runs were priced how.
  */
 export function runCostReading(r: Pick<ResultRun, "actualCost" | "expectedCost">): RunCostReading | null {
   const a = r.actualCost;

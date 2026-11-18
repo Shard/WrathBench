@@ -211,6 +211,14 @@ describe("a square", () => {
     );
   });
 
+  test("runs nobody billed add their estimate beside the bill, never into it (operator, 2026-11-18)", () => {
+    const sq = { ...reached!, costUsd: null, estimatedUsd: 0.42 };
+    expect(squareTitle(sq, "L5")).toContain("best L5 · ~$0.420 estimated where no bill was reported · 1 counted run wanted");
+    expect(squareTitle({ ...reached!, estimatedUsd: 0.5 }, "L5")).toContain("$1.25 billed · ~$0.500 estimated where no bill was reported");
+    // A square from a snapshot that predates it, or with nothing priced, says nothing of it.
+    expect(squareTitle({ ...reached!, estimatedUsd: null }, "L5")).not.toContain("estimated");
+  });
+
   test("runs that did not count are named in the hover", () => {
     expect(squareText(several!, "L5")).toBe("1/1 38m");
     expect(squareTitle(several!, "L5")).toContain("1 not counted");

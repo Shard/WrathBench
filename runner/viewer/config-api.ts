@@ -247,7 +247,7 @@ function unpromotableOf(config: Record<string, unknown>): (model: string) => boo
   try {
     credentials = parseCredentials(config["credentials"]);
   } catch {
-    // the store refuses such a block on write; with none read, only the unconditional rule hides
+    // the store refuses such a block on write; with none read, no family is hidden
   }
   return (model) => draftUnpromotable(model, credentials);
 }

@@ -22,8 +22,8 @@ import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { effortLabel, fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId, titleOf, windowNote } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, modelTableRows, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle, windowParam, type ModelTableRow } from "../lib/models";
+import { effortLabel, fmtDuration, fmtWhen, modelDisplay, shortRunId, titleOf, windowNote } from "../lib/format";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, modelRunCost, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, modelTableRows, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle, windowParam, type ModelTableRow } from "../lib/models";
 import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
@@ -368,7 +368,7 @@ function Detail(props: { row: ModelRowView }) {
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>
-              <th class="right" title="what the provider charged; blank when it reported none — the run page also carries the list-price estimate">
+              <th class="right" title="what the provider charged; where it reported none, the list-price estimate, named as one">
                 cost
               </th>
               <th>termination</th>
@@ -392,18 +392,12 @@ function Detail(props: { row: ModelRowView }) {
                   <td class="right mono">{r.bestLevel ?? "—"}</td>
                   <td class="dim">{r.live ? "live" : fmtWhen(r.endedAt)}</td>
                   <td class="right mono dim">{fmtDuration(r.durationMs)}</td>
-                  {/* The provider's own charge only. The list-price estimate is
-                      a reconstruction and belongs on the run page next to the
-                      tokens it was computed from, not in a column read as a
-                      bill; a blank here means nobody billed us a number. */}
-                  {/* `fmtCost` rather than a bare figure: the number alone
-                      invites a reconstruction to be read as an invoice, and a
-                      subscription run's figure is as-if-metered. */}
-                  <td
-                    class="right mono dim"
-                    title={r.cost?.actual.note ?? "provider reports no cost for this run"}
-                  >
-                    {fmtCost(r.cost?.actual, "—")}
+                  {/* The provider's own charge, else the list-price estimate
+                      (`modelRunCost`). `fmtCost` rather than a bare figure: the
+                      number alone invites a reconstruction to be read as an
+                      invoice, so each figure says which it is. */}
+                  <td class="right mono dim" title={modelRunCost(r).title}>
+                    {modelRunCost(r).text}
                   </td>
                   <td class={r.terminationReason === "adapter-error" ? "err" : "dim"}>
                     {r.terminationReason ?? (r.live ? "—" : "no record")}

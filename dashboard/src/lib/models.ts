@@ -9,7 +9,8 @@
  * the table and the detail panel cannot word the same fact two ways.
  */
 
-import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
+import type { ModelEpisodeView, ModelRowView, ModelRunView, ModelStatusView, TierView } from "@viewer/api-types";
+import { fmtCost, listCost } from "./format";
 import type { CharacterRow } from "./ladder";
 import { AUTO_WINDOW } from "./runs";
 import { canonicalModelId } from "../../../infra/model-catalogue";
@@ -281,4 +282,20 @@ export function windowsOf(row: Pick<ModelRowView, "compactWindow" | "windows">):
 export function windowParam(row: Pick<ModelRowView, "compactWindow" | "windows">): string | null {
   const windows = windowsOf(row);
   return windows.length === 1 && windows[0] === AUTO_WINDOW ? null : windows.join(",");
+}
+
+/**
+ * A run's cost cell in a model's panel: the provider's charge, else the
+ * list-price estimate (operator, 2026-11-18). The panel spells each figure out
+ * with `fmtCost` ("$1.20 reported", "~$0.80 as-if-metered (list price,
+ * 2026-11)"), and a figure nobody was charged wears the runs table's tilde and
+ * hover (`listCost`): the list-price estimate and a claude-code run's own
+ * as-if-metered figure alike.
+ */
+export function modelRunCost(r: Pick<ModelRunView, "cost">): { text: string; title: string } {
+  const c = listCost(r.cost?.actual, r.cost?.expected, "provider reports no cost for this run");
+  if (c.figure === null) return { text: "—", title: c.title };
+  const spelled = fmtCost({ ...c.figure, asIfMetered: c.figure.asIfMetered === true, asOf: c.figure.asOf ?? null }, "—");
+  // The tilde every listing puts on a figure nobody was charged.
+  return { text: c.estimate ? `~${spelled}` : spelled, title: c.title };
 }
