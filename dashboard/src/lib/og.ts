@@ -144,7 +144,7 @@ export interface OgOptions {
   identity?: boolean;
   /** One name above each frontier entry, on by default. */
   labels?: boolean;
-  /** The operator's preview series (`info.json`'s `previewSeries`), which the homepage's ladder leaves out and so does the card. */
+  /** The operator's preview series (`info.json`'s `previewSeries`), which the homepage's ladder leaves out by default and so does the card. */
   preview?: string | null;
 }
 
