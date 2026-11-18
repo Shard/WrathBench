@@ -1,5 +1,7 @@
 import { planOf, snapshotOf, type RunningJob } from "./fixtures/tick";
 import { planTick } from "./run-fleet-plan";
+import { SUBSCRIPTION_FAMILIES } from "../runner/src/drivers";
+import { providerOfModel } from "../runner/src/credential-slots";
 import { launchRouting } from "../runner/test/fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import {
@@ -1028,20 +1030,34 @@ describe("campaigns: probe sweeps as the third lane", () => {
 });
 
 describe("roster policy", () => {
-  test.each(["sonnet", "opus", "haiku", "claude-4-opus", "anthropic/claude-3.5-sonnet:free"])(
-    "%s is claude-family",
-    (m) => expect(isClaudeFamily(m)).toBe(true),
-  );
-  test.each(["z-ai/glm-5.2:free", "poolside/laguna-s-2.1:free", "deepseek-v4-flash-free"])(
-    "%s is not claude-family",
-    (m) => expect(isClaudeFamily(m)).toBe(false),
-  );
+  test.each([
+    // The Claude Code CLI's aliases and ids.
+    "sonnet", "opus", "haiku", "fable", "opusplan", "sonnet[1m]", "claude-4-opus", "claude-opus-5-5", "Claude-Sonnet-5-5",
+    // OpenRouter's, any model under the vendor, a variant, an alias, behind a further prefix.
+    "anthropic/claude-3.5-sonnet:free", "anthropic/claude-haiku-4.5", "anthropic/some-future-model", "~anthropic/claude-sonnet-latest",
+    "openrouter/anthropic/claude-opus-5.5",
+  ])("%s is claude-family", (m) => expect(isClaudeFamily(m)).toBe(true));
+  test.each([
+    "z-ai/glm-5.2:free", "poolside/laguna-s-2.1:free", "deepseek-v4-flash-free",
+    // Another vendor's id that merely names Claude: distills and fine-tunes.
+    "reedmayhew/claude-3.7-sonnet-reasoning-gemma3-12b", "someone--claude-distill-qwen3-8b", "qwen/qwen3-8b-claude-distill",
+    "deepseek-r1-distill-claude", "teichai/qwen3-8b-claude-4.5-opus-high-reasoning-distill", "claudette-7b", "anthropic-ish/model",
+    // A word that is a Claude alias only on its own.
+    "sonnet-poet-7b", "opus-mt-en-de", "haiku-writer/llama-3",
+  ])("%s is not claude-family", (m) => expect(isClaudeFamily(m)).toBe(false));
 
-  test("a claude model on an openai-driver entry is refused, citing the roster policy", () => {
-    expect(() => validateEntries("roster:x", [{ model: "sonnet" }])).toThrow(/roster policy/);
-    expect(() => validateEntries("roster:x", [{ model: "anthropic/claude-3.5-sonnet:free", driver: "openai" }])).toThrow(
-      /roster policy/,
-    );
+  test("a claude model on an endpoint driver is no longer refused with the file: the credentials decide, per entry", () => {
+    expect(validateEntries("roster:x", [{ model: "sonnet" }])).toHaveLength(1);
+    expect(validateEntries("roster:x", [{ model: "anthropic/claude-3.5-sonnet:free", driver: "openai" }])).toHaveLength(1);
+    expect(validateEntries("roster:x", [{ model: "anthropic/claude-3.5-sonnet:free", driver: "pi" }])).toHaveLength(1);
+  });
+
+  test("every subscription family's driver bills its provider, so the table cannot drift from the credential table", () => {
+    expect(SUBSCRIPTION_FAMILIES.map((f) => [f.family, f.provider, f.driver])).toEqual([
+      ["ChatGPT", "chatgpt", "codex"],
+      ["Claude", "claude", "claude-code"],
+    ]);
+    for (const f of SUBSCRIPTION_FAMILIES) expect(providerOfModel({ driver: f.driver })).toBe(f.provider);
   });
 
   test("the claude-code driver carries claude models only", () => {
@@ -1191,13 +1207,21 @@ describe("roster policy", () => {
     ).toHaveLength(1);
   });
 
-  test("a claude-* id is barred on any openai entry, local or shared", () => {
-    // OpenRouter, the default base.
-    expect(() => validateEntries("roster:x", [{ model: "anthropic/claude-3.5-sonnet:free" }])).toThrow(/roster policy/);
-    // A local entry is barred the same.
-    expect(() =>
-      validateEntries("roster:x", [{ model: "claude-4-opus", apiBase: "http://192.168.100.20:1234/v1" }]),
-    ).toThrow(/roster policy/);
+  test("with a claude credential a claude-* id is barred on any endpoint entry, local or shared", () => {
+    const config = parseFleet({
+      accounts: { pool: ["R"] },
+      roster: {
+        // OpenRouter, the default base.
+        or: { tier: "t0", model: "anthropic/claude-3.5-sonnet:free" },
+        // A local entry is barred the same.
+        box: { tier: "t0", model: "claude-4-opus", apiBase: "http://192.168.100.20:1234/v1", serving: LOCAL_SERVING },
+      },
+      policy: {},
+    });
+    expect(config.refusals.map((r) => [r.pin, /roster policy — \S+ is a Claude model/.test(r.why)])).toEqual([
+      ["roster or", true],
+      ["roster box", true],
+    ]);
   });
 
   // Operator, 2026-11-18: "astra or any chatgpt model should not be run on
@@ -1281,6 +1305,93 @@ describe("roster policy", () => {
         policy: {},
       });
       expect(community.refusals).toEqual([]);
+    });
+  });
+
+  // Operator, 2026-11-18: Claude models are treated exactly as ChatGPT ones,
+  // on the claude credential: an entry refusal, never the file's.
+  describe("Claude models run only on claude-code where a claude credential is configured", () => {
+    const refusedWhy = (config: FleetConfig, name: string): string | undefined => config.refusals.find((r) => r.pin === `roster ${name}`)?.why;
+
+    test("on OpenRouter it is refused by name, saying what to write instead, and the entry stays in the catalog", () => {
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        roster: {
+          opus: { tier: "t0", model: "anthropic/claude-opus-5.5" },
+          "haiku-pi": { tier: "t0", model: "anthropic/claude-haiku-5.5", driver: "pi" },
+        },
+        queue: [{ ref: "opus", episode: "freeplay" }],
+        policy: {},
+      });
+      expect(refusedWhy(config, "opus")).toBe(
+        "roster policy — anthropic/claude-opus-5.5 is a Claude model, and with a claude credential configured Claude models run only via the claude-code driver: " +
+          "write it as a claude-code entry on that credential instead (model claude-opus-5-5, driver claude-code) — the entry is in the catalog and scheduled by nothing",
+      );
+      expect(refusedWhy(config, "haiku-pi")).toMatch(/anthropic\/claude-haiku-5\.5 is a Claude model/);
+      expect(config.roster["opus"]!.refused).toMatch(/run only via the claude-code driver/);
+      expect(config.refusals.find((r) => r.pin === "roster opus")!.jobs.length).toBeGreaterThan(0);
+    });
+
+    test("inside a providers list it is refused too, whichever provider names it", () => {
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        roster: {
+          sonnet: {
+            tier: "t0",
+            model: "claude-sonnet-5-5",
+            providers: [
+              { credential: "zen-paid", apiBase: "https://opencode.ai/zen/v1" },
+              { credential: "or-paid", model: "anthropic/claude-sonnet-5.5" },
+            ],
+          },
+        },
+        policy: {},
+      });
+      expect(refusedWhy(config, "sonnet")).toMatch(/claude-sonnet-5-5 is a Claude model/);
+    });
+
+    test("the disabled subscription still counts: disabling it never re-opens the endpoint", () => {
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        credentials: { ...OPEN_CREDENTIALS, claude: { ...OPEN_CREDENTIALS.claude, enabled: false } },
+        roster: { opus: { tier: "t0", model: "anthropic/claude-opus-5.5" } },
+        policy: {},
+      });
+      expect(refusedWhy(config, "opus")).toMatch(/Claude model/);
+    });
+
+    test("allowed: a claude-code entry, a distill that names Claude, and any Claude model where there is no claude credential", () => {
+      const ok = parseFleet({
+        accounts: { pool: ["R"] },
+        roster: {
+          sonnet: { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", credential: "claude" },
+          distill: { tier: "t0", model: "reedmayhew/claude-3.7-sonnet-reasoning-gemma3-12b" },
+        },
+        policy: {},
+      });
+      expect(ok.refusals).toEqual([]);
+      const { claude: _claude, ...noSubscription } = OPEN_CREDENTIALS;
+      const community = parseFleet({
+        accounts: { pool: ["R"] },
+        credentials: noSubscription,
+        roster: { opus: { tier: "t0", model: "anthropic/claude-opus-5.5" } },
+        policy: {},
+      });
+      expect(community.refusals).toEqual([]);
+    });
+
+    test("each family answers only to its own credential", () => {
+      const { claude: _claude, ...chatgptOnly } = OPEN_CREDENTIALS;
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        credentials: chatgptOnly,
+        roster: {
+          opus: { tier: "t0", model: "anthropic/claude-opus-5.5" },
+          astra: { tier: "t0", model: "openai/gpt-6.2-astra" },
+        },
+        policy: {},
+      });
+      expect(config.refusals.map((r) => r.pin)).toEqual(["roster astra"]);
     });
   });
 });
@@ -1829,7 +1940,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(() => parseFleet(nextShape({ policy: { runPods: true } }))).toThrow(/policy.runPods must be one of/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share the name/);
     // The roster policy applies to every entry.
-    expect(() => parseFleet(nextShape({ roster: { bad: { tier: "t1", model: "sonnet" } }, queue: [] }))).toThrow(/roster policy/);
+    expect(() => parseFleet(nextShape({ roster: { bad: { tier: "t1", model: "gpt-6-luna", driver: "claude-code" } }, queue: [] }))).toThrow(/roster policy/);
     // The gate may not borrow a pool account.
     expect(() =>
       parseFleet(nextShape({ preflight: { enabled: true, account: "RUNNER", smokes: ["x.ts"] } })),

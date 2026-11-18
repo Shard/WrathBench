@@ -359,10 +359,11 @@ instead of a cloud pool, for example an LM Studio box on the LAN
 (loopback, RFC-1918 or `.local`) bills free, and its runs take a slot on a
 `local` credential, whose `slots: 1` is what keeps one runner on the box:
 
-- **Claude-barred.** No `claude-*` id ever rides an openai entry, local or
-  cloud; claude runs only on the `claude-code` driver. Where a `chatgpt`
-  credential is configured, ChatGPT models (`gpt-*`, not `gpt-oss-*`) are
-  refused there too, and run only on the `codex` driver.
+- **Subscription families barred.** Where a `claude` credential is
+  configured, no Claude model (`anthropic/...`, `claude-*`) rides an openai
+  entry, local or cloud, and runs only on the `claude-code` driver. Where a
+  `chatgpt` credential is configured, ChatGPT models (`gpt-*`, not
+  `gpt-oss-*`) are refused there too, and run only on the `codex` driver.
 - **The credential names a dummy key.** LM Studio ignores the bearer value, but
   the pipeline needs the env var to exist, so the `local` credential's
   `secretEnv` is `LMSTUDIO_KEY` and `.env` carries a non-secret

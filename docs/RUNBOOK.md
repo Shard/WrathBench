@@ -324,17 +324,21 @@ first credential that serves its model and has room ("Credentials").
   decides what runs.
 
 Two enabled jobs must not share an account, a pinned account may not be in the
-pool, and the roster policy is enforced on every entry at every re-read:
-claude models run only on the claude-code driver, which runs only claude
-models. Where a `chatgpt` credential is configured (enabled or not), ChatGPT
-models (`openai/gpt-*` or a bare `gpt-*`; the open-weights `gpt-oss-*` are
-not) run only on the codex driver: an entry that puts one on OpenRouter or
-another endpoint, its own or any provider's in its `providers` list, is
-refused as the entry, and a store write of one is refused outright, so it is
-written as a codex entry on that credential instead. A deployment with no
-ChatGPT subscription may run them on an endpoint. The config page's drafts
-never offer a model a promotion could not write: no Claude model, and no
-ChatGPT model under that credential.
+pool, and the roster policy is enforced on every entry at every re-read. The
+claude-code driver runs only Claude models and the codex driver none, which
+refuses the file. A subscription family runs only through its subscription
+where one is configured (enabled or not): Claude models (any `anthropic/...`
+id, a bare `claude-*`, or a Claude Code alias such as `sonnet`; another
+vendor's distill that names Claude is not one) only on the claude-code driver
+while a `claude` credential exists, and ChatGPT models (`openai/gpt-*` or a
+bare `gpt-*`; the open-weights `gpt-oss-*` are not) only on the codex driver
+while a `chatgpt` one does. An entry that puts one on OpenRouter or another
+endpoint, its own or any provider's in its `providers` list, is refused as the
+entry, and a store write of one is refused outright, so it is written as that
+subscription's entry instead. A deployment without the subscription may run
+the family on an endpoint. The config page's drafts never offer a model a
+promotion could not write: no Claude model under a claude credential, and no
+ChatGPT model under a chatgpt one.
 
 Billing is derived, not policed, so no model id is refused for what it costs.
 An entry the rules put on the wrong side (a stealth id quoted at zero with no
@@ -627,8 +631,8 @@ and proposes every tool-calling model the roster does not already run and
 nobody has ignored, free and paid, newest first. A second fetch adds only
 what is new, refreshes a pending draft's price, and never brings an ignored
 model back. A model a promotion could not write is never offered: no Claude
-model, and no ChatGPT model while a `chatgpt` credential is configured. Add
-those as a claude-code or codex entry.
+model while a `claude` credential is configured, and no ChatGPT model while a
+`chatgpt` one is. Add those as a claude-code or codex entry.
 
 A draft is not config. It is a `proposed/<model id>` row in the store, which
 `parseFleet` never reads, so nothing schedules it, and a fetch or an ignore

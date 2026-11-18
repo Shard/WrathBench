@@ -160,7 +160,7 @@ describe("writes", () => {
     const { store } = tempStore();
     store.seed(fixtureConfig());
     expect(() => store.put("roster/son", { tier: "t9", model: "sonnet" })).toThrow(ConfigRejected);
-    expect(() => store.put("roster/son", { tier: "t1", model: "sonnet" })).toThrow(/claude models run only via the claude-code driver/);
+    expect(() => store.put("roster/son", { tier: "t1", model: "gpt-6.2-sol", driver: "claude-code" })).toThrow(/the claude-code driver carries claude models only/);
     expect(store.get("roster/son")).toEqual({ tier: "t1", model: "sonnet", driver: "claude-code" });
     expect(store.audit().filter((a) => a.key === "roster/son" && a.note === null)).toEqual([]);
     store.close();
@@ -184,6 +184,29 @@ describe("writes", () => {
     expect(() =>
       fresh.seed(fixtureConfig({ credentials: { chatgpt }, roster: { astra: { tier: "t0", model: "openai/gpt-6.2-astra" } } })),
     ).toThrow(/^roster\/astra: roster policy — openai\/gpt-6\.2-astra is a ChatGPT model/);
+    fresh.close();
+  });
+
+  test("a Claude model off claude-code is refused at write and at seed while a claude credential is configured, and allowed with none", () => {
+    const claude = { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: false };
+    const { store } = tempStore();
+    // With no Claude subscription configured, an OpenRouter Claude entry is an ordinary one.
+    store.seed(fixtureConfig({ roster: { ...(fixtureConfig().roster as object), opus: { tier: "t0", model: "anthropic/claude-opus-5.5" } } }));
+    store.put("roster/haiku", { tier: "t0", model: "anthropic/claude-haiku-5.5:free" });
+    // The subscription arrives after the entries: its write is judged alone, so it lands.
+    store.put("credentials/claude", claude);
+    expect(() => store.put("roster/sonnet-or", { tier: "t0", model: "anthropic/claude-sonnet-5.5" })).toThrow(
+      /^roster\/sonnet-or: roster policy — anthropic\/claude-sonnet-5\.5 is a Claude model, and with a claude credential configured Claude models run only via the claude-code driver: write it as a claude-code entry on that credential instead \(model claude-sonnet-5-5, driver claude-code\)$/,
+    );
+    expect(() => store.put("roster/sonnet-zen", { tier: "t0", model: "claude-sonnet-5-5", apiBase: "https://opencode.ai/zen/v1" })).toThrow(/claude-sonnet-5-5 is a Claude model/);
+    expect(store.get("roster/sonnet-or")).toBeUndefined();
+    store.put("roster/glm", { tier: "t2", model: "z-ai/glm-5.2:free" });
+    store.put("roster/son", { tier: "t0", model: "claude-sonnet-5-5", driver: "claude-code" });
+    store.close();
+    const { store: fresh } = tempStore();
+    expect(() =>
+      fresh.seed(fixtureConfig({ credentials: { claude }, roster: { opus: { tier: "t0", model: "anthropic/claude-opus-5.5" } } })),
+    ).toThrow(/^roster\/opus: roster policy — anthropic\/claude-opus-5\.5 is a Claude model/);
     fresh.close();
   });
 

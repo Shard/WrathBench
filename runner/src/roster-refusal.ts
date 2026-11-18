@@ -11,7 +11,7 @@
  */
 
 import { credentialCandidates, providerOfModel, rosterProviderRefusal, type Credential } from "./credential-slots";
-import { chatgptModelRefusal, isChatGptFamily } from "./drivers";
+import { DEFAULT_DRIVER, SUBSCRIPTION_FAMILIES, subscriptionModelRefusal } from "./drivers";
 import { LOCAL_WITHOUT_SERVING, parseServing, parseServingLabels, SERVING_OFF_LOCAL } from "./serving";
 
 /**
@@ -85,8 +85,9 @@ export interface RosterEntryRefusal {
  * enough to take it out of scheduling:
  *
  * - **a key the harness does not read** (`ROSTER_ENTRY_KEYS`);
- * - **a ChatGPT model off the codex driver** where a chatgpt credential is
- *   configured (`chatgptEntryRefusal`; operator, 2026-11-18), any provider's;
+ * - **a ChatGPT model off the codex driver, or a Claude model off the
+ *   claude-code driver**, where that subscription's credential is configured
+ *   (`subscriptionFamilyRefusal`; operator, 2026-11-18), any provider's;
  * - **a base no credential provider serves**, or one its provider's key may
  *   not go to (`rosterProviderRefusal`, runner/src/credential-slots.ts);
  *   for an entry with `providers` (`runner/src/provider-options.ts`), any one
@@ -108,7 +109,7 @@ export function rosterEntryRefusal(
 ): RosterEntryRefusal | null {
   const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
   if (keys.length > 0) return { kind: "unknown-key", why: strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS) };
-  const policy = chatgptEntryRefusal(e, credentials, env);
+  const policy = subscriptionFamilyRefusal(e, credentials);
   if (policy !== null) return { kind: "policy", why: policy };
   // Each provider is the entry as it launches there; the first that is refused refuses the entry, by name.
   if (Array.isArray(e.providers)) {
@@ -128,39 +129,40 @@ export function rosterEntryRefusal(
 }
 
 /**
- * The credential provider a ChatGPT subscription is (`CREDENTIAL_PROVIDERS`,
- * credential-slots.ts): the one the codex driver bills.
- */
-const CHATGPT_PROVIDER = "chatgpt";
-
-/**
- * Why a roster entry breaks the ChatGPT rule, or null (operator, 2026-11-18:
- * "astra or any chatgpt model should not be run on openrouter ... they should
- * be using codex"). A ChatGPT model (`isChatGptFamily`), its own or any
- * provider's in its `providers` list, runs only on the driver that bills the
- * chatgpt credential — while the deployment has one configured, enabled or
- * not, so disabling the subscription never quietly re-opens the endpoint. A
- * deployment with no ChatGPT subscription (quickstart, community) may run them
- * on an endpoint.
+ * Why a roster entry breaks a subscription family's rule, or null (operator,
+ * 2026-11-18: "astra or any chatgpt model should not be run on openrouter ...
+ * they should be using codex", and Claude the same on its subscription). A
+ * model of a family in `SUBSCRIPTION_FAMILIES` (ChatGPT, Claude), its own or
+ * any provider's in its `providers` list, runs only on the driver that bills
+ * that family's subscription — while the deployment has a credential of it
+ * configured, enabled or not, so disabling the subscription never quietly
+ * re-opens the endpoint. A deployment without one (quickstart, community) may
+ * run the family on an endpoint.
  *
- * The Claude rule is the unconditional one, refused with the file
- * (`validateEntries`, infra/run-fleet-config.ts). This one depends on the
- * credentials, so it refuses the ENTRY on a re-read (`rosterEntryRefusal`) and
- * the WRITE at the store (`refuseKeyPairing`, config-store.ts). Roster entries
- * only: a recorded run is never read or reclassified by it.
+ * It depends on the credentials, so it refuses the ENTRY on a re-read
+ * (`rosterEntryRefusal`), the WRITE at the store (`refuseKeyPairing`,
+ * config-store.ts) and the model on the drafts (`draftUnpromotable`). What a
+ * CLI driver can serve at all (claude-code claude only, codex none) is the
+ * unconditional rule, refused with the file (`claudeModels`,
+ * `validateEntries`). Roster entries only: a recorded run is never read or
+ * reclassified by it.
  */
-export function chatgptEntryRefusal(
+export function subscriptionFamilyRefusal(
   e: { model?: unknown; driver?: unknown; providers?: unknown },
   credentials: readonly Pick<Credential, "provider">[],
-  env: Record<string, string | undefined> = process.env,
 ): string | null {
-  if (!credentials.some((c) => c.provider === CHATGPT_PROVIDER)) return null;
-  if (providerOfModel({ driver: typeof e.driver === "string" ? e.driver : undefined }, env) === CHATGPT_PROVIDER) return null;
-  const models = Array.isArray(e.providers)
-    ? (e.providers as unknown[]).map((o) => (typeof o === "object" && o !== null ? (o as { model?: unknown }).model : undefined) ?? e.model)
-    : [e.model];
-  const model = models.find((m): m is string => typeof m === "string" && isChatGptFamily(m));
-  return model === undefined ? null : chatgptModelRefusal(model);
+  const driver = e.driver ?? DEFAULT_DRIVER;
+  const models = (
+    Array.isArray(e.providers)
+      ? (e.providers as unknown[]).map((o) => (typeof o === "object" && o !== null ? (o as { model?: unknown }).model : undefined) ?? e.model)
+      : [e.model]
+  ).filter((m): m is string => typeof m === "string");
+  for (const f of SUBSCRIPTION_FAMILIES) {
+    if (driver === f.driver || !credentials.some((c) => c.provider === f.provider)) continue;
+    const model = models.find(f.matches);
+    if (model !== undefined) return subscriptionModelRefusal(f, model);
+  }
+  return null;
 }
 
 /** The provider and pinned-credential rules of `rosterEntryRefusal`, for one provider. */
