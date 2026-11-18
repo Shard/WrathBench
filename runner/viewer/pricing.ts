@@ -353,9 +353,9 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * Paid providers that are not OpenRouter, priced by hand: each model entry's
  * `prices.endpoints`, resolved against its provider (`ENDPOINT_PRICES`).
  *
- * The OpenRouter sync cannot help here: `infra/sync-prices.ts` writes only the
- * windows its catalogue quotes, so a Cerebras rate in an entry's
- * `prices.openrouter` would be emptied on the next run of the script — and
+ * The OpenRouter sync cannot help here: `infra/sync-prices.ts` owns an entry's
+ * `prices.openrouter` and quotes only what OpenRouter's catalogue carries, so a
+ * Cerebras rate typed in there would be a row no sync could ever check — and
  * OpenRouter's `qwen/qwen3.8-27b` is neither the same id string nor the same
  * rate as Cerebras's `qwen-3.8-27b`. So these rows are typed in, dated and
  * sourced the way the Anthropic rows are, and a stale one is visible rather
@@ -463,9 +463,9 @@ function isSubscriptionRun(run: PriceableRun): boolean {
  * (`OPENROUTER_DELISTED`, an entry's `prices.openrouter[id].delisted`).
  *
  * A delisted model is unpriced in a way running the sync cannot fix — the
- * catalogue has no row to copy, so a sync *empties* the id's windows rather
- * than updating them. That is a different problem from "the sync has not seen
- * this yet", and telling the reader to run a script that cannot help is worse
+ * catalogue has no row to copy, and its windows were emptied before the sync
+ * kept a dropped id's history. That is a different problem from "the sync has
+ * not seen this yet", and telling the reader to run a script that cannot help is worse
  * than telling them nothing, so `unpricedNote` answers these ids from the
  * entry instead.
  *

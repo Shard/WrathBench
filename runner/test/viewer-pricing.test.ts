@@ -507,18 +507,15 @@ describe("the hand-held provider table", () => {
     expect(asOfDated.note).not.toContain("in force from");
   });
 
-  test("the rows live outside an entry's prices.openrouter, where a sync would empty them", () => {
+  test("the rows live outside an entry's prices.openrouter, which the sync owns", () => {
     for (const p of ENDPOINT_PRICES) {
       expect(OPENROUTER_PRICES.models[p.model]).toBeUndefined();
       expect(OPENROUTER_PRICES.models[p.id]).toBeUndefined();
     }
-    // The failure the table exists to avoid, on the sync's own merge step: a
-    // hand-typed Cerebras row in the synced file does not survive a catalogue
-    // that does not carry the id.
+    // A sync whose catalogue carries none of them leaves the hand table
+    // answering the same run.
     const catalogue = Object.fromEntries(Object.entries(OPENROUTER_PRICES.models).map(([id, ws]) => { const { from: _f, ...r } = ws[ws.length - 1]!; return [id, r]; }));
-    const smuggled = { ...OPENROUTER_PRICES.models, "qwen-3.8-27b": [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }] };
-    expect(mergeWindows(smuggled, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
-    // While the hand table still answers the same run after that sync.
+    expect(mergeWindows(OPENROUTER_PRICES.models, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
     expect(priceFor(cerebras)?.input).toBe(0.99);
   });
 
@@ -705,11 +702,29 @@ describe("a sync that re-reads the catalogue", () => {
     expect(windowAt(second[id]!, Date.parse("2026-08-24"))!.input).toBe(0.075);
   });
 
-  test("an id the catalogue no longer prices is dropped, and a new id starts on an undated window", () => {
-    const { "z-ai/glm-5.3": _gone, ...rest } = catalogue;
-    const fresh = { ...rest, "vendor/new-model": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 } };
+  test("an id the catalogue no longer prices keeps every window, and its runs keep their price", () => {
+    const { "z-ai/glm-5.3-flash": _gone, ...rest } = catalogue;
+    const after = mergeWindows(current, rest, "2099-09-09");
+    expect(after["z-ai/glm-5.3-flash"]).toEqual(current["z-ai/glm-5.3-flash"] as typeof after[string]);
+    // The August run reads the same window it did before the id was dropped.
+    expect(windowAt(after["z-ai/glm-5.3-flash"]!, Date.parse("2026-08-24"))!.input).toBe(0.075);
+    // A sync whose catalogue carries nothing at all is the same case for every id.
+    expect(mergeWindows(current, {}, "2099-09-09") as unknown).toEqual(current);
+    // An emptied id has nothing to keep and stays out of the answer.
+    expect(mergeWindows({ "a/gone": [] }, {}, "2099-09-09")["a/gone"]).toBeUndefined();
+  });
+
+  test("a changed rate appends one window from today; an unchanged one adds nothing", () => {
+    const id = "z-ai/glm-5.3-flash";
+    const moved = { ...catalogue[id]!, output: catalogue[id]!.output + 1 };
+    const after = mergeWindows(current, { ...catalogue, [id]: moved }, "2099-09-09");
+    expect(after[id]).toEqual([...current[id]!, { ...moved, from: "2099-09-09" }]);
+    for (const other of Object.keys(current)) if (other !== id) expect(after[other]).toEqual(current[other] as typeof after[string]);
+  });
+
+  test("a new id starts on an undated window", () => {
+    const fresh = { ...catalogue, "vendor/new-model": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 } };
     const after = mergeWindows(current, fresh, "2026-09-09");
-    expect(after["z-ai/glm-5.3"]).toBeUndefined();
     expect(after["vendor/new-model"]).toEqual([{ input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }]);
     // No prior file at all is the same case for every id.
     expect(mergeWindows(undefined, { "a/b": { input: 1, output: 2, cacheRead: 0, cacheWrite: 1 } }, "2026-09-09")["a/b"]![0]!.from).toBeUndefined();
