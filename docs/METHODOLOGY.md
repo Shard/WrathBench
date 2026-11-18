@@ -202,7 +202,9 @@ model-facing failures were feedback failures, and weak models burned episodes
 blind-retrying. The harness repairs an input only when exactly one valid
 reading exists; with two it rejects, explains, and never picks. It never
 changes game semantics or teaches strategy, and error-message text is
-load-bearing surface: changing it is a harness change.
+load-bearing surface: changing it is a harness change. The scratchpad tools
+drop a stray `path` or `file` key, since there is one scratchpad and the key
+can name nothing else (operator, 2026-11-18).
 
 **A name in view is a valid referent, with bounded fuzz** (2026-08-29). A
 player points at things by name, so wherever a helper takes a guid it also
@@ -210,6 +212,15 @@ takes the name of something currently observed. One candidate acts; none, or
 two or more, refuse and say what is in view — the harness never picks between
 plausible referents. Guids are opaque strings, never fuzzed or aliased: a stale
 alias silently naming the wrong unit is the forbidden class.
+
+**The SDK keeps its own sends under the server's flood limits** (operator,
+2026-11-18). The core kicks a session that sends more of some opcodes in a
+second than its AntiDOS table allows, and a model's loop over `questAreas`
+lost its session four times in one run that way. So `questAreas` answers
+again from an answer under a second old or a query still in flight, and
+sends at most 10 a second, under the 25 the core kicks at. A kick tells a
+client nothing, so `session_gone` says only that the server ended the
+session.
 
 **A deadline explains, never caps.** The SDK knows the caller's remaining time
 so a hint can say a walk was always too long; no wait shortens and no call is
@@ -291,7 +302,11 @@ and a program that wants either calls `wake()`. A wake waits two seconds after
 its first reason so a cascade is one wake. A death or a refusal settles for ten
 instead, so the deaths and refusals of a wipe that land together reach the
 model as one wake listing all of them, and a `wake()` call, the cap and a
-`yield`'s own seconds are never held by that settle (operator, 2026-11-18). What it was already shown in
+`yield`'s own seconds are never held by that settle (operator, 2026-11-18). A
+refusal is a failure of the program's own call: a move its code replaced or
+stopped, the long-route note on a move that went ahead, and a call the
+character's death refused or cut short are none, and neither wake it nor are
+recorded as one (operator, 2026-11-18). What it was already shown in
 a tool result wakes no later sleep. The wake block is facts in fixed wording:
 every routine as it stands, new errors and refusals with their hints, what
 changed for the character, and the routines' last console lines, capped. A

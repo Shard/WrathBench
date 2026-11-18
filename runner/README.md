@@ -1347,7 +1347,10 @@ A reply with no tool call sleeps instead of being re-prompted after the step
 interval (`src/wake.ts`). A wake is a routine ending, the first error of a
 signature since a load, the first refusal of a signature in the run (a save
 re-arms none, so a combat routine's ordinary refusals do not wake it after
-every edit; later ones are counted in the next wake), a `wake(reason)` call,
+every edit; later ones are counted in the next wake; a move the code itself
+replaced or stopped, the long-route note on a move that went ahead and a call
+the character's death refused or cut short are no refusals, and the stack
+sends none for them, operator 2026-11-18), a `wake(reason)` call,
 any character's death, the event
 stream closing, a sandbox restart or a harness notice; each reason opens a
 window and the sleep ends at the first to close: two seconds, so a cascade is

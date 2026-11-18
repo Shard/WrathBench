@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, withoutDeathRefusals, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
+import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
 import type { DeathCause } from "../src/sandbox/snippet-delta";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
@@ -927,31 +927,6 @@ describe("ProgramWake", () => {
     // At fan-out, another character's refusal is its own news.
     c.schedule(10_000, () => p.push(refusal(c.now(), "walk", "drop", "Bravo"), wake));
     expect((await wake.sleep(p, { via: "yield", turn: 4, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true })).fired).toBe("refusal");
-  });
-
-  test("a wake that carries a death does not name the refusals the death caused", async () => {
-    const c = fakeClock(10_000_000);
-    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
-    const p = fakeProgram();
-    const refusal = (ts: number, status: string, hint: string): ProgramFact => ({ kind: "refusal", ts, routine: "cull", deploy: 6, action: "moveTo", status, hint, signature: `cull||moveTo|${status}`, fresh: true });
-    c.schedule(10_000, () => {
-      p.push(refusal(c.now(), "interrupted", "the move stopped because the character died. A corpse cannot move: sdk.repop() releases the spirit, and a ghost can walk."), wake);
-      wake.onDeath(c.now());
-      p.push(refusal(c.now() + 1, "dead", "you are dead"), wake);
-    });
-    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
-    expect(woke.block.split("\n")[0]).toBe("[wake 1 · slept 20s · woke for: your character died]");
-    // They are still listed among the wake's refusals, with their hints.
-    expect(woke.block).toContain("cull moveTo dead — you are dead");
-    expect(woke.block).toContain("cull moveTo interrupted — the move stopped because the character died.");
-    // An interrupted move with another cause is still news beside a death; with no death in the wake, a dead refusal is too.
-    const r = (o: Partial<WakeReason>): WakeReason => ({ key: "refusal", ts: 1, text: "t", inContext: false, ...o });
-    const died: WakeReason = { key: "died", ts: 1, text: "your character died", inContext: true };
-    expect(withoutDeathRefusals([died, r({ byDeath: true }), r({ text: "other" })]).map((x) => x.text)).toEqual(["your character died", "other"]);
-    expect(withoutDeathRefusals([r({ byDeath: true })]).length).toBe(1);
-    // At fan-out, only the dead character's.
-    const bravoDied: WakeReason = { ...died, character: "Bravo", text: "Bravo died" };
-    expect(withoutDeathRefusals([bravoDied, r({ byDeath: true, character: "Bravo", text: "b" }), r({ byDeath: true, character: "Alfa", text: "a" })]).map((x) => x.text)).toEqual(["Bravo died", "a"]);
   });
 
   test("routine lines a tool result showed count only the routines they showed", async () => {
