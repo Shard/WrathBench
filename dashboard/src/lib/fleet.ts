@@ -14,7 +14,7 @@
  */
 
 import type { FleetJobView, FleetPausedView, FleetResponse, FleetRunFacts, FleetServerView, TpsFacts } from "@viewer/api-types";
-import { costMark, fmtDuration, fmtTps, modelDisplay } from "./format";
+import { fmtDuration, fmtTps, listCost, modelDisplay, type ListCost } from "./format";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
 export const HEARTBEAT_STALE_MS = 180_000;
@@ -180,12 +180,8 @@ export interface FleetRow {
    * the state badge is what says it stopped.
    */
   tps: TpsFacts | null;
-  /** What the provider said it charged (the actual figure, as the episodes page shows it); null when unreported. */
-  costUsd: number | null;
-  /** Why the cost is blank, in the pricing layer's words; "" when there is a figure. */
-  costNote: string;
-  /** `costMark` of the same figure: "*" when part of it is a backfill, else "". */
-  costMark: string;
+  /** The cost cell, as the runs table shows it (`listCost`): the actual, else the marked estimate. */
+  cost: ListCost;
   /** Active time in the episode, from the run's figures; null when there is no run. */
   elapsedMs: number | null;
   /**
@@ -409,13 +405,13 @@ function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {
 }
 
 /**
- * The actual cost only — `CostView.actual`, what the provider said it charged,
- * as the episodes page shows it — never the estimate, and null for any of the
- * ways there is none (no run, unreadable trajectory, a provider that reports no cost).
+ * The cost cell the runs table would show for the run: what the provider said
+ * it charged, else the list-price estimate, marked (`listCost`), and a blank
+ * for any of the ways there is neither (no run, an unreadable trajectory, an
+ * unpriced model).
  */
-function actualUsd(run: FleetRunFacts | undefined): number | null {
-  const c = run?.cost?.actual ?? null;
-  return c === null || c.basis === "none" ? null : c.usd;
+function runCostCell(run: FleetRunFacts | undefined): ListCost {
+  return listCost(run?.cost?.actual, run?.cost?.expected, "");
 }
 
 /**
@@ -466,9 +462,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly FleetRunFacts[]):
       xp: run?.xp ?? null,
       tokens: run?.tokens?.totalTokens ?? null,
       tps: run?.tps ?? null,
-      costUsd: actualUsd(run),
-      costNote: run?.cost?.actual?.note ?? "",
-      costMark: costMark(run?.cost?.actual),
+      cost: runCostCell(run),
       elapsedMs: run?.playtimeMs ?? null,
       budgetMs: run?.comparability?.budget.episodeMs ?? null,
       note:
@@ -502,9 +496,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly FleetRunFacts[]):
       xp: run?.xp ?? null,
       tokens: run?.tokens?.totalTokens ?? null,
       tps: run?.tps ?? null,
-      costUsd: actualUsd(run),
-      costNote: run?.cost?.actual?.note ?? "",
-      costMark: costMark(run?.cost?.actual),
+      cost: runCostCell(run),
       elapsedMs: here?.elapsedMs ?? run?.playtimeMs ?? null,
       budgetMs: here?.budgetMs ?? run?.comparability?.budget.episodeMs ?? null,
       note: here !== undefined ? `${pausedLabel(here)} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,

@@ -17,7 +17,7 @@ import { createApi } from "../viewer/api";
 import { ACTOR_HEADER, NOTE_HEADER, handleConfigRequest, type ConfigApiOptions } from "../viewer/config-api";
 import { CATALOGUE_URL, draftDocument } from "../viewer/drafts";
 import { renderSnapshot } from "../viewer/snapshot";
-import { CATALOGUE_TEXT, CONFIG, PENDING, ROSTER_MODEL, catalogueFetch, fleetOf, seededStore as seeded, storeFacts } from "./fixtures/drafts";
+import { CATALOGUE_TEXT, CLAUDE_CREDENTIAL, CONFIG, PENDING, ROSTER_MODEL, catalogueFetch, fleetOf, seededStore as seeded, storeFacts } from "./fixtures/drafts";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -57,7 +57,7 @@ describe("the draft routes", () => {
     const f = catalogueFetch();
     const res = await call(db, "POST", "proposed/fetch", undefined, { fetch: f.fetch });
     expect(res.status).toBe(200);
-    // Five tool-calling models the roster does not run, less the Claude one, which a promotion could never write.
+    // Five tool-calling models the roster does not run, less the Claude one, which a promotion could not write under the claude credential.
     expect((res.body as DraftFetchResponse).added.length).toBe(4);
     expect((res.body as DraftFetchResponse).added).not.toContain("anthropic/claude-fixture-5");
     expect((res.body as DraftFetchResponse).skipped).toBe(1);
@@ -167,11 +167,30 @@ describe("the draft routes", () => {
     const facts = storeFacts(db);
     const res = await call(db, "POST", "proposed/promote", { model: "anthropic/claude-fixture-5", name: "claude-fixture", tier: "t0" }, {}, ATTRIBUTED);
     expect(res.status).toBe(400);
-    expect((res.body as { error: string }).error).toMatch(/claude models run only via the claude-code driver/);
+    expect((res.body as { error: string }).error).toBe(
+      "roster/claude-fixture: roster policy — anthropic/claude-fixture-5 is a Claude model, and with a claude credential configured Claude models run only via the claude-code driver: " +
+        "write it as a claude-code entry on that credential instead (model claude-fixture-5, driver claude-code)",
+    );
     expect(storeFacts(db)).toEqual(facts);
     const store = new ConfigStore(db, { readonly: true });
     expect(store.draft("anthropic/claude-fixture-5")).toBeDefined();
     store.close();
+  });
+
+  test("with no claude credential a Claude model is offered and promoted as any other; with one, a disabled one too, it is hidden", async () => {
+    const { claude: _claude, ...noSubscription } = CONFIG.credentials;
+    const open = seededStore({ ...CONFIG, credentials: noSubscription });
+    const offered = (await call(open, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch })).body as DraftFetchResponse;
+    expect(offered.added).toContain("anthropic/claude-fixture-5");
+    expect(((await call(open, "GET", "proposed")).body as DraftsResponse).drafts.map((d) => d.model)).toContain("anthropic/claude-fixture-5");
+    const promoted = await call(open, "POST", "proposed/promote", { model: "anthropic/claude-fixture-5", name: "claude-fixture", tier: "t0" }, {}, ATTRIBUTED);
+    expect(promoted.status).toBe(200);
+    expect(fleetOf(open).roster["claude-fixture"]).toMatchObject({ model: "anthropic/claude-fixture-5", tier: "t0" });
+
+    // Disabling the subscription never re-opens the endpoint.
+    const disabled = seededStore({ ...CONFIG, credentials: { claude: { ...CLAUDE_CREDENTIAL, enabled: false } } });
+    const hidden = (await call(disabled, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch })).body as DraftFetchResponse;
+    expect(hidden.added).not.toContain("anthropic/claude-fixture-5");
   });
 
   test("with a chatgpt credential a ChatGPT model is never offered and never promoted; gpt-oss is", async () => {

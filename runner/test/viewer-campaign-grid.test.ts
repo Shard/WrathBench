@@ -191,6 +191,25 @@ describe("the squares", () => {
     expect(v.costUsd).toBe(1.5);
     expect(view([run({ actualCost: cost(9, true) })]).costUsd).toBeNull();
   });
+
+  test("what nobody billed is the square's estimate: the as-if-metered figure, else the list price; never the bill's", () => {
+    const none = { usd: null, basis: "none", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "" } as CostFigure;
+    const listed = (usd: number): CostFigure => ({ ...none, usd, basis: "list-price", asIfMetered: true, asOf: "2026-11-01" }) as CostFigure;
+    const v = view([
+      // A metered run: its bill, and its own list price is never added on top.
+      run({ runId: "or", actualCost: cost(1.5), expectedCost: listed(7) }),
+      // claude-code: the SDK's as-if-metered figure, an estimate and never the bill.
+      run({ runId: "cc", actualCost: cost(2, true), expectedCost: listed(5) }),
+      // OpenCode Go or codex: no actual, the list-price estimate.
+      run({ runId: "go", actualCost: none, expectedCost: listed(0.25) }),
+      // Unpriced: nothing.
+      run({ runId: "x", actualCost: none, expectedCost: none }),
+    ]);
+    expect(v.grid[0]!.squares[0]).toMatchObject({ costUsd: 1.5, estimatedUsd: 2.25 });
+    // The campaign's own figure stays the bill alone.
+    expect(v.costUsd).toBe(1.5);
+    expect(view([run({ actualCost: cost(1.5), expectedCost: listed(7) })]).grid[0]!.squares[0]!.estimatedUsd).toBeNull();
+  });
 });
 
 describe("progress and state agree", () => {

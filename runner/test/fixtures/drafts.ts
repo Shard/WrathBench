@@ -16,9 +16,13 @@ export const CATALOGUE_TEXT = readFileSync(join(import.meta.dir, "openrouter-mod
 /** In the roster already, so never proposed. */
 export const ROSTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 
+/** The Claude subscription the claude-code entry runs on: with it configured, no Claude model is a draft. */
+export const CLAUDE_CREDENTIAL = { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: true };
+
 export const CONFIG = {
   _notes: ["fixture"],
   accounts: { pool: ["RUNNER"] },
+  credentials: { claude: CLAUDE_CREDENTIAL },
   roster: {
     nemo: { model: ROSTER_MODEL, tier: "t1" },
     son: { model: "sonnet", driver: "claude-code", tier: "t1" },

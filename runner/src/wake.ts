@@ -646,7 +646,8 @@ function groupSeats(rows: readonly { n: number; line: SignatureLine }[]): { text
  * `WAKE_CONSOLE_CHARS`, at most `WAKE_CONSOLE_SHOWN`. The newest entry is
  * always shown, cut to its head when it alone is over the cap.
  */
-function consoleTail(entries: readonly ProgramLogLine[]): string[] {
+function consoleTail(lines: readonly ProgramLogLine[]): string[] {
+  const entries = foldConsole(lines);
   const out: string[] = [];
   let left = WAKE_CONSOLE_CHARS;
   for (let k = entries.length - 1; k >= 0 && out.length < WAKE_CONSOLE_SHOWN; k--) {
@@ -666,6 +667,36 @@ function consoleTail(entries: readonly ProgramLogLine[]): string[] {
   return out;
 }
 
+/**
+ * The console with every repeat of a line as one entry, wherever it fell: the
+ * stack folds only a line that repeats the one before it, and each beat starts
+ * its log afresh, so one line printed on every pass of a loop comes as an
+ * entry per beat. Alike is the stack's own test (routine, character, level,
+ * text); the entry stands where the line last fell, counts summed, at its
+ * newest time. Order and entries are otherwise as they came. Pure.
+ */
+export function foldConsole(lines: readonly ProgramLogLine[]): ProgramLogLine[] {
+  const last = new Map<string, number>();
+  const sums = new Map<string, { count: number; ts: number }>();
+  const keyOf = (l: ProgramLogLine): string => JSON.stringify([l.routine, l.character ?? null, l.level, l.text]);
+  lines.forEach((l, k) => {
+    const key = keyOf(l);
+    last.set(key, k);
+    const s = sums.get(key);
+    if (s === undefined) sums.set(key, { count: l.count, ts: l.ts });
+    else {
+      s.count += l.count;
+      s.ts = Math.max(s.ts, l.ts);
+    }
+  });
+  if (last.size === lines.length) return [...lines];
+  return lines.flatMap((l, k) => {
+    const key = keyOf(l);
+    if (last.get(key) !== k) return [];
+    return [{ ...l, ...sums.get(key)! }];
+  });
+}
+
 function namedReasons(reasons: readonly WakeReason[]): string {
   const texts: string[] = [];
   // At fan-out, the characters that died are one reason, where the first of them stands: a wipe names every one.
@@ -679,7 +710,7 @@ function namedReasons(reasons: readonly WakeReason[]): string {
   return texts.length > WAKE_REASONS_SHOWN ? `${shown}; and ${texts.length - WAKE_REASONS_SHOWN} more` : shown;
 }
 
-/** Two drains as one span: facts in order, repeats summed by signature, the console's tail, the routines as they stand now. */
+/** Two drains as one span: facts in order, repeats summed by signature, the console's tail with repeats folded (`foldConsole`), the routines as they stand now. */
 export function mergeFacts(a: ProgramFacts | null, b: ProgramFacts): ProgramFacts {
   if (a === null) return b;
   const repeats = new Map<string, { signature: string; count: number; ts: number }>();
@@ -691,7 +722,7 @@ export function mergeFacts(a: ProgramFacts | null, b: ProgramFacts): ProgramFact
       prev.ts = Math.max(prev.ts, r.ts);
     }
   }
-  const lines: ProgramLogLine[] = [...a.console.lines, ...b.console.lines];
+  const lines = foldConsole([...a.console.lines, ...b.console.lines]);
   return {
     deploy: b.deploy,
     routines: b.routines,

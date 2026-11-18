@@ -1222,12 +1222,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
    *
    * `runCost` is the listing's own, over the same memoised totals, so no page
    * can quote different dollars for one run. Both figures ride on the row but
-   * under their own names: `actualCost` is what the provider charged — the
-   * only figure the runs table shows, because an estimate standing in for a
-   * bill is the one thing a listing must not do — and `expectedCost` is the
-   * price table applied to the tokens, which the ladder's scatter reads only
-   * where no provider figure exists (a free tier, local hardware, a
-   * subscription) and labels as such.
+   * under their own names: `actualCost` is what the provider charged, and
+   * `expectedCost` is the price table applied to the tokens, which the runs
+   * table and the ladder's scatter read only where no provider figure exists
+   * (a free tier, local hardware, a subscription) and mark as an estimate.
    */
   function listingFacts(
     row: RunRow,

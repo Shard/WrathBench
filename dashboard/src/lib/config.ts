@@ -29,7 +29,7 @@
  */
 
 import type { DraftFetchResponse, DraftPriceView, DraftPromoteBody, E90TokenProfileView } from "@viewer/api-types";
-import { fmtTokens, fmtUsd } from "./format";
+import { fmtTokens } from "./format";
 
 /** The tiers a roster entry may carry. The policy names them; these are the ones the page offers. */
 export const TIERS = ["t0", "t1", "t2"] as const;
@@ -275,10 +275,8 @@ export function promoteBody(model: string, form: PromoteForm): DraftPromoteBody 
   return body;
 }
 
-/** "~$0.42": the tilde is the label that says it is an estimate. */
-export function fmtEstimate(usd: number | null): string {
-  return usd === null ? "—" : `~${fmtUsd(usd)}`;
-}
+/** The tilde that marks an estimate; it lives with the other cost formatters. */
+export { fmtEstimate } from "./format";
 
 /** A per-million rate in as few digits as say it: 0.075, 0.6, 15. */
 function rate(v: number): string {

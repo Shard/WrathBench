@@ -214,6 +214,14 @@ export interface Square {
   bestLevel: number | null;
   /** Billed cost of the square's runs, on `CampaignView.costUsd`'s basis. */
   costUsd: number | null;
+  /**
+   * The rest of the square's cost: summed over its runs that no provider
+   * billed, a subscription's as-if-metered figure or the list-price estimate,
+   * the figure each one's run page shows (operator, 2026-11-18). Kept apart
+   * from `costUsd` so a bill and an estimate are never one number. Null when
+   * no such run is priced; absent from a snapshot published before it.
+   */
+  estimatedUsd?: number | null;
   /** Runs whose recorded race/class is not the cell's declared start. */
   mismatchedStart: number;
   /** Distinct builds the square's runs ran on: their harness versions. */
@@ -1599,9 +1607,9 @@ export interface FleetPausedView {
 /**
  * One run's progress as the fleet table shows it: the listing row's own
  * figures (`RunListRow`, the same derivation the runs table reads), cut to the
- * cells — level and xp, tokens, speed, the provider's own cost, active time
- * against the run's recorded episode clock, and the id it was served as. The
- * public runs index publishes exactly this shape per row.
+ * cells — level and xp, tokens, speed, the cost, active time against the run's
+ * recorded episode clock, and the id it was served as. The public runs index
+ * publishes exactly this shape per row.
  */
 export interface FleetRunFacts {
   runId: string;
@@ -1611,8 +1619,18 @@ export interface FleetRunFacts {
   playtimeMs: number | null;
   tokens: Pick<TokenTotals, "totalTokens"> | null;
   tps?: TpsFacts | null;
-  /** The provider's own figure: the fleet table never shows the estimate. */
-  cost: { actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill"> } | null;
+  /**
+   * The provider's own figure, and the list-price estimate the table shows,
+   * marked, where there is none (operator, 2026-11-18). `expected` is carried
+   * only on a row whose actual is `none`, the one row that shows it: this shape
+   * is every row of the public runs index, and the rest would be bytes no page
+   * reads. Absent, too, on a row from a viewer that predates it.
+   */
+  cost: {
+    /** `asIfMetered` marks a figure nobody was charged (claude-code's own), which the cell shows as an estimate; absent on an older row. */
+    actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill"> & { asIfMetered?: boolean };
+    expected?: Pick<CostFigure, "usd" | "basis" | "asIfMetered" | "asOf">;
+  } | null;
   comparability: { budget: Pick<ComparabilityView["budget"], "episodeMs"> } | null;
 }
 
@@ -2318,16 +2336,17 @@ export interface ResultRun {
    * What the provider says it charged — `CostView.actual`, and only that.
    * `CostView`'s own top-level fields are the *expected* figure, so a row that
    * held the whole view would render an estimate wherever a reader reached for
-   * `cost.usd`; a listing of what runs cost may not quietly show a guess.
+   * `cost.usd`; a listing of what runs cost may not quietly show a guess as a bill.
    * `basis: "none"` (with `note` saying which nothing) is the blank.
    */
   actualCost: CostFigure | null;
   /**
    * `CostView.expected` — the price table applied to the run's own tokens,
    * `$0` with `asIfMetered` for a free tier or local hardware. The runs table
-   * never shows it (a listing of what runs cost may not show a guess); the
-   * ladder's scatter reads it only where no provider figure exists, and says
-   * so. Optional for the reason `xpEarned` is.
+   * and the ladder's scatter read it only where no provider figure exists, and
+   * mark it as an estimate (operator, 2026-11-18). The public build carries its
+   * dollars, basis and price date, not its note. Optional for the reason
+   * `xpEarned` is.
    */
   expectedCost?: CostFigure | null;
   /**
@@ -2698,11 +2717,13 @@ export interface ModelRunView {
   /**
    * The run's cost, attached by the route from the same memoised trajectory
    * totals the listing uses. Optional because the projection this view is built
-   * from (`runner/src/models.ts`) does not know about prices. Only `actual`: the
-   * panel prints the provider's figure, and the published snapshot carries
-   * nothing else of it.
+   * from (`runner/src/models.ts`) does not know about prices. The panel prints
+   * the provider's figure, else the list-price estimate, marked as one
+   * (operator, 2026-11-18); the published snapshot carries the estimate's
+   * dollars and date, not its note. `expected` is optional because a snapshot
+   * published before it has only `actual`.
    */
-  cost?: Pick<CostView, "actual"> | null;
+  cost?: (Pick<CostView, "actual"> & { expected?: Pick<CostFigure, "usd" | "basis" | "asIfMetered" | "asOf"> }) | null;
 }
 
 /** The last error a model died of, off the end of that run's trajectory. */

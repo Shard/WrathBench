@@ -493,7 +493,7 @@ const RUN_LIST_ROW_KEYS = [
   ...under("tps", TPS_KEYS),
   "cost",
   "cost.actual",
-  ...under("cost.actual", ["usd", "basis", "note"]),
+  ...under("cost.actual", ["usd", "basis", "asIfMetered", "note"]),
   "comparability",
   "comparability.budget",
   "comparability.budget.episodeMs",
@@ -565,7 +565,7 @@ const RESULT_RUN_KEYS = [
   "actualCost",
   ...under("actualCost", ["usd", "basis", "asIfMetered", "note"]),
   "expectedCost",
-  ...under("expectedCost", ["usd", "basis", "asIfMetered"]),
+  ...under("expectedCost", ["usd", "basis", "asIfMetered", "asOf"]),
   "billing",
   "areas",
   ...under("areas", ["startArea", "distinctAreas", "leftStartArea", "capitalZone", "zoneMarks", "areaMarks"]),
@@ -624,6 +624,17 @@ describe("projectRuns", () => {
     // The estimate and the per-component dollars stay on the run's own page.
     expect(Object.keys(row.cost!)).toEqual(["actual"]);
     expect(row.comparability).toEqual({ budget: { episodeMs: fixtureBudget().episodeMs } });
+  });
+
+  test("a row with no actual carries the estimate its cost cell shows, cut to dollars and date, and stays a fixed point (operator, 2026-11-18)", () => {
+    const none = smuggle<CostFigure>({ usd: null, basis: "none", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "a subscription endpoint, so no actual" });
+    const input = smuggle<RunListRow>({ ...runListRowFixture(), cost: smuggle<CostView>({ ...costFigureFixture(), actual: none, expected: costFigureFixture() }) });
+    const row = projectRuns({ runs: [input] }).runs[0]!;
+    expect(row.cost).toEqual({
+      actual: { usd: null, basis: "none", asIfMetered: false, note: "a subscription endpoint, so no actual" },
+      expected: { usd: 1.5, basis: "list-price", asIfMetered: true, asOf: "2026-08-20" },
+    });
+    expect(projectRuns({ runs: [row as unknown as RunListRow] }).runs[0]!.cost).toEqual(row.cost);
   });
 
   test("withholds by value, not by renaming: the fields read null", () => {
@@ -1587,6 +1598,7 @@ describe("projectCampaigns", () => {
       minutesToStop: smuggle({ min: 287, median: 301, max: 350 }),
       bestLevel: 10,
       costUsd: 1.25,
+      estimatedUsd: 0.5,
       mismatchedStart: 0,
       builds: ["harness-0.5-931"],
       runIds: ["fixture-run-1"],
@@ -1701,6 +1713,7 @@ describe("projectCampaigns", () => {
               ...under("minutesToStop", ["min", "median", "max"]),
               "bestLevel",
               "costUsd",
+              "estimatedUsd",
               "mismatchedStart",
               "builds",
               "runIds",
@@ -1862,7 +1875,7 @@ describe("projectModels", () => {
       "counted",
       "cost",
       // the panel prints the provider's figure; the estimate is on the run's page
-      ...under("cost", ["actual", ...under("actual", COST_FIGURE_KEYS)]),
+      ...under("cost", ["actual", ...under("actual", COST_FIGURE_KEYS), "expected", ...under("expected", ["usd", "basis", "asIfMetered", "asOf"])]),
     ];
     const tierKeys = (t: string): string[] => [
       `policy.tiers.${t}`,

@@ -238,7 +238,12 @@ export interface DriverEntry {
    */
   bill: "metered" | "subscription" | "none";
   cost: DriverCost;
-  /** The roster's model-family rule: whether it carries claude models only, or none, and the refusal either way. */
+  /**
+   * What the driver's CLI can serve, refused with the file whatever the
+   * credentials: claude-code carries claude models only, codex none. An
+   * endpoint driver has none: a claude model on it is refused only where a
+   * Claude subscription is configured (`SUBSCRIPTION_FAMILIES`).
+   */
   claudeModels?: { only: boolean; refusal: string };
   /** Whether the scaffold has an auto-compaction window a run can set (`compactWindow`). */
   compactWindow: boolean;
@@ -333,10 +338,6 @@ export const DRIVER_TABLE = {
     probeOnly: false,
     bill: "metered",
     cost: FIXED_LOOP_COST,
-    claudeModels: {
-      only: false,
-      refusal: "roster policy — claude models run only via the claude-code driver, never through an openai-driver entry",
-    },
     compactWindow: false,
     snippetDelta: false,
     usage: "response",
@@ -420,10 +421,6 @@ export const DRIVER_TABLE = {
     probeOnly: true,
     bill: "metered",
     cost: { reported: "none", table: "synced" },
-    claudeModels: {
-      only: false,
-      refusal: "roster policy — claude models run only via the claude-code driver, never through a pi-driver entry",
-    },
     compactWindow: true,
     snippetDelta: false,
     usage: "response",
@@ -521,33 +518,75 @@ export function isReferenceRun(r: { driver?: string | null | undefined; unscored
 
 // ------------------------------------------------------- model families
 
-/** True for models that must ride the claude-code driver (the claude-code harness), and that the codex driver refuses. */
+/**
+ * True for Anthropic's Claude models: any id under the `anthropic/` vendor
+ * (OpenRouter's, `anthropic/claude-sonnet-5.5:free`, also behind a further
+ * prefix or as a `~anthropic/` alias), an unprefixed `claude-*` id (the API's,
+ * the Claude Code CLI's and OpenCode Zen's spelling), and the Claude Code
+ * CLI's bare aliases (`opus`, `sonnet`, `haiku`, `fable`, with `plan` or
+ * `[1m]`). Another vendor's id that merely names Claude (a distill,
+ * `someone/claude-3.7-sonnet-reasoning-gemma3-12b`, `qwen3-8b-claude-distill`)
+ * is not one.
+ *
+ * The claude-code driver carries these only and the codex driver none
+ * (`claudeModels`, what each CLI can serve). Where a deployment has a Claude
+ * subscription they run only through it (`SUBSCRIPTION_FAMILIES`).
+ */
 export function isClaudeFamily(model: string): boolean {
-  return /(^|\/)(claude|opus|sonnet|haiku)/i.test(model);
+  return /(?:^|\/)~?anthropic\/|^claude-|^(?:opus|sonnet|haiku|fable)(?:plan)?(?:\[1m\])?$/i.test(model);
 }
 
 /**
  * True for OpenAI's ChatGPT models, by their OpenRouter id (`openai/gpt-6.2-astra`)
  * or a bare slug (`gpt-6.2-sol`, as Codex and OpenCode spell them). The
  * open-weights `gpt-oss-*` are not ChatGPT models and run anywhere.
- *
- * Where a deployment has a ChatGPT subscription these run only through it, on
- * the codex driver (operator, 2026-11-18: "astra or any chatgpt model should
- * not be run on openrouter ... they should be using codex"); the rule is
- * applied with the credentials in hand (`chatgptEntryRefusal`,
- * roster-refusal.ts), since a deployment without one may still run them on an
- * endpoint.
  */
 export function isChatGptFamily(model: string): boolean {
   return /(^|\/)(chat)?gpt-(?!oss)/i.test(model);
 }
 
-/** The ChatGPT rule's refusal: by name, and what to write instead. */
-export function chatgptModelRefusal(model: string): string {
-  const slug = model.slice(model.lastIndexOf("/") + 1);
+/**
+ * A model family that runs only through its vendor's subscription where the
+ * deployment has one: the family, the credential provider that subscription
+ * is (`CREDENTIAL_PROVIDERS`, credential-slots.ts), and the one driver that
+ * bills it. Operator, 2026-11-18: "astra or any chatgpt model should not be
+ * run on openrouter ... they should be using codex", and the same for Claude
+ * on its subscription. The rule is applied with the credentials in hand
+ * (`subscriptionFamilyRefusal`, roster-refusal.ts), since a deployment
+ * without the subscription (quickstart, community) may still run the family
+ * on an endpoint.
+ */
+export interface SubscriptionFamily {
+  /** The family's name, as the refusal says it. */
+  family: string;
+  /** The credential provider of the subscription. */
+  provider: string;
+  /** The driver that bills that provider, the only one the family runs on while it is configured. */
+  driver: Driver;
+  matches: (model: string) => boolean;
+  /** The model as that driver's CLI spells it, from an endpoint's id, for the refusal's hint. */
+  slug: (model: string) => string;
+}
+
+const lastSegment = (model: string): string => model.slice(model.lastIndexOf("/") + 1);
+
+export const SUBSCRIPTION_FAMILIES: readonly SubscriptionFamily[] = [
+  { family: "ChatGPT", provider: "chatgpt", driver: "codex", matches: isChatGptFamily, slug: lastSegment },
+  {
+    family: "Claude",
+    provider: "claude",
+    driver: "claude-code",
+    matches: isClaudeFamily,
+    // OpenRouter's `anthropic/claude-haiku-4.5:free` is the CLI's `claude-haiku-4-5`.
+    slug: (model) => lastSegment(model).replace(/:.*$/, "").replaceAll(".", "-"),
+  },
+];
+
+/** A subscription family's refusal: by name, and what to write instead. */
+export function subscriptionModelRefusal(f: SubscriptionFamily, model: string): string {
   return (
-    `roster policy — ${model} is a ChatGPT model, and with a chatgpt credential configured ChatGPT models run only via the codex driver: ` +
-    `write it as a codex entry on that credential instead (model ${slug}, driver codex)`
+    `roster policy — ${model} is a ${f.family} model, and with a ${f.provider} credential configured ${f.family} models run only via the ${f.driver} driver: ` +
+    `write it as a ${f.driver} entry on that credential instead (model ${f.slug(model)}, driver ${f.driver})`
   );
 }
 

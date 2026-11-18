@@ -17,7 +17,7 @@
 
 import { characterLabel } from "@viewer/characters";
 import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewer/api-types";
-import { effortLabel, fmtDuration, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
+import { effortLabel, fmtDuration, fmtEstimate, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
 import { partyHref } from "./party";
 
 export type CampaignState = CampaignView["state"];
@@ -316,6 +316,8 @@ export function squareTitle(sq: Square | null, goal: string | null): string {
   if (sq.live > 0) parts.push(`${sq.live} live`);
   if (sq.mismatchedStart > 0) parts.push(`${sq.mismatchedStart} ran as another start`);
   if (sq.costUsd !== null) parts.push(`${fmtUsd(sq.costUsd)} billed`);
+  // Never added to the bill: the estimate's tilde, beside it.
+  if ((sq.estimatedUsd ?? null) !== null) parts.push(`${fmtEstimate(sq.estimatedUsd ?? null)} estimated where no bill was reported`);
   if (sq.settled === "capped") parts.push("capped: its attempts are spent without the counted runs it wanted");
   if (wanted !== null) parts.push(wanted);
   const lines = refusal === null ? [parts.join(" · ")] : [refusal, parts.join(" · ")];
