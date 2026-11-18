@@ -22,11 +22,23 @@ the operator's figure in GitHub issue #66.
   inside its allowance). Go's figure is not read as the run's cost: Go is a
   subscription, so a paid Go run has no actual and its cost is the list-price
   estimate from its `opencode-go` endpoint row, marked as-if-metered, the way a
-  codex run's is (operator's decision, 2026-11-16). A Go model with no endpoint
-  row reads its catalogue entry's OpenRouter row instead, found through the
-  entry's aliases (Go's `glm-5.3` is `z-ai/glm-5.3`): the one price lookup that
-  goes through an alias, because a flat plan has no per-host bill for the
-  alias to get wrong, only the model's listed price. Read as an actual, the
+  codex run's is (operator's decision, 2026-11-16). Which list price, in order
+  (operator, 2026-11-18): OpenCode's own published per-model price first, then
+  the model's OpenRouter listing. OpenCode publishes its prices on each
+  endpoint's `/models` (a `cost` per model, in dollars per million, readable
+  without a key), and `bun wb data prices` syncs Go's into the `opencode-go`
+  rows for every model the roster or a run puts on Go's base, by the
+  OpenRouter rules: dated, windows only appended, an id the listing drops kept.
+  A model OpenCode serves there on another API, or prices in context-size
+  tiers, gets no row and is reported. Zen publishes the same listing, but
+  every Zen run so far was a free slug and no paid Zen model is on the
+  roster, so no Zen provider is declared; one would get synced rows by
+  naming its base and listing in the catalogue. A Go model with no row reads its catalogue entry's OpenRouter row instead, found
+  through the entry's aliases (Go's `glm-5.3-flash` is `z-ai/glm-5.3-flash`):
+  the one price lookup that goes through an alias, because a flat plan has no
+  per-host bill for the alias to get wrong, only the model's listed price. The
+  two can differ a lot: Go lists `glm-5.3` at $1.40 / $4.40 per M, where
+  OpenRouter's listing has been $0.07 / $1.40 since 2026-10-28. Read as an actual, the
   allowance's zero made every Go run look free. Overage past a spent allowance
   is a real charge, so a non-zero sum is named in the cost's note rather than
   dropped; a `-free` Go slug stays free. The catalogue marks the provider
@@ -34,8 +46,9 @@ the operator's figure in GitHub issue #66.
   viewer reads. DeepSeek's own platform sends no `cost`, so a run
   there carries an expected figure from its endpoint price row (`prices.endpoints` on its
   entry in `infra/model-catalogue.json`) and no actual one. DeepSeek
-  bills double in weekday peak hours, which a dated row cannot express, so
-  its row holds the off-peak rate and says so. The record also names
+  bills double in weekday peak hours, on its own platform and on Go alike,
+  which a dated row cannot express, so both rows hold the off-peak rate and
+  say so. The record also names
   the serving `provider` when the body reports one, or OpenCode's response
   headers do (`x-opencode-endpoint-id`, with the upstream's own model id beside
   it; Go has stopped sending them), and the first one seen is

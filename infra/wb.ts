@@ -282,7 +282,7 @@ export const ENTRIES: readonly Entry[] = [
   { group: "site", command: "tiles", summary: "upload changed minimap and art tiles (--dry-run | --upload)", ...onHost("bun", "infra/publish-tiles.ts") },
   { group: "site", command: "verify", summary: "read the public bucket back and check it", ...onHost("bun", "infra/publish-accept.ts") },
 
-  { group: "data", command: "prices", summary: "sync OpenRouter list prices into the model catalogue", ...onHost("bun", "infra/sync-prices.ts") },
+  { group: "data", command: "prices", summary: "sync list prices into the model catalogue: OpenRouter's, and a provider's own listing (OpenCode Go)", ...onHost("bun", "infra/sync-prices.ts") },
   { group: "data", command: "logos", summary: "fetch the model logos the model catalogue names (--check: drift only)", ...onHost("bun", "infra/fetch-model-logos.ts") },
   { group: "data", command: "catalogue", summary: "model ids a published generation names that the catalogue does not list (--base URL), or --format the catalogue file", ...onHost("bun", "infra/model-catalogue-check.ts") },
 

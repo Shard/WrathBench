@@ -695,12 +695,16 @@ read it from there. In a checkout:
    (`open` with the checkpoint's URL, `closed` with where the vendor says it is
    served only, else `unknown`) and its `source`. Other spellings of the same
    model go in `aliases`: a codex slug, a dated snapshot, a Zen `-free` id.
-2. Price it. A paid OpenRouter or codex model: `bun wb data prices`, which
-   writes the windows onto the entry (and reports any priced id the catalogue
-   does not list). A new Claude model: a dated, sourced `prices.anthropic`.
-   A non-OpenRouter paid provider: a dated, sourced `prices.endpoints` row
-   under the provider's id in `providers` (add the provider, with its exact
-   `apiBase`, if it is new). Free and local models need no price.
+2. Price it. A paid OpenRouter, codex or OpenCode Go model: `bun wb data
+   prices`, which writes the windows onto the entry (and reports any priced id
+   the catalogue does not list); a Go model is priced from OpenCode's own
+   listing once the roster puts it on Go's base. Where the config store or the
+   runs are not on the machine, give them as files: `--fleet` a `bun wb config
+   export` and `--runs` the viewer's `/api/runs` body, both read-only and
+   never committed. A new Claude model: a dated, sourced `prices.anthropic`.
+   Another non-OpenRouter paid provider: a dated, sourced `prices.endpoints`
+   row under the provider's id in `providers` (add the provider, with its
+   exact `apiBase`, if it is new). Free and local models need no price.
 3. `bun wb data catalogue --format` validates the file and rewrites it in its
    one spelling (offline, prices untouched), which `bun run test` requires.
    Commit.
