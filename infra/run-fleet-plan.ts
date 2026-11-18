@@ -1046,6 +1046,43 @@ export function freshAttempt(
 }
 
 /**
+ * A fresh policy pick with its attempt numbered past every run id on disk
+ * (`takenRunIds`, archive included). The pick's attempt is the model's count
+ * on the episode plus one, and a count is not an id: a run removed from disk
+ * by hand lowers the count while a later attempt's id is still there, and the
+ * pick then names that run again — its roster skips it as terminated, exits,
+ * and the next tick spawns the same no-op (sub-haiku-55 e90, 2026-11-16, with
+ * `-a2` deleted and `-a3` on disk). The count stays the floor and stays what
+ * counts; only the id moves on, to the first attempt whose every run id
+ * (`idsOf`: the spawn's, a party's members' included) is free. The number is
+ * written onto the job, so the pick's line, its announcement key and the live
+ * job's re-spawn on every later tick all name the run it launched. A resume, a
+ * party's own id, or a job with no attempt is returned as it was. Pure.
+ */
+export function attemptPastTaken(job: FleetJob, idsOf: (job: FleetJob) => readonly string[], taken: ReadonlySet<string>): FleetJob {
+  if (job.attempt === undefined || job.resume !== undefined || job.partyId !== undefined) return job;
+  // At most `taken.size` attempts can collide, so the walk ends.
+  for (let n = Math.max(1, job.attempt), left = taken.size; left >= 0; n++, left--) {
+    const at = n === job.attempt ? job : { ...job, attempt: n };
+    if (!idsOf(at).some((id) => taken.has(id))) return at;
+  }
+  return job;
+}
+
+/**
+ * Whether a spawn would launch nothing: a fresh (not looping, not resuming)
+ * spawn every one of whose run ids already ended on disk. Its roster skips
+ * each as terminated and exits `roster complete`, so spawning it only respawns
+ * it on the next tick, forever. `attemptPastTaken` keeps a policy pick out of
+ * this; the tick holds any spawn still in it rather than launch it. Pure.
+ */
+export function spawnsOnlyEnded(spawn: JobSpawn, stamp: string, ended: ReadonlySet<string>): boolean {
+  if (!spawn.enabled || spawn.loop || spawn.resumeRunId !== undefined) return false;
+  const ids = fillEntries(spawn, stamp).map((e) => e.runId!);
+  return ids.length > 0 && ids.every((id) => ended.has(id));
+}
+
+/**
  * The tick's pinned campaign jobs, each told every run id on disk so its spawn
  * numbers its attempt past them (`freshAttempt`). One function for the live
  * tick and `planTick`, so `--dry-run` names the ids the spawn will use.
@@ -3639,6 +3676,12 @@ export function planTick(snap: TickSnapshot): TickPlan {
     for (const h of policy.held) holds.push({ ...h, refs: [h.name], by: "policy" });
     const continued = planContinuations(policy.picks, characters, cfg.roster, occupants, former);
     ({ picks, waiting, dropped } = continued);
+    // Each pick's attempt past every id on disk (`attemptPastTaken`), before
+    // it is remembered, announced or spawned.
+    picks = picks.map((p) => ({
+      ...p,
+      job: attemptPastTaken(p.job, (j) => fillEntries(spawnOf(j, p.account, undefined), snap.stamp).map((e) => e.runId!), takenRunIds),
+    }));
     for (const w of waiting) {
       const ref = policy.picks.find((p) => p.job.name === w.name)?.job.ref ?? w.name;
       holds.push({ name: w.name, refs: [ref], episode: "freeplay", why: `${w.why}; not starting fresh on ${w.offered}`, by: "character" });
@@ -3727,6 +3770,18 @@ export function planTick(snap: TickSnapshot): TickPlan {
   // repeat and meeting it again says so again.
   const counted = countedFrom(states);
   for (const j of [...pinnedDone, ...queue.done]) steps.push({ kind: "done", job: j, progress: progressLabel(j, counted) ?? "met" });
+  // A fresh spawn whose every run id already ended would launch nothing and
+  // be spawned again next tick (`spawnsOnlyEnded`): held with the reason.
+  const ended = new Set(runs.filter((f) => f.terminationReason !== null).map((f) => f.runId));
+  for (let i = 0; i < out.length; i++) {
+    const s = out[i]!;
+    if (sup.running.has(s.name) || !spawnsOnlyEnded(s, snap.stamp, ended)) continue;
+    out[i] = { ...s, enabled: false };
+    const job = pending.get(s.name) ?? [...pinnedJobs(cfg), ...campaignJobs].find((j) => j.name === s.name);
+    const why = `every run id it would launch has already ended (${fillEntries(s, snap.stamp).map((e) => e.runId).join(", ")}) — nothing to launch`;
+    holds.push({ name: s.name, refs: job?.refs ?? [], episode: job?.episode ?? null, why, by: job?.source ?? "queue" });
+    steps.push({ kind: "say", key: `ended:${s.name}:${why}`, line: `hold ${s.name}: ${why}`, record: { job: s.name, event: "nothing-to-launch", detail: why } });
+  }
   // The credentials' budgets over every spawn, last: a running job's next
   // episode on a held credential. A running freeplay job is its driver's to
   // pause; a running scored one drains to its boundary.

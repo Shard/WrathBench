@@ -2362,7 +2362,12 @@ listing shows one. A *pause* is not a termination: a paused run with no
 response yet is resumed, not archived. Nothing is deleted, and the viewer
 never reads inside `archive/`; `--status` and the scheduler do, because the
 defer ladder is made of launches that did not happen and attempt numbers must
-stay unique on disk.
+stay unique on disk. A policy pick's attempt is the model's count plus one,
+but its run id is numbered past every id on disk, archive included: a run
+deleted by hand lowers the count without freeing a later attempt's id, and
+the pick moves on to the next free number instead of naming a run that has
+already ended. A fresh spawn whose every run id has already ended is held
+with that reason rather than launched for its roster to skip.
 
 The CLI parks runs for two other reasons: the comparability floor, and the
 operator's own judgement about what a listing should show. It runs in the
