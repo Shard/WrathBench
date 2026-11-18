@@ -1,14 +1,17 @@
 /**
- * The steep re-plan, reproduced: eight `move_to`s in Ashenvale and the
- * Badlands, each from the point a freeplay character stood on, with the
- * verdict the module served it then beside the verdict served now.
+ * The steep re-plan, reproduced: eleven `move_to`s in Ashenvale, the
+ * Badlands and Dun Morogh, each from the point a freeplay character stood
+ * on, with the verdict the module served it then beside the verdict served
+ * now.
  *
- * Six of the eight are moves that character made, `drop` refusals at a
- * single 4y step of 51-58 degrees (the guard refuses a segment over 2.0y and
- * steeper than 1.2x its 2D length, about 50 degrees; the mesh is built to
- * walk 60). The module now re-plans around such a band before refusing
- * (wrath-mcp/module/PROTOCOL.md, `drop`), so some of those should arrive. The other
- * two are `target_off_mesh` controls: the re-plan never runs on them, and
+ * Nine of the eleven are moves those characters made, `drop` refusals at a
+ * 4y step of 51-61 degrees (the guard refuses a segment over 2.0y and
+ * steeper than 1.2x its 2D length, the client's own 50 degrees; the mesh is
+ * built to walk 60). The module now re-plans around such a band before
+ * refusing, weighting ground steeper than the client walks
+ * (wrath-mcp/module/PROTOCOL.md, `drop`), so some of those should arrive:
+ * P9-P11, the Dun Morogh hills, each re-plan to a route the guard passes in
+ * an offline check of the mesh. The other two are `target_off_mesh` controls: the re-plan never runs on them, and
  * they must stay as they were. P8 is the character's own move. P4 is not:
  * its move, (3200, -100, 80), was a z buried under the hill, and the
  * module's buried-z step (PROTOCOL.md, `move_to` z) now walks it to the one
@@ -40,7 +43,7 @@
  * refusals now arrive is the measurement, not the gate: it is reported.
  *
  * An operator smoke, not a deploy smoke: it runs on PROBE (never a gate
- * account), writes six fixture placements, waits out the core's ~60s
+ * account), writes nine fixture placements, waits out the core's ~60s
  * logout hold between them (several minutes in all), and is diagnostic.
  *
  *   bun wb smoke steep-replan
@@ -150,6 +153,9 @@ const STARTS: Start[] = [
       { id: "P7", target: { x: -6121.87, y: -3482.93, z: 293.581 }, before: "drop, climb +5.8" },
     ],
   },
+  { scenario: "steep-dunmorogh-valley", repros: [{ id: "P9", target: { x: -5644.0, y: -499.0, z: 396.7 }, before: "drop, climb +4.8 at (-5664.7, -430.8, 367.4)" }] },
+  { scenario: "steep-dunmorogh-ridge", repros: [{ id: "P10", target: { x: -5917.5, y: -266.3, z: 402.1 }, before: "drop, climb +6.7 at (-5892.8, -295.8, 376.6)" }] },
+  { scenario: "steep-dunmorogh-road", repros: [{ id: "P11", target: { x: -5698.1, y: -439.3, z: 383.4 }, before: "drop, climb +6.0 at (-5729.8, -448.0, 375.2)" }] },
 ];
 
 /** One served verdict. */
