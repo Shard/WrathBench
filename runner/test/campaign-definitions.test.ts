@@ -117,6 +117,14 @@ describe("the checked-in definitions", () => {
     expect(launchLoopOf({ driver: "codex", fanout: true }, {}).loop).toBe("program");
   });
 
+  test("deadmines@7 is @6 run again: only the version and the note move", () => {
+    const v6 = checkedIn("deadmines@6");
+    const v7 = checkedIn("deadmines@7");
+    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "" });
+    expect(rest(v7)).toEqual(rest(v6));
+    expect(v7.version).toBe(7);
+  });
+
   test("program-shakedown-party@1 is deadmines@5's first three members, one agent, ending on Rhahk'Zor", () => {
     const party = checkedIn("program-shakedown-party@1");
     const v5 = checkedIn("deadmines@5");
