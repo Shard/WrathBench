@@ -43,14 +43,23 @@
  *     fall onto a foot "under" the landing, forced or not.
  *   - `sneed`: from the Moonbrook staging spot (scenario moonbrook-mine)
  *     through trigger 78 into the Deadmines, a walk to (-178, -418, 56), then
- *     to (-240.8, -489.9, 55.3), 4.8y over the corridor floor, must arrive
- *     with `meshZ` at the floor (about 50.5). The core settled that end on a
- *     surface 1.4y under the request and the last segment read as a 5.4y
- *     climb. Level 80 (the scenario's), so nothing on the walk stops it.
+ *     to (-240.8, -489.9, 55.3), 4.8y over the corridor floor. The core settled
+ *     that end on a surface 1.4y under the request and the last segment read
+ *     as a 5.4y climb. The guard's verdict is the first answer: the move is
+ *     dispatched, not `drop`, with `meshZ` at the floor (about 50.5), however
+ *     the walk then ends. The Defias on the way attack the level-80
+ *     character (hundreds of swings a run on harness-1.0-41) and a stun or a
+ *     knock ends a walk `stunned` or `interrupted`, so each walk is
+ *     re-issued from where it stopped, as a player would, up to
+ *     MESH_WALK_TRIES times, and must then arrive. The trash is neither
+ *     fought nor cleared: nothing short of a GM's hand would clear it, and
+ *     the leg is about the route, which a level-80 character survives.
  * `bun wb smoke` does not carry the variable into the runner pod, so pin the
  * legs there with
  * `kubectl -n wrathbench exec deploy/wrathbench-runner -- env
- * NAV_MESH_Z=kharanos,sneed bun infra/smoke/module-navigation.ts`.
+ * MODULE_ACCOUNT=<a smoke account> NAV_MESH_Z=kharanos,sneed bun
+ * infra/smoke/module-navigation.ts`: MODULE_ACCOUNT is what `bun wb smoke`
+ * would inject, and the default PROBE may hold no room for the character.
  *
  * Not staged here, deliberately: `no_mesh` needs an unmapped map, and
  * `path_incomplete` / `start_off_mesh` need specific terrain (a transport
@@ -403,6 +412,26 @@ type MeshLeg = (typeof MESH_LEGS)[number];
 const SNEED_FROM = { x: -178, y: -418, z: 56 };
 const SNEED_TO = { x: -240.8, y: -489.9, z: 55.3 };
 const SNEED_FLOOR_Z = 50.5;
+/** How many times a mesh-z leg's walk is issued before a stop that is not the route's (`stunned`, `interrupted`, `rooted`) fails it. */
+const MESH_WALK_TRIES = 5;
+const WALK_STOPS = new Set(["stunned", "interrupted", "rooted"]);
+
+/**
+ * A walk a fight may stop: re-issued from where it stopped, after a pause a
+ * stun wears off in, until it ends any other way or the tries run out.
+ * Returns the first answer (the guard's verdict on the route from where the
+ * leg began) and the last.
+ */
+async function walkThrough(target: { x: number; y: number; z: number }, leg: Leg, what: string): Promise<{ first: any; last: any }> {
+  const first = await move(target, 120000, leg);
+  let last = first;
+  for (let tries = 1; WALK_STOPS.has(last.status) && tries < MESH_WALK_TRIES; ++tries) {
+    log(`  ${what}: ${last.status} at (${last.pos.x.toFixed(1)}, ${last.pos.y.toFixed(1)}); walking on (${tries + 1}/${MESH_WALK_TRIES})`);
+    await Bun.sleep(4000);
+    last = await move(target, 120000, leg);
+  }
+  return { first, last };
+}
 
 /**
  * The legs NAV_MESH_Z pins, run in order on this run's character, now logged
@@ -453,10 +482,14 @@ async function meshZLegs(): Promise<MeshLeg[]> {
       if (inbound.status !== "transferred") fail(`sneed: the move to trigger 78 should transfer onto map 36, got ${JSON.stringify(inbound)}`);
       await waitFor((e) => e.opcode === "SMSG_NEW_WORLD" && e.data?.map === 36, 20000, "SMSG_NEW_WORLD onto map 36", leg);
       await Bun.sleep(1500);
-      const from = await move(SNEED_FROM, 120000, leg);
-      if (from.status !== "arrived") fail(`sneed: the walk to the leg's start ${JSON.stringify(SNEED_FROM)} should arrive, got ${JSON.stringify(from)}`);
-      const r = await move(SNEED_TO, 60000, leg);
-      if (r.status !== "arrived") fail(`sneed: the request 4.8y over the corridor floor should arrive, got ${JSON.stringify(r)}`);
+      const from = (await walkThrough(SNEED_FROM, leg, "sneed: the walk to the leg's start")).last;
+      if (from.status !== "arrived") fail(`sneed: the walk to the leg's start ${JSON.stringify(SNEED_FROM)} should arrive within ${MESH_WALK_TRIES} tries, got ${JSON.stringify(from)}`);
+      const { first, last: r } = await walkThrough(SNEED_TO, leg, "sneed: the walk to the corridor");
+      // The guard's verdict, whatever stopped the walk: dispatched, and to the floor.
+      if (first.status === "drop" || first.pathLength === undefined) fail(`sneed: the move 4.8y over the corridor floor should be dispatched, not refused: ${JSON.stringify(first)}`);
+      if (typeof first.meshZ !== "number" || Math.abs(first.meshZ - SNEED_FLOOR_Z) > 1.5) fail(`sneed: the move should resolve to the floor, meshZ ~${SNEED_FLOOR_Z}: ${JSON.stringify(first)}`);
+      log(`PASS mesh-z sneed verdict -> dispatched to meshZ ${first.meshZ.toFixed(1)}, path ${first.pathLength.toFixed(1)}y (first walk ended ${first.status})`);
+      if (r.status !== "arrived") fail(`sneed: the request 4.8y over the corridor floor should arrive within ${MESH_WALK_TRIES} tries, got ${JSON.stringify(r)}`);
       if (dist2d(r.pos, SNEED_TO) > 4) fail(`sneed: arrived ${dist2d(r.pos, SNEED_TO).toFixed(1)}y from the request`);
       if (typeof r.meshZ !== "number" || Math.abs(r.meshZ - SNEED_FLOOR_Z) > 1.5) fail(`sneed: the arrival should carry meshZ at the floor (~${SNEED_FLOOR_Z}): ${JSON.stringify(r)}`);
       log(`PASS mesh-z sneed -> arrived on the corridor floor, meshZ ${r.meshZ.toFixed(1)}, server z ${r.pos.z.toFixed(1)}`);
