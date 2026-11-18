@@ -315,6 +315,13 @@ export const WESTFALL_ZONE = 40;
 // Ashenvale (map 1, zone 331) or the Badlands (map 0, zone 3; the server
 // recomputes the zone from the position at login) aggroes or interrupts a
 // walk.
+// The Thunderbrew Distillery in Kharanos (Dun Morogh, zone 1), for the
+// module-navigation smoke's optional mesh-z leg: the floor a freeplay
+// character stood on when its walk down the cellar's switchback stairs to
+// Jarven Thunderbrew was refused as a 5.1y fall, because the core had settled
+// the stair point under the landing onto the landing.
+const NAV_KHARANOS_FLOOR = { x: -5586.76, y: -542.163, z: 403.541 };
+export const NAV_KHARANOS_JARVEN = { x: -5606, y: -544.5, z: 392.5 };
 const STEEP_ASH_LOWLAND = { x: 3200, y: 100, z: 27.99 };
 const STEEP_ASH_LOWLAND_TO = { x: 3190.13, y: -106.667 };
 const STEEP_ASH_CLIMB = { x: 3085.2, y: 89.96, z: 50.63 };
@@ -677,6 +684,12 @@ export const SCENARIOS = {
       o: facing(VINEYARD_EDGE, VINEYARD_NEAREST_VERMIN),
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+  },
+  "nav-kharanos-floor": {
+    description: "level 80, no money, on the Thunderbrew Distillery floor in Kharanos above the cellar stairs (module-navigation smoke: the optional mesh-z leg down to Jarven Thunderbrew)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 1, ...NAV_KHARANOS_FLOOR, o: facing(NAV_KHARANOS_FLOOR, NAV_KHARANOS_JARVEN) },
   },
   "steep-ashenvale-lowland": {
     description: "level 80, no money, on the Ashenvale coastal lowland below the Maestra's Post hills (steep-replan smoke: one climb refusal, one off-mesh point)",
