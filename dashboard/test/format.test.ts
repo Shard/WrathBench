@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { backfilledTitle, costMark, effortLabel, titleOf, windowNote, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, paneText } from "../src/lib/format";
+import { backfilledTitle, costMark, effortLabel, expectedLine, fmtEstimate, listCost, titleOf, windowNote, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, paneText } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -105,6 +105,44 @@ describe("fmtCost", () => {
     expect(fmtCost({ usd: 0.5, basis: "list", asIfMetered: true, asOf: null })).toBe(
       "$0.500 as-if-metered (list price, undated)",
     );
+  });
+});
+
+describe("listCost: one run's cost cell on a listing (operator, 2026-11-18)", () => {
+  const reported = { usd: 1.25, basis: "reported", asIfMetered: false, asOf: null, note: "the provider's own charge" };
+  const none = { usd: null, basis: "none", asIfMetered: false, asOf: null, note: "a subscription endpoint, so no actual" };
+  const listed = { usd: 0.42, basis: "list-price", asIfMetered: true, asOf: "2026-11-01", note: "row note" };
+  const unpriced = { usd: null, basis: "none", asIfMetered: false, asOf: null, note: "no price on file" };
+
+  test("an actual shows as it always has, whatever the estimate says", () => {
+    expect(listCost(reported, listed, "blank")).toEqual({ usd: 1.25, figure: reported, estimate: false, text: "$1.25", title: "the provider's own charge" });
+    // A backfilled claude-code actual keeps its `*`.
+    expect(listCost({ ...reported, asIfMetered: true, backfill: { reportedUsd: 1, usd: 0.25, turns: 2 } }, listed, "blank").text).toBe("$1.25*");
+  });
+
+  test("no actual: the estimate, with the tilde and the run page's line in the hover, then why there is no actual", () => {
+    expect(listCost(none, listed, "blank")).toEqual({
+      usd: 0.42,
+      figure: listed,
+      estimate: true,
+      text: "~$0.420",
+      title: "expected, as-if-metered, 2026-11 prices · no actual\na subscription endpoint, so no actual",
+    });
+    // A metered estimate (a provider that reports no charge) is not called as-if-metered.
+    expect(listCost(null, { ...listed, asIfMetered: false }, "blank").title).toBe("expected, 2026-11 prices · no actual");
+    // A $0 list price (a free tier) is still a figure, and still marked.
+    expect(listCost(none, { ...listed, usd: 0 }, "blank").text).toBe("~$0.00");
+  });
+
+  test("no price either: a dash, whose hover is the actual's note or the caller's blank", () => {
+    expect(listCost(none, unpriced, "blank")).toEqual({ usd: null, figure: null, estimate: false, text: "—", title: "a subscription endpoint, so no actual" });
+    expect(listCost(undefined, undefined, "blank")).toMatchObject({ usd: null, text: "—", title: "blank" });
+  });
+
+  test("the run page's own line: the month, or undated, or nothing where the listing has no date", () => {
+    expect(expectedLine({ asIfMetered: false, asOf: null })).toBe("expected, undated prices · no actual");
+    expect(expectedLine({ asIfMetered: true })).toBe("expected, as-if-metered · no actual");
+    expect(fmtEstimate(null)).toBe("—");
   });
 });
 

@@ -15,7 +15,7 @@
  */
 
 import type { CharacterCost, CostView } from "@viewer/api-types";
-import { backfilledTitle, costMark, fmtUsd } from "../lib/format";
+import { backfilledTitle, costMark, expectedLine, fmtUsd } from "../lib/format";
 import { InfoHint } from "./InfoHint";
 
 type Figure = CostView["actual"];
@@ -57,7 +57,8 @@ export function runCostReading(cost: CostView | undefined): CostReading {
     return {
       value: fmtUsd(e.usd),
       title: e.note,
-      sub: `expected${e.asIfMetered ? ", as-if-metered" : ""}, ${month(e)} prices · no actual`,
+      // The same line a listing's hover gives an estimate (`listCost`).
+      sub: expectedLine(e),
       hint,
     };
   }

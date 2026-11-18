@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, modelTableRows, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, modelRunCost, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, modelTableRows, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -219,5 +219,28 @@ describe("modelTableRows — one row per model (operator, 2026-11-16)", () => {
     expect(table[0]!.row.newestRunId).toBe("go-2");
     // A row from a viewer that predates the field is a row of its own, as before.
     expect(modelTableRows([row({ name: "a" }), row({ name: "b" })]).map((t) => t.also.length)).toEqual([0, 0]);
+  });
+});
+
+describe("modelRunCost: a run's cost in a model's panel (operator, 2026-11-18)", () => {
+  const none = { usd: null, basis: "none" as const, asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "a subscription endpoint, so no actual" };
+  const actual = { ...none, usd: 1.25, basis: "reported" as const, note: "the provider's own charge" };
+  const expected = { usd: 0.42, basis: "list-price" as const, asIfMetered: true, asOf: "2026-11-01" };
+
+  test("an actual says it was reported, as before", () => {
+    expect(modelRunCost({ cost: { actual, expected } })).toEqual({ text: "$1.25 reported", title: "the provider's own charge" });
+  });
+
+  test("no actual: the list price, spelled as one, with the run page's line in the hover", () => {
+    expect(modelRunCost({ cost: { actual: none, expected } })).toEqual({
+      text: "$0.420 as-if-metered (list price, 2026-11)",
+      title: "expected, as-if-metered, 2026-11 prices · no actual\na subscription endpoint, so no actual",
+    });
+  });
+
+  test("no price, no cost, or a snapshot from before the estimate: a dash", () => {
+    expect(modelRunCost({ cost: { actual: none, expected: { ...expected, basis: "none", usd: null } } }).text).toBe("—");
+    expect(modelRunCost({ cost: { actual: none } }).text).toBe("—");
+    expect(modelRunCost({ cost: null })).toEqual({ text: "—", title: "provider reports no cost for this run" });
   });
 });

@@ -9,7 +9,8 @@
  * the table and the detail panel cannot word the same fact two ways.
  */
 
-import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
+import type { ModelEpisodeView, ModelRowView, ModelRunView, ModelStatusView, TierView } from "@viewer/api-types";
+import { fmtCost, listCost } from "./format";
 import type { CharacterRow } from "./ladder";
 import { AUTO_WINDOW } from "./runs";
 import { canonicalModelId } from "../../../infra/model-catalogue";
@@ -281,4 +282,16 @@ export function windowsOf(row: Pick<ModelRowView, "compactWindow" | "windows">):
 export function windowParam(row: Pick<ModelRowView, "compactWindow" | "windows">): string | null {
   const windows = windowsOf(row);
   return windows.length === 1 && windows[0] === AUTO_WINDOW ? null : windows.join(",");
+}
+
+/**
+ * A run's cost cell in a model's panel: the provider's charge, else the
+ * list-price estimate (operator, 2026-11-18). The panel spells each figure out
+ * with `fmtCost` ("$1.20 reported", "$0.80 as-if-metered (list price,
+ * 2026-11)"), so an estimate reads as one in the cell itself, and the hover is
+ * the runs table's (`listCost`).
+ */
+export function modelRunCost(r: Pick<ModelRunView, "cost">): { text: string; title: string } {
+  const c = listCost(r.cost?.actual, r.cost?.expected, "provider reports no cost for this run");
+  return { text: c.figure === null ? "—" : fmtCost({ ...c.figure, asIfMetered: c.figure.asIfMetered === true, asOf: c.figure.asOf ?? null }, "—"), title: c.title };
 }

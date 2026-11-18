@@ -677,7 +677,9 @@ version it depended on.
 harnesses run one growing conversation rather than the fixed window and bill a
 flat subscription rather than metered tokens; a codex run reports no cost at
 all and is shown a list-price estimate marked as-if-metered — a comparison,
-not a bill (2026-09-05; `docs/COSTS.md`).
+not a bill (2026-09-05; `docs/COSTS.md`). The listings show that estimate too,
+marked as one, wherever a run has no provider-reported charge, and a reported
+charge is never replaced by it (operator, 2026-11-18).
 
 ## Changing this document
 

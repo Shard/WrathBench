@@ -96,8 +96,13 @@ the operator's figure in GitHub issue #66.
   to, and its expected cost already prices every token.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (the deploy-window design draws the line; the viewer falls back to
-  an estimate only where there is no actual, and labels it). A listing that shows
-  only actuals, such as the runs table, shows a blank for a codex or Go run.
+  an estimate only where there is no actual, and labels it). The listings do the
+  same (operator's decision, 2026-11-18): the runs table, a model's run list and
+  the fleet table show the list-price estimate where a run has no actual, marked
+  with the estimate's `~` and the run page's "expected … · no actual" line in the
+  hover, and the runs table sorts it by that figure beside the actuals. A
+  campaign square's hover gives what its runs were billed and, apart, the
+  estimate for those nobody billed; the campaign's own total stays the bill.
 
 ## 2. Rules, each paid for
 

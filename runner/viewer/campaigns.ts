@@ -75,6 +75,20 @@ function billedUsd(r: ResultRun): number | null {
   return a !== null && a.basis === "reported" && !a.asIfMetered && a.usd !== null ? a.usd : null;
 }
 
+/**
+ * A run's cost where no provider billed one: a subscription's as-if-metered
+ * figure (the Claude SDK's own), else the list-price estimate over its tokens
+ * — what the run page shows when there is no bill. Null for a billed run,
+ * which `billedUsd` already counts, and for an unpriced one.
+ */
+function estimatedUsd(r: ResultRun): number | null {
+  if (billedUsd(r) !== null) return null;
+  const a = r.actualCost;
+  if (a !== null && a.basis === "reported" && a.usd !== null) return a.usd;
+  const e = r.expectedCost;
+  return e !== null && e !== undefined && e.basis !== "none" && e.usd !== null ? e.usd : null;
+}
+
 function sumOrNull(xs: readonly (number | null)[]): number | null {
   const got = xs.filter((x): x is number => x !== null);
   return got.length === 0 ? null : got.reduce((a, b) => a + b, 0);
@@ -215,6 +229,7 @@ export function campaignsView(
         minutesToStop: minutes.length === 0 ? null : { min: Math.min(...minutes), median: median(minutes)!, max: Math.max(...minutes) },
         bestLevel: levels.length > 0 ? Math.max(...levels) : null,
         costUsd: sumOrNull(runs.map(billedUsd)),
+        estimatedUsd: sumOrNull(runs.map(estimatedUsd)),
         mismatchedStart: runs.filter((r) => startMismatch(startOf(r, cellId), { race: r.race, class: r.class })).length,
         builds: buildsOf(runs),
         runIds: byStart.map((r) => r.runId),
