@@ -88,7 +88,7 @@ import {
 } from "./episode-launcher";
 import { K8sClient } from "./k8s-client";
 import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
-import { partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from "../runner/src/party";
+import { fanoutAccountsOf, partyConfigOf, withFanoutGuids, withMemberGuids, type PartyStamp } from "../runner/src/party";
 import { PARTY_END_GRACE_MS, writeEndRequest } from "../runner/src/end-request";
 import { runParty, type MemberVerdict, type PartyMemberRun } from "./party-fate";
 import { commandStager, STAGER_SCRIPT, type PartyStager, type StagedGuid, type StageRequest } from "./party-stager";
@@ -1578,8 +1578,8 @@ async function awaitAccount(
  * default RUNNER).
  */
 export function specAccounts(spec: Pick<Resolved, "account" | "campaignFile">): (string | undefined)[] {
-  const fanout = spec.campaignFile?.fanout?.members.map((m) => m.account);
-  return fanout !== undefined && fanout.length > 0 ? fanout : [spec.account];
+  const fanout = fanoutAccountsOf(spec.campaignFile?.fanout);
+  return fanout.length > 0 ? fanout : [spec.account];
 }
 
 /** How often a launch held by a credential's usage budget looks again. */

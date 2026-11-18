@@ -171,6 +171,17 @@ export function withFanoutGuids(launch: FanoutLaunch, guids: ReadonlyMap<string,
 }
 
 /**
+ * Every account a one-agent launch drives, in member order: its members'.
+ * The one reading of them that the run's grant (`fanoutConfigOf`), the
+ * roster's account wait (`specAccounts`) and a run pod's launch context
+ * (`stageRunDir`) share, so the launcher hands owners for exactly the
+ * accounts the runner checks. None for a launch with no fan-out half.
+ */
+export function fanoutAccountsOf(launch: Pick<FanoutLaunch, "members"> | undefined): string[] {
+  return launch === undefined ? [] : launch.members.map((m) => m.account);
+}
+
+/**
  * The run's fan-out grant for a one-agent launch (`RunConfig.fanout`): as
  * many characters as the party has, on its members' accounts, each member's
  * character staged on its own account, so the agent logs them in by name.
@@ -182,7 +193,7 @@ export function fanoutConfigOf(launch: FanoutLaunch): {
 } {
   return {
     characters: launch.members.length,
-    accounts: launch.members.map((m) => m.account),
+    accounts: fanoutAccountsOf(launch),
     staged: launch.members.map((m) => ({ character: m.character, account: m.account, ...(m.guid !== undefined ? { guid: m.guid } : {}) })),
   };
 }

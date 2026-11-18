@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 import { archiveIfStillborn } from "../runner/src/archive";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import { buildLaunchContext, encodeLaunchContext, hygieneAccountsOf, LAUNCH_CONTEXT_ENV } from "../runner/src/launch-context";
+import { fanoutAccountsOf } from "../runner/src/party";
 import { runWorldOf, SHARED_WORLD } from "../runner/src/session-record";
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, RUN_POD_STAMP_ENV, type RosterDriver } from "../runner/src/drivers";
@@ -505,7 +506,9 @@ export function stageRunDir(launch: Pick<EpisodeLaunch, "spec" | "resume" | "run
         runsDir,
         runId,
         resume: launch.resume,
-        accounts: hygieneAccountsOf({ ...flagOf(launch.args, "account"), ...flagOf(launch.args, "accounts") }),
+        // The flags' accounts, and a one-agent arm's whole party, which its
+        // argv does not name: the runner checks owners on every one.
+        accounts: hygieneAccountsOf({ ...flagOf(launch.args, "account"), ...flagOf(launch.args, "accounts") }, fanoutAccountsOf(launch.spec.campaignFile?.fanout)),
         credentials: placed === undefined ? null : [placed.id, `env:${placed.env}`],
         world: runWorldOf(launch.runDir) ?? SHARED_WORLD,
       }),
