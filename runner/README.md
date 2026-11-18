@@ -40,12 +40,13 @@ does, the context and the tools, the sandbox and the watchdogs, in that order.
 ## Entry points
 
 The operator entry point is `infra/run-episode.sh`, which loads `.env`,
-computes the harness version on the host (the container has no git) and execs
-the runner inside the `runner` service of whichever deployment it is pointed
+computes the harness version on the host for `--local` and compose (a cluster
+pod takes its stamp from the image tag, since its baked-in tree has no `.git`)
+and execs the runner inside the `runner` service of whichever deployment it is pointed
 at — the Kubernetes cluster or the local compose stack:
 
 ```bash
-./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|stub] [flags...]
+./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|pi|stub] [flags...]
 ./infra/run-episode.sh --resume <run-id>
 ./infra/run-episode.sh --model <id> --local     # run on the host instead
 ```
@@ -223,7 +224,7 @@ and `codex` already do, and what another driver would have to.
   express is refused by name, never mapped to a neighbour**: the tuple would
   otherwise carry a level the run never had. codex refuses `none` and
   `minimal`; a dimension a driver has no setting for at all is refused at
-  config time, as `compactWindow` is off claude-code and codex
+  config time, as `compactWindow` is off the fixed loop and the stub
   (`loadRunConfig`). A stated value the scaffold would silently cap to its own
   limit is refused too, at the first turn that reports the limit; a driver's
   default that is capped is not ("The compaction window", below).
@@ -374,8 +375,8 @@ guard to see:
   driver-blind: it asks `credentialCandidates` for the model's provider.
 - The dashboard is outside the scan: it reads the wire, and its harness
   colours (`LadderChart.tsx`, a `--<harness>` token and a `.badge.harness-<id>`
-  rule in `styles.css`), the harness tag's tooltip (`HarnessTag.tsx`) and its
-  reference test (`isScriptedReference`) name harnesses and drivers directly.
+  rule in `styles.css`) and the harness tag's tooltip (`HarnessTag.tsx`) name
+  harnesses directly.
   A new harness gets a colour there.
 - `infra/run-episode.sh` is shell, outside the scan: it checks a CLI's binary
   (and a subscription's credential) per driver by name before launch.
@@ -427,7 +428,7 @@ Measured against claude 2.1.238 with a local capture proxy (no model calls):
 
 - **Claude Code keeps its own conversation history and compacts it itself.**
   Turn 2's request carries turn 1 verbatim plus its own `context_management`
-  edits. The context policy's 24-message window is therefore not in force, and an
+  edits. The context policy's message window is therefore not in force, and an
   unversioned model-side summarizer sits inside the scaffold — which is why it
   is a different harness and not a `wrathbench` row (see COSTS.md for what
   that does to the token curve).
@@ -691,11 +692,10 @@ with `--credential <id>` for the credential the run took a slot on, which the
 run records as `config.credential` (docs/RUNBOOK.md, "Credentials").
 
 The runner refuses to start this driver without the chosen variable's token, and
-the refusal names that variable. Note that the
-compose `runner` service runs `oven/bun` and has no `claude` binary: install it
-into that service, or use `--local` with a module URL the host can reach
-(`WRATHBENCH_MODULE_URL`) — the module's port is not published to the host by
-default.
+the refusal names that variable. The compose
+`runner` image installs the CLI; `--local` needs a module URL the host can
+reach (`WRATHBENCH_MODULE_URL`), and the module's port is not published to the
+host by default.
 
 ## The codex driver
 
@@ -746,11 +746,14 @@ and differs only where the CLI does:
   the model's row in the ChatGPT catalogue, not these flags. `gpt-5.5` keeps
   `request_user_input`, `view_image`, `apply_patch` and the goal tools, inert
   under read-only in an empty cwd. GPT-6 models (`gpt-6-astra`, `gpt-6.1-sol`,
-  `gpt-6-luna`) are also given the CLI's code mode (`functions.exec`, a
-  JavaScript runtime with timers, a store and the clock, and `functions.wait`)
-  and its collaboration tools (`spawn_agent` and the rest), with developer
-  messages describing them, a skills list and an environment block carrying
-  the date and timezone; `--disable multi_agent` does not remove them. That
+  `gpt-6-luna`, `gpt-6.2-astra`, `gpt-6.2-sol`) are also given the CLI's code
+  mode (`functions.exec`, a JavaScript runtime with timers, a store and the
+  clock, and `functions.wait`), `request_user_input_async` (and on GPT-6.2
+  `send_message_to_user_async`) and its collaboration tools (`spawn_agent` and
+  the rest), with developer messages describing them, a skills list, a line
+  naming `mcp__wrathbench` as a deferred tool namespace (since 0.169) and an
+  environment block carrying the date and timezone; `--disable multi_agent`
+  does not remove them. That
   per-model surface cannot be configured out, so it is part of what the
   `codex` label means (docs/METHODOLOGY.md, principle 3), and the driver runs
   those models with it rather than refusing them. Every game action still goes through our MCP tools, under the
@@ -804,8 +807,8 @@ and differs only where the CLI does:
   compaction window" has what it is as a run dimension) reaches the CLI as
   the integer `-c model_auto_compact_token_limit=<tokens>` (`codexArgs`):
   `200k` is `200000`, a bare TOML integer, which the pinned CLI reads as an
-  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.163.0`, as at
-  `rust-v0.159.3`). It
+  `Option<i64>` (`codex-rs/core/src/config/mod.rs` at `rust-v0.169.1`, as at
+  `rust-v0.163.0` and `rust-v0.159.3`). It
   replaces the catalogue's own limit for the model, and the CLI then compacts
   at the smaller of it and 90% of the catalogue window
   (`ModelInfo::auto_compact_token_limit`), measured against the full active
@@ -1481,8 +1484,8 @@ every `POST /action` with the module's answer and the cache names for its ids,
 grouped by the snippet whose async context dispatched it, and pushes the notes
 to the host — before the snippet's result, before a pong, and on a 60s timer
 while no snippet runs. The host links them to the tool call (`EvalLink`:
-the caller's `dispatchTs` as `callTs`, and the turn) and hands them to
-`onActions`, which `run.ts` and `mcp.ts` write as `actions` records. The SDK's
+the caller's `dispatchTs` as `callTs`, and the turn) and writes them into the
+session record's `calls` stream as `actions` rows. The SDK's
 client-parity queries, fired from the event fold outside every snippet, are
 marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
 "The action log".

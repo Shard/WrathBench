@@ -3,7 +3,7 @@
 The Dockerfiles behind every WrathBench container, used by both the compose quickstart and the Helm chart. There are two:
 
 - `server.Dockerfile` builds AzerothCore from the pinned submodule (`deps/azerothcore`, see `infra/PINS.md`) with `wrath-mcp/module/` copied in as `modules/mod-wrathbench`, and produces the worldserver, authserver and database-import images. The rest of this file is about it.
-- `runner.Dockerfile` builds the runner image: pinned Bun, git, the Claude Code CLI, and the repository itself baked in, since a cluster has no bind mount to supply it. Its header comment says why each of those is there; `infra/docker/runner.Dockerfile.dockerignore` is its ignore list.
+- `runner.Dockerfile` builds the runner image: pinned Bun, git, the Claude Code, Codex and pi CLIs, and the repository itself baked in, since a cluster has no bind mount to supply it. Its header comment says why each of those is there; `infra/docker/runner.Dockerfile.dockerignore` is its ignore list.
 
 Build context for both is the repository root.
 

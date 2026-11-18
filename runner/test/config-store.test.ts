@@ -166,6 +166,27 @@ describe("writes", () => {
     store.close();
   });
 
+  test("a ChatGPT model off codex is refused at write and at seed while a chatgpt credential is configured, and an older row never blocks an unrelated edit", () => {
+    const chatgpt = { provider: "chatgpt", secretEnv: "CODEX_HOME", slots: 1, billing: "paid", enabled: false };
+    const { store } = tempStore();
+    store.seed(fixtureConfig({ roster: { ...(fixtureConfig().roster as object), astra: { tier: "t0", model: "openai/gpt-6.2-astra" } } }));
+    // The subscription arrives after the entry: its write is judged alone, so it lands.
+    store.put("credentials/chatgpt", chatgpt);
+    expect(() => store.put("roster/sol", { tier: "t0", model: "openai/gpt-6.2-sol" })).toThrow(
+      /^roster\/sol: roster policy — openai\/gpt-6\.2-sol is a ChatGPT model, .*\(model gpt-6\.2-sol, driver codex\)$/,
+    );
+    expect(store.get("roster/sol")).toBeUndefined();
+    store.put("roster/glm", { tier: "t2", model: "z-ai/glm-5.2:free" });
+    store.put("roster/oss", { tier: "t0", model: "openai/gpt-oss-120b" });
+    store.put("roster/sol", { tier: "t1", model: "gpt-6.2-sol", driver: "codex" });
+    store.close();
+    const { store: fresh } = tempStore();
+    expect(() =>
+      fresh.seed(fixtureConfig({ credentials: { chatgpt }, roster: { astra: { tier: "t0", model: "openai/gpt-6.2-astra" } } })),
+    ).toThrow(/^roster\/astra: roster policy — openai\/gpt-6\.2-astra is a ChatGPT model/);
+    fresh.close();
+  });
+
   test("a hosted tenant's account (TENANTnn) is refused at write, wherever the row names an account, and nothing is written", () => {
     const { store } = tempStore();
     store.seed(fixtureConfig());

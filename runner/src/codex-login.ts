@@ -128,8 +128,8 @@ export function requestCodexLogin(dir: string, id: string, actor: string, now: n
 const ANSI = /\u001b\[[0-9;?]*[ -\/]*[@-~]/g;
 
 /**
- * The link and the one-time code out of the CLI's device-auth lines (0.153
- * and 0.163 print the link on its own line after "Open this link", and the
+ * The link and the one-time code out of the CLI's device-auth lines (0.153,
+ * 0.163 and 0.169 print the link on its own line after "Open this link", and the
  * code on its own line after "one-time code"). Colour codes are stripped.
  */
 export function parseDeviceAuth(lines: readonly string[]): { url?: string; code?: string } {

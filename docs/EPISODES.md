@@ -497,7 +497,7 @@ standing sandbox that never finishes. Duration separates neither pair.
   next attempt is launched `--continue-from` the last one — same account,
   same character, the scratchpad carried forward — and records the lineage as
   `continued_from` (docs/RUNBOOK.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
-  on the Models page and as a `freeplay` run on the Episodes page, never counted
+  on the Models page and counted under `freeplay` on the About page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay starts again once they are met,
   on a fresh character: a character does not carry across a series, and the

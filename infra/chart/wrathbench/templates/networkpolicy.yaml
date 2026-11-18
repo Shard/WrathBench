@@ -20,17 +20,26 @@ EXCEPT the private, CGNAT and link-local ranges, which hold every pod, every
 Service and the LAN. Something on the LAN gets its own rule (the Kubernetes
 API, a self-hosted model server), never a hole in that one.
 
-One exception, on purpose: the FLEET may reach MySQL. Its preflight gate runs
-smokes in-process, and a gate smoke that starts from a fixture stages it with
-infra/fixtures/apply.ts, which writes acore_characters over 3306 from this
-pod. The gate's list is store config (`preflight.smokes`), so this rule is
-what lets it name such a smoke. Today it runs only infra/smoke/preflight.ts,
-which stages nothing; the smokes that stage a fixture (kill-credit.ts among
-them) run in the runner pod, in `bun wb smoke suite` after a release's
-resume, not in the fleet pod. A benchmark episode cannot use that
-path: the snippet child is not given the database env (sandboxChildEnv) and
+One exception, on purpose: the FLEET may reach MySQL. The supervisor and the
+rosters it spawns write game state there directly, from this pod: with
+`worlds` on, the worlds' reconcile and the roster's world launcher
+(infra/world.ts, mysqlWorldDb) write each world's realm row in acore_auth
+and drop its schema at its end; with `staging` on, the party stager the
+roster runs before a fresh launch (infra/fixtures/stage-party.ts) writes the
+scenario into acore_characters; and a gate smoke (`preflight.smokes`, store
+config) that starts from a fixture stages it with infra/fixtures/apply.ts.
+Today the gate runs only infra/smoke/preflight.ts, which stages nothing, and
+the smokes that stage a fixture (kill-credit.ts among them) run in the runner
+pod, so with neither switch on nothing uses the rule; it is unconditional
+because the gate's list is config. A benchmark episode cannot use this path:
+the snippet child is not given the database env (sandboxChildEnv) and
 Landlock confines its connects to the module port. Run pods have no database
 env and no such rule.
+
+The log-retention CronJob's pod gets an egress allow-list too: it holds the
+module's port secret, for GET /health on the long-lived worldserver, and talks
+to nothing else (the worlds' console logs it prunes are files on the data
+volume).
 
 Not covered, deliberately: the runner pod (the operator's shell, which runs
 bootstrap, fixtures and every smoke, and so needs MySQL), the authserver, and
@@ -173,7 +182,8 @@ spec:
         - protocol: TCP
           port: {{ required "networkPolicy.kubeApi: every entry needs a port" .port }}
     {{- end }}
-    # A gate smoke's fixture staging (see the header).
+    # The worlds' realm rows and schemas, the party stager and a gate smoke's
+    # fixture staging (see the header).
     - to:
         - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "db") | nindent 12 }}
       ports:
@@ -213,7 +223,7 @@ spec:
     {{- with include "wrathbench.np.localModels" . | trim }}{{ . | nindent 4 }}{{ end }}
 {{- end }}
 {{- /* Egress only from here on: the viewer is reached through the Ingress,
-       and the publisher and collector listen on nothing. */}}
+       and the publisher, collector and log-retention listen on nothing. */}}
 {{- if include "wrathbench.on.viewer" $ }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -273,6 +283,26 @@ spec:
   egress:
     {{- include "wrathbench.np.dns" . | nindent 4 }}
     {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
+{{- end }}
+{{- /* On whenever templates/log-retention.yaml renders the CronJob. */}}
+{{- $r := .Values.worldserver.logRetention | default dict }}
+{{- if gt (int ($r.days | default 0)) 0 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-log-retention
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-retention
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "log-retention") | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    # Its module host is a Service name.
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    # GET /health, for the server's start time (files/log-retention.pl).
+    {{- include "wrathbench.np.module" . | nindent 4 }}
 {{- end }}
 {{- end }}
 {{- if .Values.staging.enabled }}

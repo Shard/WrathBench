@@ -63,6 +63,7 @@ import {
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
 import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credential-slots";
+import { chatgptEntryRefusal } from "./roster-refusal";
 import { parseSiteBlock } from "./site-settings";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
@@ -363,14 +364,22 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
  * honour, and the write surface is exactly where one would arrive from. So the
  * store refuses the write outright, judging only the row being written, so an
  * older row the table now refuses never blocks an unrelated edit.
+ *
+ * The ChatGPT rule is judged the same way (`chatgptEntryRefusal`,
+ * runner/src/roster-refusal.ts), against the credentials of the config the
+ * write would leave: a ChatGPT model is written only as a codex entry where a
+ * chatgpt credential is configured.
  */
-function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>): void {
+function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>, doc: Record<string, unknown>): void {
   if (!key.startsWith("roster/") || typeof value !== "object" || value === null || Array.isArray(value)) return;
   // A key is a credential's (`credentials/<id>.secretEnv`), never an entry's:
   // naming one here is the field that once sent any variable anywhere.
   if ("apiKeyEnv" in value) throw new ConfigRejected(`${key}: apiKeyEnv is not an entry's — a key is a credential's (credentials/<id>.secretEnv); pin one with credential`);
   const why = rosterProviderRefusal(value as Record<string, unknown>, env);
   if (why !== null) throw new ConfigRejected(`${key}: ${why}`);
+  // The document has already parsed (`validateFleet`), so its credentials read.
+  const policy = chatgptEntryRefusal(value as Record<string, unknown>, parseCredentials(doc["credentials"]), env);
+  if (policy !== null) throw new ConfigRejected(`${key}: ${policy}`);
 }
 
 // ------------------------------------------------------------------- store
@@ -600,8 +609,9 @@ export class ConfigStore {
     if (value !== undefined) {
       next.push({ key, ord: before?.ord ?? this.nextOrd(key, rows), value, updatedAt: at });
     }
-    validateFleet(renderFleet(next), this.env);
-    refuseKeyPairing(key, value, this.env);
+    const doc = renderFleet(next);
+    validateFleet(doc, this.env);
+    refuseKeyPairing(key, value, this.env, doc);
     return { rows, before, at };
   }
 
@@ -754,8 +764,9 @@ export class ConfigStore {
     // refused by name), then the config it leaves behind, definitions kept.
     validateFleet(doc, this.env);
     refuseUnreadableCampaignRows((doc as { campaigns?: unknown }).campaigns);
-    validateFleet(renderFleet([...rows, ...kept]), this.env);
-    for (const r of rows) refuseKeyPairing(r.key, r.value, this.env);
+    const rendered = renderFleet([...rows, ...kept]);
+    validateFleet(rendered, this.env);
+    for (const r of rows) refuseKeyPairing(r.key, r.value, this.env, rendered);
     const at = Date.now();
     const actor = opts.actor ?? DEFAULT_ACTOR;
     const note = opts.note ?? (config.length > 0 ? "reseed --force" : "seed");

@@ -15,9 +15,9 @@ import { ConfigStore } from "../src/config-store";
 import type { DraftFetchResponse, DraftsResponse, E90TokenProfileView } from "../viewer/api-types";
 import { createApi } from "../viewer/api";
 import { ACTOR_HEADER, NOTE_HEADER, handleConfigRequest, type ConfigApiOptions } from "../viewer/config-api";
-import { CATALOGUE_URL } from "../viewer/drafts";
+import { CATALOGUE_URL, draftDocument } from "../viewer/drafts";
 import { renderSnapshot } from "../viewer/snapshot";
-import { CONFIG, PENDING, ROSTER_MODEL, catalogueFetch, fleetOf, seededStore as seeded, storeFacts } from "./fixtures/drafts";
+import { CATALOGUE_TEXT, CONFIG, PENDING, ROSTER_MODEL, catalogueFetch, fleetOf, seededStore as seeded, storeFacts } from "./fixtures/drafts";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -57,7 +57,9 @@ describe("the draft routes", () => {
     const f = catalogueFetch();
     const res = await call(db, "POST", "proposed/fetch", undefined, { fetch: f.fetch });
     expect(res.status).toBe(200);
-    expect((res.body as DraftFetchResponse).added.length).toBe(5);
+    // Five tool-calling models the roster does not run, less the Claude one, which a promotion could never write.
+    expect((res.body as DraftFetchResponse).added.length).toBe(4);
+    expect((res.body as DraftFetchResponse).added).not.toContain("anthropic/claude-fixture-5");
     expect((res.body as DraftFetchResponse).skipped).toBe(1);
     expect(f.calls).toEqual([CATALOGUE_URL]);
     expect(fleetOf(db)).toEqual(before.fleet);
@@ -70,7 +72,7 @@ describe("the draft routes", () => {
     const again = await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch });
     expect((again.body as DraftFetchResponse).added).toEqual([]);
     const store = new ConfigStore(db, { readonly: true });
-    expect(store.drafts().length).toBe(5);
+    expect(store.drafts().length).toBe(4);
     store.close();
   });
 
@@ -81,11 +83,10 @@ describe("the draft routes", () => {
     expect(bare.drafts.map((d) => d.model)).toEqual([
       "z-ai/glm-6:free",
       "z-ai/glm-6",
-      "anthropic/claude-fixture-5",
       "fixturelab/mystery-7b",
       "openrouter/auto",
     ]);
-    expect(bare.drafts.map((d) => d.billing)).toEqual(["free", "paid", "paid", "paid", "paid"]);
+    expect(bare.drafts.map((d) => d.billing)).toEqual(["free", "paid", "paid", "paid"]);
     expect(bare.profile).toBeNull();
     expect(bare.drafts.every((d) => d.estimateUsd === null)).toBe(true);
     // The rule's routing: the lab's own provider where one is on record, nothing pinned where not.
@@ -158,6 +159,11 @@ describe("the draft routes", () => {
   test("a refusal by the roster policy leaves the draft where it was, with the parser's sentence", async () => {
     const db = seededStore();
     await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch });
+    // A Claude draft a fetch from before the hiding left behind: off the listing, and still refused.
+    const old = new ConfigStore(db);
+    old.writeDrafts({ put: [{ model: "anthropic/claude-fixture-5", value: draftDocument({ ...PENDING, model: "anthropic/claude-fixture-5" }) }] });
+    old.close();
+    expect(((await call(db, "GET", "proposed")).body as DraftsResponse).drafts.map((d) => d.model)).not.toContain("anthropic/claude-fixture-5");
     const facts = storeFacts(db);
     const res = await call(db, "POST", "proposed/promote", { model: "anthropic/claude-fixture-5", name: "claude-fixture", tier: "t0" }, {}, ATTRIBUTED);
     expect(res.status).toBe(400);
@@ -166,6 +172,35 @@ describe("the draft routes", () => {
     const store = new ConfigStore(db, { readonly: true });
     expect(store.draft("anthropic/claude-fixture-5")).toBeDefined();
     store.close();
+  });
+
+  test("with a chatgpt credential a ChatGPT model is never offered and never promoted; gpt-oss is", async () => {
+    const tools = (id: string) => ({ id, name: id, created: 1_786_000_000, supported_parameters: ["tools"], pricing: { prompt: "0.000001", completion: "0.000002" } });
+    const doc = JSON.parse(CATALOGUE_TEXT) as { data: unknown[] };
+    const text = JSON.stringify({ ...doc, data: [...doc.data, tools("openai/gpt-6.2-astra"), tools("openai/gpt-oss-120b")] });
+    const credentials = {
+      chatgpt: { provider: "chatgpt", secretEnv: "CODEX_HOME", slots: 1, billing: "paid", enabled: true },
+      "or-paid": { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true },
+    };
+    const db = seededStore({ ...CONFIG, credentials });
+    const fetched = (await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch(text).fetch })).body as DraftFetchResponse;
+    expect(fetched.added).toContain("openai/gpt-oss-120b");
+    expect(fetched.added).not.toContain("openai/gpt-6.2-astra");
+    // One left by an earlier fetch is off the listing, pending or ignored, and its promotion is refused by name.
+    const old = new ConfigStore(db);
+    old.writeDrafts({ put: [{ model: "openai/gpt-6.2-astra", value: draftDocument({ ...PENDING, model: "openai/gpt-6.2-astra" }) }] });
+    old.close();
+    const list = (await call(db, "GET", "proposed")).body as DraftsResponse;
+    expect([...list.drafts, ...list.ignored].map((d) => d.model)).not.toContain("openai/gpt-6.2-astra");
+    const res = await call(db, "POST", "proposed/promote", { model: "openai/gpt-6.2-astra", name: "astra", tier: "t0" }, {}, ATTRIBUTED);
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toMatch(/^roster\/astra: roster policy — openai\/gpt-6\.2-astra is a ChatGPT model, .*codex entry on that credential instead \(model gpt-6\.2-astra, driver codex\)/);
+
+    // A deployment with no ChatGPT subscription is offered it, as any other model.
+    const { chatgpt: _c, ...meteredOnly } = credentials;
+    const open = seededStore({ ...CONFIG, credentials: meteredOnly });
+    const offered = (await call(open, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch(text).fetch })).body as DraftFetchResponse;
+    expect(offered.added).toContain("openai/gpt-6.2-astra");
   });
 
   test("a name the roster already has is refused rather than overwritten", async () => {

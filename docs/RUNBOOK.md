@@ -104,7 +104,7 @@ A run is live when its row has neither a termination nor a pause; one with
 neither whose heartbeat is older than two minutes has lost its process and
 reads `ownerless`.
 
-`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session` and `requests` are
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session`, `requests` and `messages` are
 `infra/inspect-run.ts` in the runner pod. Before a release ships a change to
 it, the same file runs in the pod from stdin:
 `kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
@@ -324,7 +324,15 @@ first credential that serves its model and has room ("Credentials").
 Two enabled jobs must not share an account, a pinned account may not be in the
 pool, and the roster policy is enforced on every entry at every re-read:
 claude models run only on the claude-code driver, which runs only claude
-models.
+models. Where a `chatgpt` credential is configured (enabled or not), ChatGPT
+models (`openai/gpt-*` or a bare `gpt-*`; the open-weights `gpt-oss-*` are
+not) run only on the codex driver: an entry that puts one on OpenRouter or
+another endpoint, its own or any provider's in its `providers` list, is
+refused as the entry, and a store write of one is refused outright, so it is
+written as a codex entry on that credential instead. A deployment with no
+ChatGPT subscription may run them on an endpoint. The config page's drafts
+never offer a model a promotion could not write: no Claude model, and no
+ChatGPT model under that credential.
 
 Billing is derived, not policed, so no model id is refused for what it costs.
 An entry the rules put on the wrong side (a stealth id quoted at zero with no
@@ -412,7 +420,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               share a chart with the runs that had it. `wikiCoords` alongside it is REFUSED:
               coordinates are a setting of a surface this entry does not have. A probe drops it
               with the other run dimensions — a campaign owns its own task shape.
-            `compactWindow` — claude-code and codex entries ONLY: the CLI's auto-compaction
+            `compactWindow` — claude-code, codex and pi entries ONLY: the CLI's auto-compaction
               window, `"auto"` or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). `"auto"` is the
               CLI's own window, which sits near the model's whole context (codex: 90% of the
               catalogue window). ABSENT is the driver's default: on claude-code 300k (operator,
@@ -430,7 +438,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               is not a resume's: a paused run keeps the window it recorded, and one
               that recorded none ran on `auto` and stays there; a freeplay character moves to
               300k at its next fresh session. Normalised on load (`"100K"` → `"100k"`, `"1000k"`
-              → `"1M"`; `"auto"` → absent on codex, kept on claude-code); on any other driver,
+              → `"1M"`; `"auto"` → absent on codex and pi, kept on claude-code); on any other driver,
               or out of range, it takes the whole file down. A run dimension like `effort`
               (operator decisions 2026-10-09, and 2026-10-11 for codex): stamped into the tuple
               as a KEY — a defaulted run carries `300k` like a stated one, and a run with no
@@ -616,7 +624,9 @@ new models** reads the public OpenRouter catalogue once, with no credential,
 and proposes every tool-calling model the roster does not already run and
 nobody has ignored, free and paid, newest first. A second fetch adds only
 what is new, refreshes a pending draft's price, and never brings an ignored
-model back.
+model back. A model a promotion could not write is never offered: no Claude
+model, and no ChatGPT model while a `chatgpt` credential is configured. Add
+those as a claude-code or codex entry.
 
 A draft is not config. It is a `proposed/<model id>` row in the store, which
 `parseFleet` never reads, so nothing schedules it, and a fetch or an ignore
@@ -1669,6 +1679,8 @@ rename.
 The `queue` normally holds only the pinned jobs: the supervisor fills free
 pool accounts from the roster by policy — each model's tier budget
 (`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
+the Deadmines evals once a counted `e360` reaches `deadminesAtLevel` on a tier
+that buys them,
 models with no counted run yet first, then shorter episode first, fewest
 counted runs first and roster order, one character per model, each pick on
 the first credential with room ("Credentials"), or for an entry with `providers` on
@@ -2236,9 +2248,10 @@ same store while the fleet is up: both would spawn jobs on the same accounts.
 ### A fan-out run, by hand
 
 One agent driving several characters (Shard/wrath-mcp#29). The fleet
-launches one only as a party campaign's one-agent arm (docs/EPISODES.md,
+launches one as a party campaign's one-agent arm (docs/EPISODES.md,
 "One agent, the whole party"), on the party's pinned accounts, staged as the
-party is; anything else is launched by hand.
+party is, and as a scored `deadmines-solo` attempt the policy draws; anything
+else is launched by hand.
 
 ```
 bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] [--credential <id>] \
@@ -2250,8 +2263,8 @@ bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] [--c
   them (the module holds one session per account). The run uses one model
   credential. Without the flags, or with a count of 1, the run is the
   single-character one, unchanged.
-- It is refused for a scored episode (`e90`, `e360`), a party member and a
-  continuation: a fan-out run is a probe until its eval is defined.
+- It is refused for a scored episode other than `deadmines-solo` (`e90`,
+  `e360`, `deadmines`), a party member and a continuation.
 - The supervisor counts every account a live fan-out run's grant names
   (`config.fanout.accounts` in its `meta.json`) as held, pool accounts
   included, so the queue and the policy leave them alone and a roster waits
@@ -2272,8 +2285,7 @@ bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] [--c
   `recent_events` and `state_summary`, plus `login_character`,
   `logout_character` and `list_characters`, in the stack's plain default
   wording; the fixed loop's turn context carries the stack's roll-up and no
-  event window. The system prompt is the single-character one. All of that is
-  placeholder until the harness round decides the benchmark's own.
+  event window. The system prompt is the single-character one.
 
 `runner/test/fixtures/stub-fanout-demo.json` is a scripted five-character
 session for the stub driver (`--driver stub --stub <that file> --wiki false`,
@@ -2836,7 +2848,9 @@ the key restart onto it with the fleet drained. On the quickstart stack it is
 
 The chart can put NetworkPolicies on the pods that run model-driven code: the
 fleet pod and the run pods. Each gets an egress allow-list and no ingress. The
-viewer, publisher and collector get egress allow-lists too. The switch is
+viewer, publisher, collector and the log-retention CronJob get egress
+allow-lists too; log-retention's is DNS and the module on 8086, for the
+`/health` its pass reads. The switch is
 `networkPolicy.enabled`, off by default. `templates/networkpolicy.yaml`
 says what each policy admits and why. In short, the fleet and run pods may
 reach:
@@ -2849,8 +2863,10 @@ reach:
   be written as IPv4:port.
 
 Only the fleet may reach the Kubernetes API, for the run-pod launcher, and
-MySQL, for a gate smoke that stages a fixture (none does today). Neither may
-reach ClickHouse, the viewer or any other address on the LAN.
+MySQL, which it writes directly with `worlds` on (each world's realm row and
+schema) and with `staging` on (the party stager), and for a gate smoke that
+stages a fixture (none does today). Neither may reach ClickHouse, the viewer
+or any other address on the LAN.
 
 **Turning it on is a release step of its own.** Ship the chart first, with the
 switch off, which changes nothing. Then set the values in a separate GitOps
@@ -2872,7 +2888,7 @@ the policies on with the fleet quiet, and check the result before resuming:
 
 ```
 bun wb fleet drain                   # switch set, every run parked, fleet at 0
-#  ...the values commit lands; `kubectl -n wrathbench get networkpolicy` lists five (six with staging on)
+#  ...the values commit lands; `kubectl -n wrathbench get networkpolicy` lists six (one more each with staging and worlds on)
 kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1   # if the upgrade has not; it comes up paused
 kubectl -n wrathbench exec deploy/wrathbench-fleet -- bun -e '
 for (const u of ["http://worldserver:8086/health", "https://openrouter.ai/api/v1/models",
@@ -2885,11 +2901,15 @@ bun wb fleet resume
 
 Every line but the last two should print an HTTP status: any status means the
 connection was made. ClickHouse and the viewer should print `TimeoutError`.
-Resume as soon as it passes. After the resume, watch three things with the
-fleet live:
+Resume as soon as it passes. After the resume, watch these with the fleet
+live:
 
 - the next preflight gate pass, and the next `bun wb smoke suite` (kill-credit's
   fixture staging uses MySQL from the runner pod);
+- with `worlds` on, the first world created and ended, and with `staging` on,
+  the first staged launch: both write MySQL from the fleet pod;
+- the next log-retention pass: its log says `server start unknown` if it could
+  not reach `/health`;
 - each driver's first episode, through its first model call and first module
   call;
 - the first run pod.
@@ -3405,7 +3425,8 @@ bun wb export eee --runs data/runs                            # rendered from a 
 bun wb export eee --base … --series 0.5 --out data/eee/0.5 --bundle data/eee/0.5.json
 ```
 
-One record per (series, episode, harness, model, effort, compaction window),
+One record per (series, episode, harness, model, effort, compaction window,
+loop, `yield`, wiki),
 over the runs the ladder ranks: no live, paused, lapsed or steered run, and no
 scripted reference. Free runs are left out by default, as on the public site;
 `--include-free` exports them too, and the coverage line counts what was left

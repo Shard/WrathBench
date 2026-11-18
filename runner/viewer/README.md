@@ -58,8 +58,8 @@ is created empty, and every page serves its labelled empty state.
 - `WRATHBENCH_GROUPS` lists the deployment's groups that are on
   (`groups.ts`: `runner`, `evals`, `viewer`, comma-separated); unset is all
   three. An off group's routes answer the 404 any unknown path gets: runner's
-  `/api/fleet` and `/api/models`, evals' `/api/ladder`, `/api/campaigns` and
-  `/api/episodes`. `/api/info` names the groups when one is off, the public
+  `/api/fleet` and `/api/models`, evals' `/api/ladder`, `/api/campaigns`,
+  `/api/episodes` and `/api/dungeons`. `/api/info` names the groups when one is off, the public
   projection keeps them, and the dashboard drops those pages. A viewer told the
   viewer group is off refuses to start.
 - `WRATHBENCH_ADMIN=1` is the admin switch: it mounts the config API and
@@ -346,7 +346,7 @@ pairing is the only thing that finds an attempt boundary — a relaunch can foll
 a logout by a second — which is why it is on the wire rather than left to the
 page; a resume inside an attempt comes off that attempt's `sessions` in the
 view. The id may be any run in the chain, not only the head, and the series
-reads the same store-then-sqlite path `/api/run/<id>` reads its own states
+reads the same store-then-record path `/api/run/<id>` reads its own states
 through. Public mode serves it, projected by the run detail's own projectors
 applied across the chain.
 
@@ -831,9 +831,9 @@ either shape and none of the slim record's own.
 
 ## Endpoints
 
-Everything under `/api` is read-only with one exception: the config API below,
-which is the only write surface the viewer has and is mounted only with the
-admin switch on, never in public mode. Everywhere else no route accepts a body, every database is opened
+Everything under `/api` is read-only with one exception: the config API and
+the admin routes below, which are the only write surface the viewer has and are
+mounted only with the admin switch on, never in public mode. Everywhere else no route accepts a body, every database is opened
 readonly, and the runs directory is only ever listed and read. The routes and
 their response shapes are `api.ts` and `api-types.ts`; anything that is not a
 route is the built SPA, or the not-built notice when there is none.
@@ -864,8 +864,9 @@ page (`dashboard/src/pages/Config.tsx`, with its sections in `ConfigAdmin.tsx`).
 Its nav link appears only on a private build served by a viewer with the admin
 switch on, which is the same condition these routes are mounted under.
 
-A *key* is a row: `roster/<name>`, `campaigns/<name>`, `queue/<n>`, or one of
-the singletons `_notes`, `preflight`, `accounts`, `policy`. Published campaign
+A *key* is a row: `roster/<name>`, `campaigns/<name>`, `credentials/<id>`,
+`queue/<n>`, or one of the singletons `_notes`, `preflight`, `accounts`,
+`policy`, `site`. Published campaign
 definitions (`campaign-defs/<id>@<version>`) are rows too, listed and readable
 here, but every write route refuses them with a 400: only
 `runner/src/campaign-publish.ts` writes one, once.
@@ -1001,8 +1002,10 @@ every pass — and for credential shapes no one can name: provider key prefixes,
 JWT and OAuth tokens, cloud access key ids, private-key headers, `Bearer`
 credentials, and 32 or more hex characters right after a word like "token",
 "secret" or "key". It fails closed the way a failed upload does: the other
-objects still land, the manifest does not flip, and the site stays on the last
-generation that passed. The pass's log line and the state file's `secretScan`
+objects still land. A run whose new version has a finding is held back whole,
+its row left at the version the bucket already holds, and the pass still
+flips; a finding in any other body (an aggregate, `live.json`) leaves the
+manifest unflipped and the site on the last generation that passed. The pass's log line and the state file's `secretScan`
 name each withheld object, the rule and the count, never the matched text;
 the scan clears when a pass comes through clean. Known values are matched in
 one rolling-hash pass whatever their number, and the shapes in one regular

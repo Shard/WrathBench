@@ -122,8 +122,8 @@ modelKeys:
 localModelHosts: []
 
 # NetworkPolicies for the fleet and run pods (egress allow-list, no ingress)
-# and egress allow-lists for the viewer, publisher and collector
-# (templates/networkpolicy.yaml, which says what each one admits and why).
+# and egress allow-lists for the viewer, publisher, collector and the
+# log-retention CronJob (templates/networkpolicy.yaml, which says what each one admits and why).
 # OFF by default, so that shipping the chart changes nothing. Turning it on is
 # a release step of its own, with its own check (docs/RUNBOOK.md, "Network
 # policy"). When it is on, every `localModelHosts` entry must be IPv4:port,
