@@ -131,7 +131,9 @@ turn-ins) are its record's `events` rows, not trajectory records, and
 own charge where it reported one (OpenRouter's per response, the Claude Code
 CLI's per session) and the tokens the responses reported; it prices nothing,
 the list-price figure being the viewer's (`requests` prices a window's tokens
-at the model catalogue's row). A 0.5 run's `run.sqlite`
+at the model catalogue's row), except on a paid OpenCode Go run, whose
+`usage.cost` is the subscription's allowance and not its cost: there the line
+leads with the tokens at list, as-if-metered. A 0.5 run's `run.sqlite`
 is opened only when it has no fresh heartbeat, so a live one's row reads
 `unread` and its level `not read`. Each query is `readonly=2`, capped at 60 s and 256 MiB, and
 tagged `log_comment = 'wb inspect'`, so on a Code 241 `system.query_log` shows
