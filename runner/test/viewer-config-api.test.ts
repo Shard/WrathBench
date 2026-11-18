@@ -195,11 +195,11 @@ describe("writes", () => {
   test("an invalid edit is a 400 carrying the config error, and nothing is written", async () => {
     const { handle, dbPath } = fixture();
     const res = await handle(
-      req("/api/config/roster/son", { method: "PUT", body: JSON.stringify({ tier: "t1", model: "sonnet" }) }),
+      req("/api/config/roster/son", { method: "PUT", body: JSON.stringify({ tier: "t1", model: "gpt-6.2-sol", driver: "claude-code" }) }),
     );
     expect(res.status).toBe(400);
     // The supervisor's own refusal text, word for word.
-    expect(((await res.json()) as { error: string }).error).toMatch(/claude models run only via the claude-code driver/);
+    expect(((await res.json()) as { error: string }).error).toMatch(/the claude-code driver carries claude models only/);
     const store = new ConfigStore(dbPath, { readonly: true });
     expect(store.get("roster/son")).toEqual({ tier: "t1", model: "sonnet", driver: "claude-code" });
     store.close();
@@ -230,6 +230,34 @@ describe("writes", () => {
     const store = new ConfigStore(dbPath, { readonly: true });
     expect(store.get("roster/astra")).toBeUndefined();
     expect(store.get("roster/luna")).toBeUndefined();
+    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
+    store.close();
+  });
+
+  test("with a claude credential a Claude model off claude-code is a 400 by name, a providers list included, and nothing is written", async () => {
+    const { handle, dbPath } = fixture();
+    const put = async (key: string, body: unknown, method = "PUT") => handle(req(`/api/config/${key}`, { method, body: JSON.stringify(body) }));
+    // With no Claude subscription configured, an OpenRouter Claude entry is an ordinary one.
+    expect((await put("roster/opus-or", { tier: "t0", model: "anthropic/claude-opus-5.5" })).status).toBe(200);
+    expect((await put("roster/opus-or", undefined, "DELETE")).status).toBe(200);
+    expect((await put("credentials/claude", { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
+    expect((await put("credentials/or-paid", { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
+    for (const [method, key, body] of [
+      ["PUT", "roster/opus", { tier: "t0", model: "anthropic/claude-opus-5.5" }],
+      ["PATCH", "roster/glm", { model: "anthropic/claude-haiku-5.5" }],
+      ["PUT", "roster/fable", { tier: "t0", model: "z-ai/glm-6", providers: [{ credential: "or-paid", model: "anthropic/claude-fable-5.2" }] }],
+    ] as const) {
+      const res = await put(key, body, method);
+      expect([method, key, res.status]).toEqual([method, key, 400]);
+      expect(((await res.json()) as { error: string }).error).toMatch(
+        new RegExp(`^${key}: roster policy — \\S+ is a Claude model, and with a claude credential configured Claude models run only via the claude-code driver: write it as a claude-code entry on that credential instead`),
+      );
+    }
+    // A claude-code entry is the Claude model's place.
+    expect((await put("roster/sonnet", { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", credential: "claude" })).status).toBe(200);
+    const store = new ConfigStore(dbPath, { readonly: true });
+    expect(store.get("roster/opus")).toBeUndefined();
+    expect(store.get("roster/fable")).toBeUndefined();
     expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
     store.close();
   });

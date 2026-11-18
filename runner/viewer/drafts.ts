@@ -36,10 +36,10 @@ import { z } from "zod";
 import { CATALOGUE, priceOf } from "../../infra/sync-prices";
 import { PROPOSED_PREFIX, type ConfigRow } from "../src/config-store";
 import type { Credential } from "../src/credential-slots";
-import { harnessDriver, isClaudeFamily } from "../src/drivers";
+import { harnessDriver } from "../src/drivers";
 import { billingOf } from "../src/model-cost";
 import { inSeries, isCounted, type RunFact, type SchedulingPolicy } from "../src/models";
-import { chatgptEntryRefusal } from "../src/roster-refusal";
+import { subscriptionFamilyRefusal } from "../src/roster-refusal";
 import { resolveRouting, routingLabel, type RoutingSpec } from "../src/routing";
 import type {
   DraftFetchResponse,
@@ -283,13 +283,14 @@ export function draftDocument(d: DraftRecord): Record<string, unknown> {
 
 /**
  * Whether a catalogue model is kept off the drafts: one a promotion, which
- * writes an OpenRouter entry on the fixed loop, could never write. A Claude
- * model always (claude-code only, `validateEntries`); a ChatGPT model where a
- * chatgpt credential is configured (`chatgptEntryRefusal`). Either is added as
- * its subscription's own entry instead (operator, 2026-11-18).
+ * writes an OpenRouter entry on the fixed loop, could never write: a ChatGPT
+ * model where a chatgpt credential is configured, a Claude model where a
+ * claude one is (`subscriptionFamilyRefusal`). Either is added as its
+ * subscription's own entry instead (operator, 2026-11-18); with no such
+ * credential it is offered like any other model.
  */
 export function draftUnpromotable(model: string, credentials: readonly Pick<Credential, "provider">[]): boolean {
-  return isClaudeFamily(model) || chatgptEntryRefusal({ model }, credentials) !== null;
+  return subscriptionFamilyRefusal({ model }, credentials) !== null;
 }
 
 /** What a fetch writes, and what it reports. */

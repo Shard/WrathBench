@@ -63,7 +63,7 @@ import {
 } from "./campaign-def";
 import { campaignRowProblem } from "./campaigns";
 import { describeBudget, parseCredentials, rosterProviderRefusal, type Credential } from "./credential-slots";
-import { chatgptEntryRefusal } from "./roster-refusal";
+import { subscriptionFamilyRefusal } from "./roster-refusal";
 import { parseSiteBlock } from "./site-settings";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
@@ -365,10 +365,11 @@ export function validateFleet(doc: unknown, env: Record<string, string | undefin
  * store refuses the write outright, judging only the row being written, so an
  * older row the table now refuses never blocks an unrelated edit.
  *
- * The ChatGPT rule is judged the same way (`chatgptEntryRefusal`,
- * runner/src/roster-refusal.ts), against the credentials of the config the
- * write would leave: a ChatGPT model is written only as a codex entry where a
- * chatgpt credential is configured.
+ * The subscription families' rule is judged the same way
+ * (`subscriptionFamilyRefusal`, runner/src/roster-refusal.ts), against the
+ * credentials of the config the write would leave: a ChatGPT model is written
+ * only as a codex entry where a chatgpt credential is configured, and a Claude
+ * model only as a claude-code entry where a claude one is.
  */
 function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>, doc: Record<string, unknown>): void {
   if (!key.startsWith("roster/") || typeof value !== "object" || value === null || Array.isArray(value)) return;
@@ -378,7 +379,7 @@ function refuseKeyPairing(key: string, value: unknown, env: Record<string, strin
   const why = rosterProviderRefusal(value as Record<string, unknown>, env);
   if (why !== null) throw new ConfigRejected(`${key}: ${why}`);
   // The document has already parsed (`validateFleet`), so its credentials read.
-  const policy = chatgptEntryRefusal(value as Record<string, unknown>, parseCredentials(doc["credentials"]), env);
+  const policy = subscriptionFamilyRefusal(value as Record<string, unknown>, parseCredentials(doc["credentials"]));
   if (policy !== null) throw new ConfigRejected(`${key}: ${policy}`);
 }
 
