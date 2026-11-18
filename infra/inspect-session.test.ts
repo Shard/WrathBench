@@ -462,7 +462,7 @@ describe("a paid run on the OpenCode Go subscription", () => {
     const cost = line((await inspect(["run", GO_DS, "--width", "1000"])).out, "cost");
     expect(cost).toStartWith(`cost       over the run: ${listed("deepseek-v4.1-flash")}: a subscription endpoint, so no actual`);
     expect(cost).toContain("opencode-go/deepseek-v4.1-flash");
-    expect(cost).toContain("usage.cost $0 on 3 of 3 responses: inside the allowance, not the run's cost");
+    expect(cost).toContain("inside the allowance, not the run's cost: usage.cost $0 on 3 of 3 responses");
     expect(cost).toContain("tokens in 3.0k (cache read 1.8k), out 150, reported on 3 of 3 responses");
     expect(cost).not.toContain("reported by the provider");
   });
@@ -471,7 +471,7 @@ describe("a paid run on the OpenCode Go subscription", () => {
     const cost = line((await inspect(["run", GO_GLM, "--width", "1000"])).out, "cost");
     expect(cost).toStartWith(`cost       over the run: ${listed("glm-5.3")}`);
     expect(cost).toContain("(z-ai/glm-5.3)");
-    expect(cost).toContain("usage.cost $0.0042 on 3 of 3 responses: Extra Usage past a spent allowance, a real charge on top of the plan");
+    expect(cost).toContain("Extra Usage past a spent allowance, a real charge on top of the plan: usage.cost $0.0042 on 3 of 3 responses");
   });
 
   test("an OpenRouter run keeps the provider's own charge", async () => {

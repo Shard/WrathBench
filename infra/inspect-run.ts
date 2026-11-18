@@ -2262,8 +2262,8 @@ export function costLine(
       u.usd === null
         ? "no usage.cost reported"
         : u.usd > 0
-          ? `usage.cost ${fmtUsd(u.usd)} on ${u.costed} of ${u.responses} responses: Extra Usage past a spent allowance, a real charge on top of the plan`
-          : `usage.cost $0 on ${u.costed} of ${u.responses} responses: inside the allowance, not the run's cost`;
+          ? `Extra Usage past a spent allowance, a real charge on top of the plan: usage.cost ${fmtUsd(u.usd)} on ${u.costed} of ${u.responses} responses`
+          : `inside the allowance, not the run's cost: usage.cost $0 on ${u.costed} of ${u.responses} responses`;
     return `over the run: ${listed} · ${allowance} · ${tokens}`;
   }
   const charged: string[] = [];
