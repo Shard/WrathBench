@@ -11,6 +11,7 @@
  */
 
 import { credentialCandidates, providerOfModel, rosterProviderRefusal, type Credential } from "./credential-slots";
+import { chatgptModelRefusal, isChatGptFamily } from "./drivers";
 import { LOCAL_WITHOUT_SERVING, parseServing, parseServingLabels, SERVING_OFF_LOCAL } from "./serving";
 
 /**
@@ -65,7 +66,7 @@ export function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly 
 }
 
 /** Which rule refused an entry. The parser acts on one of them (`credential`). */
-export type RosterRefusalKind = "unknown-key" | "provider" | "credential" | "serving";
+export type RosterRefusalKind = "unknown-key" | "policy" | "provider" | "credential" | "serving";
 
 export interface RosterEntryRefusal {
   kind: RosterRefusalKind;
@@ -84,6 +85,8 @@ export interface RosterEntryRefusal {
  * enough to take it out of scheduling:
  *
  * - **a key the harness does not read** (`ROSTER_ENTRY_KEYS`);
+ * - **a ChatGPT model off the codex driver** where a chatgpt credential is
+ *   configured (`chatgptEntryRefusal`; operator, 2026-11-18), any provider's;
  * - **a base no credential provider serves**, or one its provider's key may
  *   not go to (`rosterProviderRefusal`, runner/src/credential-slots.ts);
  *   for an entry with `providers` (`runner/src/provider-options.ts`), any one
@@ -105,6 +108,8 @@ export function rosterEntryRefusal(
 ): RosterEntryRefusal | null {
   const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
   if (keys.length > 0) return { kind: "unknown-key", why: strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS) };
+  const policy = chatgptEntryRefusal(e, credentials, env);
+  if (policy !== null) return { kind: "policy", why: policy };
   // Each provider is the entry as it launches there; the first that is refused refuses the entry, by name.
   if (Array.isArray(e.providers)) {
     for (const o of e.providers as unknown[]) {
@@ -120,6 +125,42 @@ export function rosterEntryRefusal(
   const serving = servingRefusal(e, env);
   if (serving !== null) return { kind: "serving", why: serving };
   return null;
+}
+
+/**
+ * The credential provider a ChatGPT subscription is (`CREDENTIAL_PROVIDERS`,
+ * credential-slots.ts): the one the codex driver bills.
+ */
+const CHATGPT_PROVIDER = "chatgpt";
+
+/**
+ * Why a roster entry breaks the ChatGPT rule, or null (operator, 2026-11-18:
+ * "astra or any chatgpt model should not be run on openrouter ... they should
+ * be using codex"). A ChatGPT model (`isChatGptFamily`), its own or any
+ * provider's in its `providers` list, runs only on the driver that bills the
+ * chatgpt credential — while the deployment has one configured, enabled or
+ * not, so disabling the subscription never quietly re-opens the endpoint. A
+ * deployment with no ChatGPT subscription (quickstart, community) may run them
+ * on an endpoint.
+ *
+ * The Claude rule is the unconditional one, refused with the file
+ * (`validateEntries`, infra/run-fleet-config.ts). This one depends on the
+ * credentials, so it refuses the ENTRY on a re-read (`rosterEntryRefusal`) and
+ * the WRITE at the store (`refuseKeyPairing`, config-store.ts). Roster entries
+ * only: a recorded run is never read or reclassified by it.
+ */
+export function chatgptEntryRefusal(
+  e: { model?: unknown; driver?: unknown; providers?: unknown },
+  credentials: readonly Pick<Credential, "provider">[],
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  if (!credentials.some((c) => c.provider === CHATGPT_PROVIDER)) return null;
+  if (providerOfModel({ driver: typeof e.driver === "string" ? e.driver : undefined }, env) === CHATGPT_PROVIDER) return null;
+  const models = Array.isArray(e.providers)
+    ? (e.providers as unknown[]).map((o) => (typeof o === "object" && o !== null ? (o as { model?: unknown }).model : undefined) ?? e.model)
+    : [e.model];
+  const model = models.find((m): m is string => typeof m === "string" && isChatGptFamily(m));
+  return model === undefined ? null : chatgptModelRefusal(model);
 }
 
 /** The provider and pinned-credential rules of `rosterEntryRefusal`, for one provider. */

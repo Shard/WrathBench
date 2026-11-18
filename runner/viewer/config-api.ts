@@ -33,6 +33,7 @@ import {
   configDbPath,
   type AuditRow,
 } from "../src/config-store";
+import { parseCredentials, type Credential } from "../src/credential-slots";
 import { parsePolicyBlock } from "../src/models";
 import type { RoutingSpec } from "../src/routing";
 import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types";
@@ -43,6 +44,7 @@ import {
   draftRecordOf,
   draftRefSchema,
   draftsResponse,
+  draftUnpromotable,
   promoteSchema,
   promotedEntry,
   readCatalogue,
@@ -239,6 +241,17 @@ function rosterModelsOf(config: Record<string, unknown>): Set<string> {
   return out;
 }
 
+/** The models a promotion could never write here, by the config's own credentials (`draftUnpromotable`). */
+function unpromotableOf(config: Record<string, unknown>): (model: string) => boolean {
+  let credentials: Credential[] = [];
+  try {
+    credentials = parseCredentials(config["credentials"]);
+  } catch {
+    // the store refuses such a block on write; with none read, only the unconditional rule hides
+  }
+  return (model) => draftUnpromotable(model, credentials);
+}
+
 /** The fleet's `policy.routing`, which an entry with none of its own gets. */
 function policyRoutingOf(config: Record<string, unknown>): RoutingSpec | undefined {
   try {
@@ -291,7 +304,7 @@ async function handleDrafts(
       profile = null; // no profile is no estimate — never a reason to withhold the drafts
     }
     return json(
-      draftsResponse({ rows, roster: rosterModelsOf(config), profile, policyRouting: policyRoutingOf(config) }) satisfies DraftsResponse,
+      draftsResponse({ rows, roster: rosterModelsOf(config), profile, policyRouting: policyRoutingOf(config), hidden: unpromotableOf(config) }) satisfies DraftsResponse,
     );
   }
   const where = `${CONFIG_API_PREFIX}/${DRAFTS_ROUTE}${verb === "" ? "" : `/${verb}`}`;
@@ -314,7 +327,8 @@ async function handleDrafts(
     const store = new ConfigStore(dbPath);
     try {
       const existing = store.drafts().flatMap((r) => draftRecordOf(r) ?? []);
-      const { put, remove, report } = reconcileDrafts({ catalogue, existing, roster: rosterModelsOf(store.render()), now: Date.now() });
+      const config = store.render();
+      const { put, remove, report } = reconcileDrafts({ catalogue, existing, roster: rosterModelsOf(config), now: Date.now(), hidden: unpromotableOf(config) });
       store.writeDrafts({ put: put.map((d) => ({ model: d.model, value: draftDocument(d) })), remove });
       return json(report satisfies DraftFetchResponse);
     } finally {

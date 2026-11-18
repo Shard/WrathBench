@@ -20,6 +20,7 @@ import {
   smokePath,
   tailOf,
   fillEntries,
+  isChatGptFamily,
   isClaudeFamily,
   jobArgv,
   jobJsonlPath,
@@ -1101,7 +1102,10 @@ describe("roster policy", () => {
           "luna-codex": { tier: "t1", model: "gpt-6-luna", driver: "codex" },
         }),
       );
-      expect(config.refusals).toHaveLength(0);
+      // No clash: the file parses. The OpenRouter entry is refused on its own,
+      // by the ChatGPT rule, since this deployment has a chatgpt credential.
+      expect(config.refusals.map((r) => r.pin)).toEqual(["roster luna-or"]);
+      expect(config.refusals[0]!.why).toMatch(/ChatGPT model/);
     });
 
     test("harnessClash names the first clash in roster order, and an absent driver is openai", () => {
@@ -1194,6 +1198,90 @@ describe("roster policy", () => {
     expect(() =>
       validateEntries("roster:x", [{ model: "claude-4-opus", apiBase: "http://192.168.100.20:1234/v1" }]),
     ).toThrow(/roster policy/);
+  });
+
+  // Operator, 2026-11-18: "astra or any chatgpt model should not be run on
+  // openrouter ... they should be using codex". Conditional on the deployment
+  // having a ChatGPT subscription, so it refuses the ENTRY, never the file.
+  describe("ChatGPT models run only on codex where a chatgpt credential is configured", () => {
+    test.each(["openai/gpt-6.2-astra", "openai/gpt-6.1-sol", "openai/gpt-6-luna", "openai/gpt-5.6-terra-pro", "gpt-6.2-sol", "openai/chatgpt-4o-latest"])(
+      "%s is ChatGPT-family",
+      (m) => expect(isChatGptFamily(m)).toBe(true),
+    );
+    test.each(["openai/gpt-oss-120b", "gpt-oss-20b", "z-ai/glm-5.2:free", "anthropic/claude-3.5-sonnet", "deepseek/deepseek-v4-flash"])(
+      "%s is not ChatGPT-family",
+      (m) => expect(isChatGptFamily(m)).toBe(false),
+    );
+
+    const OR = "https://openrouter.ai/api/v1";
+    const refusedWhy = (config: FleetConfig, name: string): string | undefined => config.refusals.find((r) => r.pin === `roster ${name}`)?.why;
+
+    test("on OpenRouter it is refused by name, saying what to write instead, and the entry stays in the catalog", () => {
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        roster: {
+          astra: { tier: "t0", model: "openai/gpt-6.2-astra" },
+          "sol-or": { tier: "t0", model: "openai/gpt-6.2-sol", driver: "openai", apiBase: OR },
+        },
+        queue: [{ ref: "astra", episode: "freeplay" }],
+        policy: {},
+      });
+      expect(refusedWhy(config, "astra")).toBe(
+        "roster policy — openai/gpt-6.2-astra is a ChatGPT model, and with a chatgpt credential configured ChatGPT models run only via the codex driver: " +
+          "write it as a codex entry on that credential instead (model gpt-6.2-astra, driver codex) — the entry is in the catalog and scheduled by nothing",
+      );
+      expect(refusedWhy(config, "sol-or")).toMatch(/openai\/gpt-6\.2-sol is a ChatGPT model/);
+      expect(config.roster["astra"]!.refused).toMatch(/run only via the codex driver/);
+      expect(config.refusals.find((r) => r.pin === "roster astra")!.jobs.length).toBeGreaterThan(0);
+    });
+
+    test("inside a providers list it is refused too, whichever provider names it", () => {
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        roster: {
+          astra: {
+            tier: "t0",
+            model: "gpt-6.2-astra",
+            providers: [
+              { credential: "zen-paid", apiBase: "https://opencode.ai/zen/v1" },
+              { credential: "or-paid", model: "openai/gpt-6.2-astra" },
+            ],
+          },
+        },
+        policy: {},
+      });
+      expect(refusedWhy(config, "astra")).toMatch(/gpt-6\.2-astra is a ChatGPT model/);
+    });
+
+    test("the disabled subscription still counts: disabling it never re-opens the endpoint", () => {
+      const config = parseFleet({
+        accounts: { pool: ["R"] },
+        credentials: { ...OPEN_CREDENTIALS, chatgpt: { ...OPEN_CREDENTIALS.chatgpt, enabled: false } },
+        roster: { astra: { tier: "t0", model: "openai/gpt-6.2-astra" } },
+        policy: {},
+      });
+      expect(refusedWhy(config, "astra")).toMatch(/ChatGPT model/);
+    });
+
+    test("allowed: gpt-oss on OpenRouter, a codex slug on codex, and any GPT where there is no chatgpt credential", () => {
+      const ok = parseFleet({
+        accounts: { pool: ["R"] },
+        roster: {
+          oss: { tier: "t0", model: "openai/gpt-oss-120b" },
+          sol: { tier: "t1", model: "gpt-6.2-sol", driver: "codex", credential: "chatgpt" },
+        },
+        policy: {},
+      });
+      expect(ok.refusals).toEqual([]);
+      const { chatgpt: _chatgpt, ...noSubscription } = OPEN_CREDENTIALS;
+      const community = parseFleet({
+        accounts: { pool: ["R"] },
+        credentials: noSubscription,
+        roster: { astra: { tier: "t0", model: "openai/gpt-6.2-astra" } },
+        policy: {},
+      });
+      expect(community.refusals).toEqual([]);
+    });
   });
 });
 

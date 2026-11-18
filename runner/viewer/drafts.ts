@@ -3,7 +3,8 @@
  * shape of 2026-09-18).
  *
  * A manual fetch reads the OpenRouter catalogue once and proposes every
- * tool-calling model the roster does not run and the operator has not ignored.
+ * tool-calling model the roster does not run, the operator has not ignored
+ * and a promotion could write (`draftUnpromotable`).
  * A draft is not a roster entry: it is not scheduled, not on the Models page,
  * and never in the public build. The operator ignores it (remembered, never
  * proposed again unless un-ignored) or promotes it into the roster at a tier
@@ -34,9 +35,11 @@
 import { z } from "zod";
 import { CATALOGUE, priceOf } from "../../infra/sync-prices";
 import { PROPOSED_PREFIX, type ConfigRow } from "../src/config-store";
-import { harnessDriver } from "../src/drivers";
+import type { Credential } from "../src/credential-slots";
+import { harnessDriver, isClaudeFamily } from "../src/drivers";
 import { billingOf } from "../src/model-cost";
 import { inSeries, isCounted, type RunFact, type SchedulingPolicy } from "../src/models";
+import { chatgptEntryRefusal } from "../src/roster-refusal";
 import { resolveRouting, routingLabel, type RoutingSpec } from "../src/routing";
 import type {
   DraftFetchResponse,
@@ -278,6 +281,17 @@ export function draftDocument(d: DraftRecord): Record<string, unknown> {
   };
 }
 
+/**
+ * Whether a catalogue model is kept off the drafts: one a promotion, which
+ * writes an OpenRouter entry on the fixed loop, could never write. A Claude
+ * model always (claude-code only, `validateEntries`); a ChatGPT model where a
+ * chatgpt credential is configured (`chatgptEntryRefusal`). Either is added as
+ * its subscription's own entry instead (operator, 2026-11-18).
+ */
+export function draftUnpromotable(model: string, credentials: readonly Pick<Credential, "provider">[]): boolean {
+  return isClaudeFamily(model) || chatgptEntryRefusal({ model }, credentials) !== null;
+}
+
 /** What a fetch writes, and what it reports. */
 export interface Reconciled {
   put: DraftRecord[];
@@ -296,6 +310,8 @@ export interface Reconciled {
  *   writes nothing;
  * - an ignored model is never touched, so no fetch brings it back;
  * - a pending draft for a model the roster now runs is dropped;
+ * - a model a promotion could never write (`hidden`, `draftUnpromotable`) is
+ *   not proposed;
  * - a draft whose row is missing from this read is left alone: a row that
  *   failed to parse is not evidence the model is gone.
  */
@@ -305,6 +321,8 @@ export function reconcileDrafts(args: {
   /** Every roster entry's `model`, as written. */
   roster: ReadonlySet<string>;
   now: number;
+  /** Models kept off the drafts (`draftUnpromotable`). */
+  hidden?: (model: string) => boolean;
 }): Reconciled {
   const byModel = new Map(args.existing.map((d) => [d.model, d]));
   const put = new Map<string, DraftRecord>();
@@ -317,6 +335,7 @@ export function reconcileDrafts(args: {
     seen.add(m.id);
     toolModels++;
     if (args.roster.has(m.id)) continue;
+    if (args.hidden?.(m.id) === true) continue;
     const prior = byModel.get(m.id);
     if (prior === undefined) {
       put.set(m.id, { model: m.id, status: "draft", name: m.name, created: m.created, price: m.price, firstSeen: args.now });
@@ -457,10 +476,12 @@ export function draftsResponse(args: {
   roster: ReadonlySet<string>;
   profile: E90TokenProfileView | null;
   policyRouting?: RoutingSpec | undefined;
+  /** Models kept off the listing, pending or ignored (`draftUnpromotable`). */
+  hidden?: (model: string) => boolean;
 }): DraftsResponse {
   const views = args.rows
     .map((r) => draftRecordOf(r))
-    .filter((d): d is DraftRecord => d !== null && !args.roster.has(d.model))
+    .filter((d): d is DraftRecord => d !== null && !args.roster.has(d.model) && args.hidden?.(d.model) !== true)
     .map((d) => viewOf(d, args.profile, args.policyRouting))
     .sort(newestFirst);
   return {
