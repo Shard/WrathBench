@@ -1445,7 +1445,10 @@ first request.
 Records: `wake` per sleep (`via` `turn-end` or `yield`, `turn`, `fired`,
 `sleptMs`, `maxMs`, the `reasons`, the rendered `block`), `deploy` per load, `routine` per routine
 end, restart, `wake` call and pre-emption, and `program_error` per fresh error
-or refusal and per repeat count at each wake. `bun wb inspect requests` reads
+or refusal and per repeat count at each wake. A repeat record (`kind`
+`repeat`, its `signature` and `count`) counts the further occurrences between
+`since` (the previous wake, or the process's start) and `at` (this wake), not
+a running total. `bun wb inspect requests` reads
 wakes per hour, requests per wake (on codex, responses per wake too) and the
 share asleep off the `wake` records; `bun wb inspect messages` sizes each
 turn's message by part and prints the wake blocks. `loop` and `yield` are
