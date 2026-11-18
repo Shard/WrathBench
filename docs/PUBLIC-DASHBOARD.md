@@ -264,7 +264,7 @@ at the edge.
   currency tokens toward a quest's items (the bag grid shows neither of the
   last two, as the 60 s reading does not); reputation and skills still wait
   on a page.
-- **Runs before the recorder** have no `trace` table. Their tracks carry no
+- **Runs before the recorder** have no trace. Their tracks carry no
   `trace` field, so their bytes and keys are what they were, and nothing is
   backfilled.
 - **A published segment cannot be corrected in place.** A content-addressed
@@ -434,8 +434,8 @@ trajectories weigh. Two setup facts carry all the operational risk:
   disabled: it would be a second, un-ruled address for the objects the cache
   rules exist to sit in front of.
 - Cloudflare does **not cache JSON by default**. An explicit cache rule on
-  the data hostname ("eligible for cache, respect origin TTL") is required,
-  with the publisher setting `cache-control` per object at PUT. Forgetting
+  the data hostname, setting the edge and browser TTL by path, is required:
+  the objects carry no `cache-control`, which Bun's S3 writer cannot send. Forgetting
   the rule is the one real misconfiguration cost: every request becomes a
   billed read against the bucket (~$7/month at 30M requests/month, versus ~$0
   with the rule).
@@ -492,8 +492,8 @@ too:
   cadence ago trips the fleet-dead threshold in
   `dashboard/src/lib/fleet.ts`. This is what makes a slower cadence safe: the
   age is frozen at render time rather than growing while a reader waits. The
-  map's pip dimming reads the same way, through `positionAgeMs` in
-  `dashboard/src/lib/mapview.ts`.
+  map's pip dimming reads the same way, through `positionAgeMs`
+  (`@wrathbench/inspector/views/feedclock`).
 - A shell banner in snapshot mode states the data's age from the
   artifact's `generatedAt`, and warns when the publisher has evidently stopped
   pushing. Three clocks exist (the supervisor's heartbeat, the push, the edge
