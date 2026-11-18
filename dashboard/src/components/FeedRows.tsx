@@ -19,7 +19,7 @@ import type { ActionsEntry, EventsServedEntry, FeedEntry, ReflectionWindowView }
 import { rawPath, SNAPSHOT_MODE } from "../api/client";
 import { actionLines, isActionsEntry, keepLines, sameLine, type MoveVerdict } from "../lib/actionlog";
 import type { CallGroup, FeedGroup, ResponseGroup, TurnGroup } from "../lib/feedgroup";
-import { eventsHead, lineOf, milestoneLine } from "../lib/feedline";
+import { eventsHead, lineOf, milestoneLine, programErrorLine } from "../lib/feedline";
 import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, tsOf, type ActionRun, type FeedKind, type FeedRow, type Surface, type Tally } from "../lib/feedtier";
 import { expandedBy, harnessFields, isHarnessEntry, noticeView, splitNotices, stateLine, type ExpandPreset } from "../lib/feedview";
 import { fmtElapsed, fmtLatency, fmtTokens, paneText, stamp } from "../lib/format";
@@ -644,19 +644,31 @@ function StateRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset
 }
 
 /**
- * A milestone or a turn-in as one line (`lib/feedline.ts`), with the record
- * behind a toggle: a level or a death is a thing to spot down a long feed,
- * not a record to read. A death carries the error rule an errored card does.
+ * A milestone, a turn-in or a program's error or refusal as one line
+ * (`lib/feedline.ts`), with the record behind a toggle: a level or a death
+ * is a thing to spot down a long feed, not a record to read. A death and a
+ * thrown error carry the error rule an errored card does.
  */
-function MarkRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset; kind: FeedKind; startOpen?: boolean | undefined }) {
+function MarkRow(props: {
+  entry: FeedEntry;
+  runId: string;
+  preset: ExpandPreset;
+  kind: FeedKind;
+  line: string;
+  title?: string | undefined;
+  bad: boolean;
+  startOpen?: boolean | undefined;
+}) {
   const [open, setOpen] = createSignal<boolean | null>(null);
   createEffect(on(() => props.preset, () => setOpen(null), { defer: true }));
   const shown = (): boolean => open() ?? (props.startOpen === true || expandedBy(props.preset, "detail"));
   return (
-    <div class="entry mark" classList={{ bad: props.kind === "death" }}>
+    <div class="entry mark" classList={{ bad: props.bad }}>
       <div class="head">
         <FeedIcon kind={props.kind} />
-        <span class="t">{milestoneLine(props.entry)}</span>
+        <span class="t" title={props.title}>
+          {props.line}
+        </span>
         <Show when={props.entry.turn !== undefined}>
           <span class="dim">turn {props.entry.turn}</span>
         </Show>
@@ -715,7 +727,12 @@ function FullRow(props: { g: FeedGroup; ctx: FeedCtx; opened?: boolean }) {
       if (isHarnessEntry(g.entry)) return <NoticeRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} />;
       if (isActionsEntry(g.entry)) return <ActionsRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} startOpen={props.opened} />;
       if (g.entry.t === "milestone" || g.entry.t === "quest_complete") {
-        return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} startOpen={props.opened} />;
+        return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} line={milestoneLine(g.entry)} bad={kind() === "death"} startOpen={props.opened} />;
+      }
+      if (g.entry.t === "program_error") {
+        const p = programErrorLine(g.entry);
+        const thrown = (g.entry as { kind?: unknown }).kind === "error";
+        return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} line={p.text.length > 0 ? `${p.label}: ${p.text}` : p.label} title={p.title} bad={thrown} startOpen={props.opened} />;
       }
       return <Entry entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} />;
   }
@@ -732,7 +749,7 @@ function ActionItem(props: { g: FeedGroup; ctx: FeedCtx }) {
   const open = (): boolean => over() ?? expandedBy(props.ctx.preset, "detail");
   return (
     <div class="act" classList={{ open: open() }}>
-      <button class="act-line" classList={{ err: line().failed }} aria-expanded={open()} onClick={() => setOver(!open())}>
+      <button class="act-line" classList={{ err: line().failed }} title={line().title} aria-expanded={open()} onClick={() => setOver(!open())}>
         <FeedIcon kind={line().kind} />
         <span class="act-label">{line().label}</span>
         <span class="act-text">{line().text}</span>

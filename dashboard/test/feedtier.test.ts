@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FeedEntry } from "../../runner/viewer/api-types";
 import { groupFeed, type FeedGroup } from "../src/lib/feedgroup";
-import { lineOf, milestoneLine } from "../src/lib/feedline";
+import { lineOf, milestoneLine, programErrorLine } from "../src/lib/feedline";
 import {
   ACTIONS,
   KINDS,
@@ -98,6 +98,21 @@ describe("the classification", () => {
     for (const t of ["move", "state", "events_served", "wake", "claude_result", "codex_item", "pi_retry", "reflect_window"]) expect([t, tierOf(entryKind(e(t, 1)))]).toEqual([t, "action"]);
     // A CLI's reasoning summary is the model's own text.
     expect(tierOf(entryKind(e("codex_reasoning", 1, { text: "…" })))).toBe("decision");
+  });
+
+  test("a program's fresh error or refusal is a notice; a wake's count of its repeats is an action", () => {
+    const refusal = e("program_error", 1, { kind: "refusal", signature: "grind||castSpell|not_ready", name: "grind", action: "castSpell", status: "not_ready", deploy: 2, at: 1 });
+    const error = e("program_error", 1, { kind: "error", signature: "grind|TypeError|routines/grind.ts:42", name: "grind", error: "TypeError: x is undefined", frames: [], deploy: 2, at: 1 });
+    const repeat = e("program_error", 1, { kind: "repeat", signature: "grind||castSpell|not_ready", count: 12 });
+    expect([refusal, error].map((x) => [entryKind(x), tierOf(entryKind(x))])).toEqual([
+      ["notice", "decision"],
+      ["notice", "decision"],
+    ]);
+    expect([entryKind(repeat), tierOf(entryKind(repeat))]).toEqual(["repeat", "action"]);
+    // A public window ships the skeleton alone: nothing to read, so it folds.
+    const skeleton = e("program_error", 1);
+    expect([entryKind(skeleton), tierOf(entryKind(skeleton))]).toEqual(["record", "action"]);
+    expect(lineOf(groupFeed([skeleton])[0]!)).toMatchObject({ label: "program error", text: "", failed: false });
   });
 
   test("a reply with no text is the envelope of its tool calls", () => {
@@ -239,6 +254,68 @@ describe("identity across a live append", () => {
     expect(r2[1]).toBe(r1[1]!);
     expect(r2[3]).not.toBe(r1[3]!);
     expect((r2[3] as ActionRun).anchor).toBe((r1[3] as ActionRun).anchor);
+  });
+});
+
+describe("a program's errors", () => {
+  const repeat = (signature: string, count: number, ts = 50, extra: Record<string, unknown> = {}) => e("program_error", ts, { kind: "repeat", signature, count, ...extra });
+
+  test("a wake's repeats fold with the wake around them, counted by occurrence and never as failed", () => {
+    const rows = tierFeed(
+      groupFeed([
+        ...call("write_file", 1),
+        e("program_error", 20, { kind: "refusal", signature: "grind||castSpell|not_ready", name: "grind", action: "castSpell", status: "not_ready", deploy: 2, at: 20 }),
+        ...move(1, 30),
+        e("wake", 50, { sleptMs: 300_000, reasons: [] }),
+        repeat("grind||castSpell|not_ready", 12),
+        repeat("grind|TypeError|routines/grind.ts:42", 3),
+        e("state", 60, { level: 7 }),
+      ]),
+    );
+    expect(shape(rows)).toEqual(["call:write_file", "program_error", "run:6"]);
+    const run = runs(rows)[0]!;
+    expect(run.tally.failed).toBe(0);
+    expect(tallyLabel(run.tally)).toBe("1 move · 1 state sample · 1 wait · 15 repeated failures");
+  });
+
+  test("a fresh refusal and a fresh error in words, with the routine and the character", () => {
+    expect(programErrorLine(e("program_error", 1, { kind: "refusal", signature: "grind||castSpell|not_ready", name: "grind", action: "castSpell", status: "not_ready" }))).toEqual({
+      label: "refused",
+      text: "castSpell not_ready (routine grind)",
+      title: "grind||castSpell|not_ready",
+    });
+    expect(programErrorLine(e("program_error", 1, { kind: "refusal", signature: "party|Tankpartyb|moveTo|superseded", name: "party", seat: "Tankpartyb", action: "moveTo", status: "superseded" })).text).toBe(
+      "moveTo superseded (routine party, Tankpartyb)",
+    );
+    expect(programErrorLine(e("program_error", 1, { kind: "error", signature: "grind|TypeError|x", name: "grind", error: "TypeError: x is undefined\n    at grind (routines/grind.ts:42:7)" }))).toMatchObject({
+      label: "routine error",
+      text: "TypeError: x is undefined (routine grind)",
+    });
+    expect(programErrorLine(e("program_error", 1, { kind: "error", signature: "memory|save", error: "memory too large" }))).toMatchObject({ label: "program error", text: "memory too large" });
+  });
+
+  test("a repeat reads as more of the same, off its signature, whatever its shape", () => {
+    const text = (signature: string, count = 12) => {
+      const l = programErrorLine(repeat(signature, count));
+      return `${l.label} ${l.text}`;
+    };
+    expect(text("grind||castSpell|not_ready")).toBe("refused castSpell not_ready ×12 more (routine grind)");
+    expect(text("party|Tankpartyb|moveTo|superseded", 1_204)).toBe("refused moveTo superseded ×1,204 more (routine party, Tankpartyb)");
+    expect(text("grind|TypeError|routines/grind.ts:42", 3)).toBe("routine error TypeError at routines/grind.ts:42 ×3 more (routine grind)");
+    expect(text("|SyntaxError|", 2)).toBe("program error SyntaxError ×2 more");
+    expect(text("memory|save", 5)).toBe("program error memory save ×5 more");
+    expect(text("something:else", 4)).toBe("repeated something:else ×4 more");
+  });
+
+  test("a repeat's line is quiet, and its hover names the span its count covers where the record says", () => {
+    const one = (entry: FeedEntry) => lineOf(groupFeed([entry])[0]!);
+    const old = one(repeat("grind||castSpell|not_ready", 12));
+    expect(old).toMatchObject({ kind: "repeat", label: "refused", text: "castSpell not_ready ×12 more (routine grind)", failed: false, title: "grind||castSpell|not_ready" });
+    const spanned = one(repeat("grind||castSpell|not_ready", 12, 50, { since: 1_000_000, at: 1_300_000 }));
+    expect(spanned.title).toContain("grind||castSpell|not_ready · ");
+    expect(spanned.title).toContain(" – ");
+    // A fresh one is a failure in its own colour.
+    expect(one(e("program_error", 1, { kind: "refusal", signature: "s", name: "grind", action: "castSpell", status: "not_ready" }))).toMatchObject({ kind: "notice", failed: true });
   });
 });
 

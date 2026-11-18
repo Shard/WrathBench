@@ -457,6 +457,24 @@ describe("inspect trajectory", () => {
     expect((await inspect(["trajectory", "run-resumed", "--runs-dir", runsDir, "--all", "--grep", "harness-test", "--last", "2"])).out.slice(1, -1).every((l) => l.includes(" meta "))).toBe(true);
   });
 
+  test("--all reads a wake's program error repeat as a count over a span, not as a fresh error", async () => {
+    const runsDir = tmp("inspect-run-repeats-");
+    const dir = join(runsDir, "run-repeats");
+    mkdirSync(dir, { recursive: true });
+    const t0 = Date.UTC(2030, 0, 2, 10, 0, 0);
+    const lines = [
+      { ts: t0, t: "program_error", kind: "refusal", signature: "grind||castSpell|not_ready", name: "grind", action: "castSpell", status: "not_ready", deploy: 2, at: t0 },
+      { ts: t0 + 300_000, t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 12, since: t0 + 1_000, at: t0 + 300_000 },
+      // Written before the span was: its count alone.
+      { ts: t0 + 600_000, t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 3 },
+    ];
+    writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
+    const out = (await inspect(["trajectory", "run-repeats", "--runs-dir", runsDir, "--all"])).out.slice(1, -1);
+    expect(out[0]).toContain('"kind":"refusal"');
+    expect(out[1]).toBe("01-02 10:05:00  program_error  repeat ×12 grind||castSpell|not_ready  since 01-02 10:00:01");
+    expect(out[2]).toBe("01-02 10:10:00  program_error  repeat ×3 grind||castSpell|not_ready");
+  });
+
   test("--since stops reading at the first older record", async () => {
     const r = await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--since", String(NOW - 3_600_000 + 5.5 * 60_000)]);
     const body = r.out.slice(1, -1);

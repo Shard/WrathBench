@@ -49,6 +49,7 @@ export const ICONS: Readonly<Record<IconName, string>> = {
   state: "M1.5 8h3l1.5-4 3 8 1.5-4h4",
   area: "M8 14s4.5-4.2 4.5-7.5a4.5 4.5 0 0 0-9 0C3.5 9.8 8 14 8 14zM8 5a1.6 1.6 0 1 0 0 3.2A1.6 1.6 0 0 0 8 5z",
   sleep: `${RING}M8 5v3l2 1.5`,
+  repeat: "M2.5 6h10l-2.5-2.5M13.5 10h-10L6 12.5",
   record: "M3 4.5h10M3 8h10M3 11.5h6",
   other: "M4 8h.01M8 8h.01M12 8h.01",
   chevron: "M6 4l4 4-4 4",
