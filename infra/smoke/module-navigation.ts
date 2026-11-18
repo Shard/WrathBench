@@ -29,6 +29,29 @@
  * `arrived` whose server z is >3y below the z it started from over a short
  * walk — the exact c4 defect).
  *
+ * Two more OPTIONAL legs, pinned with NAV_MESH_Z (`kharanos`, `sneed`, or
+ * both, comma-separated), check that the drop guard judges a route at the
+ * right z (wrath-mcp/module/PROTOCOL.md, `drop` and `arrived`). Unpinned
+ * they cost nothing: no fixture, no logout hold. Each runs after the logout
+ * below, places this run's character with a fixture scenario (so it needs
+ * the fixtures tool: inside the runner, or the quickstart's compose) and logs
+ * in again:
+ *   - `kharanos`: from the Thunderbrew Distillery floor (scenario
+ *     nav-kharanos-floor) down the cellar's switchback stairs to Jarven
+ *     Thunderbrew must arrive. The core settled the stair point under the
+ *     landing onto the landing, and the step after it was refused as a 5.1y
+ *     fall onto a foot "under" the landing, forced or not.
+ *   - `sneed`: from the Moonbrook staging spot (scenario moonbrook-mine)
+ *     through trigger 78 into the Deadmines, a walk to (-178, -418, 56), then
+ *     to (-240.8, -489.9, 55.3), 4.8y over the corridor floor, must arrive
+ *     with `meshZ` at the floor (about 50.5). The core settled that end on a
+ *     surface 1.4y under the request and the last segment read as a 5.4y
+ *     climb. Level 80 (the scenario's), so nothing on the walk stops it.
+ * `bun wb smoke` does not carry the variable into the runner pod, so pin the
+ * legs there with
+ * `kubectl -n wrathbench exec deploy/wrathbench-runner -- env
+ * NAV_MESH_Z=kharanos,sneed bun infra/smoke/module-navigation.ts`.
+ *
  * Not staged here, deliberately: `no_mesh` needs an unmapped map, and
  * `path_incomplete` / `start_off_mesh` need specific terrain (a transport
  * deck, a mesh gap) that Northshire does not offer on demand. Those two are
@@ -51,8 +74,10 @@
  * and the login account with MODULE_ACCOUNT (default PROBE).
  */
 
+import { DEADMINES_ENTRANCE_TRIGGER, NAV_KHARANOS_JARVEN, SCENARIOS } from "../fixtures/scenarios";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
+import { applyScenario, type FixtureContext } from "./lib/fixture";
 import { moduleBase, moduleWsBase } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 
@@ -72,10 +97,12 @@ function log(msg: string) {
   console.log(`[nav] ${msg}`);
 }
 // Best-effort session cleanup so a failed run does not leave the account
-// blocked for the next one (lib/fail.ts: once, awaited, then the exit).
+// blocked for the next one (lib/fail.ts: once, awaited, then the exit). The
+// session logged in now: the main legs', or an optional leg's own.
+let liveToken = TOKEN;
 const { fail: failNow, failed } = failOnce({
   prefix: () => "[nav] FAIL",
-  cleanup: () => fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: TOKEN }) }),
+  cleanup: () => fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: liveToken }) }),
   cleanupMs: 3000,
 });
 function fail(msg: string): never {
@@ -99,14 +126,18 @@ async function req(method: string, path: string, body?: unknown): Promise<{ stat
 
 const events: any[] = [];
 
-function openEvents(): Promise<WebSocket> {
+/** A logged-in session's token and the events its socket has seen: the main legs' unless a leg opens its own. */
+type Leg = { token: string; events: any[] };
+const MAIN: Leg = { token: TOKEN, events };
+
+function openEvents(leg: Leg = MAIN): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
+    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(leg.token)}`, { headers: authHeaders() });
     ws.addEventListener("open", () => resolve(ws));
     ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
     ws.addEventListener("message", (ev) => {
       try {
-        events.push(JSON.parse(String(ev.data)));
+        leg.events.push(JSON.parse(String(ev.data)));
       } catch {
         log(`event <- (unparseable) ${String(ev.data)}`);
       }
@@ -114,10 +145,10 @@ function openEvents(): Promise<WebSocket> {
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, leg: Leg = MAIN): Promise<any> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const hit = events.find(pred);
+    const hit = leg.events.find(pred);
     if (hit) return hit;
     if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
     await Bun.sleep(100);
@@ -145,13 +176,14 @@ async function deletePreviousCharacter(): Promise<void> {
 }
 
 /** Issue move_to and return the terminal WB_MOVE_RESULT data for it. */
-async function move(target: { x: number; y: number; z: number; guid?: string }, timeoutMs = 60000): Promise<any> {
-  const ack = await req("POST", "/action", { token: TOKEN, action: "move_to", ...target });
+async function move(target: { x: number; y: number; z: number; guid?: string }, timeoutMs = 60000, leg: Leg = MAIN): Promise<any> {
+  const ack = await req("POST", "/action", { token: leg.token, action: "move_to", ...target });
   if (ack.status !== 200 || !ack.json?.ok) fail(`move_to refused: ${ack.status} ${JSON.stringify(ack.json)}`);
   const result = await waitFor(
     (e) => e.opcode === "WB_MOVE_RESULT" && e.data?.moveId === ack.json.moveId,
     timeoutMs,
     `WB_MOVE_RESULT for moveId ${ack.json.moveId}`,
+    leg,
   );
   log(
     `move_to (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)}) -> ${result.data.status}` +
@@ -358,8 +390,83 @@ async function main() {
   if (del.status !== 200 || !del.json?.ok) fail(`session delete failed: ${del.status} ${JSON.stringify(del.json)}`);
   ws.close();
 
-  log(`PASS: meshZ arrival -> ground-z fallback -> unit target -> target_off_mesh -> too_far -> plain arrival -> drop leg ${dropSeen ? "PASS" : "optional/skipped"}; vocabulary clean`);
+  // 8. OPTIONAL LEGS — the guard judges a route at the right z (header).
+  const meshLegs = await meshZLegs();
+
+  log(`PASS: meshZ arrival -> ground-z fallback -> unit target -> target_off_mesh -> too_far -> plain arrival -> drop leg ${dropSeen ? "PASS" : "optional/skipped"}; vocabulary clean; mesh-z legs ${meshLegs.length ? meshLegs.join(", ") + " PASS" : "optional/skipped"}`);
   process.exit(0);
+}
+
+const MESH_LEGS = ["kharanos", "sneed"] as const;
+type MeshLeg = (typeof MESH_LEGS)[number];
+/** The Deadmines leg: where its walk starts, inside the instance, and the request 4.8y over the corridor floor. */
+const SNEED_FROM = { x: -178, y: -418, z: 56 };
+const SNEED_TO = { x: -240.8, y: -489.9, z: 55.3 };
+const SNEED_FLOOR_Z = 50.5;
+
+/**
+ * The legs NAV_MESH_Z pins, run in order on this run's character, now logged
+ * out: a fixture scenario places it, a session of the leg's own logs it in,
+ * the leg's moves run, and it logs out again. Returns the legs that passed
+ * (every pinned one, or the run has failed).
+ */
+async function meshZLegs(): Promise<MeshLeg[]> {
+  const pinned = (process.env.NAV_MESH_Z ?? "").split(",").map((l) => l.trim().toLowerCase()).filter(Boolean);
+  for (const l of pinned) if (!(MESH_LEGS as readonly string[]).includes(l)) fail(`NAV_MESH_Z names ${l}; the legs are ${MESH_LEGS.join(", ")}`);
+  if (pinned.length === 0) {
+    log(`optional mesh-z legs: not pinned; NAV_MESH_Z=${MESH_LEGS.join(",")} runs them`);
+    return [];
+  }
+  const fixture: FixtureContext = {
+    base: BASE,
+    account: ACCOUNT,
+    character: CHARACTER,
+    token: smokeSubToken(TOKEN, "fixture"),
+    log,
+    fail,
+    createAndLogout: async () => fail(`${CHARACTER} should exist: this run created it`),
+  };
+  const passed: MeshLeg[] = [];
+  for (const name of pinned as MeshLeg[]) {
+    const scenario = name === "kharanos" ? "nav-kharanos-floor" : "moonbrook-mine";
+    await applyScenario(fixture, scenario);
+    const leg: Leg = { token: smokeSubToken(TOKEN, `mesh-${name}`), events: [] };
+    liveToken = leg.token;
+    const legWs = await openEvents(leg);
+    await Bun.sleep(200);
+    const session = await req("POST", "/session", { token: leg.token, account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
+    if (session.status !== 200 || !session.json?.inWorld) fail(`${name}: session failed: ${session.status} ${JSON.stringify(session.json)}`);
+    const at = (await waitFor((e) => e.opcode === "SMSG_LOGIN_VERIFY_WORLD", 5000, "SMSG_LOGIN_VERIFY_WORLD", leg)).data;
+    const want = SCENARIOS[scenario].position;
+    if (at.map !== want.map || dist2d(at, want) > 8) fail(`${name}: scenario ${scenario} did not land: map ${at.map} (${at.x}, ${at.y}, ${at.z})`);
+    if (name === "kharanos") {
+      const r = await move(NAV_KHARANOS_JARVEN, 60000, leg);
+      if (r.status !== "arrived") fail(`kharanos: the walk down the cellar stairs to Jarven should arrive, got ${JSON.stringify(r)}`);
+      if (dist2d(r.pos, NAV_KHARANOS_JARVEN) > 4) fail(`kharanos: arrived ${dist2d(r.pos, NAV_KHARANOS_JARVEN).toFixed(1)}y from Jarven`);
+      if (Math.abs(r.pos.z - NAV_KHARANOS_JARVEN.z) > 2) fail(`kharanos: arrived off the cellar floor: server z ${r.pos.z} vs ${NAV_KHARANOS_JARVEN.z}`);
+      log(`PASS mesh-z kharanos -> arrived in the cellar at z ${r.pos.z.toFixed(1)}`);
+    } else {
+      // Into the Deadmines as deadmines-entry goes: one move of trigger 78's
+      // centre is a transfer onto map 36. Then the walk to the leg's start.
+      const { x, y, z } = DEADMINES_ENTRANCE_TRIGGER;
+      const inbound = await move({ x, y, z }, 60000, leg);
+      if (inbound.status !== "transferred") fail(`sneed: the move to trigger 78 should transfer onto map 36, got ${JSON.stringify(inbound)}`);
+      await waitFor((e) => e.opcode === "SMSG_NEW_WORLD" && e.data?.map === 36, 20000, "SMSG_NEW_WORLD onto map 36", leg);
+      await Bun.sleep(1500);
+      const from = await move(SNEED_FROM, 120000, leg);
+      if (from.status !== "arrived") fail(`sneed: the walk to the leg's start ${JSON.stringify(SNEED_FROM)} should arrive, got ${JSON.stringify(from)}`);
+      const r = await move(SNEED_TO, 60000, leg);
+      if (r.status !== "arrived") fail(`sneed: the request 4.8y over the corridor floor should arrive, got ${JSON.stringify(r)}`);
+      if (dist2d(r.pos, SNEED_TO) > 4) fail(`sneed: arrived ${dist2d(r.pos, SNEED_TO).toFixed(1)}y from the request`);
+      if (typeof r.meshZ !== "number" || Math.abs(r.meshZ - SNEED_FLOOR_Z) > 1.5) fail(`sneed: the arrival should carry meshZ at the floor (~${SNEED_FLOOR_Z}): ${JSON.stringify(r)}`);
+      log(`PASS mesh-z sneed -> arrived on the corridor floor, meshZ ${r.meshZ.toFixed(1)}, server z ${r.pos.z.toFixed(1)}`);
+    }
+    const out = await req("DELETE", "/session", { token: leg.token });
+    if (out.status !== 200 || !out.json?.ok) fail(`${name}: session delete failed: ${out.status} ${JSON.stringify(out.json)}`);
+    legWs.close();
+    passed.push(name);
+  }
+  return passed;
 }
 
 main().catch(failed);
