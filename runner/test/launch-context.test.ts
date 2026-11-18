@@ -94,4 +94,8 @@ describe("hygieneAccountsOf", () => {
     expect(hygieneAccountsOf({})).toEqual(["RUNNER"]);
     expect(hygieneAccountsOf({ "max-characters": "2", accounts: "FAN1, fan2", account: "FAN1" })).toEqual(["FAN1", "FAN2"]);
   });
+
+  test("a one-agent arm's party, which its argv does not name, is cleared on every member's account", () => {
+    expect(hygieneAccountsOf({ account: "EVAL01" }, ["EVAL01", "eval02", "EVAL03"])).toEqual(["EVAL01", "EVAL02", "EVAL03"]);
+  });
 });

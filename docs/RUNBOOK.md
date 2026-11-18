@@ -2015,8 +2015,9 @@ predecessor's directory read-only, live or archived, wherever it is (none when
 it is in neither place, and the run starts fresh as it always has). The
 launcher makes the directory as the fleet's user before the pod exists, and
 reads for it what run.ts would read from the other runs, handed over as
-`WRATHBENCH_LAUNCH_CONTEXT`: hygiene's character owners on the launch's
-accounts (a fresh launch in a pod without them exits 2 before writing
+`WRATHBENCH_LAUNCH_CONTEXT`: hygiene's character owners on every account the
+run drives, its flags' and, for a one-agent arm, every party member's from its
+campaign file (a fresh launch in a pod without them exits 2 before writing
 anything), the run's credential's newest usage reading, and the guids the
 other runs on its world have recorded, which its session record counts as
 the deployment's own. That last is a snapshot: a character a sibling records

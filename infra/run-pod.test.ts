@@ -41,7 +41,8 @@ import { tempDirs } from "./temp-dirs";
 import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { RUN_POD_STAMP_ENV } from "../runner/src/drivers";
 import { loadRunConfig, newSessionToken } from "../runner/src/config";
-import { LAUNCH_CONTEXT_ENV, launchContextOf } from "../runner/src/launch-context";
+import { LAUNCH_CONTEXT_ENV, launchContextOf, launchOwners } from "../runner/src/launch-context";
+import { fanoutConfigOf } from "../runner/src/party";
 import { Trajectory } from "../runner/src/trajectory";
 import { parseStoreKey, sealSecret, SEALED_SECRET_ENV, STORE_KEY_ENV, unsealLaunchSecret } from "../runner/src/store-secrets";
 import { KEY_HEX, SENTINEL } from "../runner/test/fixtures/store-secrets";
@@ -671,6 +672,35 @@ describe("PodLauncher against a fake API", () => {
       expect(mountsOf(api.only())).toEqual([[`runs/${basename(dir)}`, false]]);
       expect(contextOf(api.only())?.characterOwners).toBeUndefined();
       await h3.stop(0);
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("a one-agent arm's fresh launch is handed owners on every account its party drives, not only the one its --account names", async () => {
+    const api = new FakeApi();
+    try {
+      const dir = join(tempDir("wb-run-pod-runs-"), launch("").spec.runId);
+      const fanout = {
+        members: ["tank", "healer", "dps1", "dps2", "dps3"].map((member, i) => ({
+          member,
+          role: member === "tank" ? ("tank" as const) : member === "healer" ? ("healer" as const) : ("damage" as const),
+          account: `EVAL0${i + 1}`,
+          character: `Stage${i + 1}`,
+        })),
+      };
+      const base = launch(dir);
+      // The fleet's argv for a one-agent arm: one --account, the party in its campaign file.
+      const h = await launcher(api).start({
+        ...base,
+        spec: { ...base.spec, driver: "codex", campaignFile: { fanout } },
+        args: ["--driver", "codex", "--model", "gpt-6", "--account", "EVAL01", "--episode", "probing", "--campaign-file", `data/runs/${basename(dir)}/campaign.json`],
+      });
+      const ctx = launchContextOf({ [LAUNCH_CONTEXT_ENV]: envOf(api.only())[LAUNCH_CONTEXT_ENV]?.value });
+      expect(Object.keys(ctx?.characterOwners ?? {}).sort()).toEqual(["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05"]);
+      // The runner's own refusal, on the accounts its config's grant names.
+      expect(fanoutConfigOf(fanout).accounts.filter((a) => launchOwners(ctx, a) === undefined)).toEqual([]);
+      await h.stop(0);
     } finally {
       api.stop();
     }

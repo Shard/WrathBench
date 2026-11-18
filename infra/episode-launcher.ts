@@ -27,6 +27,7 @@ import type { PlacedCredential } from "./run-fleet-credentials";
 import { DEFAULT_DRIVER, driverEntry, entryOf, type RosterDriver } from "../runner/src/drivers";
 import { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode } from "../runner/src/models";
 import { launchSecret, STORE_KEY_ENV } from "../runner/src/store-secrets";
+import type { CampaignFile } from "../runner/src/campaign-file";
 
 /** The fleet setting's vocabulary lives with the policy block it is part of; re-exported for the launchers' callers. */
 export { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode };
@@ -72,6 +73,12 @@ export interface EpisodeSpec {
   /** The openai driver's key, by env var NAME. */
   apiKeyEnv: string;
   launch: LaunchSpec | undefined;
+  /**
+   * A probe's or task episode's campaign file, of which a launcher reads only
+   * a one-agent arm's party (`fanout`): every account the run drives, where
+   * its argv names one (`stageRunDir`).
+   */
+  campaignFile?: Pick<CampaignFile, "fanout"> | undefined;
 }
 
 export interface EpisodeLaunch {

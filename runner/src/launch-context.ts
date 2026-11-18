@@ -8,8 +8,9 @@
  * things run.ts takes from the runs directory as a whole are therefore taken
  * here, by the fleet pod, at launch:
  *
- * - hygiene's character owners on the launch's accounts (`characterOwners`),
- *   which keep a character an un-ended run still plays from being deleted.
+ * - hygiene's character owners on every account the launch drives
+ *   (`characterOwners`, on `hygieneAccountsOf`'s accounts), which keep a
+ *   character an un-ended run still plays from being deleted.
  *   A fresh launch only, the one hygiene runs on; a run pod's fresh launch
  *   without them is refused, never run on an empty map.
  * - the newest usage reading of the run's credential (`newestCredentialUsage`),
@@ -101,15 +102,17 @@ export function launchContextOf(env: Readonly<Record<string, string | undefined>
 }
 
 /**
- * The accounts a fresh launch's hygiene clears, from run.ts's own flags: its
+ * The accounts a fresh launch's hygiene clears: run.ts's own flags, its
  * `--account` (the config's default when it names none) and a fan-out grant's
- * `--accounts` (`fanoutFromArgs`). A superset is harmless; one it missed
- * refuses the launch in the pod.
+ * `--accounts` (`fanoutFromArgs`), and `drives`, the accounts a one-agent
+ * arm's campaign file names for its party (`fanoutAccountsOf`), whose argv
+ * carries one `--account` and takes the rest from the file. A superset is
+ * harmless; one it missed refuses the launch in the pod.
  */
-export function hygieneAccountsOf(args: Readonly<Record<string, string | boolean>>): string[] {
+export function hygieneAccountsOf(args: Readonly<Record<string, string | boolean>>, drives: readonly string[] = []): string[] {
   const fanout = typeof args["accounts"] === "string" ? args["accounts"].split(",").map((a) => a.trim()).filter((a) => a.length > 0) : [];
   const single = typeof args["account"] === "string" ? args["account"] : DEFAULT_ACCOUNT;
-  return [...new Set([...fanout, single].map((a) => a.toUpperCase()))];
+  return [...new Set([...drives, ...fanout, single].map((a) => a.toUpperCase()))];
 }
 
 /** Hygiene's owners on `account` as the launcher read them, or undefined when it read none for it. */
