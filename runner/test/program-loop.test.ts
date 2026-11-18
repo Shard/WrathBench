@@ -1124,6 +1124,27 @@ function programSetup(script: ConstructorParameters<typeof StubAdapter>[0], o: {
 const userOf = (req: ChatRequest): string => String(req.messages[req.messages.length - 1]!.content);
 
 describe("the fixed loop on the program loop", () => {
+  test("a model that answers every wake in words alone ends idle once it has not acted for the idle window (operator, 2026-11-18)", async () => {
+    const talk = { content: "The party did not clear the Deadmines.", toolCalls: [] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => talk)]);
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "idle" });
+    s.options.trajectory.close();
+    const records = readTrajectory(s.dir);
+    // Four five-minute wakes answered without a tool call, then the sleep that found the verdict.
+    expect(records.filter((r) => r.t === "wake").map((w) => w["fired"])).toEqual(["cap", "cap", "cap", "cap", "stopped"]);
+    expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call for \d+ms: 4 wakes in a row answered without one$/);
+  });
+
+  test("a model that yields at every wake has acted, however long its routine plays", async () => {
+    const yieldTurn = { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 300 } }] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => yieldTurn)], { yield: true });
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "stub-complete" });
+  });
+
   test("a reply with no tool call sleeps; the wake opens every request until the next sleep", async () => {
     const s = programSetup([
       { content: "starting", toolCalls: [{ name: "start_routine", arguments: { name: "trip" } }] },

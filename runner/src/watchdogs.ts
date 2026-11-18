@@ -4,6 +4,16 @@
  *
  *   idle            no successful model response for idleMs. Guards against a
  *                   dead adapter or a model that stops producing output.
+ *                   Also a model that has stopped acting (operator,
+ *                   2026-11-18): on the program loop, consecutive wakes
+ *                   answered with no tool call, as many as fit the idle
+ *                   window at the wake cap (`ceil(idleMs / WAKE_CAP_MS)`,
+ *                   four at twenty minutes), with no tool call for idleMs of
+ *                   wall clock, sleep included. A reply resets the first
+ *                   clock, so a model that answers every wake in a few words
+ *                   and never acts would otherwise hold its world to the
+ *                   episode limit. Any tool call is acting, `yield` included:
+ *                   a model that yields while its routine plays has acted.
  *   no-xp           no increase in (level, xp) for noXpMs, measured from the
  *                   first observed progress value — a session that never forms
  *                   is `idle`'s problem, not this one's.
@@ -34,6 +44,7 @@
  */
 
 import type { TerminationReason, WatchdogConfig } from "./config";
+import { WAKE_CAP_MS } from "./wake";
 import { endConditionsOf, killEndDetail, killEndMet, levelTargetOf, type EndCondition, type EndReason, type KillReading } from "./end-conditions";
 
 export interface WatchdogVerdict {
@@ -44,6 +55,14 @@ export interface WatchdogVerdict {
 export class Watchdogs {
   private readonly startedAt: number;
   private lastModelOutputAt: number;
+  /** When the model last called a tool, any tool: the no-action half of `idle`. */
+  private lastToolCallAt: number;
+  /** Whether a tool call came since the program loop last put the model to sleep. */
+  private actedSinceSleep = false;
+  /** Wakes answered in a row with no tool call (`noteWakeAnswered`). */
+  private wakesWithoutAction = 0;
+  /** The no-action verdict's detail, once the rule has met. */
+  private stoppedActing: string | null = null;
   private lastProgressAt: number | null = null;
   private lastProgress: { level: number; xp: number } | null = null;
   private sandboxRestarts = 0;
@@ -80,6 +99,7 @@ export class Watchdogs {
   ) {
     this.startedAt = this.now() - Math.max(0, elapsedBeforeMs);
     this.lastModelOutputAt = this.now();
+    this.lastToolCallAt = this.now();
     this.ends = endConditionsOf({ stopAtLevel: opts.stopAtLevel ?? null, end: opts.end });
     this.stopAtLevel = levelTargetOf(this.ends);
   }
@@ -92,6 +112,38 @@ export class Watchdogs {
   /** A model response arrived. */
   noteModelOutput(): void {
     this.lastModelOutputAt = this.now();
+  }
+
+  /**
+   * The model called a tool: noted at dispatch, before the call runs, so a
+   * `yield` counts as acting before the sleep it starts.
+   */
+  noteToolCall(): void {
+    this.lastToolCallAt = this.now();
+    this.actedSinceSleep = true;
+    this.wakesWithoutAction = 0;
+  }
+
+  /**
+   * The program loop is about to put the model to sleep (a turn's end, or a
+   * `yield`, whose call has already been noted): it has answered what it was
+   * handed. With no tool call since the previous sleep, that was a wake
+   * answered without acting. Counted at the sleep's start, and only here:
+   * a capacity backoff holds the idle clock (`noteAsleep`) but is no answer.
+   */
+  noteWakeAnswered(): void {
+    const acted = this.actedSinceSleep;
+    this.actedSinceSleep = false;
+    if (acted) {
+      this.wakesWithoutAction = 0;
+      return;
+    }
+    this.wakesWithoutAction++;
+    if (this.cfg.idleMs === null || this.stoppedActing !== null) return;
+    const quietMs = this.now() - this.lastToolCallAt;
+    if (this.wakesWithoutAction >= Math.ceil(this.cfg.idleMs / WAKE_CAP_MS) && quietMs >= this.cfg.idleMs) {
+      this.stoppedActing = `no tool call for ${quietMs}ms: ${this.wakesWithoutAction} wakes in a row answered without one`;
+    }
   }
 
   /** When the model went to sleep on the program loop (`wake.ts`), or null while it is awake. */
@@ -217,6 +269,7 @@ export class Watchdogs {
     if (this.cfg.idleMs !== null && awakeUntil - this.lastModelOutputAt >= this.cfg.idleMs) {
       return { reason: "idle", detail: `no model output for ${awakeUntil - this.lastModelOutputAt}ms` };
     }
+    if (this.stoppedActing !== null) return { reason: "idle", detail: this.stoppedActing };
     if (
       this.cfg.noXpMs !== null &&
       this.lastProgressAt !== null &&

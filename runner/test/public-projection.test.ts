@@ -2337,6 +2337,33 @@ describe("projectEntries", () => {
 });
 
 describe("the action log in a public window", () => {
+  test("a program_error ships its kind, a repeat's count and span, and a refusal's action and status; names and free text stay private (operator, 2026-11-18)", () => {
+    // The private fields, each carrying a value the public window must never hold.
+    const routine = "poison-routine-name";
+    const signature = `${routine}|${CHARACTER_NAME}|castSpell|not_ready`;
+    const records = [
+      { t: "program_error", ts: 50, kind: "refusal", signature, name: routine, character: CHARACTER_NAME, seat: "poison-seat", action: "castSpell", status: "not_ready", deploy: 2, at: 49, [POISON.smuggled]: 1 },
+      { t: "program_error", ts: 51, kind: "error", signature: `${routine}|TypeError|routines/grind.ts:42`, name: routine, character: CHARACTER_NAME, error: `TypeError: ${POISON.lastErrorMessage}`, frames: [{ file: POISON.configPath, line: 42 }], deploy: 2, at: 50 },
+      { t: "program_error", ts: 52, kind: "repeat", signature, count: 12, since: 30, at: 52 },
+      // Prose under a listed name is not a word, and stays out.
+      { t: "program_error", ts: 53, kind: "refusal", signature, name: routine, action: `castSpell ${POISON.objective}`, status: { code: POISON.smuggled }, at: "53" },
+    ];
+    const out = records.map((r, i) => projectEntry(summarize(r, i, 0, 10)));
+    const text = JSON.stringify(out);
+    assertClean(text);
+    for (const kept of [routine, CHARACTER_NAME, "poison-seat", "TypeError", "routines/grind.ts", signature]) expect(text).not.toContain(kept);
+    expect(out.map((o) => keyPaths(o))).toEqual([
+      allow(["i", "t", "ts", "kind", "action", "status", "at"]),
+      allow(["i", "t", "ts", "kind", "at"]),
+      allow(["i", "t", "ts", "kind", "count", "since", "at"]),
+      allow(["i", "t", "ts", "kind"]),
+    ]);
+    expect(out[0]).toMatchObject({ kind: "refusal", action: "castSpell", status: "not_ready", at: 49 });
+    expect(out[2]).toMatchObject({ kind: "repeat", count: 12, since: 30, at: 52 });
+    // A fixed point, as the publisher's acceptance check re-projects it.
+    expect(out.map((o) => projectEntry(o))).toEqual(out);
+  });
+
   test("an actions record ships its notes field by field: names and ids stay, smuggled and secret keys go", () => {
     const record = {
       t: "actions",
