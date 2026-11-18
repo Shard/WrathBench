@@ -173,8 +173,13 @@ producing is never cut for being slow. A failed attempt, a cut stream
 included, is retried whole, and attempts start only inside a 5-minute budget.
 When they run out on network errors before any response the run pauses
 `rate-limited`, or `provider-unresponsive` when the last attempt ended by its
-own clock (the model API sent nothing), a provider pause handled the same way; when they run out on a failed read after the headers (a stall
-or a cut stream) it ends as `adapter-error`. Every retry is on the record as
+own clock (the model API sent nothing), a provider pause handled the same way.
+When they run out on a read after the headers that the last attempt's clock
+ended (silence mid-stream, or the ceiling) the run pauses
+`provider-unresponsive` as well: every request is streamed, so a slow model's
+timeout nearly always lands there (operator, 2026-11-18). A read after the
+headers that failed otherwise (a cut stream, a reset mid-body) ends the run as
+`adapter-error`. Every retry is on the record as
 a `harness` record of kind `adapter_retry` (the attempt it starts, of how
 many, the wait before it, the cause and any status, and the failure's first
 200 characters), never in the model's context, and `bun wb inspect run`
@@ -1436,7 +1441,11 @@ resumed run's thread is new, so its first message is plain. The message that rea
 CLI moved to unannounced is the one meant for the old thread: the CLI names
 its thread only once the turn has started.
 
-Time asleep is not `idle`, and a restart the program is blamed for (a blocked
+Time asleep is not `idle`, and neither is a few words at every wake: a model
+that answers its wakes without a tool call is idle once it has done so for as
+many wakes in a row as fit the idle window at the five-minute cap (four, at
+twenty minutes) and has called no tool for the whole window, sleep included
+(operator, 2026-11-18). Any tool call is acting, `yield` included. A restart the program is blamed for (a blocked
 event loop with no snippet in flight) counts toward `snippet-runaway` as a
 snippet's does. A resume finds the workspace where it was, and the stack loads
 the program and starts the routines that were running from the top before the
@@ -1553,7 +1562,8 @@ until the resume re-leases the token, which rotates it.
 ## Watchdogs
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`
-(no model output), `no-xp` (no level/XP progress once progress was first
+(no model output, or on the program loop wakes answered without a tool call
+for the same window), `no-xp` (no level/XP progress once progress was first
 observed; off by default and on every episode, so only a run or a campaign
 definition that names a threshold has it), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).

@@ -771,6 +771,10 @@ export async function runPiEpisode(o: PiEpisodeOptions): Promise<LoopOutcome> {
                 return;
               }
               toolCalls++;
+              // Acting, at dispatch (`Watchdogs.noteToolCall`). Pi runs no
+              // program loop, so nothing here counts a wake answered: the
+              // no-action half of `idle` waits for pi to sleep.
+              watchdogs.noteToolCall();
               watchdogs.noteModelOutput();
             }
             restartsBefore = o.sandbox.totalRestarts;
