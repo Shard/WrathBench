@@ -440,6 +440,19 @@ function writeTurn(traj: Trajectory, session: FixtureSession, spec: Spec, turn: 
       traj.append({ t: "harness", kind: "session_note", text: "an invented notice" });
     }
     call(12_000, "log_status", { text: "Two wolves joined the pull by the fence. Routing along the fence line from here." }, { text: "logged" });
+    // The routine's first refusal and first throw of this deploy: each a notice of its own.
+    at(12_500);
+    traj.append({ t: "program_error", kind: "refusal", signature: "grind||castSpell|not_ready", name: "grind", action: "castSpell", status: "not_ready", deploy: turn, at: t + 12_400 });
+    traj.append({
+      t: "program_error",
+      kind: "error",
+      signature: "grind|TypeError|routines/grind.ts:42",
+      name: "grind",
+      error: "TypeError: Cannot read properties of undefined (reading 'guid')",
+      frames: ["at grind (routines/grind.ts:42:17)"],
+      deploy: turn,
+      at: t + 12_450,
+    });
   } else if (phase === 5) {
     call(4_000, "reflect", { reason: "half an hour of pelts; is the mill worth the walk?" }, { text: "reflection window open for 2 turns" });
     call(5_000, "read_log", { limit: 5 }, { text: "5 entries\nturn 3 · L7 · Invented Field: Two wolves joined the pull by the fence." });
@@ -466,6 +479,13 @@ function writeTurn(traj: Trajectory, session: FixtureSession, spec: Spec, turn: 
   // The routine walks until the next turn: a long quiet stretch, and one walk in six that is refused.
   patrol(22_000, owner, 12, phase === 4 ? "too_far" : "arrived");
   patrol(42_000, owner, 9);
+  if (phase === 4 || phase === 0) {
+    // A wake after the patrol, and its count of what the routine kept hitting since the last.
+    at(58_000);
+    traj.append({ t: "wake", via: "yield", turn, fired: "cap", sleptMs: 30_000, maxMs: 300_000, n: turn });
+    traj.append({ t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 9 + (turn % 5), since: t, at: t + 58_000 });
+    if (phase === 4) traj.append({ t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 2, since: t, at: t + 58_000 });
+  }
   return owner;
 }
 

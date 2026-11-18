@@ -2597,6 +2597,18 @@ function compact(r: Record<string, unknown>, width: number, token: string | null
   return cap(JSON.stringify(shown), width);
 }
 
+/**
+ * A wake's count of one program error's further occurrences
+ * (runner/src/wake.ts), as what it is: "repeat ×12 grind||castSpell|not_ready
+ * since 11-18 10:02:11", not a fresh error. A record from before `since` and
+ * `at` were written says only its count.
+ */
+function repeatLine(r: Record<string, unknown>, token: string | null): string {
+  const n = typeof r["count"] === "number" ? r["count"] : "?";
+  const since = typeof r["since"] === "number" ? `  since ${clock(r["since"])}` : "";
+  return `repeat ×${n} ${strike(String(r["signature"] ?? "?"), token)}${since}`;
+}
+
 /** One half of a call and its result. */
 interface Half {
   side: "call" | "result";
@@ -2713,6 +2725,9 @@ export async function inspectTrajectory(runId: string, opts: TrajectoryOptions, 
       if (!grepOk(strike(rec.text() ?? "", token))) return;
       if (rec.t === "meta") {
         return keep({ ts: rec.ts, error: false, text: `${clock(rec.ts)}  meta  run ${String(r["runId"] ?? "?")} harness ${String(r["harnessVersion"] ?? "?")}` });
+      }
+      if (rec.t === "program_error" && r["kind"] === "repeat") {
+        return keep({ ts: rec.ts, error: false, text: cap(`${clock(rec.ts)}  program_error  ${repeatLine(r, token)}`, w) });
       }
       const line = compact(r, w, token);
       const error = r["isError"] === true;

@@ -613,6 +613,9 @@ function fakeProgram() {
       pending = { ...pending, facts: [...pending.facts, f] };
       wake.onFact(f);
     },
+    repeat(signature: string, count: number, ts: number) {
+      pending = { ...pending, repeats: [...pending.repeats, { signature, count, ts }] };
+    },
     console(text: string) {
       pending = { ...pending, console: { lines: [...pending.console.lines, { ts: 1, level: "log", routine: "grind", text, count: 1 }], total: pending.console.total + 1 } };
     },
@@ -678,6 +681,32 @@ describe("ProgramWake", () => {
     expect(records.find((r) => r.t === "deploy")).toMatchObject({ ok: true, by: "save", deploy: 2 });
     expect(records.find((r) => r.t === "routine")).toMatchObject({ event: "ended", name: "trip", state: "returned" });
     expect(records.find((r) => r.t === "wake")).toMatchObject({ via: "turn-end", turn: 3, fired: "routine_ended", sleptMs: 42_000, maxMs: WAKE_CAP_MS, reasons: ["routine_ended"] });
+  });
+
+  test("a wake's repeat records say which span their count covers: from the previous wake (or the start) to this one", async () => {
+    const c = fakeClock();
+    const records: Record<string, unknown>[] = [];
+    const start = c.now();
+    const wake = new ProgramWake({ trajectory: { append: (r) => void records.push(r), scrub: (t) => t }, now: c.now, sleep: c.sleep });
+    const p = fakeProgram();
+    const sleep = () => wake.sleep(p, { via: "yield", turn: 1, capMs: 10_000, floorMs: 3_000, stopped: () => false, kept: true });
+    p.repeat("grind||castSpell|not_ready", 4, start + 1_000);
+    await sleep();
+    const first = c.now();
+    // Counted while the model was awake, drained as the next sleep starts: still the next wake's.
+    c.advance(7_000);
+    p.repeat("grind||castSpell|not_ready", 2, c.now());
+    p.repeat("grind|TypeError|routines/grind.ts:42", 1, c.now());
+    await sleep();
+    const second = c.now();
+    const repeats = records.filter((r) => r["t"] === "program_error");
+    expect(repeats).toEqual([
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 4, since: start, at: first },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 2, since: first, at: second },
+      { t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 1, since: first, at: second },
+    ]);
+    expect(first).toBeGreaterThan(start);
+    expect(second).toBeGreaterThan(first + 7_000);
   });
 
   test("a wake that stays in the conversation marks the routine values it showed; a fixed-loop turn-end wake, never kept, does not", async () => {
