@@ -649,11 +649,14 @@ export function projectRunFacts(r: FleetRunFacts): FleetRunFacts {
             actual: {
               usd: r.cost.actual.usd,
               basis: r.cost.actual.basis,
+              ...(r.cost.actual.asIfMetered !== undefined ? { asIfMetered: r.cost.actual.asIfMetered } : {}),
               note: r.cost.actual.note,
               ...(r.cost.actual.backfill !== undefined
                 ? { backfill: { reportedUsd: r.cost.actual.backfill.reportedUsd, usd: r.cost.actual.backfill.usd, turns: r.cost.actual.backfill.turns } }
                 : {}),
             },
+            // The estimate the cell shows where there is no actual, and only there.
+            ...(r.cost.actual.basis === "none" && r.cost.expected !== undefined ? { expected: projectListedExpected(r.cost.expected) } : {}),
           },
     comparability: r.comparability === null ? null : { budget: { episodeMs: r.comparability.budget.episodeMs } },
     // `snapshot` is not carried over: the renderer stamps its own paths after
@@ -685,8 +688,18 @@ function projectResultActual(c: CostFigure): CostFigure {
   });
 }
 
+/**
+ * An expected figure as a listing carries it: the dollars, whether they are
+ * as-if-metered, and the price row's date, which a listing's estimate names
+ * the month of as the run page does. The note and the breakdown stay on the
+ * run page.
+ */
+function projectListedExpected(c: Pick<CostFigure, "usd" | "basis" | "asIfMetered" | "asOf">): CostFigure {
+  return lean<CostFigure>({ usd: c.usd, basis: c.basis, asIfMetered: c.asIfMetered, asOf: c.asOf });
+}
+
 function projectResultExpected(c: CostFigure): CostFigure {
-  return lean<CostFigure>({ usd: c.usd, basis: c.basis, asIfMetered: c.asIfMetered });
+  return projectListedExpected(c);
 }
 
 /**
@@ -1042,6 +1055,7 @@ function projectSquare(sq: Square): Square {
     minutesToStop: sq.minutesToStop === null ? null : { min: sq.minutesToStop.min, median: sq.minutesToStop.median, max: sq.minutesToStop.max },
     bestLevel: sq.bestLevel,
     costUsd: sq.costUsd,
+    ...(sq.estimatedUsd !== undefined ? { estimatedUsd: sq.estimatedUsd } : {}),
     mismatchedStart: sq.mismatchedStart,
     builds: [...sq.builds],
     runIds: [...sq.runIds],
@@ -1157,8 +1171,8 @@ const TIER_IDS: readonly TierView[] = ["t0", "t1", "t2"];
  * One run in a model's detail panel: the columns the panel prints. The version,
  * series and extra flag, the character's ids and its served model, and the
  * start time are on the run's own page and the results listing; the panel
- * lists the run, its character label, how it ended and what it cost. Of the
- * cost only `actual`, the figure the panel prints.
+ * lists the run, its character label, how it ended and what it cost: the
+ * actual, and the expected figure the panel prints where there is none.
  */
 function projectModelRun(r: ModelRunView): ModelRunView {
   return lean<ModelRunView>({
@@ -1172,7 +1186,17 @@ function projectModelRun(r: ModelRunView): ModelRunView {
     terminationReason: r.terminationReason,
     live: r.live,
     counted: r.counted,
-    ...(r.cost !== undefined ? { cost: r.cost === null ? null : { actual: projectCostFigure(r.cost.actual) } } : {}),
+    ...(r.cost !== undefined
+      ? {
+          cost:
+            r.cost === null
+              ? null
+              : {
+                  actual: projectCostFigure(r.cost.actual),
+                  ...(r.cost.expected !== undefined ? { expected: projectListedExpected(r.cost.expected) } : {}),
+                },
+        }
+      : {}),
   });
 }
 

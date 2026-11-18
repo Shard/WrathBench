@@ -190,6 +190,94 @@ export function fmtCost(
   return `${fmtUsd(c.usd)} ${c.asIfMetered ? "as-if-metered " : ""}(list price, ${when})`;
 }
 
+/** "~$0.42": the tilde is the label that says it is an estimate. */
+export function fmtEstimate(usd: number | null): string {
+  return usd === null ? "—" : `~${fmtUsd(usd)}`;
+}
+
+/** As much of a `CostFigure` as a listing carries; the public build leaves the rest out. */
+export interface ListedFigure {
+  usd: number | null;
+  basis: string;
+  asIfMetered?: boolean;
+  asOf?: string | null;
+  note?: string;
+  backfill?: unknown;
+}
+
+const isPriced = (c: ListedFigure | null | undefined): c is ListedFigure & { usd: number } =>
+  c !== null && c !== undefined && c.basis !== "none" && c.usd !== null;
+
+/**
+ * The run page's line for an expected figure standing in for an actual
+ * ("expected, as-if-metered, 2026-10 prices · no actual"). The month is left
+ * out only where the listing does not carry the price row's date at all.
+ */
+export function expectedLine(e: Pick<ListedFigure, "asIfMetered" | "asOf">): string {
+  const month = e.asOf === undefined ? "" : `, ${e.asOf === null ? "undated" : e.asOf.slice(0, 7)} prices`;
+  return `expected${e.asIfMetered === true ? ", as-if-metered" : ""}${month} · no actual`;
+}
+
+/** One run's cost as a listing shows it (`listCost`). */
+export interface ListCost {
+  /** The figure shown, and the one the column sorts on; null for the blank. */
+  usd: number | null;
+  /** The figure itself, actual or expected, for a caller that formats it its own way. */
+  figure: ListedFigure | null;
+  /** True when the figure is the list-price estimate rather than an actual. */
+  estimate: boolean;
+  /** The cell: "$1.23", "$1.23*" for a backfilled actual, "~$1.23" for an estimate, "—" for neither. */
+  text: string;
+  /** The cell's hover. */
+  title: string;
+}
+
+/**
+ * The hover's first line for a reported figure nobody was charged: a
+ * claude-code run's own `total_cost_usd`, which the CLI computes as if the
+ * session were metered while a subscription pays for it.
+ */
+export const CLI_FIGURE_LINE = "as-if-metered, the CLI's own total_cost_usd · no charge";
+
+/**
+ * The cost a listing shows for one run (operator, 2026-11-18). A provider's
+ * real charge (OpenRouter `usage.cost`, an endpoint's own) shows plain. Every
+ * figure nobody was charged is marked with the estimate's tilde: a claude-code
+ * run's as-if-metered `total_cost_usd`, whose hover names the CLI's figure as
+ * its source, and, where there is no actual at all (an OpenCode Go or codex
+ * run, a provider that reports nothing), the expected figure, the price table
+ * over the run's tokens, with the run page's "expected … · no actual" line.
+ * `blank` is the hover when neither figure exists and the actual says nothing
+ * of why.
+ */
+export function listCost(actual: ListedFigure | null | undefined, expected: ListedFigure | null | undefined, blank: string): ListCost {
+  if (isPriced(actual)) {
+    if (actual.asIfMetered === true) {
+      const note = actual.note ?? "";
+      return {
+        usd: actual.usd,
+        figure: actual,
+        estimate: true,
+        text: `${fmtEstimate(actual.usd)}${costMark(actual)}`,
+        title: note === "" ? CLI_FIGURE_LINE : `${CLI_FIGURE_LINE}\n${note}`,
+      };
+    }
+    return { usd: actual.usd, figure: actual, estimate: false, text: `${fmtUsd(actual.usd)}${costMark(actual)}`, title: actual.note ?? "" };
+  }
+  if (isPriced(expected)) {
+    // The actual's note says why there is none (a subscription endpoint, a provider that reports nothing).
+    const why = actual?.note ?? "";
+    return {
+      usd: expected.usd,
+      figure: expected,
+      estimate: true,
+      text: fmtEstimate(expected.usd),
+      title: why === "" ? expectedLine(expected) : `${expectedLine(expected)}\n${why}`,
+    };
+  }
+  return { usd: null, figure: null, estimate: false, text: "—", title: actual?.note ?? blank };
+}
+
 /**
  * The one sentence every page uses for where a subscription run's cost comes
  * from. A subscription run has no metered bill; for claude-code the figure the

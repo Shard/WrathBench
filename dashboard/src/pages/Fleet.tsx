@@ -42,7 +42,7 @@ import {
   type FleetRow,
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtTokens, fmtUsd, modelDisplay, num, shortRunId, stamp } from "../lib/format";
+import { fmtDuration, fmtTokens, modelDisplay, num, shortRunId, stamp } from "../lib/format";
 import { iconModels } from "../lib/modelmark";
 import { displayError } from "../lib/errors";
 
@@ -299,7 +299,7 @@ function FleetRowView(props: { row: FleetRow }) {
       */}
       <td class="right mono dim" title={tpsTitle(r().tps)}>{tpsLabel(r().tps)}</td>
       {/* The actual figure only, as the episodes page shows it; blank is "not reported", never an estimate. */}
-      <td class="right mono dim" title={r().costNote}>{r().costUsd === null ? "—" : `${fmtUsd(r().costUsd)}${r().costMark}`}</td>
+      <td class="right mono dim" title={r().cost.title}>{r().cost.text}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
     </tr>
   );

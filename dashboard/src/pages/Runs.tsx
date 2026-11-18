@@ -36,7 +36,7 @@ import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { useFeeds } from "../lib/feeds";
-import { costMark, effortLabel, fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { effortLabel, fmtDuration, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import {
@@ -44,7 +44,7 @@ import {
   RUN_COLUMNS,
   clampPage,
   columnClass,
-  costOf,
+  runListCost,
   filterLabel,
   filterParams,
   filterRuns,
@@ -478,8 +478,8 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
         return <td class="right mono dim">{fmtDuration(r().playtimeMs)}</td>;
       case "cost":
         return (
-          <td class="right mono dim" title={r().actualCost?.note ?? "no cost recorded for this run"}>
-            {costOf(r()) === null ? "—" : `${fmtUsd(costOf(r()))}${costMark(r().actualCost)}`}
+          <td class="right mono dim" title={runListCost(r()).title}>
+            {runListCost(r()).text}
           </td>
         );
     }

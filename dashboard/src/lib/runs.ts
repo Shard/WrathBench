@@ -15,7 +15,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
-import { effortLabel } from "./format";
+import { effortLabel, listCost, type ListCost } from "./format";
 import { canonicalModelId } from "../../../infra/model-catalogue";
 
 /**
@@ -55,7 +55,7 @@ export const COLUMN_TITLES: Partial<Record<RunColumn, string>> = {
   level: "the highest level any state sample observed",
   turns: "driver turns the provider reported usage for; model responses where nothing reported",
   duration: "active time: the stretches between a pause and its resume are not charged",
-  cost: "what the provider says it charged; blank where nothing was reported, never the estimate",
+  cost: "what the provider says it charged; where it reported nothing, the list-price estimate over the run's tokens, marked ~",
 };
 
 /* -------------------------------------------------------------- readings */
@@ -145,11 +145,18 @@ export function turnsOf(r: Pick<ResultRun, "tokens" | "modelResponses">): number
   return t !== null && t > 0 ? t : r.modelResponses;
 }
 
-/** The actual cost in dollars, or null for every kind of nothing. */
-export function costOf(r: Pick<ResultRun, "actualCost">): number | null {
-  const c = r.actualCost;
-  if (c === null || c.basis === "none") return null;
-  return c.usd;
+/** The cost column's cell: the actual, else the marked list-price estimate (`listCost`). */
+export function runListCost(r: Pick<ResultRun, "actualCost" | "expectedCost">): ListCost {
+  return listCost(r.actualCost, r.expectedCost, "no cost recorded for this run");
+}
+
+/**
+ * The dollars the cost column shows, and so the ones it sorts on: an estimate
+ * sorts beside the actuals by its figure, because a column that ordered
+ * anything other than the numbers it shows would read as unsorted.
+ */
+export function costOf(r: Pick<ResultRun, "actualCost" | "expectedCost">): number | null {
+  return runListCost(r).usd;
 }
 
 /* ------------------------------------------------------------------ sort */
