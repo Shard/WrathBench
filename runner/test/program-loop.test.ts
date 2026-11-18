@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { ActionHintNote, ProgramFact, ProgramFacts, RoutineRow } from "@wrathbench/mcp";
+import type { ActionHintNote, ProgramFact, ProgramFacts, ProgramLogLine, RoutineRow } from "@wrathbench/mcp";
 import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, routineDetailKey, Scratchpad } from "@wrathbench/mcp";
 import { PROGRAM_FANOUT_RUN_SNIPPET_SENTENCE } from "@wrathbench/mcp/fanout";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
+import { conditionLines, deathLine, foldConsole, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
 import type { DeathCause } from "../src/sandbox/snippet-delta";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
@@ -599,6 +599,59 @@ describe("renderWake", () => {
     expect(m.facts).toEqual([refusal, thrown]);
     expect(m.repeats).toEqual([{ signature: "s", count: 5, ts: 4 }]);
     expect(m.console.total).toBe(7);
+  });
+
+  /** A console entry as a beat drains it. */
+  const logged = (ts: number, text: string, count = 1, o: Partial<ProgramLogLine> = {}): ProgramLogLine => ({ ts, level: "log", routine: "quest", text, count, ...o });
+
+  test("one line repeated across beats is one console entry, counts summed", () => {
+    // As a live wake had it: the stack folds only a line repeating the one before, and each beat starts afresh.
+    const msg = 'loop error state.units() filter: type received "gameobject"';
+    const lines = Array.from({ length: 11 }, (_, k) => logged(NOW - 11_000 + k * 1_000, msg, k % 2 === 0 ? 3 : 2));
+    const text = renderWake(view({ facts: emptyFacts({ console: { lines, total: 28 } }) }));
+    expect(text.slice(text.indexOf("program console:")).split("\n")).toEqual(["program console: 28 lines, last 1 shown, repeats folded", `  [quest] ${msg} ×28`]);
+  });
+
+  test("a folded line stands where it last fell, at its newest time; other lines keep their order", () => {
+    const folded = foldConsole([logged(1, "a"), logged(2, "b", 2), logged(3, "a", 4), logged(4, "c"), logged(5, "b")]);
+    expect(folded).toEqual([logged(3, "a", 5), logged(4, "c"), logged(5, "b", 3)]);
+    const text = renderWake(view({ facts: emptyFacts({ console: { lines: [logged(1, "a"), logged(2, "b"), logged(3, "a")], total: 3 } }) }));
+    expect(text.slice(text.indexOf("program console:")).split("\n")).toEqual(["program console: 3 lines, last 2 shown, repeats folded", "  [quest] b", "  [quest] a ×2"]);
+  });
+
+  test("the same text from another routine, character or level is its own line", () => {
+    const lines = [logged(1, "x"), logged(2, "x", 1, { routine: "grind" }), logged(3, "x", 1, { character: "Alfa" }), logged(4, "x", 1, { level: "warn" }), logged(5, "x")];
+    expect(foldConsole(lines)).toEqual([lines[1]!, lines[2]!, lines[3]!, logged(5, "x", 2)]);
+    const text = renderWake(view({ facts: emptyFacts({ console: { lines, total: 5 } }) }));
+    expect(text.slice(text.indexOf("program console:")).split("\n")).toEqual([
+      "program console: 5 lines, last 4 shown, repeats folded",
+      "  [grind] x",
+      "  [quest (Alfa)] x",
+      "  [quest] warn: x",
+      "  [quest] x ×2",
+    ]);
+  });
+
+  test("two drains fold their console into one span, before the span's cap", () => {
+    const a = emptyFacts({ console: { lines: [logged(1, "same", 3), ...Array.from({ length: 199 }, (_, k) => logged(2 + k, `line ${k}`))], total: 202 } });
+    const b = emptyFacts({ console: { lines: [logged(300, "same", 2)], total: 2 } });
+    const m = mergeFacts(a, b);
+    expect(m.console.total).toBe(204);
+    expect(m.console.lines.length).toBe(200);
+    expect(m.console.lines[0]).toEqual(logged(2, "line 0"));
+    expect(m.console.lines.at(-1)).toEqual(logged(300, "same", 5));
+  });
+
+  test("the character cap holds on folded lines", () => {
+    const big = (k: number, count: number) => logged(NOW - 10 + k, `move ${k % 7} {\n${"  field: value,\n".repeat(40)}}`, count, { routine: "grind" });
+    // Seven distinct entries, each printed twice in separate beats.
+    const lines = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((k) => big(k, 1));
+    const text = renderWake(view({ facts: emptyFacts({ console: { lines, total: 14 } }) }));
+    const con = text.slice(text.indexOf("program console:"));
+    expect(con.length).toBeLessThan(WAKE_CONSOLE_CHARS + 100);
+    expect(con).toStartWith("program console: 14 lines, last 3 shown, repeats folded\n  [grind] move 4 {");
+    expect(con).toContain("move 6 {");
+    expect(con.match(/×2/g)?.length).toBe(3);
   });
 });
 
