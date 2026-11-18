@@ -90,8 +90,10 @@ spec:
               value: /etc/wrathbench/run-pod/pod.json
             - name: WRATHBENCH_RUN_POD_LAUNCHER
               value: /etc/wrathbench/run-pod/launcher.json
-            # For the preflight gate's fixture staging (infra/fixtures/apply.ts
-            # writes acore_characters directly). A benchmark episode cannot
+            # For what writes game state directly from this pod: the worlds'
+            # realm rows and schemas (infra/world.ts), the party stager
+            # (infra/fixtures/stage-party.ts) and a preflight gate smoke's
+            # fixture staging (infra/fixtures/apply.ts). A benchmark episode cannot
             # reach these: sandboxChildEnv forwards the snippet child a named
             # list of variables, and none of these is on it.
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
