@@ -181,6 +181,12 @@ export function stopRequestOf(signal: AbortSignal | undefined): StopRequest | nu
   return { kind: "terminate", detail: typeof r === "string" ? r : "aborted" };
 }
 
+/** Whether a fan-out brief's character is a ghost (its `self.ghost`, the stack's digest folds it into `dead`). */
+function briefGhost(brief: Record<string, unknown> | undefined): boolean {
+  const g = (brief?.["self"] as Record<string, unknown> | undefined)?.["ghost"];
+  return (g !== null && typeof g === "object" && "value" in g ? (g as { value: unknown }).value : g) === true;
+}
+
 export type LoopOutcome =
   | { kind: "terminated"; reason: TerminationReason; detail?: string }
   /** `notBefore`: the provider's stated reset, when the adapter carried one (adapter.ts). */
@@ -305,8 +311,11 @@ export class ContextBuilder {
         eventCount += s.eventCount ?? 0;
         lastSeq += (s.lastSeq ?? -1) + 1;
       }
-      // Each character's level and stream, for a program-loop wake (`WakeSample.seats`).
-      const seats = this.fanoutDigests.map((d) => ({ character: d.character, level: d.level, connected: d.connected }));
+      // Each character's level, stream and whether it is dead or a ghost, for a program-loop wake (`WakeSample.seats`).
+      const seats = this.fanoutDigests.map((d) => {
+        const ghost = briefGhost(snaps[d.character]);
+        return { character: d.character, level: d.level, connected: d.connected, dead: d.dead && !ghost, ghost };
+      });
       return { eventCount, lastSeq, observation: { connected: this.fanoutDigests.every((d) => d.connected) }, seats } as SnapshotLike;
     } catch {
       return null;
@@ -722,13 +731,17 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           onRoutinesShown: (text) => {
             programWake.routinesShown(program.routines());
             // The window keeps a result's head (`capWindowMessage`): routine lines past the cap were never seen, so none count as shown.
-            if (text.length > CONTEXT_POLICY.WINDOW_MESSAGE_CHARS) program.forgetShown();
+            if (text.length > CONTEXT_POLICY.WINDOW_MESSAGE_CHARS) {
+              program.forgetShown();
+              programWake.forgetShown();
+            }
           },
           // What a result carries of the routines' refusals, and of a death, is delivered (`ProgramWake.hintsDelivered`).
           onHintsDelivered: (hints) => programWake.hintsDelivered(hints),
           ...(programPrompt?.yield === true
             ? {
                 yieldWake: async (seconds: number): Promise<string> => {
+                  watchdogs.noteWakeAnswered();
                   const woke = await programWake.sleep(program, {
                     via: "yield",
                     turn,
@@ -876,6 +889,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         lastCut = cut;
         // The results that showed routine errors and values may be gone or folded: the next lines show them whole.
         program?.forgetShown();
+        programWake?.forgetShown();
       }
       lastFold = fold;
       const contextText = await builder.build(turn, pendingNotices, currentWake);
@@ -1044,6 +1058,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // that record after the fact carry, so no reader infers it from shape.
         const dispatchTs = Date.now();
         trajectory.append({ t: "tool_call", turn, name: tc.name, args: argError ?? args, dispatchTs });
+        // Acting, for the no-action half of `idle`: noted before the call runs, so a `yield` counts before its sleep.
+        watchdogs.noteToolCall();
         if (tc.name === "run_snippet" && argError === null) {
           // Log the normalized code: a model that used an alias key (cmd/snippet/
           // source/script/ts) has the real source under that key, and callTool
@@ -1104,6 +1120,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       if (program !== undefined && programWake !== undefined && outcome.turn.toolCalls.length === 0) {
         // The program loop: a reply with no tool call sleeps until a wake,
         // and the wake's block opens every request until the next sleep.
+        watchdogs.noteWakeAnswered();
         const woke = await programWake.sleep(program, {
           via: "turn-end",
           turn,

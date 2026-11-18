@@ -475,7 +475,9 @@ the SPA owns everything that is UI.
   hosts: OpenRouter's synced windows by OpenRouter id, Anthropic's list prices
   by the served ids, a metered endpoint's by its base and id
   (`runner/viewer/pricing.ts` holds the rules for which row a run reads, and no
-  rate). Two things stay rules rather than catalogue rows, because they judge
+  rate). The one exception is a paid run on a subscription endpoint (OpenCode
+  Go) with no endpoint row: it has no per-host bill, so it reads its entry's
+  OpenRouter row through the alias, as-if-metered. Two things stay rules rather than catalogue rows, because they judge
   the shape of an id nobody has seen: the scheduler's Claude-family test
   (`isClaudeFamily`) and the free, contributor and local billing predicates;
   so does `LAB_PROVIDERS` (`runner/src/routing.ts`), which is routing policy

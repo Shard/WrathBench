@@ -173,8 +173,13 @@ producing is never cut for being slow. A failed attempt, a cut stream
 included, is retried whole, and attempts start only inside a 5-minute budget.
 When they run out on network errors before any response the run pauses
 `rate-limited`, or `provider-unresponsive` when the last attempt ended by its
-own clock (the model API sent nothing), a provider pause handled the same way; when they run out on a failed read after the headers (a stall
-or a cut stream) it ends as `adapter-error`. Every retry is on the record as
+own clock (the model API sent nothing), a provider pause handled the same way.
+When they run out on a read after the headers that the last attempt's clock
+ended (silence mid-stream, or the ceiling) the run pauses
+`provider-unresponsive` as well: every request is streamed, so a slow model's
+timeout nearly always lands there (operator, 2026-11-18). A read after the
+headers that failed otherwise (a cut stream, a reset mid-body) ends the run as
+`adapter-error`. Every retry is on the record as
 a `harness` record of kind `adapter_retry` (the attempt it starts, of how
 many, the wait before it, the cause and any status, and the failure's first
 200 characters), never in the model's context, and `bun wb inspect run`
@@ -1342,12 +1347,21 @@ A reply with no tool call sleeps instead of being re-prompted after the step
 interval (`src/wake.ts`). A wake is a routine ending, the first error of a
 signature since a load, the first refusal of a signature in the run (a save
 re-arms none, so a combat routine's ordinary refusals do not wake it after
-every edit; later ones are counted in the next wake), a `wake(reason)` call,
+every edit; later ones are counted in the next wake; a move the code itself
+replaced or stopped, the long-route note on a move that went ahead and a call
+the character's death refused or cut short are no refusals, and the stack
+sends none for them, operator 2026-11-18), a `wake(reason)` call,
 any character's death, the event
-stream closing, a sandbox restart or a harness notice; the first reason opens
-a two-second window so a cascade is one wake, the step interval is the floor
-and five minutes the cap. Level-ups and quest completions do not wake; the
-next wake reports them. `--yield true` adds a `yield` tool held open the same
+stream closing, a sandbox restart or a harness notice; each reason opens a
+window and the sleep ends at the first to close: two seconds, so a cascade is
+one wake, and ten for a death or a refusal (`WAKE_SETTLE_MS`), so a wipe's
+deaths and refusals that land together are one wake; each counts from when
+the sleep learned of the reason. The step interval is the floor and five
+minutes, or a `yield`'s own seconds, the cap, which no window moves.
+Level-ups, quest completions and worn gear crossing into low or broken do not
+wake; the next wake reports them (`worn down since you slept: …`, measured
+against what the last wake reported, at the HUD durability line's
+thresholds). `--yield true` adds a `yield` tool held open the same
 way inside a turn, whose result is the wake. What a wake shows is facts only,
 rendered by a pure function (`renderWake`) and scrubbed of the run's secrets:
 every routine as it stands, new errors with the model's own file lines,
@@ -1356,7 +1370,10 @@ was refused, `[Alfa, Bravo]` after the status, as the stack's hint lines
 do), moves that replaced one another, `wake` calls, what
 changed for the character, and the routines' last console entries (at most
 20, in at most 2,000 characters, since one log call can print an object over
-many lines). Two lines are on the failure path only, for a single character:
+many lines). A routine row that ended more than five minutes ago, once a
+kept block or a routine tool showed it ended, is counted on one line
+(`freshRoutines`, `ROUTINE_ROW_STALE_MS`). Two lines are on the failure path
+only. For a single character:
 a wake that carries a death says `last death: killed by <last hitter>, took
 N in the 10s before: …`, from a latch the child keeps apart from the snippet
 delta's drain (`SnippetDeltaRecorder.takeDeath`, `SandboxHost.deathCause`)
@@ -1364,7 +1381,14 @@ and worded by the same `damageTaken`; and a block no HUD rides with (a
 `yield` result on claude-code and codex, `hud: false`) says
 `character: ghost, died 5m10s ago` (or dead) and the HUD's own durability
 line when worn gear is broken or low. A turn's message and every fixed-loop
-request carry a fresh HUD, so their blocks leave the condition out. A routine's error or returned value is shown whole once; a later
+request carry a fresh HUD, so their blocks leave the condition out. At
+fan-out each line names its character: a `deaths:` block with one line per
+character that died since the last wake, from its own seat's latch
+(`SandboxHost.deathCause(character)`), `characters: Alfa ghost, died 3m10s
+ago; …` where no HUD follows (the roll-up names the dead), and each
+character's durability line on every block, read from its seat
+(`worn_durability`, `SandboxHost.wornDurabilityAll`), since the roll-up
+carries no gear. A routine's error or returned value is shown whole once; a later
 routine line refers to it (`(value shown before)`). The stack's program host
 keeps that ledger for its own tool results and the wake alike; a wake marks
 what it showed only when its block stays in the conversation (a `yield`
@@ -1436,7 +1460,11 @@ resumed run's thread is new, so its first message is plain. The message that rea
 CLI moved to unannounced is the one meant for the old thread: the CLI names
 its thread only once the turn has started.
 
-Time asleep is not `idle`, and a restart the program is blamed for (a blocked
+Time asleep is not `idle`, and neither is a few words at every wake: a model
+that answers its wakes without a tool call is idle once it has done so for as
+many wakes in a row as fit the idle window at the five-minute cap (four, at
+twenty minutes) and has called no tool for the whole window, sleep included
+(operator, 2026-11-18). Any tool call is acting, `yield` included. A restart the program is blamed for (a blocked
 event loop with no snippet in flight) counts toward `snippet-runaway` as a
 snippet's does. A resume finds the workspace where it was, and the stack loads
 the program and starts the routines that were running from the top before the
@@ -1553,7 +1581,8 @@ until the resume re-leases the token, which rotates it.
 ## Watchdogs
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`
-(no model output), `no-xp` (no level/XP progress once progress was first
+(no model output, or on the program loop wakes answered without a tool call
+for the same window), `no-xp` (no level/XP progress once progress was first
 observed; off by default and on every episode, so only a run or a campaign
 definition that names a threshold has it), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).

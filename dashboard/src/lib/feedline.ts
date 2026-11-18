@@ -131,15 +131,20 @@ function whose(routine: string | undefined, who: string | undefined): string {
 
 /**
  * A `program_error` record in words: a fresh refusal or error, or a wake's
- * count of the further occurrences of one since the previous wake. A repeat
- * names its error or refusal by its signature alone, so the line is read off
- * that (`<routine>|<character or seat>|<action>|<status>` for a refusal,
- * `<routine>|<error name>|<file:line>` for an error, `memory|<what>`), and
- * a signature of any other shape is shown as it is.
+ * count of the further occurrences of one since the previous wake. A refusal,
+ * fresh or repeated, carries its `action` and `status`; the private viewer
+ * also has the signature (`<routine>|<character or seat>|<action>|<status>`
+ * for a refusal, `<routine>|<error name>|<file:line>` for an error,
+ * `memory|<what>`), which names the routine and the error. A public window
+ * carries the words and counts alone, and a record written before a repeat
+ * carried its action reads as the count it is, never as a placeholder.
  */
 export function programErrorLine(entry: FeedEntry): { label: string; text: string; title?: string | undefined } {
   const e = entry as unknown as Record<string, unknown>;
   const signature = str(e["signature"]);
+  const action = str(e["action"]);
+  const status = str(e["status"]);
+  const refused = action !== undefined && status !== undefined ? `${action} ${status}` : undefined;
   const repeats = repeatCount(entry);
   if (repeats !== null) {
     const more = `×${repeats.toLocaleString("en-US")} more`;
@@ -148,26 +153,30 @@ export function programErrorLine(entry: FeedEntry): { label: string; text: strin
     const title = [signature, since !== undefined && at !== undefined ? `${stamp(since)} – ${stamp(at)}` : undefined].filter((p) => p !== undefined).join(" · ");
     const span = title.length > 0 ? title : undefined;
     const parts = (signature ?? "").split("|");
+    if (refused !== undefined) {
+      // The routine and the character are the signature's leading parts, on the private viewer only.
+      const who = parts.length >= 4 ? whose(str(parts.slice(0, -3).join("|")), str(parts[parts.length - 3]!)) : "";
+      return { label: "refused", text: `${refused} ${more}${who}`, title: span };
+    }
     if (parts.length === 4) {
-      const [routine, who, action, status] = parts as [string, string, string, string];
-      return { label: "refused", text: `${action} ${status} ${more}${whose(str(routine), str(who))}`, title: span };
+      const [routine, who, a, st] = parts as [string, string, string, string];
+      return { label: "refused", text: `${a} ${st} ${more}${whose(str(routine), str(who))}`, title: span };
     }
     if (parts.length === 2 && parts[0] === "memory") return { label: "program error", text: `memory ${parts[1]} ${more}`, title: span };
     if (parts.length === 3) {
       const [routine, name, place] = parts as [string, string, string];
       return { label: routine.length > 0 ? "routine error" : "program error", text: `${name}${place.length > 0 ? ` at ${place}` : ""} ${more}${whose(str(routine), undefined)}`, title: span };
     }
-    return { label: "repeated", text: `${signature ?? "?"} ${more}`, title: span };
+    return { label: "repeated", text: signature !== undefined ? `${signature} ${more}` : more, title: span };
   }
   // A public window's skeleton: the type and the time, nothing else.
   if (e["kind"] === undefined) return { label: "program error", text: "" };
   const routine = str(e["name"]);
   const who = str(e["seat"]) ?? str(e["character"]);
-  if (e["kind"] === "refusal") {
-    return { label: "refused", text: `${str(e["action"]) ?? "?"} ${str(e["status"]) ?? "?"}${whose(routine, who)}`, title: signature };
-  }
+  if (e["kind"] === "refusal") return { label: "refused", text: `${refused ?? ""}${whose(routine, who)}`.trim(), title: signature };
+  // A public window has neither the routine nor the error's text: the label alone says what happened.
   const error = str(e["error"]);
-  return { label: routine !== undefined ? "routine error" : "program error", text: `${clip(firstLine(error ?? "?"))}${whose(routine, who)}`, title: signature };
+  return { label: routine !== undefined ? "routine error" : "program error", text: `${error !== undefined ? clip(firstLine(error)) : ""}${whose(routine, who)}`.trim(), title: signature };
 }
 
 /** One row as one line. */

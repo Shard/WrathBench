@@ -2215,6 +2215,11 @@ export function projectLiveNearby(windows: unknown, positions: PositionsResponse
  *   `claudeTurn` carries the numbers).
  * - `events_served`: the raw batch, which the summary never carries; the
  *   opcode tally is the public fact.
+ * - `program_error`: `signature`, `name`, `character`, `seat`, `error` and
+ *   `frames` hold routine and character names and a thrown error's free text
+ *   (operator, 2026-11-18); `deploy` is not on the list. What ships is the
+ *   kind, a repeat's count and span, and a refusal's action and status, each
+ *   crossing `PROGRAM_ERROR_VALUE` as a fixed word or a number.
  *
  * Left out because the run page reads nothing of them (operator, 2026-10-18):
  * the raw line's byte range (`start`, `end`), which only the private viewer's
@@ -2244,6 +2249,8 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "id", "name", "categoryId",
   ],
   quest_complete: ["questId"],
+  // Typed per field by `PROGRAM_ERROR_VALUE`: no free text crosses under a listed name.
+  program_error: ["kind", "count", "since", "at", "action", "status"],
   episodic: ["level", "zone", "text"],
   character: ["character"],
   harness: ["kind", "cleared", "model", "cliVersion", "text", "leashChanged", "before", "after", "trigger", "preTokens", "postTokens", "durationMs"],
@@ -2257,6 +2264,23 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   claude_system: ["type", "subtype", "estimated_tokens", "estimated_tokens_delta"],
   meta: ["runId", "harnessVersion", "startedAt", "resumedFresh"],
   driver: ["driver", "harness", "systemPromptChars"],
+};
+
+/**
+ * What each published `program_error` field may hold: the kind, and a
+ * refusal's SDK action and status, as fixed words (`castSpell`, `not_ready`);
+ * a repeat's count and the stamps of its span as numbers. A value of any other
+ * shape is left out, so a field the writer someday fills with prose stays
+ * private under the name the operator made public.
+ */
+const PROGRAM_ERROR_WORD = /^[A-Za-z0-9_]{1,64}$/;
+const PROGRAM_ERROR_VALUE: Readonly<Record<string, (v: unknown) => boolean>> = {
+  kind: (v) => typeof v === "string" && PROGRAM_ERROR_WORD.test(v),
+  action: (v) => typeof v === "string" && PROGRAM_ERROR_WORD.test(v),
+  status: (v) => typeof v === "string" && PROGRAM_ERROR_WORD.test(v),
+  count: (v) => typeof v === "number" && Number.isFinite(v),
+  since: (v) => typeof v === "number" && Number.isFinite(v),
+  at: (v) => typeof v === "number" && Number.isFinite(v),
 };
 
 /**
@@ -2380,6 +2404,7 @@ export function projectEntry(e: EntrySummary, codeIsRepeated = false): EntrySumm
     // spent subscription's names when it resets, which stays the operator's.
     if (e.t === "claude_result" && k === "text" && e["isError"] === true) continue;
     const v = e[k];
+    if (e.t === "program_error" && PROGRAM_ERROR_VALUE[k]?.(v) !== true) continue;
     if (codeIsRepeated && e.t === "tool_call" && k === "args") {
       // The call's `code` is the snippet record's own; what else the call
       // carried (nothing, for run_snippet) still ships.

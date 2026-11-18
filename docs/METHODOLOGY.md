@@ -202,7 +202,9 @@ model-facing failures were feedback failures, and weak models burned episodes
 blind-retrying. The harness repairs an input only when exactly one valid
 reading exists; with two it rejects, explains, and never picks. It never
 changes game semantics or teaches strategy, and error-message text is
-load-bearing surface: changing it is a harness change.
+load-bearing surface: changing it is a harness change. The scratchpad tools
+drop a stray `path` or `file` key, since there is one scratchpad and the key
+can name nothing else (operator, 2026-11-18).
 
 **A name in view is a valid referent, with bounded fuzz** (2026-08-29). A
 player points at things by name, so wherever a helper takes a guid it also
@@ -210,6 +212,15 @@ takes the name of something currently observed. One candidate acts; none, or
 two or more, refuse and say what is in view — the harness never picks between
 plausible referents. Guids are opaque strings, never fuzzed or aliased: a stale
 alias silently naming the wrong unit is the forbidden class.
+
+**The SDK keeps its own sends under the server's flood limits** (operator,
+2026-11-18). The core kicks a session that sends more of some opcodes in a
+second than its AntiDOS table allows, and a model's loop over `questAreas`
+lost its session four times in one run that way. So `questAreas` answers
+again from an answer under a second old or a query still in flight, and
+sends at most 10 a second, under the 25 the core kicks at. A kick tells a
+client nothing, so `session_gone` says only that the server ended the
+session.
 
 **A deadline explains, never caps.** The SDK knows the caller's remaining time
 so a hint can say a walk was always too long; no wait shortens and no call is
@@ -287,16 +298,33 @@ signature since a load and of each refusal signature in the run (operator delega
 next wake), the program's own `wake(reason)`, a death, a
 sandbox restart, the event stream closing or a harness notice, and after five
 minutes at the latest; gaining a level or completing a quest does not wake it,
-and a program that wants either calls `wake()`. What it was already shown in
+and a program that wants either calls `wake()`. A wake waits two seconds after
+its first reason so a cascade is one wake. A death or a refusal settles for ten
+instead, so the deaths and refusals of a wipe that land together reach the
+model as one wake listing all of them, and a `wake()` call, the cap and a
+`yield`'s own seconds are never held by that settle (operator, 2026-11-18). A
+refusal is a failure of the program's own call: a move its code replaced or
+stopped, the long-route note on a move that went ahead, and a call the
+character's death refused or cut short are none, and neither wake it nor are
+recorded as one (operator, 2026-11-18). What it was already shown in
 a tool result wakes no later sleep. The wake block is facts in fixed wording:
 every routine as it stands, new errors and refusals with their hints, what
-changed for the character, and the routines' last console lines, capped. Two
+changed for the character, and the routines' last console lines, capped. A
+routine that ended more than five minutes ago, once a block the model keeps
+or a routine tool showed it ended, is counted on one line rather than listed
+(operator, 2026-11-18). A worn item that crosses into low or broken, by the
+HUD durability line's thresholds, is reported at the next wake, once per
+crossing, naming the item and the level; it does not wake the model, as a
+level or a quest does not (operator, 2026-11-18). Two
 more lines ride the failure path only, so a model whose character never
 falls sees neither (operator delegated, 2026-11-15): a wake that carries a
 death names the last hitter and the damage taken in the ten seconds before
 it, in the snippet delta's words, and a `yield` block that no HUD follows
 says when the character is dead or a ghost, and for how long, and repeats
-the HUD's durability line when worn gear is broken or low. On
+the HUD's durability line when worn gear is broken or low. At fan-out both
+are per character, each naming it: a death line for every character that
+died since the last wake, and the durability lines on every block, since the
+fan-out roll-up carries no gear (operator, 2026-11-18). On
 codex, whose conversation holds what it was sent, the turn's message carries
 the scratchpad only when the thread does not already hold it as it stands; the
 event window goes every time.
@@ -441,6 +469,18 @@ world, invisible to the agent under the observation contract; a run that had
 one is labelled `camera`, which is never part of the condition (operator,
 2026-11-15).
 
+**A model that has stopped acting is idle** (operator, 2026-11-18). The idle
+watchdog ends a run whose model went silent, and on the program loop time
+asleep is not silence. A model that has given up answers every five-minute
+wake in a few words, so it was never silent and held its world to the clock.
+A run whose model answers wakes in a row without a tool call therefore ends
+`idle` as well, once it has done so for the idle window: as many wakes as fit
+the window at the five-minute cap (four at twenty minutes), with no tool call
+across the whole window, sleep included. The window, not the count alone, is
+what keeps a burst of wakes seconds apart from reading as idleness. Any tool
+call is acting, `yield` included: a model that yields while its routine plays
+has acted.
+
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and
 what happens next is the lane's property. Scored lanes end it and the model
@@ -454,7 +494,10 @@ mechanism the scheduler has per model, which consecutive failures climb and
 the operator's clear resets — evidence about an endpoint, not a model
 (operator, 2026-11-14) — a fleet stop or an offline gap is harness weather, and a transport failure mid-episode
 (`adapter-error`) ended the run on the endpoint's clock, so it is never scored
-(2026-08-30).
+(2026-08-30). A response that timed out after its headers arrived is not
+such a failure: a streamed request's timeout nearly always lands there, so,
+like a request that got no answer at all, it pauses the run
+`provider-unresponsive`, a provider's pause (operator, 2026-11-18).
 
 **The tier is the evidence budget.** How much a model runs is one word on its
 roster entry, denominated in runs, and the only thing that sets a run count:

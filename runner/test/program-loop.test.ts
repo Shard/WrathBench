@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, withoutDeathRefusals, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
+import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
 import type { DeathCause } from "../src/sandbox/snippet-delta";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
@@ -701,12 +701,24 @@ describe("ProgramWake", () => {
     const second = c.now();
     const repeats = records.filter((r) => r["t"] === "program_error");
     expect(repeats).toEqual([
-      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 4, since: start, at: first },
-      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 2, since: first, at: second },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 4, since: start, at: first },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 2, since: first, at: second },
       { t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 1, since: first, at: second },
     ]);
     expect(first).toBeGreaterThan(start);
     expect(second).toBeGreaterThan(first + 7_000);
+  });
+
+  test("a refusal's action and status are read off its signature from the right; an error's or memory's signature yields none", () => {
+    expect(refusalOfSignature("grind||castSpell|not_ready")).toEqual({ action: "castSpell", status: "not_ready" });
+    expect(refusalOfSignature("party|Tankpartyb|moveTo|superseded")).toEqual({ action: "moveTo", status: "superseded" });
+    // A routine whose name holds a pipe still gives only the last two words.
+    expect(refusalOfSignature("my|routine|Tankpartyb|moveTo|too_far")).toEqual({ action: "moveTo", status: "too_far" });
+    expect(refusalOfSignature("grind|TypeError|routines/grind.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|routines/x.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|")).toEqual({});
+    expect(refusalOfSignature("|SyntaxError|")).toEqual({});
+    expect(refusalOfSignature("memory|save")).toEqual({});
   });
 
   test("a wake that stays in the conversation marks the routine values it showed; a fixed-loop turn-end wake, never kept, does not", async () => {
@@ -822,7 +834,7 @@ describe("ProgramWake", () => {
     c.schedule(10_000, () => p.push(refusal(c.now(), "drop"), wake));
     const fourth = await wake.sleep(p, { via: "yield", turn: 4, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(fourth.fired).toBe("refusal");
-    expect(fourth.block.split("\n")[0]).toBe("[wake 4 · slept 12s · woke for: new refusal (grind: moveTo drop)]");
+    expect(fourth.block.split("\n")[0]).toBe("[wake 4 · slept 20s · woke for: new refusal (grind: moveTo drop)]");
   });
 
   test("a refusal that lands after the hint drain, before the result returns, still wakes: only what a result carried is delivered", async () => {
@@ -902,7 +914,7 @@ describe("ProgramWake", () => {
     expect(refusalPairOf("cull||moveTo|target_off_mesh")).toBe("|moveTo|target_off_mesh");
     c.schedule(10_000, () => p.push(refusal(c.now(), "walk", "target_off_mesh"), wake));
     const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
-    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 12s · woke for: new refusal (walk: moveTo target_off_mesh)]");
+    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 20s · woke for: new refusal (walk: moveTo target_off_mesh)]");
     // The same refusal from a routine started under a new name is not news.
     c.schedule(10_000, () => p.push(refusal(c.now(), "cull", "target_off_mesh"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true });
@@ -915,31 +927,6 @@ describe("ProgramWake", () => {
     // At fan-out, another character's refusal is its own news.
     c.schedule(10_000, () => p.push(refusal(c.now(), "walk", "drop", "Bravo"), wake));
     expect((await wake.sleep(p, { via: "yield", turn: 4, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true })).fired).toBe("refusal");
-  });
-
-  test("a wake that carries a death does not name the refusals the death caused", async () => {
-    const c = fakeClock(10_000_000);
-    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
-    const p = fakeProgram();
-    const refusal = (ts: number, status: string, hint: string): ProgramFact => ({ kind: "refusal", ts, routine: "cull", deploy: 6, action: "moveTo", status, hint, signature: `cull||moveTo|${status}`, fresh: true });
-    c.schedule(10_000, () => {
-      p.push(refusal(c.now(), "interrupted", "the move stopped because the character died. A corpse cannot move: sdk.repop() releases the spirit, and a ghost can walk."), wake);
-      wake.onDeath(c.now());
-      p.push(refusal(c.now() + 1, "dead", "you are dead"), wake);
-    });
-    const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
-    expect(woke.block.split("\n")[0]).toBe("[wake 1 · slept 12s · woke for: your character died]");
-    // They are still listed among the wake's refusals, with their hints.
-    expect(woke.block).toContain("cull moveTo dead — you are dead");
-    expect(woke.block).toContain("cull moveTo interrupted — the move stopped because the character died.");
-    // An interrupted move with another cause is still news beside a death; with no death in the wake, a dead refusal is too.
-    const r = (o: Partial<WakeReason>): WakeReason => ({ key: "refusal", ts: 1, text: "t", inContext: false, ...o });
-    const died: WakeReason = { key: "died", ts: 1, text: "your character died", inContext: true };
-    expect(withoutDeathRefusals([died, r({ byDeath: true }), r({ text: "other" })]).map((x) => x.text)).toEqual(["your character died", "other"]);
-    expect(withoutDeathRefusals([r({ byDeath: true })]).length).toBe(1);
-    // At fan-out, only the dead character's.
-    const bravoDied: WakeReason = { ...died, character: "Bravo", text: "Bravo died" };
-    expect(withoutDeathRefusals([bravoDied, r({ byDeath: true, character: "Bravo", text: "b" }), r({ byDeath: true, character: "Alfa", text: "a" })]).map((x) => x.text)).toEqual(["Bravo died", "a"]);
   });
 
   test("routine lines a tool result showed count only the routines they showed", async () => {
@@ -1153,6 +1140,52 @@ function programSetup(script: ConstructorParameters<typeof StubAdapter>[0], o: {
 const userOf = (req: ChatRequest): string => String(req.messages[req.messages.length - 1]!.content);
 
 describe("the fixed loop on the program loop", () => {
+  test("a model that answers every wake in words alone ends idle once it has not acted for the idle window (operator, 2026-11-18)", async () => {
+    const talk = { content: "The party did not clear the Deadmines.", toolCalls: [] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => talk)]);
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "idle" });
+    s.options.trajectory.close();
+    const records = readTrajectory(s.dir);
+    // Four five-minute wakes answered without a tool call, then the sleep that found the verdict.
+    expect(records.filter((r) => r.t === "wake").map((w) => w["fired"])).toEqual(["cap", "cap", "cap", "cap", "stopped"]);
+    expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call for \d+ms: 4 wakes in a row answered without one$/);
+  });
+
+  test("a settled wipe is one wake answered, and a model that only talks through wipes still ends idle on the idle window's clock, not sooner", async () => {
+    const talk = { content: "They died again.", toolCalls: [] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 80 }, () => talk)]);
+    // A wipe every minute: three deaths four seconds apart, inside one settle window.
+    for (let k = 1; k <= 40; k++) {
+      ["Alfa", "Bravo", "Charlie"].forEach((name, i) => s.clock.schedule(k * 60_000 + i * 4_000, () => s.wake.onDeath(s.clock.now(), name)));
+    }
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "idle" });
+    s.options.trajectory.close();
+    const records = readTrajectory(s.dir);
+    const died = records.filter((r) => r.t === "wake" && r["fired"] === "died");
+    // Every wipe reached the model whole, as one wake: none was split across two.
+    expect(died.length).toBeGreaterThan(4);
+    for (const w of died) expect(String(w["block"]).split("\n")[0]).toEndWith("woke for: Alfa, Bravo, Charlie died]");
+    // Four wakes in a row came within minutes; the verdict waited for twenty of no tool call, and counted each wipe once.
+    const detail = String(records.find((r) => r.t === "watchdog")?.["detail"]);
+    const m = /^no tool call for (\d+)ms: (\d+) wakes in a row answered without one$/.exec(detail);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(20 * 60_000);
+    expect(Number(m![2])).toBeLessThanOrEqual(died.length);
+    expect(Number(m![2])).toBeGreaterThanOrEqual(died.length - 1);
+  });
+
+  test("a model that yields at every wake has acted, however long its routine plays", async () => {
+    const yieldTurn = { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 300 } }] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => yieldTurn)], { yield: true });
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "stub-complete" });
+  });
+
   test("a reply with no tool call sleeps; the wake opens every request until the next sleep", async () => {
     const s = programSetup([
       { content: "starting", toolCalls: [{ name: "start_routine", arguments: { name: "trip" } }] },
@@ -1484,7 +1517,7 @@ describe("the program loop at fan-out", () => {
     const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(first.fired).toBe("refusal");
     expect(first.block.split("\n")).toEqual([
-      "[wake 1 · slept 12s · woke for: new refusal (party: castSpell not_ready [Alfa]); new refusal (party: castSpell not_ready [Bravo]); new refusal (party: castSpell out_of_range [Bravo])]",
+      "[wake 1 · slept 20s · woke for: new refusal (party: castSpell not_ready [Alfa]); new refusal (party: castSpell not_ready [Bravo]); new refusal (party: castSpell out_of_range [Bravo])]",
       "routines: none started",
       "no routine is running",
       "refusals:",
@@ -1501,7 +1534,7 @@ describe("the program loop at fan-out", () => {
     c.schedule(20_000, () => p.push(refusal(c.now(), "Charlie", "not_ready"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(second.fired).toBe("refusal");
-    expect(second.block.split("\n")[0]).toBe("[wake 2 · slept 22s · woke for: new refusal (party: castSpell not_ready [Charlie])]");
+    expect(second.block.split("\n")[0]).toBe("[wake 2 · slept 30s · woke for: new refusal (party: castSpell not_ready [Charlie])]");
     expect(second.block).toContain("refusals:\n  party castSpell not_ready [Charlie, Alfa] — the spell is not ready ×2\n  party castSpell out_of_range [Bravo] — move closer");
   });
 
@@ -1513,7 +1546,7 @@ describe("the program loop at fan-out", () => {
       c.schedule(20_000, () => wake.onDeath(c.now(), "Bravo"));
       const woke = await wake.sleep(p, { via: "yield", turn, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
       expect(woke.fired).toBe("died");
-      expect(woke.block.split("\n")[0]).toBe(`[wake ${turn} · slept 22s · woke for: Bravo died]`);
+      expect(woke.block.split("\n")[0]).toBe(`[wake ${turn} · slept 30s · woke for: Bravo died]`);
     }
   });
 
@@ -1530,7 +1563,7 @@ describe("the program loop at fan-out", () => {
     c.schedule(40_000, () => wake.onDeath(c.now(), "Bravo"));
     const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(first.fired).toBe("died");
-    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 42s · woke for: Bravo died]");
+    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 50s · woke for: Bravo died]");
     expect(first.block).toContain("since you slept: Alfa level 20 → 21 · quests completed 0 · deaths 0");
     c.schedule(10_000, () => wake.onSample({ seats: seats(21, false) }));
     const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });

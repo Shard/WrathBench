@@ -185,3 +185,149 @@ describe("level-target: a probe campaign's stopping rule", () => {
     expect(w.check()).toBeNull();
   });
 });
+
+describe("idle: a model that answers wakes without acting (operator, 2026-11-18)", () => {
+  const MIN = 60_000;
+  const tier = watchdogConfigSchema.parse({ idleMs: 20 * MIN, noXpMs: 0, episodeMs: 240 * MIN, maxSandboxRestarts: 3 });
+  /** One wake answered in words alone: the reply, then the program loop's next sleep. */
+  const talk = (w: Watchdogs): void => {
+    w.noteModelOutput();
+    w.noteWakeAnswered();
+  };
+
+  test("four five-minute wakes answered with text alone, twenty minutes after the last tool call, end the run idle", () => {
+    // The Deadmines pattern: a turn that acted, then a few words at every five-minute wake.
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteToolCall();
+    w.noteModelOutput();
+    w.noteWakeAnswered();
+    for (let k = 1; k <= 3; k++) {
+      c.tick(5 * MIN);
+      talk(w);
+      expect(w.check()).toBeNull();
+    }
+    c.tick(5 * MIN);
+    talk(w);
+    expect(w.check()).toEqual({ reason: "idle", detail: `no tool call for ${20 * MIN}ms: 4 wakes in a row answered without one` });
+  });
+
+  test("the replies keep the output clock fresh: without the no-action rule the run would hold its world to the limit", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    // Asleep between wakes: the output clock is held, as the program loop holds it.
+    for (let k = 0; k < 3; k++) {
+      w.noteAsleep();
+      c.tick(5 * MIN);
+      w.noteAwake();
+      w.noteModelOutput();
+      expect(w.check()).toBeNull();
+      w.noteWakeAnswered();
+    }
+    w.noteAsleep();
+    c.tick(5 * MIN);
+    w.noteAwake();
+    w.noteModelOutput();
+    w.noteWakeAnswered();
+    expect(w.check()?.reason).toBe("idle");
+  });
+
+  test("a burst of fast wakes answered without acting is not twenty minutes of it", () => {
+    // Deaths and refusals woke the Sonnet run seconds apart; it answered in words and acted again later.
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    for (let k = 0; k < 12; k++) {
+      c.tick(10_000);
+      talk(w);
+    }
+    expect(w.check()).toBeNull();
+    c.tick(MIN);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    c.tick(5 * MIN);
+    talk(w);
+    expect(w.check()).toBeNull();
+  });
+
+  test("twenty minutes without a tool call is not enough on fewer wakes than fit the window", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    c.tick(5 * MIN);
+    talk(w);
+    // One long awake stretch of talk, under the output clock's own limit at every reply.
+    c.tick(15 * MIN);
+    w.noteModelOutput();
+    c.tick(MIN);
+    talk(w);
+    expect(w.check()).toBeNull();
+  });
+
+  test("a yield is acting: a model that yields every five minutes while its routine plays never goes idle", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    // Three hours and twenty minutes of it, inside the four-hour clock.
+    for (let k = 0; k < 40; k++) {
+      // The call is noted at dispatch, before the sleep it starts.
+      w.noteToolCall();
+      w.noteWakeAnswered();
+      w.noteAsleep();
+      c.tick(5 * MIN);
+      w.noteAwake();
+      w.noteModelOutput();
+      expect(w.check()).toBeNull();
+    }
+  });
+
+  test("any tool call resets the count and the clock", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    for (let k = 0; k < 3; k++) {
+      c.tick(5 * MIN);
+      talk(w);
+    }
+    c.tick(MIN);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    for (let k = 0; k < 3; k++) {
+      c.tick(5 * MIN);
+      talk(w);
+    }
+    expect(w.check()).toBeNull();
+    c.tick(5 * MIN);
+    talk(w);
+    expect(w.check()?.reason).toBe("idle");
+  });
+
+  test("the count is the idle window over the wake cap: two wakes at a ten-minute window", () => {
+    const c = clock();
+    const w = new Watchdogs(watchdogConfigSchema.parse({ idleMs: 10 * MIN, noXpMs: 0, episodeMs: 240 * MIN, maxSandboxRestarts: 3 }), c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    c.tick(5 * MIN);
+    talk(w);
+    expect(w.check()).toBeNull();
+    c.tick(5 * MIN);
+    talk(w);
+    expect(w.check()?.detail).toBe(`no tool call for ${10 * MIN}ms: 2 wakes in a row answered without one`);
+  });
+
+  test("off with the idle watchdog", () => {
+    const c = clock();
+    const w = new Watchdogs(watchdogConfigSchema.parse({ idleMs: 0, noXpMs: 0, episodeMs: 0, maxSandboxRestarts: 3 }), c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    for (let k = 0; k < 40; k++) {
+      c.tick(5 * MIN);
+      talk(w);
+    }
+    expect(w.check()).toBeNull();
+  });
+});

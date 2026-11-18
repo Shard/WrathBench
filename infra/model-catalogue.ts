@@ -27,7 +27,10 @@
  *
  * **Prices** are matched on the id the *provider* bills under, exactly — never
  * through an alias, since the same model is different money on different
- * hosts (`runner/viewer/pricing.ts` says in what order). An OpenRouter row is
+ * hosts (`runner/viewer/pricing.ts` says in what order). The one exception is
+ * a subscription endpoint's paid run with no endpoint row (OpenCode Go's
+ * `glm-5.3`): a flat plan has no per-host bill, so it reads its entry's
+ * OpenRouter row through the alias, as-if-metered (`subscriptionListPrice`). An OpenRouter row is
  * keyed by its OpenRouter id and written by `infra/sync-prices.ts`; an
  * Anthropic row and an endpoint row list their ids (`ids`, defaulting to the
  * entry's key). Rates are windowed: a list in date order, the first with no
@@ -101,7 +104,7 @@ export interface CatalogueProvider {
   subscription?: boolean;
 }
 
-/** One OpenRouter id's synced windows. An empty list is an id the catalogue no longer prices. */
+/** One OpenRouter id's synced windows. A sync only appends; an empty list is an id emptied before it kept history. */
 export interface OpenRouterPrice {
   windows: readonly RateWindow[];
   /** Why the id is unpriced for good: OpenRouter delisted it, so no sync can bring a rate back. */
@@ -410,8 +413,8 @@ export function priceTables(cat: ModelCatalogue): {
     const p = entry.prices;
     if (p === undefined) continue;
     for (const [id, row] of Object.entries(p.openrouter ?? {})) {
-      // An emptied id is one the catalogue stopped pricing: asked for again on
-      // every sync, and read as having no row at all.
+      // An empty list (an id emptied before the sync kept history) is asked
+      // for again on every sync, and read as having no row at all.
       if (row.windows.length > 0) synced[id] = row.windows;
       if (row.delisted !== undefined) delisted[id] = row.delisted;
     }

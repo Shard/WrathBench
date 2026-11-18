@@ -439,8 +439,10 @@ describe("the hand-held provider table", () => {
     for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5", "deepseek-v4.1-flash"]) {
       expect(rosterPriceGap({ model: m, apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
     }
-    // A Go model with no row yet is told where its row goes, never to run the sync.
-    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("prices.endpoints");
+    // A Go model with no row of its own is priced through its catalogue alias (glm-53's entry).
+    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
+    // One no entry lists is told to add the alias or a row, never to run the sync.
+    expect(rosterPriceGap({ model: "nobody-catalogued-this-1", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("aliases");
     // And a provider-reported charge on this base is never called OpenRouter's.
     const c = runCost({ run: { ...go, model: "mimo-v2.5" }, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 1_000_000 }), reportedUsd: 0.5, coverage: { costed: 1, uncosted: 0 } });
     expect(c.actual.note).not.toContain("OpenRouter");
@@ -507,18 +509,15 @@ describe("the hand-held provider table", () => {
     expect(asOfDated.note).not.toContain("in force from");
   });
 
-  test("the rows live outside an entry's prices.openrouter, where a sync would empty them", () => {
+  test("the rows live outside an entry's prices.openrouter, which the sync owns", () => {
     for (const p of ENDPOINT_PRICES) {
       expect(OPENROUTER_PRICES.models[p.model]).toBeUndefined();
       expect(OPENROUTER_PRICES.models[p.id]).toBeUndefined();
     }
-    // The failure the table exists to avoid, on the sync's own merge step: a
-    // hand-typed Cerebras row in the synced file does not survive a catalogue
-    // that does not carry the id.
+    // A sync whose catalogue carries none of them leaves the hand table
+    // answering the same run.
     const catalogue = Object.fromEntries(Object.entries(OPENROUTER_PRICES.models).map(([id, ws]) => { const { from: _f, ...r } = ws[ws.length - 1]!; return [id, r]; }));
-    const smuggled = { ...OPENROUTER_PRICES.models, "qwen-3.8-27b": [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }] };
-    expect(mergeWindows(smuggled, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
-    // While the hand table still answers the same run after that sync.
+    expect(mergeWindows(OPENROUTER_PRICES.models, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
     expect(priceFor(cerebras)?.input).toBe(0.99);
   });
 
@@ -705,11 +704,29 @@ describe("a sync that re-reads the catalogue", () => {
     expect(windowAt(second[id]!, Date.parse("2026-08-24"))!.input).toBe(0.075);
   });
 
-  test("an id the catalogue no longer prices is dropped, and a new id starts on an undated window", () => {
-    const { "z-ai/glm-5.3": _gone, ...rest } = catalogue;
-    const fresh = { ...rest, "vendor/new-model": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 } };
+  test("an id the catalogue no longer prices keeps every window, and its runs keep their price", () => {
+    const { "z-ai/glm-5.3-flash": _gone, ...rest } = catalogue;
+    const after = mergeWindows(current, rest, "2099-09-09");
+    expect(after["z-ai/glm-5.3-flash"]).toEqual(current["z-ai/glm-5.3-flash"] as typeof after[string]);
+    // The August run reads the same window it did before the id was dropped.
+    expect(windowAt(after["z-ai/glm-5.3-flash"]!, Date.parse("2026-08-24"))!.input).toBe(0.075);
+    // A sync whose catalogue carries nothing at all is the same case for every id.
+    expect(mergeWindows(current, {}, "2099-09-09") as unknown).toEqual(current);
+    // An emptied id has nothing to keep and stays out of the answer.
+    expect(mergeWindows({ "a/gone": [] }, {}, "2099-09-09")["a/gone"]).toBeUndefined();
+  });
+
+  test("a changed rate appends one window from today; an unchanged one adds nothing", () => {
+    const id = "z-ai/glm-5.3-flash";
+    const moved = { ...catalogue[id]!, output: catalogue[id]!.output + 1 };
+    const after = mergeWindows(current, { ...catalogue, [id]: moved }, "2099-09-09");
+    expect(after[id]).toEqual([...current[id]!, { ...moved, from: "2099-09-09" }]);
+    for (const other of Object.keys(current)) if (other !== id) expect(after[other]).toEqual(current[other] as typeof after[string]);
+  });
+
+  test("a new id starts on an undated window", () => {
+    const fresh = { ...catalogue, "vendor/new-model": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 } };
     const after = mergeWindows(current, fresh, "2026-09-09");
-    expect(after["z-ai/glm-5.3"]).toBeUndefined();
     expect(after["vendor/new-model"]).toEqual([{ input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }]);
     // No prior file at all is the same case for every id.
     expect(mergeWindows(undefined, { "a/b": { input: 1, output: 2, cacheRead: 0, cacheWrite: 1 } }, "2026-09-09")["a/b"]![0]!.from).toBeUndefined();
@@ -939,11 +956,65 @@ describe("a run on the OpenCode Go subscription", () => {
     expect(runCost({ run: go, tokens: e360, reportedUsd: null }).actual.note).toContain("reported no usage.cost");
   });
 
-  test("a paid Go model with no row reads unpriced, never as its responses' $0", () => {
-    const c = runCost({ run: { ...go, model: "glm-5.3" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+  /*
+   * A Go model with no endpoint row of its own reads its catalogue entry's
+   * OpenRouter row through the entry's alias: Go's `glm-5.3` is the
+   * catalogue's `z-ai/glm-5.3`. At 2026-11-16 that is the window from
+   * 2026-10-28: $0.0699 in, $1.40 out, $0.0689 cache read.
+   */
+  const glmAt = Date.parse("2026-11-16T06:08:01Z");
+  const glmUsd = ((17_763_781 - 12_862_592) * 0.0699 + 12_862_592 * 0.0689 + 1_047_384 * 1.4) / 1e6;
+
+  test("a Go model with no endpoint row is priced at its catalogue entry's listing, as-if-metered", () => {
+    const c = runCost({ run: { ...go, model: "glm-5.3", startedAt: glmAt }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.usd).toBeNull();
+    expect(c.actual.note).toContain("usage.cost was $0 on 771 of 771 responses");
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.priceId).toBe("z-ai/glm-5.3");
+    expect(c.expected.asIfMetered).toBe(true);
+    expect(c.expected.asOf).toBe("2026-10-28");
+    expect(c.expected.usd).toBeCloseTo(glmUsd, 6);
+    // Said as the alias it went through, and never as the OpenRouter balance's bill.
+    expect(c.expected.note).toContain("glm-5.3 is the catalogue's z-ai/glm-5.3");
+    expect(c.expected.note).toContain("subscription");
+    expect(c.expected.note).not.toContain("operator's OpenRouter balance");
+    expect(c.usd).toBe(c.expected.usd);
+  });
+
+  test("the same Go model past its allowance keeps the Extra Usage in both notes, the listing as its cost", () => {
+    const c = runCost({ run: { ...go, model: "glm-5.3", startedAt: glmAt }, tokens: e360, reportedUsd: 0.0042, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.note).toContain("$0.0042");
+    expect(c.actual.note).toContain("Extra Usage");
+    expect(c.expected.usd).toBeCloseTo(glmUsd, 6);
+    expect(c.expected.note).toContain("$0.0042");
+  });
+
+  test("a hand-held Go row still wins over the alias: DeepSeek reads the Go listing, not OpenRouter's", () => {
+    const c = runCost({ run: { ...go, startedAt: glmAt }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.expected.priceId).toBe("opencode-go/deepseek-v4.1-flash");
+    expect(c.expected.asIfMetered).toBe(true);
+  });
+
+  test("a Go id spelled as an OpenRouter id is priced as-if-metered, never as billed to the OpenRouter balance", () => {
+    const row = priceFor({ ...go, model: "z-ai/glm-5.3" }, glmAt)!;
+    expect(row.id).toBe("z-ai/glm-5.3");
+    expect(row.asIfMetered).toBe(true);
+    expect(row.note).not.toContain("operator's OpenRouter balance");
+  });
+
+  test("a paid Go model the catalogue cannot name reads unpriced, never as its responses' $0", () => {
+    const c = runCost({ run: { ...go, model: "nobody-catalogued-this-1" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
     expect(c.actual.basis).toBe("none");
     expect(c.expected.basis).toBe("none");
-    expect(c.expected.note).toContain("prices.endpoints");
+    expect(c.expected.note).toContain("aliases");
+    // An entry whose only OpenRouter row is its `:free` one is not read as free for a paid Go run.
+    const freeOnly = runCost({ run: { ...go, model: "dots-studio/dots-3-note-preview" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(freeOnly.expected.basis).toBe("none");
+    expect(freeOnly.expected.usd).toBeNull();
+    // A declared-free launch on the base keeps its own reading.
+    expect(priceFor({ ...go, model: "glm-5.3", declaredBilling: "free" })?.id).toBe("declared-free");
   });
 
   test("a free Go slug stays free, and keeps its own reading", () => {

@@ -19,6 +19,7 @@ import { type CodexUsage, codexUsageDelta } from "../runner/src/codex-usage";
 import { DRIVER_LIST } from "../runner/src/drivers";
 import { readRunRow } from "../runner/src/run-reader";
 import { Trajectory } from "../runner/src/trajectory";
+import { OPENROUTER_PRICES } from "./model-catalogue";
 import { priceFor } from "../runner/viewer/pricing";
 import { scanRunTotals } from "../runner/viewer/tail";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
@@ -94,6 +95,10 @@ const V1 = "run-v1";
     reading(40, { level: 3, xp: 0 }),
   ]);
 }
+
+/** A paid run on OpenCode Go, whose responses report the allowance's $0. */
+const GO = "run-go";
+await writeRun(GO, { driver: "openai", model: "glm-5.3", apiBase: "https://opencode.ai/inference/go/openai/v1" }, [0, 6].flatMap((m, i) => openrouter(T0 + m * MIN + 10_000, i + 1, { cost: 0 })), T0 + 20 * MIN);
 
 /** The same run with the adapter's retries on the record between each request and its response (`adapter_retry`). */
 const V1_RETRIED = "run-v1-retried";
@@ -329,11 +334,24 @@ describe("the rules it shares with the runner and the viewer", () => {
     }
   });
 
+  test("a subscription run's reported $0 is named the allowance's, and its tokens are priced at list through the alias", async () => {
+    const r = await readout(GO);
+    expect(r.price).toMatchObject({ id: "z-ai/glm-5.3" });
+    expect(r.windows[0]!.reportedUsd).toBe(0);
+    expect(r.windows[0]!.pricedUsd).toBeGreaterThan(0);
+    expect(r.notes.some((n) => n.startsWith("a subscription endpoint (OpenCode Go): cost reported is its usage.cost"))).toBe(true);
+    // An OpenRouter run carries no such note.
+    expect((await readout(V1)).notes.some((n) => n.includes("subscription endpoint"))).toBe(false);
+  });
+
   test("the price row is the viewer's, at the run's start and at another day", () => {
     const cat = JSON.parse(readFileSync(join(import.meta.dir, "model-catalogue.json"), "utf8")) as Record<string, unknown>;
     const runs = [
       { model: "deepseek/deepseek-v4.1-flash", driver: "openai", apiBase: "https://openrouter.ai/api/v1" },
       { model: "deepseek-v4.1-flash", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
+      // A Go model with no row of its own: its catalogue entry's OpenRouter row, through the alias.
+      { model: "glm-5.3", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
+      { model: "z-ai/glm-5.3", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
       { model: "gpt-6-astra", driver: "codex", apiBase: null },
       { model: "sonnet", driver: "claude-code", apiBase: null, resolvedModel: "claude-fable-5-1" },
       { model: "vendor/flash-model:free", driver: "openai", apiBase: "https://openrouter.ai/api/v1" },
@@ -354,8 +372,18 @@ describe("the rules it shares with the runner and the viewer", () => {
     // What it does not price, it says rather than guesses.
     expect(requestPrice(cat, { model: "qwen/qwen3.8-27b", driver: "openai", apiBase: "http://10.0.0.5:8000/v1", resolvedModel: null, billing: null }, NOW)).toMatchObject({ none: expect.stringContaining("no row here") });
     expect(requestPrice(null, { model: "x", driver: "openai", apiBase: null, resolvedModel: null, billing: null }, NOW)).toMatchObject({ none: expect.stringContaining("no price table") });
+    const go = { driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1", resolvedModel: null, billing: null };
+    expect(requestPrice(cat, { ...go, model: "glm-5.3" }, NOW)).toMatchObject({ id: "z-ai/glm-5.3", basis: expect.stringContaining("as-if-metered") });
+    // A Go id no entry names, and an entry whose only OpenRouter row is `:free`, stay unpriced as the viewer leaves them.
+    for (const model of ["nobody-catalogued-this-1", "dots-studio/dots-3-note-preview"]) {
+      expect(priceFor({ model, apiBase: go.apiBase, driver: "openai", harness: null, platform: null, declaredBilling: null } as never, NOW)).toBeNull();
+      expect(requestPrice(cat, { ...go, model }, NOW)).toMatchObject({ none: expect.stringContaining("no listed price") });
+    }
   });
 });
+
+/** The fixture model's newest OpenRouter window: the one in force on a 2030 run. */
+const NEWEST = () => OPENROUTER_PRICES.models["deepseek/deepseek-v4.1-flash"]!.at(-1)!;
 
 describe("a v1 run", () => {
   test("per request, per turn and per hour, priced at the catalogue's row and pinned to the viewer's totals", async () => {
@@ -373,9 +401,11 @@ describe("a v1 run", () => {
     const viewer = scanned.tokens;
     expect(totals(w)).toEqual({ prompt: viewer.promptTokens, cached: viewer.cacheReadTokens!, output: viewer.completionTokens });
     expect(w.reportedUsd).toBeCloseTo(scanned.reportedCostUsd!, 12);
-    // 3,600 uncached, 2,400 read and 300 out at the row in force on T0 (2030: the newest window).
-    expect(r.price).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", input: 0.14, output: 0.42, cacheRead: 0.0042 });
-    expect(w.pricedUsd).toBeCloseTo((2400 * 0.14 + 3600 * 0.0042 + 300 * 0.42) / 1e6, 12);
+    // 2,400 uncached, 3,600 read and 300 out at the row in force on T0 (2030:
+    // the newest window, read from the file so a price sync does not break it).
+    const row = NEWEST();
+    expect(r.price).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", input: row.input, output: row.output, cacheRead: row.cacheRead });
+    expect(w.pricedUsd).toBeCloseTo((2400 * row.input + 3600 * row.cacheRead + 300 * row.output) / 1e6, 12);
   });
 
   test("a retry record between a request and its response changes none of its figures", async () => {
@@ -426,7 +456,8 @@ describe("a v1 run", () => {
     expect(r.code).toBe(0);
     const text = r.out.join("\n");
     expect(text).toContain(`${V1}: model requests over run, to L2, to 90m, UTC`);
-    expect(text).toMatch(/^price {5}deepseek\/deepseek-v4\.1-flash at \$0\.14\/\$0\.42/m);
+    const row = NEWEST();
+    expect(text).toContain(`\nprice     deepseek/deepseek-v4.1-flash at $${row.input}/$${row.output}/$${row.cacheRead}/$${row.cacheWrite} per M`);
     expect(text).toMatch(/^requests +6 +5 +not reached$/m);
     expect(text).toMatch(/^uncached in\/request +400 +400 +not reached$/m);
     expect(text).toMatch(/^stall minutes +35\.0 \(\+20\.0\?\) +25\.0 +not reached$/m);
