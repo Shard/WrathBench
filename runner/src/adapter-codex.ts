@@ -789,8 +789,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
    */
   const thread = threadContextOf(config) ? new ThreadContext() : undefined;
   /** `floorMs`: a capacity retry's backoff, which no wake cuts short; else the step interval. */
-  const sleepFor = (via: "turn-end" | "yield", capMs: number, floorMs?: number) =>
-    programWake!.sleep(program!, {
+  const sleepFor = (via: "turn-end" | "yield", capMs: number, floorMs?: number) => {
+    watchdogs.noteWakeAnswered();
+    return programWake!.sleep(program!, {
       via,
       turn,
       capMs,
@@ -803,6 +804,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // A yield result and a turn's message alike stay in the thread.
       kept: true,
     });
+  };
 
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
   const toolCtx: ToolContext = {
@@ -945,6 +947,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
                 return;
               }
               toolCalls++;
+              // Acting, at dispatch: a `yield` counts before the sleep it starts (`Watchdogs.noteToolCall`).
+              watchdogs.noteToolCall();
               watchdogs.noteModelOutput();
             }
             restartsBefore = o.sandbox.totalRestarts;
@@ -1540,6 +1544,10 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
       for (const c of followed.toolCalls) trajectory.append(codexToolCallRecord(turn, c));
+      // The CLI's own calls are acting too, read after the turn and so stamped
+      // at its end, before the sleep that follows it: the later stamp only
+      // ever holds off the no-action half of `idle`, never brings it on.
+      if (followed.toolCalls.length > 0) watchdogs.noteToolCall();
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
       // A compacted thread no longer holds the pad as it was sent: the next
       // message sends it whole. A turn whose rollout could not be read may

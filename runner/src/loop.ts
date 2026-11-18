@@ -741,6 +741,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           ...(programPrompt?.yield === true
             ? {
                 yieldWake: async (seconds: number): Promise<string> => {
+                  watchdogs.noteWakeAnswered();
                   const woke = await programWake.sleep(program, {
                     via: "yield",
                     turn,
@@ -1057,6 +1058,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // that record after the fact carry, so no reader infers it from shape.
         const dispatchTs = Date.now();
         trajectory.append({ t: "tool_call", turn, name: tc.name, args: argError ?? args, dispatchTs });
+        // Acting, for the no-action half of `idle`: noted before the call runs, so a `yield` counts before its sleep.
+        watchdogs.noteToolCall();
         if (tc.name === "run_snippet" && argError === null) {
           // Log the normalized code: a model that used an alias key (cmd/snippet/
           // source/script/ts) has the real source under that key, and callTool
@@ -1117,6 +1120,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       if (program !== undefined && programWake !== undefined && outcome.turn.toolCalls.length === 0) {
         // The program loop: a reply with no tool call sleeps until a wake,
         // and the wake's block opens every request until the next sleep.
+        watchdogs.noteWakeAnswered();
         const woke = await programWake.sleep(program, {
           via: "turn-end",
           turn,

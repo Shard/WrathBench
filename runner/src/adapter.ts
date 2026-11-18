@@ -80,10 +80,15 @@
  * - Attempts exhausted on network errors that never got a response (no
  *   status, before the headers; a timer firing there included) PAUSE
  *   (`provider-unresponsive` when the last attempt ended by its own timer,
- *   `rate-limited` otherwise), as do attempts exhausted on 5xx (`rate-limited`). Attempts exhausted on a
- *   failed read after the headers — a stall mid-stream, either timer firing
- *   there, a cut or malformed stream — end as `adapter-error`, as a failed
- *   body read always has.
+ *   `rate-limited` otherwise), as do attempts exhausted on 5xx (`rate-limited`).
+ *   Attempts exhausted on a read after the headers that the last attempt's
+ *   own timer ended — silence mid-stream, or the ceiling — PAUSE as
+ *   `provider-unresponsive` too (operator, 2026-11-18): every request is
+ *   streamed, so for a slow local model nearly every timeout lands after the
+ *   headers, and ending those as `adapter-error` ended such a run on its
+ *   endpoint's clock after a single attempt. A read that failed otherwise —
+ *   a cut or malformed stream, a reset mid-body — still ends as
+ *   `adapter-error`.
  * - A 2xx whose body is an empty answer — a null or empty `choices`, or a
  *   first choice with no `message`, and no error object — is retried like a
  *   5xx: the provider served nothing, which is its fault, not the model's
@@ -1420,6 +1425,18 @@ export class OpenAiChatAdapter implements ChatAdapter {
         kind: "pause",
         reason: lastCause === "timeout" ? "provider-unresponsive" : "rate-limited",
         detail: `persistent network failure after ${made} attempt(s): ${lastError}`,
+      };
+    }
+    // The same for a read after the headers that the attempt's own clock
+    // ended: the model API went silent mid-stream, or kept it open past the
+    // ceiling. A streamed request's timeout nearly always lands here, so this
+    // is the timeout above by another route (operator, 2026-11-18). A cut or
+    // malformed stream is not a timeout and still ends below.
+    if (lastStatus === undefined && lastCause === "timeout" && lastError.startsWith("body read failed:")) {
+      return {
+        kind: "pause",
+        reason: "provider-unresponsive",
+        detail: `persistent body-read timeout after ${made} attempt(s): ${lastError}`,
       };
     }
     // Attempts exhausted on empty answers: the provider served nothing, the

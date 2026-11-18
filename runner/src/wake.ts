@@ -1220,7 +1220,7 @@ export class ProgramWake {
       block,
     });
     // `count` is the occurrences since the previous wake, not a running total: `since` and `at` say which span.
-    for (const r of facts.repeats) this.o.trajectory.append({ t: "program_error", kind: "repeat", signature: r.signature, count: r.count, since: this.drainedAt, at: now });
+    for (const r of facts.repeats) this.o.trajectory.append({ t: "program_error", kind: "repeat", signature: r.signature, ...refusalOfSignature(r.signature), count: r.count, since: this.drainedAt, at: now });
     this.drainedAt = now;
     return { block, fired: woke.fired, sleptMs: woke.sleptMs };
   }
@@ -1319,6 +1319,22 @@ export function conditionLines(sample: WakeSample | null, diedAt: number | undef
   const worn = durabilityLine(sample.inventory);
   if (worn !== undefined) out.push(worn);
   return out;
+}
+
+/**
+ * A refusal's action and status, read off its signature, so a repeat carries
+ * them as its own fields as a fresh refusal does: the stack counts repeats by
+ * signature alone. A refusal's signature ends in the SDK's action and status
+ * (`<routine>|<character or seat>|<action>|<status>`), both plain words; an
+ * error's ends in a `file:line` or nothing and a memory signature has two
+ * parts, so neither reads as one. Read from the right, so a routine or seat
+ * whose name holds a `|` still yields only those two words.
+ */
+export function refusalOfSignature(signature: string): { action: string; status: string } | Record<string, never> {
+  const parts = signature.split("|");
+  const [action, status] = parts.slice(-2);
+  const word = /^[A-Za-z0-9_]+$/;
+  return parts.length >= 4 && action !== undefined && status !== undefined && word.test(action) && word.test(status) ? { action, status } : {};
 }
 
 /** The trajectory record of one program fact: `deploy`, `routine` or `program_error`. */

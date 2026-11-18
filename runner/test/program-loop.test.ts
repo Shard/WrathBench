@@ -37,7 +37,7 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
-import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, withoutDeathRefusals, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
+import { conditionLines, deathLine, mergeFacts, ProgramWake, refusalOfSignature, refusalPairOf, renderWake, signatureLineOf, sleepUntilWake, WAKE_CAP_MS, WAKE_CONSOLE_CHARS, Waker, withoutDeathRefusals, type WakeReason, type WakeSample, type WakeView } from "../src/wake";
 import type { DeathCause } from "../src/sandbox/snippet-delta";
 import { Watchdogs } from "../src/watchdogs";
 import { LEAKED_SECRET } from "./fixtures/leaky-snippet";
@@ -701,12 +701,24 @@ describe("ProgramWake", () => {
     const second = c.now();
     const repeats = records.filter((r) => r["t"] === "program_error");
     expect(repeats).toEqual([
-      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 4, since: start, at: first },
-      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 2, since: first, at: second },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 4, since: start, at: first },
+      { t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", action: "castSpell", status: "not_ready", count: 2, since: first, at: second },
       { t: "program_error", kind: "repeat", signature: "grind|TypeError|routines/grind.ts:42", count: 1, since: first, at: second },
     ]);
     expect(first).toBeGreaterThan(start);
     expect(second).toBeGreaterThan(first + 7_000);
+  });
+
+  test("a refusal's action and status are read off its signature from the right; an error's or memory's signature yields none", () => {
+    expect(refusalOfSignature("grind||castSpell|not_ready")).toEqual({ action: "castSpell", status: "not_ready" });
+    expect(refusalOfSignature("party|Tankpartyb|moveTo|superseded")).toEqual({ action: "moveTo", status: "superseded" });
+    // A routine whose name holds a pipe still gives only the last two words.
+    expect(refusalOfSignature("my|routine|Tankpartyb|moveTo|too_far")).toEqual({ action: "moveTo", status: "too_far" });
+    expect(refusalOfSignature("grind|TypeError|routines/grind.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|routines/x.ts:42")).toEqual({});
+    expect(refusalOfSignature("a|b|TypeError|")).toEqual({});
+    expect(refusalOfSignature("|SyntaxError|")).toEqual({});
+    expect(refusalOfSignature("memory|save")).toEqual({});
   });
 
   test("a wake that stays in the conversation marks the routine values it showed; a fixed-loop turn-end wake, never kept, does not", async () => {
@@ -1153,6 +1165,27 @@ function programSetup(script: ConstructorParameters<typeof StubAdapter>[0], o: {
 const userOf = (req: ChatRequest): string => String(req.messages[req.messages.length - 1]!.content);
 
 describe("the fixed loop on the program loop", () => {
+  test("a model that answers every wake in words alone ends idle once it has not acted for the idle window (operator, 2026-11-18)", async () => {
+    const talk = { content: "The party did not clear the Deadmines.", toolCalls: [] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => talk)]);
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "idle" });
+    s.options.trajectory.close();
+    const records = readTrajectory(s.dir);
+    // Four five-minute wakes answered without a tool call, then the sleep that found the verdict.
+    expect(records.filter((r) => r.t === "wake").map((w) => w["fired"])).toEqual(["cap", "cap", "cap", "cap", "stopped"]);
+    expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call for \d+ms: 4 wakes in a row answered without one$/);
+  });
+
+  test("a model that yields at every wake has acted, however long its routine plays", async () => {
+    const yieldTurn = { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 300 } }] };
+    const s = programSetup([{ content: null, toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }] }, ...Array.from({ length: 10 }, () => yieldTurn)], { yield: true });
+    const watchdogs = new Watchdogs({ ...s.options.config.watchdogs, idleMs: 20 * 60_000, noXpMs: null }, s.clock.now);
+    const outcome = await runLoop({ ...s.options, watchdogs });
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "stub-complete" });
+  });
+
   test("a reply with no tool call sleeps; the wake opens every request until the next sleep", async () => {
     const s = programSetup([
       { content: "starting", toolCalls: [{ name: "start_routine", arguments: { name: "trip" } }] },

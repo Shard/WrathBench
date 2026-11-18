@@ -47,11 +47,16 @@
  * - **Endpoints** (`ENDPOINT_PRICES`) — paid providers that are not
  *   OpenRouter, by hand, matched on the run's `apiBase` *and* id (operator's
  *   decision, 2026-09-04, on its trigger: a second such provider).
+ *
+ * One lookup goes through an alias: a paid run on a subscription endpoint
+ * (OpenCode Go) with no endpoint row of its own reads its catalogue entry's
+ * OpenRouter row, as-if-metered (`subscriptionListPrice`).
  */
 
 import {
   ANTHROPIC_PRICES,
   ANTHROPIC_UNPRICED,
+  catalogueKeyOf,
   ENDPOINT_PRICES,
   OPENROUTER_DELISTED,
   OPENROUTER_PRICES,
@@ -267,7 +272,7 @@ export function windowAt(windows: readonly RateWindow[], at: number | null): Rat
  * billing sentence and `asIfMetered` differ, so they are decided here and the
  * window provenance (undated first window against a dated one) is written once.
  */
-type SyncedFlavor = "openrouter" | "vendor";
+type SyncedFlavor = "openrouter" | "vendor" | "subscription";
 
 const SYNCED_BILLING: Record<SyncedFlavor, { asIfMetered: boolean; list: string; whose: string }> = {
   openrouter: {
@@ -279,6 +284,11 @@ const SYNCED_BILLING: Record<SyncedFlavor, { asIfMetered: boolean; list: string;
     asIfMetered: true,
     list: "OpenAI API list price via the OpenRouter catalogue",
     whose: "the codex harness bills a ChatGPT subscription, so this is as-if-metered",
+  },
+  subscription: {
+    asIfMetered: true,
+    list: "OpenRouter list price",
+    whose: "the run's endpoint bills a flat subscription (OpenCode Go), so this is as-if-metered",
   },
 };
 
@@ -458,6 +468,35 @@ function isSubscriptionRun(run: PriceableRun): boolean {
   return ENDPOINT_PRICES.some((p) => p.subscription && sameBase(run.apiBase, p.apiBase));
 }
 
+/**
+ * A paid subscription run's listed price when its endpoint has no row of its
+ * own: the OpenRouter row of the catalogue entry its id names, by key or alias
+ * (`catalogueKeyOf`), as-if-metered.
+ *
+ * The one place a price is read through an alias. The rule against it — the
+ * same model is different money on different hosts — is about a bill, and a
+ * Go run has none to get wrong: it pays a flat plan, and its cost is "its
+ * model's listed API price over its tokens" (operator, 2026-11-16), which is
+ * the entry's own listing. OpenCode Go serves `glm-5.3` and the catalogue
+ * prices `z-ai/glm-5.3`; without this every Go model needed a hand-typed
+ * endpoint row before its runs read anything but a blank. A hand-held Go row
+ * still wins where one exists (`providerPrice` is asked first), since it is
+ * that host's own listing.
+ *
+ * Only the entry's own key is read, never a `:free` id beside it, and a 0/0
+ * window is refused: a paid run must not read free through the back door. An
+ * id no entry lists stays unpriced, and `unpricedNote` says to add the alias.
+ */
+function subscriptionListPrice(run: PriceableRun, at: number | null): PriceRow | null {
+  const model = run.model ?? "";
+  const key = catalogueKeyOf(model);
+  if (key === null) return null;
+  const row = syncedRow(key, at, "subscription");
+  if (row === null || (row.input === 0 && row.output === 0)) return null;
+  const via = key === model ? "" : `${model} is the catalogue's ${key} (an alias); `;
+  return { ...row, note: `${via}${row.note}` };
+}
+
 /*
  * OpenRouter ids the provider's catalogue no longer carries, and why
  * (`OPENROUTER_DELISTED`, an entry's `prices.openrouter[id].delisted`).
@@ -519,8 +558,11 @@ function servedClaudeModel(run: Pick<PriceableRun, "model" | "resolvedModel">): 
  * table), then the provider table — keyed on base *and* id, so it can never
  * fire for an OpenRouter run and cannot shadow a synced answer, while the
  * reverse order would let an id that happens to collide with an OpenRouter id
- * read as OpenRouter-metered on a host that is not OpenRouter — then the synced
- * table by id, then the Claude rows by the model the CLI served.
+ * read as OpenRouter-metered on a host that is not OpenRouter — then, for a
+ * paid run on a subscription endpoint, its catalogue entry's listed price and
+ * nothing after it (`subscriptionListPrice`; the metered OpenRouter row would
+ * say the wrong thing about who paid), then the synced table by id, then the
+ * Claude rows by the model the CLI served.
  *
  * A Claude alias with no served model recorded gets no row. No family fallback
  * stands in: the alias meant different generations at different CLI pins, and
@@ -535,6 +577,7 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   if (isFreeSlug(model)) return FREE_PRICE;
   const provider = providerPrice(run, at);
   if (provider !== null) return provider;
+  if (isSubscriptionRun(run)) return subscriptionListPrice(run, at);
   const open = syncedPrice(model, at);
   if (open !== null) return open;
   const vendor = vendorOf(run);
@@ -603,6 +646,12 @@ export function unpricedNote(run: PriceableRun): string {
       return `\`${served}\` is an alias the CLI resolves at launch, and this run recorded no served model, so which model it was — and its price — is not known; tokens only, never a guess`;
     }
     return `no price on file for ${served} — tokens only, never a guess; a new Claude model needs a dated, sourced prices.anthropic on its entry in infra/model-catalogue.json`;
+  }
+  if (isSubscriptionRun(run)) {
+    const key = catalogueKeyOf(run.model);
+    return key === null
+      ? `no listed price for ${run.model ?? ""} on this subscription endpoint — add the id to its entry's aliases in infra/model-catalogue.json (it is then priced at the entry's OpenRouter list price, as-if-metered), or a dated, sourced prices.endpoints row`
+      : `no listed price for ${key} — its catalogue entry has no paid OpenRouter row (run \`bun wb data prices\`) and this endpoint no prices.endpoints row for it`;
   }
   if (isProviderBase(run.apiBase)) {
     return "no hand-held price for this model on this provider — add a dated, sourced prices.endpoints row to its entry in infra/model-catalogue.json; the OpenRouter sync cannot price it";
