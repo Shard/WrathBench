@@ -23,7 +23,7 @@
   "version": 2,
   "icons": { "package": "@lobehub/icons-static-svg", "version": "1.94.0" },
   "providers": {
-    "openrouter": { "name": "OpenRouter", "asOf": "2026-10-28" },
+    "openrouter": { "name": "OpenRouter", "asOf": "2026-11-18" },
     "anthropic": { "name": "Anthropic" },
     "cerebras": {
       "name": "Cerebras",
@@ -228,7 +228,8 @@
               { "input": 0.088606, "output": 0.177212, "cacheRead": 0.0177212, "cacheWrite": 0.088606, "from": "2026-09-16" },
               { "input": 0.0128, "output": 1.28, "cacheRead": 0.0128, "cacheWrite": 0.0128, "from": "2026-10-08" },
               { "input": 0.091, "output": 0.182, "cacheRead": 0.0182, "cacheWrite": 0.091, "from": "2026-10-14" },
-              { "input": 0.14, "output": 0.28, "cacheRead": 0.028, "cacheWrite": 0.14, "from": "2026-10-28" }
+              { "input": 0.14, "output": 0.28, "cacheRead": 0.028, "cacheWrite": 0.14, "from": "2026-10-28" },
+              { "input": 0.09, "output": 0.18, "cacheRead": 0.018, "cacheWrite": 0.09, "from": "2026-11-18" }
             ]
           }
         }
@@ -250,7 +251,8 @@
               { "input": 0.018, "output": 1.28, "cacheRead": 0.018, "cacheWrite": 0.018, "from": "2026-10-08" },
               { "input": 0.016, "output": 0.64, "cacheRead": 0.016, "cacheWrite": 0.016, "from": "2026-10-14" },
               { "input": 0.44, "output": 1.32, "cacheRead": 0.014, "cacheWrite": 0.44, "from": "2026-10-20" },
-              { "input": 0.119, "output": 0.238, "cacheRead": 0.0238, "cacheWrite": 0.119, "from": "2026-10-28" }
+              { "input": 0.119, "output": 0.238, "cacheRead": 0.0238, "cacheWrite": 0.119, "from": "2026-10-28" },
+              { "input": 0.06, "output": 0.18, "cacheRead": 0.015, "cacheWrite": 0.06, "from": "2026-11-18" }
             ]
           }
         }
@@ -272,7 +274,8 @@
               { "input": 0.9834, "output": 2.9502, "cacheRead": 0.03278, "cacheWrite": 0.9834, "from": "2026-09-16" },
               { "input": 1.32, "output": 3.96, "cacheRead": 0.044, "cacheWrite": 1.32, "from": "2026-10-08" },
               { "input": 0.66, "output": 1.98, "cacheRead": 0.022, "cacheWrite": 0.66, "from": "2026-10-20" },
-              { "input": 1.32, "output": 3.96, "cacheRead": 0.044, "cacheWrite": 1.32, "from": "2026-10-28" }
+              { "input": 1.32, "output": 3.96, "cacheRead": 0.044, "cacheWrite": 1.32, "from": "2026-10-28" },
+              { "input": 0.111, "output": 4.44, "cacheRead": 0.097, "cacheWrite": 0.111, "from": "2026-11-18" }
             ]
           }
         }
@@ -292,7 +295,8 @@
               { "input": 0.3, "output": 1.2, "cacheRead": 0.006, "cacheWrite": 0.3, "from": "2026-10-08" },
               { "input": 0.0396, "output": 0.891, "cacheRead": 0.0054, "cacheWrite": 0.0396, "from": "2026-10-14" },
               { "input": 0.056, "output": 0.12, "cacheRead": 0.0016, "cacheWrite": 0.056, "from": "2026-10-20" },
-              { "input": 0.14, "output": 0.42, "cacheRead": 0.0042, "cacheWrite": 0.14, "from": "2026-10-28" }
+              { "input": 0.14, "output": 0.42, "cacheRead": 0.0042, "cacheWrite": 0.14, "from": "2026-10-28" },
+              { "input": 0.051, "output": 0.567, "cacheRead": 0.018, "cacheWrite": 0.051, "from": "2026-11-18" }
             ]
           }
         },
@@ -767,7 +771,8 @@
               { "input": 0.425, "output": 2.55, "cacheRead": 0.085, "cacheWrite": 0.53125, "from": "2026-10-08" },
               { "input": 0.04, "output": 2.3, "cacheRead": 0.0198, "cacheWrite": 0.04, "from": "2026-10-14" },
               { "input": 0.04, "output": 1.35, "cacheRead": 0.018, "cacheWrite": 0.04, "from": "2026-10-20" },
-              { "input": 0.039, "output": 1.25, "cacheRead": 0.0039, "cacheWrite": 0.039, "from": "2026-10-28" }
+              { "input": 0.039, "output": 1.25, "cacheRead": 0.0039, "cacheWrite": 0.039, "from": "2026-10-28" },
+              { "input": 0.06, "output": 2.2, "cacheRead": 0.059, "cacheWrite": 0.06, "from": "2026-11-18" }
             ]
           }
         },
@@ -914,7 +919,8 @@
               { "input": 0.15, "output": 0.5, "cacheRead": 0.03, "cacheWrite": 0.15, "from": "2026-10-08" },
               { "input": 0.036, "output": 0.9, "cacheRead": 0.0108, "cacheWrite": 0.036, "from": "2026-10-14" },
               { "input": 0.047076, "output": 0.16, "cacheRead": 0.006, "cacheWrite": 0.047076, "from": "2026-10-20" },
-              { "input": 0.15, "output": 0.5, "cacheRead": 0.03, "cacheWrite": 0.15, "from": "2026-10-28" }
+              { "input": 0.15, "output": 0.5, "cacheRead": 0.03, "cacheWrite": 0.15, "from": "2026-10-28" },
+              { "input": 0.0399, "output": 0.0784, "cacheRead": 0.03, "cacheWrite": 0.0399, "from": "2026-11-18" }
             ]
           }
         }
