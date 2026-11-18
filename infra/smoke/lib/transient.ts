@@ -73,6 +73,34 @@ export async function deleteThroughLinger(o: {
   }
 }
 
+/**
+ * How far the server must have carried the character from a walk's start
+ * before an `interrupted` counts as mid-walk (`moveRetryReason`'s `from`):
+ * more than a run's first heartbeat (3.5y at run speed), so a walk the server
+ * never applied stays a failure.
+ */
+export const MOVE_ACCEPTED_YARDS = 5;
+
+/**
+ * The character's own health as the event stream last gave it, or undefined
+ * before any reading: the self unit's `create` block names it (`self`), and
+ * every later `create` or `values` block for that guid carries the change. A
+ * 0 is a dead character, whose `move_to` the module refuses `rooted` (death
+ * roots, wrath-mcp/module/PROTOCOL.md "Roots").
+ */
+export function selfHealth(events: readonly any[]): number | undefined {
+  let guid: string | undefined;
+  let health: number | undefined;
+  for (const e of events) {
+    if (e?.opcode !== "SMSG_UPDATE_OBJECT" || !Array.isArray(e.data?.objects)) continue;
+    for (const o of e.data.objects) {
+      if (o?.update === "create" && o.self) guid = o.guid;
+      if ((o?.update === "create" || o?.update === "values") && guid !== undefined && o.guid === guid && typeof o.fields?.health === "number") health = o.fields.health;
+    }
+  }
+  return health;
+}
+
 /** A `WB_MOVE_RESULT` as a smoke reads it. */
 export interface MoveResult {
   status: string;
@@ -90,9 +118,20 @@ export interface MoveResult {
  * while another character was resuming; the next four passed). Death and a
  * logout are never retried, and any other status (off mesh, too far,
  * rooted, …) is a verdict on the walk itself.
+ *
+ * `from`, where the walk started, narrows it to a walk the server accepted:
+ * an `interrupted` within MOVE_ACCEPTED_YARDS of the start is the server
+ * refusing the run (a character it still held as moving, the
+ * module-navigation smoke's after-failure leg), and is never retried. A world
+ * tick stall long enough to trip the drift check lands mid-walk, after the
+ * server has applied heartbeats (module-navigation, 10.6y in).
  */
-export function moveRetryReason(r: MoveResult, o: { alive: boolean; inSession: boolean; target: { x: number; y: number } }): string | undefined {
+export function moveRetryReason(
+  r: MoveResult,
+  o: { alive: boolean; inSession: boolean; target: { x: number; y: number }; from?: { x: number; y: number } },
+): string | undefined {
   if (r.status !== "interrupted" || !o.alive || !o.inSession) return undefined;
+  if (o.from !== undefined && (r.pos === undefined || Math.hypot(r.pos.x - o.from.x, r.pos.y - o.from.y) < MOVE_ACCEPTED_YARDS)) return undefined;
   const at = r.pos !== undefined ? ` at (${r.pos.x.toFixed(1)}, ${r.pos.y.toFixed(1)}, ${r.pos.z.toFixed(1)}), ${Math.hypot(r.pos.x - o.target.x, r.pos.y - o.target.y).toFixed(1)}y short` : "";
   return (
     `ended interrupted${at} with the character alive and in its session, so neither death nor a logout: ` +
