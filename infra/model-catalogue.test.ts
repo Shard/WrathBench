@@ -28,7 +28,7 @@ import {
   weightsOf,
   type ModelCatalogue,
 } from "./model-catalogue";
-import { applyOpenRouterWindows, catalogueOpenRouterIds, catalogueWindows } from "./sync-prices";
+import { applyOpenRouterWindows, catalogueOpenRouterIds, catalogueWindows, mergeWindows } from "./sync-prices";
 import { modelIdsOf, reformat, uncatalogued } from "./model-catalogue-check";
 
 const ROOT = join(import.meta.dir, "..");
@@ -506,11 +506,32 @@ describe("the sync writes onto the catalogue", () => {
     expect(() => parseCatalogue(formatCatalogue(out))).not.toThrow();
   });
 
-  test("an id OpenRouter dropped is emptied where it is, its delisted note kept; the model is never removed", () => {
+  test("an id absent from the sync's answer keeps its block exactly as it was; the model is never removed", () => {
     const { doc: out } = applyOpenRouterWindows(base, {}, "2026-10-20");
     expect(Object.keys(out.models)).toEqual(Object.keys(base.models));
-    expect(out.models["acme-labs/acme-1"]!.prices!.openrouter!["acme-labs/acme-1"]!.windows).toEqual([]);
+    expect(out.models["acme-labs/acme-1"]!.prices!.openrouter).toEqual(base.models["acme-labs/acme-1"]!.prices!.openrouter);
     expect(out.models["acme-labs/acme-0"]!.prices!.openrouter!["acme-labs/acme-0"]).toEqual({ windows: [], delisted: "gone" });
+  });
+
+  test("a sync after OpenRouter drops an id leaves every window it had, dated ones included, byte for byte", () => {
+    // The real path with the fetch taken out: the catalogue's windows, merged
+    // against a quote that no longer carries acme-1, written back.
+    const history = [
+      { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+      { input: 1.5, output: 3, cacheRead: 0.15, cacheWrite: 1.5, from: "2026-09-15" },
+    ];
+    const before = mutate((d) => (d.models["acme-labs/acme-1"].prices.openrouter["acme-labs/acme-1"].windows = history));
+    const start = JSON.parse(before) as Parameters<typeof applyOpenRouterWindows>[0];
+    const quoted = { "acme-labs/acme-1:free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    const merged = mergeWindows(catalogueWindows(start), quoted, "2026-10-20");
+    expect(merged["acme-labs/acme-1"]).toEqual(history);
+    const { doc: out, unlisted } = applyOpenRouterWindows(start, merged, "2026-10-20");
+    expect(unlisted).toEqual([]);
+    expect(out.models["acme-labs/acme-1"]).toEqual(start.models["acme-labs/acme-1"]);
+    expect(out.models["acme-labs/acme-0"]).toEqual(start.models["acme-labs/acme-0"]);
+    // Only the provider's stamp moved.
+    expect(formatCatalogue({ ...out, providers: start.providers })).toBe(formatCatalogue(start));
+    expect(out.providers["openrouter"]!["asOf"]).toBe("2026-10-20");
   });
 
   test("a new id lands on the entry its alias names; one no entry lists is reported, never written", () => {

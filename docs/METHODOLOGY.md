@@ -298,20 +298,33 @@ signature since a load and of each refusal signature in the run (operator delega
 next wake), the program's own `wake(reason)`, a death, a
 sandbox restart, the event stream closing or a harness notice, and after five
 minutes at the latest; gaining a level or completing a quest does not wake it,
-and a program that wants either calls `wake()`. A refusal is a failure of
-the program's own call: a move its code replaced or stopped, the long-route
-note on a move that went ahead, and a call the character's death refused or
-cut short are none, and neither wake it nor are recorded as one (operator,
-2026-11-18). What it was already shown in
+and a program that wants either calls `wake()`. A wake waits two seconds after
+its first reason so a cascade is one wake. A death or a refusal settles for ten
+instead, so the deaths and refusals of a wipe that land together reach the
+model as one wake listing all of them, and a `wake()` call, the cap and a
+`yield`'s own seconds are never held by that settle (operator, 2026-11-18). A
+refusal is a failure of the program's own call: a move its code replaced or
+stopped, the long-route note on a move that went ahead, and a call the
+character's death refused or cut short are none, and neither wake it nor are
+recorded as one (operator, 2026-11-18). What it was already shown in
 a tool result wakes no later sleep. The wake block is facts in fixed wording:
 every routine as it stands, new errors and refusals with their hints, what
-changed for the character, and the routines' last console lines, capped. Two
+changed for the character, and the routines' last console lines, capped. A
+routine that ended more than five minutes ago, once a block the model keeps
+or a routine tool showed it ended, is counted on one line rather than listed
+(operator, 2026-11-18). A worn item that crosses into low or broken, by the
+HUD durability line's thresholds, is reported at the next wake, once per
+crossing, naming the item and the level; it does not wake the model, as a
+level or a quest does not (operator, 2026-11-18). Two
 more lines ride the failure path only, so a model whose character never
 falls sees neither (operator delegated, 2026-11-15): a wake that carries a
 death names the last hitter and the damage taken in the ten seconds before
 it, in the snippet delta's words, and a `yield` block that no HUD follows
 says when the character is dead or a ghost, and for how long, and repeats
-the HUD's durability line when worn gear is broken or low. On
+the HUD's durability line when worn gear is broken or low. At fan-out both
+are per character, each naming it: a death line for every character that
+died since the last wake, and the durability lines on every block, since the
+fan-out roll-up carries no gear (operator, 2026-11-18). On
 codex, whose conversation holds what it was sent, the turn's message carries
 the scratchpad only when the thread does not already hold it as it stands; the
 event window goes every time.

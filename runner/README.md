@@ -1352,10 +1352,16 @@ replaced or stopped, the long-route note on a move that went ahead and a call
 the character's death refused or cut short are no refusals, and the stack
 sends none for them, operator 2026-11-18), a `wake(reason)` call,
 any character's death, the event
-stream closing, a sandbox restart or a harness notice; the first reason opens
-a two-second window so a cascade is one wake, the step interval is the floor
-and five minutes the cap. Level-ups and quest completions do not wake; the
-next wake reports them. `--yield true` adds a `yield` tool held open the same
+stream closing, a sandbox restart or a harness notice; each reason opens a
+window and the sleep ends at the first to close: two seconds, so a cascade is
+one wake, and ten for a death or a refusal (`WAKE_SETTLE_MS`), so a wipe's
+deaths and refusals that land together are one wake; each counts from when
+the sleep learned of the reason. The step interval is the floor and five
+minutes, or a `yield`'s own seconds, the cap, which no window moves.
+Level-ups, quest completions and worn gear crossing into low or broken do not
+wake; the next wake reports them (`worn down since you slept: …`, measured
+against what the last wake reported, at the HUD durability line's
+thresholds). `--yield true` adds a `yield` tool held open the same
 way inside a turn, whose result is the wake. What a wake shows is facts only,
 rendered by a pure function (`renderWake`) and scrubbed of the run's secrets:
 every routine as it stands, new errors with the model's own file lines,
@@ -1364,7 +1370,10 @@ was refused, `[Alfa, Bravo]` after the status, as the stack's hint lines
 do), moves that replaced one another, `wake` calls, what
 changed for the character, and the routines' last console entries (at most
 20, in at most 2,000 characters, since one log call can print an object over
-many lines). Two lines are on the failure path only, for a single character:
+many lines). A routine row that ended more than five minutes ago, once a
+kept block or a routine tool showed it ended, is counted on one line
+(`freshRoutines`, `ROUTINE_ROW_STALE_MS`). Two lines are on the failure path
+only. For a single character:
 a wake that carries a death says `last death: killed by <last hitter>, took
 N in the 10s before: …`, from a latch the child keeps apart from the snippet
 delta's drain (`SnippetDeltaRecorder.takeDeath`, `SandboxHost.deathCause`)
@@ -1372,7 +1381,14 @@ and worded by the same `damageTaken`; and a block no HUD rides with (a
 `yield` result on claude-code and codex, `hud: false`) says
 `character: ghost, died 5m10s ago` (or dead) and the HUD's own durability
 line when worn gear is broken or low. A turn's message and every fixed-loop
-request carry a fresh HUD, so their blocks leave the condition out. A routine's error or returned value is shown whole once; a later
+request carry a fresh HUD, so their blocks leave the condition out. At
+fan-out each line names its character: a `deaths:` block with one line per
+character that died since the last wake, from its own seat's latch
+(`SandboxHost.deathCause(character)`), `characters: Alfa ghost, died 3m10s
+ago; …` where no HUD follows (the roll-up names the dead), and each
+character's durability line on every block, read from its seat
+(`worn_durability`, `SandboxHost.wornDurabilityAll`), since the roll-up
+carries no gear. A routine's error or returned value is shown whole once; a later
 routine line refers to it (`(value shown before)`). The stack's program host
 keeps that ledger for its own tool results and the wake alike; a wake marks
 what it showed only when its block stays in the conversation (a `yield`

@@ -19,6 +19,7 @@ import { type CodexUsage, codexUsageDelta } from "../runner/src/codex-usage";
 import { DRIVER_LIST } from "../runner/src/drivers";
 import { readRunRow } from "../runner/src/run-reader";
 import { Trajectory } from "../runner/src/trajectory";
+import { OPENROUTER_PRICES } from "./model-catalogue";
 import { priceFor } from "../runner/viewer/pricing";
 import { scanRunTotals } from "../runner/viewer/tail";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
@@ -381,6 +382,9 @@ describe("the rules it shares with the runner and the viewer", () => {
   });
 });
 
+/** The fixture model's newest OpenRouter window: the one in force on a 2030 run. */
+const NEWEST = () => OPENROUTER_PRICES.models["deepseek/deepseek-v4.1-flash"]!.at(-1)!;
+
 describe("a v1 run", () => {
   test("per request, per turn and per hour, priced at the catalogue's row and pinned to the viewer's totals", async () => {
     const r = await readout(V1);
@@ -397,9 +401,11 @@ describe("a v1 run", () => {
     const viewer = scanned.tokens;
     expect(totals(w)).toEqual({ prompt: viewer.promptTokens, cached: viewer.cacheReadTokens!, output: viewer.completionTokens });
     expect(w.reportedUsd).toBeCloseTo(scanned.reportedCostUsd!, 12);
-    // 3,600 uncached, 2,400 read and 300 out at the row in force on T0 (2030: the newest window).
-    expect(r.price).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", input: 0.14, output: 0.42, cacheRead: 0.0042 });
-    expect(w.pricedUsd).toBeCloseTo((2400 * 0.14 + 3600 * 0.0042 + 300 * 0.42) / 1e6, 12);
+    // 2,400 uncached, 3,600 read and 300 out at the row in force on T0 (2030:
+    // the newest window, read from the file so a price sync does not break it).
+    const row = NEWEST();
+    expect(r.price).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", input: row.input, output: row.output, cacheRead: row.cacheRead });
+    expect(w.pricedUsd).toBeCloseTo((2400 * row.input + 3600 * row.cacheRead + 300 * row.output) / 1e6, 12);
   });
 
   test("a retry record between a request and its response changes none of its figures", async () => {
@@ -450,7 +456,8 @@ describe("a v1 run", () => {
     expect(r.code).toBe(0);
     const text = r.out.join("\n");
     expect(text).toContain(`${V1}: model requests over run, to L2, to 90m, UTC`);
-    expect(text).toMatch(/^price {5}deepseek\/deepseek-v4\.1-flash at \$0\.14\/\$0\.42/m);
+    const row = NEWEST();
+    expect(text).toContain(`\nprice     deepseek/deepseek-v4.1-flash at $${row.input}/$${row.output}/$${row.cacheRead}/$${row.cacheWrite} per M`);
     expect(text).toMatch(/^requests +6 +5 +not reached$/m);
     expect(text).toMatch(/^uncached in\/request +400 +400 +not reached$/m);
     expect(text).toMatch(/^stall minutes +35\.0 \(\+20\.0\?\) +25\.0 +not reached$/m);

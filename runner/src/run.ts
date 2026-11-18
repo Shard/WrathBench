@@ -1066,8 +1066,10 @@ async function main(): Promise<void> {
     // A run whose model chooses its start is told the pairs again whenever a createSession names one no character can have.
     ...(config.chooseStart === true ? { resultNote: chosenStartNote } : {}),
   });
-  // A single character's death wake says what killed it, from the child's latch (`wake.ts`, `deathLine`).
-  if (programWake !== undefined && config.fanout === undefined) programWake.useDeathCause(() => sandbox.deathCause());
+  // A death wake says what killed the character, from the child's latch, at fan-out each seat's (`wake.ts`, `deathLine`, `fanoutDeathLine`).
+  if (programWake !== undefined) programWake.useDeathCause((character) => sandbox.deathCause(character));
+  // A fan-out wake reads each character's worn gear from its seat: the roll-up's briefs carry none.
+  if (programWake !== undefined && config.fanout !== undefined) programWake.useWorn(() => sandbox.wornDurabilityAll());
   /** A fan-out run's roster, on that sandbox: its seats, their leases and their records (`fanout-run.ts`). */
   const roster: CharacterRoster | undefined =
     config.fanout !== undefined && fanoutSignals !== undefined
