@@ -321,16 +321,23 @@ describe("prices", () => {
       "cerebras/qwen-3.8-27b",
       "deepseek/deepseek-flash",
       "opencode-go/deepseek-v4.1-flash",
+      "opencode-go/glm-5.3",
       "opencode-go/kimi-k3.1-pro",
       "opencode-go/mimo-v2.5",
       "opencode-go/mimo-v2.6-flash",
       "opencode-go/omen-alpha",
       "opencode-go/space-bunny",
     ]);
-    // A provider's default note is the row's, with the row's own date in it.
+    // A row OpenCode's listing no longer quotes keeps the provenance it was typed with.
     const go = ENDPOINT_PRICES.find((r) => r.id === "opencode-go/mimo-v2.5")!;
     expect(go.note).toStartWith("models.dev registry listing for the opencode-go provider, read 2026-10-16.");
     expect(go.source).toBe("catalogue");
+    // A row the sync keeps reads the provider's note, with the row's date and the listing's in it.
+    const kimi = ENDPOINT_PRICES.find((r) => r.id === "opencode-go/kimi-k3.1-pro")!;
+    expect(kimi.source).toBe("list");
+    expect(kimi.note).toContain("row since 2026-10-24");
+    expect(kimi.note).toContain(`listing last read ${CATALOGUE.providers["opencode-go"]!.asOf}`);
+    expect(kimi.note).not.toContain("{");
     // Go is the one subscription endpoint; its older base keeps its own reading.
     expect(ENDPOINT_PRICES.filter((r) => r.subscription).every((r) => r.apiBase === CATALOGUE.providers["opencode-go"]!.apiBase)).toBe(true);
     expect(ENDPOINT_PRICES.find((r) => r.id === "opencode-go/omen-alpha")!.subscription).toBe(false);

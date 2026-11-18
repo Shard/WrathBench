@@ -45,12 +45,16 @@
  *   on the id; a codex run matches under `openai/<slug>`, since the Codex CLI's
  *   own slug carries no vendor prefix (`codexPrice`).
  * - **Endpoints** (`ENDPOINT_PRICES`) — paid providers that are not
- *   OpenRouter, by hand, matched on the run's `apiBase` *and* id (operator's
- *   decision, 2026-09-04, on its trigger: a second such provider).
+ *   OpenRouter, matched on the run's `apiBase` *and* id (operator's decision,
+ *   2026-09-04, on its trigger: a second such provider): by hand, or by script
+ *   from the provider's own published listing where it has one (OpenCode Go's
+ *   `/models`; `infra/sync-prices.ts`).
  *
  * One lookup goes through an alias: a paid run on a subscription endpoint
  * (OpenCode Go) with no endpoint row of its own reads its catalogue entry's
- * OpenRouter row, as-if-metered (`subscriptionListPrice`).
+ * OpenRouter row, as-if-metered (`subscriptionListPrice`). So an OpenCode run
+ * is priced at OpenCode's own published price where its listing has one, and
+ * at the OpenRouter listing where it does not (operator, 2026-11-18).
  */
 
 import {
@@ -360,8 +364,13 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
 }
 
 /*
- * Paid providers that are not OpenRouter, priced by hand: each model entry's
+ * Paid providers that are not OpenRouter: each model entry's
  * `prices.endpoints`, resolved against its provider (`ENDPOINT_PRICES`).
+ * Typed by hand, except where the provider publishes its own per-model prices
+ * machine-readably: OpenCode Go's `/models` carries a `cost` per model, so its
+ * provider names the listing and `infra/sync-prices.ts` keeps those rows by
+ * the OpenRouter rules — dated, appended, never cleared (operator,
+ * 2026-11-18). A row that states its own `source` stays hand-held.
  *
  * The OpenRouter sync cannot help here: `infra/sync-prices.ts` owns an entry's
  * `prices.openrouter` and quotes only what OpenRouter's catalogue carries, so a
@@ -397,12 +406,13 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * Cache tiers, where the listing is silent. Cerebras caches the prefix and
  * bills every input token at the input rate whether it was served from cache
  * or not ("What Cerebras costs"), so its cacheRead and cacheWrite are the
- * input rate rather than a tier below it. A models.dev listing with no
- * cache-write tier (omen-alpha, and the Go models but space-bunny, whose
- * listing states 0) bills a write as ordinary input, the same fallback the
- * OpenRouter sync uses. DeepSeek's platform prices by time of day, which a date
- * window cannot say: its row is the off-peak rate, and a cache miss bills at
- * the input rate. The free Go slugs (`-free`) need no row.
+ * input rate rather than a tier below it. A listing with no cache-write tier
+ * (omen-alpha's and space-bunny's models.dev rows, where space-bunny's states
+ * 0; OpenCode's own for most Go models) bills a write as ordinary input, the
+ * same fallback the OpenRouter sync uses. DeepSeek prices by time of day, on
+ * its own platform and on OpenCode Go alike, which a date window cannot say:
+ * both rows are the off-peak rate and say so, and a cache miss bills at the
+ * input rate. The free Go slugs (`-free`) need no row.
  *
  * `asIfMetered` is false for a provider that meters the operator's own
  * balance, where the figure is a list-price estimate of a real bill, and true
@@ -415,7 +425,7 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  */
 
 /** Two api bases name the same endpoint: same origin, same path, trailing slash ignored. */
-function sameBase(a: string | null | undefined, b: string): boolean {
+export function sameBase(a: string | null | undefined, b: string): boolean {
   if (a === null || a === undefined || a === "") return false;
   const norm = (u: string): string | null => {
     try {
@@ -479,9 +489,12 @@ function isSubscriptionRun(run: PriceableRun): boolean {
  * model's listed API price over its tokens" (operator, 2026-11-16), which is
  * the entry's own listing. OpenCode Go serves `glm-5.3` and the catalogue
  * prices `z-ai/glm-5.3`; without this every Go model needed a hand-typed
- * endpoint row before its runs read anything but a blank. A hand-held Go row
- * still wins where one exists (`providerPrice` is asked first), since it is
- * that host's own listing.
+ * endpoint row before its runs read anything but a blank. OpenCode's own row
+ * wins where one exists (`providerPrice` is asked first), since it is that
+ * host's own listing: an OpenCode run reads OpenCode's published price first
+ * and this only where OpenCode's listing has none for the model (operator,
+ * 2026-11-18). The sync asks OpenRouter for the entry's key on every launch
+ * that resolves to it, so the row this reads is kept current.
  *
  * Only the entry's own key is read, never a `:free` id beside it, and a 0/0
  * window is refused: a paid run must not read free through the back door. An
@@ -558,7 +571,8 @@ function servedClaudeModel(run: Pick<PriceableRun, "model" | "resolvedModel">): 
  * table), then the provider table — keyed on base *and* id, so it can never
  * fire for an OpenRouter run and cannot shadow a synced answer, while the
  * reverse order would let an id that happens to collide with an OpenRouter id
- * read as OpenRouter-metered on a host that is not OpenRouter — then, for a
+ * read as OpenRouter-metered on a host that is not OpenRouter, and which is
+ * how an OpenCode run reads OpenCode's own price first — then, for a
  * paid run on a subscription endpoint, its catalogue entry's listed price and
  * nothing after it (`subscriptionListPrice`; the metered OpenRouter row would
  * say the wrong thing about who paid), then the synced table by id, then the

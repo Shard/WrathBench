@@ -219,7 +219,8 @@ const FRESH = "run-fresh";
 /**
  * Two paid runs on OpenCode Go, a subscription: DeepSeek's responses report
  * the allowance's $0, GLM's a little Extra Usage past it. DeepSeek has a Go
- * row of its own; Go's `glm-5.3` is priced through its catalogue alias.
+ * row of its own (OpenCode's listing); Go's `glm-5.3-flash` has none, so it is
+ * priced through its catalogue alias.
  */
 const GO_BASE = CATALOGUE.providers["opencode-go"]!.apiBase!;
 const goTurns = (cost: number): Record<string, unknown>[] => [
@@ -232,7 +233,7 @@ const goTurns = (cost: number): Record<string, unknown>[] => [
 const GO_DS = "run-go-deepseek";
 writeRun(join(RUNS, GO_DS), GO_DS, { character: "Gowick", model: "deepseek-v4.1-flash", apiBase: GO_BASE }, goTurns(0), false);
 const GO_GLM = "run-go-glm";
-writeRun(join(RUNS, GO_GLM), GO_GLM, { character: "Glmwick", model: "glm-5.3", apiBase: GO_BASE }, goTurns(0.0014), false);
+writeRun(join(RUNS, GO_GLM), GO_GLM, { character: "Glmwick", model: "glm-5.3-flash", apiBase: GO_BASE }, goTurns(0.0014), false);
 
 const STORE = await memoryStore(RUNS);
 
@@ -469,8 +470,8 @@ describe("a paid run on the OpenCode Go subscription", () => {
 
   test("a Go model with no row of its own is priced through its catalogue alias, its Extra Usage kept as a real charge", async () => {
     const cost = line((await inspect(["run", GO_GLM, "--width", "1000"])).out, "cost");
-    expect(cost).toStartWith(`cost       over the run: ${listed("glm-5.3")}`);
-    expect(cost).toContain("(z-ai/glm-5.3)");
+    expect(cost).toStartWith(`cost       over the run: ${listed("glm-5.3-flash")}`);
+    expect(cost).toContain("(z-ai/glm-5.3-flash)");
     expect(cost).toContain("Extra Usage past a spent allowance, a real charge on top of the plan: usage.cost $0.0042 on 3 of 3 responses");
   });
 

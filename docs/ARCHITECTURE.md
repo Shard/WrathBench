@@ -429,9 +429,10 @@ the SPA owns everything that is UI.
   per-model table. The dashboard bundle gets only the fields the lookup reads
   (`dashboard/src/lib/catalogue-subset.ts`, swapped in by its Vite config at
   each build), since the prices and notes were most of a page's bytes. JSON rather than a TypeScript module because a script writes
-  part of it: `bun wb data prices` rewrites each model's OpenRouter windows in
-  place, and a data file is what a script can rewrite without touching the
-  hand-kept facts beside them; the module adds the types and the comments a
+  part of it: `bun wb data prices` rewrites each model's OpenRouter windows,
+  and the endpoint rows of a provider that publishes its own listing (OpenCode
+  Go), in place, and a data file is what a script can rewrite without touching
+  the hand-kept facts beside them; the module adds the types and the comments a
   JSON file cannot carry.
   Every roster field in the fleet config is a scheduling fact and presentation
   has always been absent from its schema, so a roster entry names a catalogue
@@ -473,11 +474,13 @@ the SPA owns everything that is UI.
   Prices are matched on the id the provider bills under, exactly, never
   through an alias, because the same model is different money on different
   hosts: OpenRouter's synced windows by OpenRouter id, Anthropic's list prices
-  by the served ids, a metered endpoint's by its base and id
+  by the served ids, an endpoint's by its base and id
   (`runner/viewer/pricing.ts` holds the rules for which row a run reads, and no
-  rate). The one exception is a paid run on a subscription endpoint (OpenCode
-  Go) with no endpoint row: it has no per-host bill, so it reads its entry's
-  OpenRouter row through the alias, as-if-metered. Two things stay rules rather than catalogue rows, because they judge
+  rate). So an OpenCode Go run reads OpenCode's own published price first,
+  synced from its `/models` listing, and only where that listing has none
+  (another API, context-size tiers, or a model never run on Go) its entry's
+  OpenRouter row through the alias, as-if-metered: the one exception, because
+  a flat plan has no per-host bill (operator, 2026-11-18). Two things stay rules rather than catalogue rows, because they judge
   the shape of an id nobody has seen: the scheduler's Claude-family test
   (`isClaudeFamily`) and the free, contributor and local billing predicates;
   so does `LAB_PROVIDERS` (`runner/src/routing.ts`), which is routing policy

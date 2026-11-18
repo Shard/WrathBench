@@ -28,12 +28,14 @@
  * **Prices** are matched on the id the *provider* bills under, exactly — never
  * through an alias, since the same model is different money on different
  * hosts (`runner/viewer/pricing.ts` says in what order). The one exception is
- * a subscription endpoint's paid run with no endpoint row (OpenCode Go's
- * `glm-5.3`): a flat plan has no per-host bill, so it reads its entry's
- * OpenRouter row through the alias, as-if-metered (`subscriptionListPrice`). An OpenRouter row is
- * keyed by its OpenRouter id and written by `infra/sync-prices.ts`; an
- * Anthropic row and an endpoint row list their ids (`ids`, defaulting to the
- * entry's key). Rates are windowed: a list in date order, the first with no
+ * a subscription endpoint's paid run with no endpoint row (an OpenCode Go
+ * model OpenCode's listing does not price): a flat plan has no per-host bill,
+ * so it reads its entry's OpenRouter row through the alias, as-if-metered
+ * (`subscriptionListPrice`). An OpenRouter row is keyed by its OpenRouter id
+ * and written by `infra/sync-prices.ts`; so is an endpoint row of a provider
+ * that publishes a `listing` (OpenCode Go), unless the row states its own
+ * `source`, which marks it hand-held. An Anthropic row and an endpoint row
+ * list their ids (`ids`, defaulting to the entry's key). Rates are windowed: a list in date order, the first with no
  * `from`, so a run is priced at the rate in force when it started.
  *
  * Everything that resolves an id is total: null, undefined and nonsense all
@@ -87,14 +89,18 @@ export interface CatalogueFamily {
 /** Who a price row is from: OpenRouter (synced), Anthropic (by hand), or another endpoint matched on its base. */
 export interface CatalogueProvider {
   name: string;
-  /** OpenRouter only: the day `infra/sync-prices.ts` last read the catalogue. */
+  /** The day `infra/sync-prices.ts` last read this provider's prices: OpenRouter's catalogue, or a provider's `listing`. */
   asOf?: string;
   /** An endpoint provider: the `apiBase` a run must have recorded, compared as origin plus path. */
   apiBase?: string;
   /** An endpoint provider: the prefix of the row's on-screen id (`cerebras/qwen-3.8-27b`). */
   label?: string;
   source?: PriceSource;
-  /** An endpoint provider's default note for its rows; `{asOf}` is the row's date. */
+  /**
+   * An endpoint provider's default note for its rows. In it, or in a row's own,
+   * `{asOf}` is the row's date and `{read}` the provider's `asOf` (the day its
+   * listing was last read).
+   */
   note?: string;
   /**
    * An endpoint provider billed as a flat plan (OpenCode Go): its rows are
@@ -102,6 +108,15 @@ export interface CatalogueProvider {
    * past the allowance, not the run's cost (`runner/viewer/pricing.ts`).
    */
   subscription?: boolean;
+  /**
+   * An endpoint provider that publishes its own per-model prices, machine
+   * readable (OpenCode's `/models`): the listing's URL. `infra/sync-prices.ts`
+   * reads it and keeps this provider's rows the way it keeps OpenRouter's —
+   * dated, appended, never cleared — except a row that states its own
+   * `source`, which is a hand-held row the sync leaves alone. The provider's
+   * `asOf` is then the day the listing was last read.
+   */
+  listing?: string;
 }
 
 /** One OpenRouter id's synced windows. A sync only appends; an empty list is an id emptied before it kept history. */
@@ -389,11 +404,30 @@ export interface EndpointRow {
   /** The model id as the provider names it — exact, case-sensitive. */
   model: string;
   windows: readonly RateWindow[];
+  /**
+   * The date an undated first window reads as. A hand-held row's own `asOf`
+   * (the day it was typed); a row the sync keeps from a provider's `listing`,
+   * the day that listing was last read — the provider's `asOf`, as an
+   * OpenRouter row reads the catalogue's (`syncedListingAsOf`).
+   */
   asOf: string;
   source: PriceSource;
   note: string;
   /** The provider's `subscription`: the row is a comparison, not a bill. */
   subscription: boolean;
+}
+
+/**
+ * The day a row the sync keeps from its provider's `listing` was last read, or
+ * null for a hand-held row (one stating its own `source`, or on a provider with
+ * no listing). An undated first window reads as this date, as an OpenRouter
+ * row's reads as the day the catalogue was last synced: the rate is confirmed
+ * as of the latest read, not only as of the day the row was first written,
+ * which stays in the note ("row since").
+ */
+export function syncedListingAsOf(provider: CatalogueProvider, row: { source?: PriceSource }): string | null {
+  if (provider.listing === undefined || row.source !== undefined) return null;
+  return provider.asOf ?? null;
 }
 
 /** The flat views of one catalogue's prices. Pure; the module's own are below. */
@@ -433,9 +467,9 @@ export function priceTables(cat: ModelCatalogue): {
           apiBase: provider.apiBase,
           model,
           windows: row.windows,
-          asOf: row.asOf,
+          asOf: syncedListingAsOf(provider, row) ?? row.asOf,
           source: row.source ?? provider.source ?? "list",
-          note: row.note ?? (provider.note ?? "").replaceAll("{asOf}", row.asOf),
+          note: (row.note ?? provider.note ?? "").replaceAll("{asOf}", row.asOf).replaceAll("{read}", provider.asOf ?? row.asOf),
           subscription: provider.subscription === true,
         });
       }
@@ -540,7 +574,7 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
   for (const [id, p] of Object.entries(providers)) {
     const at = `${where}: providers.${id}`;
     if (!isObj(p)) throw new Error(`${at} must be an object`);
-    only(p, ["name", "asOf", "apiBase", "label", "source", "note", "subscription"], at);
+    only(p, ["name", "asOf", "apiBase", "label", "source", "note", "subscription", "listing"], at);
     str(p["name"], `${at}.name`);
     if (id === "openrouter" && (typeof p["asOf"] !== "string" || !DAY.test(p["asOf"]))) throw new Error(`${at}.asOf must be a YYYY-MM-DD day`);
     if (p["apiBase"] !== undefined) {
@@ -555,6 +589,15 @@ export function parseCatalogue(json: string, where = "infra/model-catalogue.json
     if (p["source"] !== undefined && !SOURCES.includes(p["source"] as string)) throw new Error(`${at}.source must be list or catalogue`);
     if (p["subscription"] !== undefined && (p["subscription"] !== true || p["apiBase"] === undefined)) {
       throw new Error(`${at}.subscription must be true, on an endpoint provider`);
+    }
+    if (p["listing"] !== undefined) {
+      if (p["apiBase"] === undefined) throw new Error(`${at}.listing is for an endpoint provider (one with an apiBase)`);
+      try {
+        new URL(str(p["listing"], `${at}.listing`));
+      } catch {
+        throw new Error(`${at}.listing is not a URL`);
+      }
+      if (p["asOf"] !== undefined && (typeof p["asOf"] !== "string" || !DAY.test(p["asOf"]))) throw new Error(`${at}.asOf must be a YYYY-MM-DD day`);
     }
   }
 

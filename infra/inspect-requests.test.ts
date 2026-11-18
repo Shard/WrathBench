@@ -98,7 +98,7 @@ const V1 = "run-v1";
 
 /** A paid run on OpenCode Go, whose responses report the allowance's $0. */
 const GO = "run-go";
-await writeRun(GO, { driver: "openai", model: "glm-5.3", apiBase: "https://opencode.ai/inference/go/openai/v1" }, [0, 6].flatMap((m, i) => openrouter(T0 + m * MIN + 10_000, i + 1, { cost: 0 })), T0 + 20 * MIN);
+await writeRun(GO, { driver: "openai", model: "glm-5.3-flash", apiBase: "https://opencode.ai/inference/go/openai/v1" }, [0, 6].flatMap((m, i) => openrouter(T0 + m * MIN + 10_000, i + 1, { cost: 0 })), T0 + 20 * MIN);
 
 /** The same run with the adapter's retries on the record between each request and its response (`adapter_retry`). */
 const V1_RETRIED = "run-v1-retried";
@@ -336,7 +336,7 @@ describe("the rules it shares with the runner and the viewer", () => {
 
   test("a subscription run's reported $0 is named the allowance's, and its tokens are priced at list through the alias", async () => {
     const r = await readout(GO);
-    expect(r.price).toMatchObject({ id: "z-ai/glm-5.3" });
+    expect(r.price).toMatchObject({ id: "z-ai/glm-5.3-flash" });
     expect(r.windows[0]!.reportedUsd).toBe(0);
     expect(r.windows[0]!.pricedUsd).toBeGreaterThan(0);
     expect(r.notes.some((n) => n.startsWith("a subscription endpoint (OpenCode Go): cost reported is its usage.cost"))).toBe(true);
@@ -349,8 +349,10 @@ describe("the rules it shares with the runner and the viewer", () => {
     const runs = [
       { model: "deepseek/deepseek-v4.1-flash", driver: "openai", apiBase: "https://openrouter.ai/api/v1" },
       { model: "deepseek-v4.1-flash", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
-      // A Go model with no row of its own: its catalogue entry's OpenRouter row, through the alias.
+      // A Go model OpenCode's listing prices: OpenCode's own row first.
       { model: "glm-5.3", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
+      // A Go model with no row of its own: its catalogue entry's OpenRouter row, through the alias.
+      { model: "glm-5.3-flash", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
       { model: "z-ai/glm-5.3", driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1" },
       { model: "gpt-6-astra", driver: "codex", apiBase: null },
       { model: "sonnet", driver: "claude-code", apiBase: null, resolvedModel: "claude-fable-5-1" },
@@ -373,7 +375,12 @@ describe("the rules it shares with the runner and the viewer", () => {
     expect(requestPrice(cat, { model: "qwen/qwen3.8-27b", driver: "openai", apiBase: "http://10.0.0.5:8000/v1", resolvedModel: null, billing: null }, NOW)).toMatchObject({ none: expect.stringContaining("no row here") });
     expect(requestPrice(null, { model: "x", driver: "openai", apiBase: null, resolvedModel: null, billing: null }, NOW)).toMatchObject({ none: expect.stringContaining("no price table") });
     const go = { driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1", resolvedModel: null, billing: null };
-    expect(requestPrice(cat, { ...go, model: "glm-5.3" }, NOW)).toMatchObject({ id: "z-ai/glm-5.3", basis: expect.stringContaining("as-if-metered") });
+    expect(requestPrice(cat, { ...go, model: "glm-5.3" }, NOW)).toMatchObject({ id: "opencode-go/glm-5.3", basis: expect.stringContaining("opencode-go endpoint row") });
+    // A synced Go row is read as of the listing's last read, as the viewer reads it; a hand-held one as of its own day.
+    const goRead = ((cat["providers"] as Record<string, Record<string, unknown>>)["opencode-go"]!["asOf"]) as string;
+    expect(requestPrice(cat, { ...go, model: "deepseek-v4.1-flash" }, NOW)).toMatchObject({ basis: `opencode-go endpoint row, its first window, read ${goRead}` });
+    expect(requestPrice(cat, { ...go, model: "mimo-v2.5" }, NOW)).toMatchObject({ basis: "opencode-go endpoint row, its first window, read 2026-10-16" });
+    expect(requestPrice(cat, { ...go, model: "glm-5.3-flash" }, NOW)).toMatchObject({ id: "z-ai/glm-5.3-flash", basis: expect.stringContaining("as-if-metered") });
     // A Go id no entry names, and an entry whose only OpenRouter row is `:free`, stay unpriced as the viewer leaves them.
     for (const model of ["nobody-catalogued-this-1", "dots-studio/dots-3-note-preview"]) {
       expect(priceFor({ model, apiBase: go.apiBase, driver: "openai", harness: null, platform: null, declaredBilling: null } as never, NOW)).toBeNull();

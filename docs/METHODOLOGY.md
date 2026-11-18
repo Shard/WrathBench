@@ -532,7 +532,9 @@ Claude Code, ChatGPT and OpenCode Go runs read paid wherever a reader sees
 billing, even though the scheduler treats a subscription as outside the
 metered budget. An OpenCode Go run's cost is its model's listed API price over
 its tokens, marked as-if-metered as a codex run's is, never the allowance's $0
-its responses report (operator, 2026-11-16).
+its responses report (operator, 2026-11-16): OpenCode's own published price
+for the model where it publishes one, else its OpenRouter listing (operator,
+2026-11-18).
 
 ## Scoring
 
