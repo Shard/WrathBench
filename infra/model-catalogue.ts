@@ -404,11 +404,30 @@ export interface EndpointRow {
   /** The model id as the provider names it — exact, case-sensitive. */
   model: string;
   windows: readonly RateWindow[];
+  /**
+   * The date an undated first window reads as. A hand-held row's own `asOf`
+   * (the day it was typed); a row the sync keeps from a provider's `listing`,
+   * the day that listing was last read — the provider's `asOf`, as an
+   * OpenRouter row reads the catalogue's (`syncedListingAsOf`).
+   */
   asOf: string;
   source: PriceSource;
   note: string;
   /** The provider's `subscription`: the row is a comparison, not a bill. */
   subscription: boolean;
+}
+
+/**
+ * The day a row the sync keeps from its provider's `listing` was last read, or
+ * null for a hand-held row (one stating its own `source`, or on a provider with
+ * no listing). An undated first window reads as this date, as an OpenRouter
+ * row's reads as the day the catalogue was last synced: the rate is confirmed
+ * as of the latest read, not only as of the day the row was first written,
+ * which stays in the note ("row since").
+ */
+export function syncedListingAsOf(provider: CatalogueProvider, row: { source?: PriceSource }): string | null {
+  if (provider.listing === undefined || row.source !== undefined) return null;
+  return provider.asOf ?? null;
 }
 
 /** The flat views of one catalogue's prices. Pure; the module's own are below. */
@@ -448,7 +467,7 @@ export function priceTables(cat: ModelCatalogue): {
           apiBase: provider.apiBase,
           model,
           windows: row.windows,
-          asOf: row.asOf,
+          asOf: syncedListingAsOf(provider, row) ?? row.asOf,
           source: row.source ?? provider.source ?? "list",
           note: (row.note ?? provider.note ?? "").replaceAll("{asOf}", row.asOf).replaceAll("{read}", provider.asOf ?? row.asOf),
           subscription: provider.subscription === true,

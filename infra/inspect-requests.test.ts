@@ -376,6 +376,10 @@ describe("the rules it shares with the runner and the viewer", () => {
     expect(requestPrice(null, { model: "x", driver: "openai", apiBase: null, resolvedModel: null, billing: null }, NOW)).toMatchObject({ none: expect.stringContaining("no price table") });
     const go = { driver: "openai", apiBase: "https://opencode.ai/inference/go/openai/v1", resolvedModel: null, billing: null };
     expect(requestPrice(cat, { ...go, model: "glm-5.3" }, NOW)).toMatchObject({ id: "opencode-go/glm-5.3", basis: expect.stringContaining("opencode-go endpoint row") });
+    // A synced Go row is read as of the listing's last read, as the viewer reads it; a hand-held one as of its own day.
+    const goRead = ((cat["providers"] as Record<string, Record<string, unknown>>)["opencode-go"]!["asOf"]) as string;
+    expect(requestPrice(cat, { ...go, model: "deepseek-v4.1-flash" }, NOW)).toMatchObject({ basis: `opencode-go endpoint row, its first window, read ${goRead}` });
+    expect(requestPrice(cat, { ...go, model: "mimo-v2.5" }, NOW)).toMatchObject({ basis: "opencode-go endpoint row, its first window, read 2026-10-16" });
     expect(requestPrice(cat, { ...go, model: "glm-5.3-flash" }, NOW)).toMatchObject({ id: "z-ai/glm-5.3-flash", basis: expect.stringContaining("as-if-metered") });
     // A Go id no entry names, and an entry whose only OpenRouter row is `:free`, stay unpriced as the viewer leaves them.
     for (const model of ["nobody-catalogued-this-1", "dots-studio/dots-3-note-preview"]) {

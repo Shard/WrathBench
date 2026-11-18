@@ -28,7 +28,8 @@ the operator's figure in GitHub issue #66.
   endpoint's `/models` (a `cost` per model, in dollars per million, readable
   without a key), and `bun wb data prices` syncs Go's into the `opencode-go`
   rows for every model the roster or a run puts on Go's base, by the
-  OpenRouter rules: dated, windows only appended, an id the listing drops kept.
+  OpenRouter rules: dated, windows only appended, an id the listing drops kept,
+  and a row read as of the listing's last read, as an OpenRouter row is.
   A model OpenCode serves there on another API, or prices in context-size
   tiers, gets no row and is reported. Zen publishes the same listing, but
   every Zen run so far was a free slug and no paid Zen model is on the

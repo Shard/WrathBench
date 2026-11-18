@@ -234,6 +234,22 @@ describe("folding a listing into the catalogue", () => {
     expect(rows.find((r) => r.model === "kept-1")!.note).toBe(`Acme Go's own listing (row since 2026-10-01, read ${TODAY})`);
   });
 
+  test("a kept row reads as of the listing's last read, as an OpenRouter row does; a hand-held row keeps its own date", () => {
+    const before = priceTables(parseCatalogue(formatCatalogue(doc())) as ModelCatalogue).endpoints;
+    expect(before.find((r) => r.model === "kept-1")!.asOf).toBe("2026-11-01");
+    const { doc: out } = foldListing(doc(), "acmego", listing, launches, TODAY);
+    const rows = priceTables(parseCatalogue(formatCatalogue(out)) as ModelCatalogue).endpoints;
+    // Typed 2026-10-01, confirmed by today's read: today is the date it is read as.
+    expect(rows.find((r) => r.model === "kept-1")!.asOf).toBe(TODAY);
+    expect(rows.find((r) => r.model === "new-1")!.asOf).toBe(TODAY);
+    expect(rows.find((r) => r.model === "held-1")!.asOf).toBe("2026-10-01");
+    // A provider with no listing keeps every row's own date.
+    const noListing = doc();
+    delete (noListing.providers["acmego"] as Record<string, unknown>)["listing"];
+    const plain = priceTables(parseCatalogue(formatCatalogue(noListing)) as ModelCatalogue).endpoints;
+    expect(plain.find((r) => r.model === "kept-1")!.asOf).toBe("2026-10-01");
+  });
+
   test("a hand-held row is never touched, even when the listing quotes its id", () => {
     const before = doc();
     const { doc: out } = foldListing(before, "acmego", listing, [...launches, { model: "held-1", apiBase: BASE }], TODAY);

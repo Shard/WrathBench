@@ -429,6 +429,12 @@ describe("the hand-held provider table", () => {
     expect(ds.source).toBe("list");
     expect(ds.note).toContain("OpenCode Go's own published price");
     expect(ds.note).toContain("2× in peak hours");
+    // Read as of the listing's last read, as an OpenRouter row is, even for a run older than the read.
+    const read = CATALOGUE.providers["opencode-go"]!.asOf!;
+    expect(ds.asOf).toBe(read);
+    expect(priceFor({ ...go, model: "deepseek-v4.1-flash" }, Date.parse("2026-10-20"))!.asOf).toBe(read);
+    // A hand-held Go row keeps the day it was typed.
+    expect(priceFor({ ...go, model: "mimo-v2.5" })!.asOf).toBe("2026-10-16");
     // Go is a subscription: the listing is a comparison, not a bill.
     expect(ds.asIfMetered).toBe(true);
     for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5"]) expect(priceFor({ ...go, model: m })?.id).toBe(`opencode-go/${m}`);

@@ -4752,7 +4752,9 @@ export function requestPrice(
         const at0 = obj(providers[provider]);
         if (!ids.includes(model) || !sameBase(base, at0["apiBase"])) continue;
         const w = rateAt(pr["windows"], at);
-        if (w !== null) return row(`${str(at0["label"]) ?? provider}/${model}`, w, `${provider} endpoint row, ${when(w, pr["asOf"])}`)!;
+        // A row the sync keeps from the provider's listing reads as of its last read (model-catalogue.ts `syncedListingAsOf`).
+        const read = typeof at0["listing"] === "string" && pr["source"] === undefined && typeof at0["asOf"] === "string" ? at0["asOf"] : pr["asOf"];
+        if (w !== null) return row(`${str(at0["label"]) ?? provider}/${model}`, w, `${provider} endpoint row, ${when(w, read)}`)!;
       }
     }
     // A subscription endpoint (OpenCode Go) with no row of its own: its catalogue
