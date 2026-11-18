@@ -204,7 +204,10 @@ reading exists; with two it rejects, explains, and never picks. It never
 changes game semantics or teaches strategy, and error-message text is
 load-bearing surface: changing it is a harness change. The scratchpad tools
 drop a stray `path` or `file` key, since there is one scratchpad and the key
-can name nothing else (operator, 2026-11-18).
+can name nothing else (operator, 2026-11-18). A word from one of the SDK's
+closed vocabularies, such as `state.units()`'s `type`, is matched in any
+letter case and resolves to its documented spelling, since case carries no
+meaning there (operator, 2026-11-18).
 
 **A name in view is a valid referent, with bounded fuzz** (2026-08-29). A
 player points at things by name, so wherever a helper takes a guid it also
