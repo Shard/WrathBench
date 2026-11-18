@@ -649,6 +649,7 @@ export function projectRunFacts(r: FleetRunFacts): FleetRunFacts {
             actual: {
               usd: r.cost.actual.usd,
               basis: r.cost.actual.basis,
+              ...(r.cost.actual.asIfMetered !== undefined ? { asIfMetered: r.cost.actual.asIfMetered } : {}),
               note: r.cost.actual.note,
               ...(r.cost.actual.backfill !== undefined
                 ? { backfill: { reportedUsd: r.cost.actual.backfill.reportedUsd, usd: r.cost.actual.backfill.usd, turns: r.cost.actual.backfill.turns } }

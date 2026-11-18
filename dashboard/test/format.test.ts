@@ -116,8 +116,23 @@ describe("listCost: one run's cost cell on a listing (operator, 2026-11-18)", ()
 
   test("an actual shows as it always has, whatever the estimate says", () => {
     expect(listCost(reported, listed, "blank")).toEqual({ usd: 1.25, figure: reported, estimate: false, text: "$1.25", title: "the provider's own charge" });
-    // A backfilled claude-code actual keeps its `*`.
-    expect(listCost({ ...reported, asIfMetered: true, backfill: { reportedUsd: 1, usd: 0.25, turns: 2 } }, listed, "blank").text).toBe("$1.25*");
+    // A backfilled actual keeps its `*`.
+    expect(listCost({ ...reported, backfill: { reportedUsd: 1, usd: 0.25, turns: 2 } }, listed, "blank").text).toBe("$1.25*");
+  });
+
+  test("a claude-code run's own as-if-metered figure is nobody's charge: the tilde, and a hover naming the CLI's figure", () => {
+    const cli = { usd: 0.031, basis: "reported", asIfMetered: true, asOf: null, note: "the Claude Agent SDK's own total_cost_usd for this session" };
+    expect(listCost(cli, listed, "blank")).toEqual({
+      usd: 0.031,
+      figure: cli,
+      estimate: true,
+      text: "~$0.031",
+      title: "as-if-metered, the CLI's own total_cost_usd · no charge\nthe Claude Agent SDK's own total_cost_usd for this session",
+    });
+    // Backfilled, it wears both marks.
+    expect(listCost({ ...cli, backfill: { reportedUsd: 0.02, usd: 0.011, turns: 1 } }, listed, "blank").text).toBe("~$0.031*");
+    // An older row that does not say whether it was metered reads as a charge, as it always did.
+    expect(listCost({ usd: 0.031, basis: "reported", note: "n" }, listed, "blank")).toMatchObject({ estimate: false, text: "$0.031" });
   });
 
   test("no actual: the estimate, with the tilde and the run page's line in the hover, then why there is no actual", () => {

@@ -493,7 +493,7 @@ const RUN_LIST_ROW_KEYS = [
   ...under("tps", TPS_KEYS),
   "cost",
   "cost.actual",
-  ...under("cost.actual", ["usd", "basis", "note"]),
+  ...under("cost.actual", ["usd", "basis", "asIfMetered", "note"]),
   "comparability",
   "comparability.budget",
   "comparability.budget.episodeMs",
@@ -631,7 +631,7 @@ describe("projectRuns", () => {
     const input = smuggle<RunListRow>({ ...runListRowFixture(), cost: smuggle<CostView>({ ...costFigureFixture(), actual: none, expected: costFigureFixture() }) });
     const row = projectRuns({ runs: [input] }).runs[0]!;
     expect(row.cost).toEqual({
-      actual: { usd: null, basis: "none", note: "a subscription endpoint, so no actual" },
+      actual: { usd: null, basis: "none", asIfMetered: false, note: "a subscription endpoint, so no actual" },
       expected: { usd: 1.5, basis: "list-price", asIfMetered: true, asOf: "2026-08-20" },
     });
     expect(projectRuns({ runs: [row as unknown as RunListRow] }).runs[0]!.cost).toEqual(row.cost);

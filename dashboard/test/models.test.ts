@@ -231,10 +231,18 @@ describe("modelRunCost: a run's cost in a model's panel (operator, 2026-11-18)",
     expect(modelRunCost({ cost: { actual, expected } })).toEqual({ text: "$1.25 reported", title: "the provider's own charge" });
   });
 
-  test("no actual: the list price, spelled as one, with the run page's line in the hover", () => {
+  test("no actual: the list price, spelled as one and tilded, with the run page's line in the hover", () => {
     expect(modelRunCost({ cost: { actual: none, expected } })).toEqual({
-      text: "$0.420 as-if-metered (list price, 2026-11)",
+      text: "~$0.420 as-if-metered (list price, 2026-11)",
       title: "expected, as-if-metered, 2026-11 prices · no actual\na subscription endpoint, so no actual",
+    });
+  });
+
+  test("a claude-code run's own as-if-metered figure: tilded, the CLI's figure named in the hover", () => {
+    const cli = { ...actual, usd: 0.031, asIfMetered: true, note: "the SDK's own total_cost_usd" };
+    expect(modelRunCost({ cost: { actual: cli, expected } })).toEqual({
+      text: "~$0.031 as-if-metered (reported)",
+      title: "as-if-metered, the CLI's own total_cost_usd · no charge\nthe SDK's own total_cost_usd",
     });
   });
 

@@ -233,15 +233,35 @@ export interface ListCost {
 }
 
 /**
- * The cost a listing shows for one run: the provider's actual where it reported
- * one, else the expected figure (the price table over the run's tokens), marked
- * with the estimate's tilde and the run page's "expected … · no actual" line
- * (operator, 2026-11-18). An OpenCode Go or codex run has no actual, so this is
- * how a listing shows what the run page already does. `blank` is the hover
- * when neither figure exists and the actual says nothing of why.
+ * The hover's first line for a reported figure nobody was charged: a
+ * claude-code run's own `total_cost_usd`, which the CLI computes as if the
+ * session were metered while a subscription pays for it.
+ */
+export const CLI_FIGURE_LINE = "as-if-metered, the CLI's own total_cost_usd · no charge";
+
+/**
+ * The cost a listing shows for one run (operator, 2026-11-18). A provider's
+ * real charge (OpenRouter `usage.cost`, an endpoint's own) shows plain. Every
+ * figure nobody was charged is marked with the estimate's tilde: a claude-code
+ * run's as-if-metered `total_cost_usd`, whose hover names the CLI's figure as
+ * its source, and, where there is no actual at all (an OpenCode Go or codex
+ * run, a provider that reports nothing), the expected figure, the price table
+ * over the run's tokens, with the run page's "expected … · no actual" line.
+ * `blank` is the hover when neither figure exists and the actual says nothing
+ * of why.
  */
 export function listCost(actual: ListedFigure | null | undefined, expected: ListedFigure | null | undefined, blank: string): ListCost {
   if (isPriced(actual)) {
+    if (actual.asIfMetered === true) {
+      const note = actual.note ?? "";
+      return {
+        usd: actual.usd,
+        figure: actual,
+        estimate: true,
+        text: `${fmtEstimate(actual.usd)}${costMark(actual)}`,
+        title: note === "" ? CLI_FIGURE_LINE : `${CLI_FIGURE_LINE}\n${note}`,
+      };
+    }
     return { usd: actual.usd, figure: actual, estimate: false, text: `${fmtUsd(actual.usd)}${costMark(actual)}`, title: actual.note ?? "" };
   }
   if (isPriced(expected)) {

@@ -101,6 +101,9 @@ the operator's figure in GitHub issue #66.
   the fleet table show the list-price estimate where a run has no actual, marked
   with the estimate's `~` and the run page's "expected … · no actual" line in the
   hover, and the runs table sorts it by that figure beside the actuals. A
+  claude-code run's own `total_cost_usd` is as-if-metered, a figure nobody was
+  charged, so it wears the same `~`, its hover naming the CLI's figure; only a
+  provider's real charge shows plain. A
   campaign square's hover gives what its runs were billed and, apart, the
   estimate for those nobody billed; the campaign's own total stays the bill.
 

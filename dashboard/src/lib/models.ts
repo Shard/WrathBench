@@ -287,11 +287,15 @@ export function windowParam(row: Pick<ModelRowView, "compactWindow" | "windows">
 /**
  * A run's cost cell in a model's panel: the provider's charge, else the
  * list-price estimate (operator, 2026-11-18). The panel spells each figure out
- * with `fmtCost` ("$1.20 reported", "$0.80 as-if-metered (list price,
- * 2026-11)"), so an estimate reads as one in the cell itself, and the hover is
- * the runs table's (`listCost`).
+ * with `fmtCost` ("$1.20 reported", "~$0.80 as-if-metered (list price,
+ * 2026-11)"), and a figure nobody was charged wears the runs table's tilde and
+ * hover (`listCost`): the list-price estimate and a claude-code run's own
+ * as-if-metered figure alike.
  */
 export function modelRunCost(r: Pick<ModelRunView, "cost">): { text: string; title: string } {
   const c = listCost(r.cost?.actual, r.cost?.expected, "provider reports no cost for this run");
-  return { text: c.figure === null ? "—" : fmtCost({ ...c.figure, asIfMetered: c.figure.asIfMetered === true, asOf: c.figure.asOf ?? null }, "—"), title: c.title };
+  if (c.figure === null) return { text: "—", title: c.title };
+  const spelled = fmtCost({ ...c.figure, asIfMetered: c.figure.asIfMetered === true, asOf: c.figure.asOf ?? null }, "—");
+  // The tilde every listing puts on a figure nobody was charged.
+  return { text: c.estimate ? `~${spelled}` : spelled, title: c.title };
 }

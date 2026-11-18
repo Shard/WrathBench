@@ -198,7 +198,7 @@ describe("the squares", () => {
     const v = view([
       // A metered run: its bill, and its own list price is never added on top.
       run({ runId: "or", actualCost: cost(1.5), expectedCost: listed(7) }),
-      // claude-code: the SDK's as-if-metered figure.
+      // claude-code: the SDK's as-if-metered figure, an estimate and never the bill.
       run({ runId: "cc", actualCost: cost(2, true), expectedCost: listed(5) }),
       // OpenCode Go or codex: no actual, the list-price estimate.
       run({ runId: "go", actualCost: none, expectedCost: listed(0.25) }),

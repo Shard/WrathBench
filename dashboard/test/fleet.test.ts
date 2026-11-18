@@ -215,6 +215,10 @@ describe("the rows", () => {
     // An unpriced model, or a row from a viewer that sent no estimate: a blank.
     expect(at(run({ cost: { actual: none } } as unknown as Partial<RunListRow>))).toMatchObject({ usd: null, estimate: false, text: "—" });
     expect(at(run({ cost: null } as Partial<RunListRow>))).toMatchObject({ usd: null, text: "—" });
+    // A claude-code run's own figure is as-if-metered: an estimate, though reported.
+    expect(
+      at(run({ cost: { actual: { usd: 0.031, basis: "reported", asIfMetered: true, note: "the CLI's own" } } } as unknown as Partial<RunListRow>)),
+    ).toMatchObject({ usd: 0.031, estimate: true, text: "~$0.031", title: "as-if-metered, the CLI's own total_cost_usd · no charge\nthe CLI's own" });
     // A reported actual shows as it always has.
     expect(at(run({ tokens: null } as Partial<RunListRow>))).toMatchObject({ usd: 0.42, estimate: false, text: "$0.420" });
   });

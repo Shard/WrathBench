@@ -1627,7 +1627,8 @@ export interface FleetRunFacts {
    * reads. Absent, too, on a row from a viewer that predates it.
    */
   cost: {
-    actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill">;
+    /** `asIfMetered` marks a figure nobody was charged (claude-code's own), which the cell shows as an estimate; absent on an older row. */
+    actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill"> & { asIfMetered?: boolean };
     expected?: Pick<CostFigure, "usd" | "basis" | "asIfMetered" | "asOf">;
   } | null;
   comparability: { budget: Pick<ComparabilityView["budget"], "episodeMs"> } | null;
