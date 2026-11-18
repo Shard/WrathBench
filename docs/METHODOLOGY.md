@@ -202,7 +202,9 @@ model-facing failures were feedback failures, and weak models burned episodes
 blind-retrying. The harness repairs an input only when exactly one valid
 reading exists; with two it rejects, explains, and never picks. It never
 changes game semantics or teaches strategy, and error-message text is
-load-bearing surface: changing it is a harness change.
+load-bearing surface: changing it is a harness change. The scratchpad tools
+drop a stray `path` or `file` key, since there is one scratchpad and the key
+can name nothing else (operator, 2026-11-18).
 
 **A name in view is a valid referent, with bounded fuzz** (2026-08-29). A
 player points at things by name, so wherever a helper takes a guid it also
@@ -210,6 +212,15 @@ takes the name of something currently observed. One candidate acts; none, or
 two or more, refuse and say what is in view — the harness never picks between
 plausible referents. Guids are opaque strings, never fuzzed or aliased: a stale
 alias silently naming the wrong unit is the forbidden class.
+
+**The SDK keeps its own sends under the server's flood limits** (operator,
+2026-11-18). The core kicks a session that sends more of some opcodes in a
+second than its AntiDOS table allows, and a model's loop over `questAreas`
+lost its session four times in one run that way. So `questAreas` answers
+again from an answer under a second old or a query still in flight, and
+sends at most 10 a second, under the 25 the core kicks at. A kick tells a
+client nothing, so `session_gone` says only that the server ended the
+session.
 
 **A deadline explains, never caps.** The SDK knows the caller's remaining time
 so a hint can say a walk was always too long; no wait shortens and no call is
