@@ -50,7 +50,7 @@ measure latency. The model instead writes a program of named routines in
 TypeScript against the SDK, which the harness runs and tracks, sleeps until
 it is woken, and intervenes (operator, 2026-11-14). The benchmark
 therefore measures how well a model drives a fixed toolkit toward long-horizon
-goals in a live world, and says so (`docs/VISION.md`); SDK fluency is a
+goals in a live world, and says so; SDK fluency is a
 confound and the fixed harness is the mitigation. Episode cost is linear in
 wall clock, and the legal posture is explicit (`docs/DATA-AND-LEGAL.md`).
 
