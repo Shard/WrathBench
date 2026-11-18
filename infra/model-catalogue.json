@@ -315,6 +315,13 @@
         }
       }
     },
+    "eigenlabs--qwen3.8-27b-4bit-mtp": {
+      "family": "qwen",
+      "name": "Qwen3.8 27B 4bit MTP (EigenLabs MLX)",
+      "weights": "open",
+      "source": "https://huggingface.co/EigenLabs/Qwen3.8-27B-4bit-mtp (apache-2.0, not gated; base_model Qwen/Qwen3.8-27B)",
+      "note": "EigenLabs' 4-bit MLX quantisation of Qwen3.8 27B with its multi-token-prediction head, served locally (LM Studio, oMLX) under this id. Its own entry, not an alias of qwen/qwen3.8-27b, so it is not merged with the hosted model"
+    },
     "google/gemini-3.7-flash": {
       "family": "gemini",
       "name": "Gemini 3.7 Flash",
@@ -367,6 +374,18 @@
       "aliases": ["gemini-4-carbon"],
       "prices": {
         "openrouter": { "google/gemini-4-carbon": { "windows": [{ "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 0.1875 }] } }
+      }
+    },
+    "google/gemini-4-hydrogen": {
+      "family": "gemini",
+      "name": "Gemini 4 Hydrogen",
+      "weights": "closed",
+      "source": "https://ai.google.dev/gemini-api/docs/models (API only; no Gemini checkpoint in the google Hugging Face org)",
+      "aliases": ["gemini-4-hydrogen"],
+      "prices": {
+        "openrouter": {
+          "google/gemini-4-hydrogen": { "windows": [{ "input": 1.5, "output": 7.5, "cacheRead": 0.075, "cacheWrite": 0.0833333 }] }
+        }
       }
     },
     "google/gemma-4-26b-a4b-it": {
