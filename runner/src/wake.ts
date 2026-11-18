@@ -6,9 +6,16 @@
  * awake or not (the stack's `ProgramHost`), so a reply with no tool call puts
  * the model to sleep instead of re-prompting it after the step interval, and
  * on a `yield` arm the `yield` tool sleeps the same way inside a turn. A sleep
- * ends on the first wake reason, a two-second window after it so that a
- * cascade is one wake, never sooner than the step interval, and after five
- * minutes at the latest.
+ * ends on the first wake reason, a window after it so that what lands
+ * together is one wake, never sooner than the step interval, and after five
+ * minutes at the latest. The window is two seconds (a restart and the ends
+ * it caused), and ten for a death or a refusal (`WAKE_SETTLE_MS`, operator,
+ * 2026-11-18), so a wipe's deaths and the refusals they bring reach the model
+ * as one wake; a reason with a shorter window that lands inside a settle
+ * wakes at its own and carries what is pending. A `wake(reason)` call, the
+ * model's own timer, keeps its two seconds, and the cap (or a `yield`'s own
+ * seconds) is never moved. Each window counts from when the sleep learned of
+ * the reason, so a death row that reaches the runner late still settles.
  *
  * The wake set is fixed by the harness and the same for every model:
  *
@@ -48,8 +55,25 @@
  * character is dead or a ghost and for how long, and the HUD's own
  * durability line when worn gear is broken or low (`conditionLines`); where
  * a fresh HUD rides with the block (a turn's message, any fixed-loop
- * request) it would say it twice, so it is left out there. At fan-out
- * neither is shown.
+ * request) it would say it twice, so it is left out there. At fan-out both
+ * are per character, each line naming it (operator, 2026-11-18): a death
+ * line for every character that died since the last wake, from its own
+ * seat's latch (`fanoutDeathLines`), and the characters dead or a ghost
+ * where no HUD follows, and each one's durability line on every block,
+ * since the fan-out roll-up says who is dead but nothing of gear
+ * (`fanoutConditionLines`).
+ *
+ * A worn item crossing into low or broken is reported at the next wake, one
+ * entry per item and character, the level and the reading (`wornCrossings`,
+ * operator, 2026-11-18), against what the last wake reported, so a crossing
+ * while the model was awake is not lost. It never wakes by itself, as a
+ * level or a quest does not. The thresholds are the HUD durability line's
+ * (`durabilityLevel`).
+ *
+ * A routine row that ended more than five minutes ago and that a kept block
+ * or a routine tool already showed ended is left out of the routine lines,
+ * counted on one line (`ROUTINE_ROW_STALE_MS`, operator, 2026-11-18): an idle
+ * run's wakes otherwise repeat hours-old ends whose value they refer back to.
  *
  * Every sleep writes one `wake` record (`via`, `turn`, `fired`, `sleptMs`,
  * `maxMs`), every fact a `deploy`, `routine` or `program_error` record as it
@@ -58,8 +82,8 @@
  * from the trajectory alone.
  */
 
-import { renderRoutines, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
-import { durabilityLine, PLAYER_FLAGS_GHOST, renderNotices, type SnapshotLike } from "./context";
+import { renderRoutines, routineDetailKey, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
+import { durabilityLine, PLAYER_FLAGS_GHOST, renderNotices, wornReadings, type DurabilityLevel, type SnapshotLike } from "./context";
 import type { HarnessNotice } from "./sandbox/host";
 import { damageTaken, DEATH_WINDOW_MS, type DeathCause } from "./sandbox/snippet-delta";
 
@@ -76,6 +100,22 @@ export const WAKE_CAP_MS = 300_000;
 export const PROGRAM_TOOL_TIMEOUT_MS = 2 * WAKE_CAP_MS;
 /** The window the first wake reason opens, so a cascade (a restart and the ends it caused) is one wake. */
 export const WAKE_COALESCE_MS = 2_000;
+/**
+ * The window a death or a refusal opens (operator, 2026-11-18): a wipe's
+ * deaths, and the refusals that fall in it, are one wake. A constant, not a knob.
+ */
+export const WAKE_SETTLE_MS = 10_000;
+/** The reasons that open the settle window rather than the two-second one. */
+const SETTLE_KEYS: ReadonlySet<WakeKey> = new Set<WakeKey>(["died", "refusal"]);
+/**
+ * How long ago a routine must have ended for its row, once shown, to be left
+ * out of a wake's routine lines (operator, 2026-11-18). A constant, not a knob.
+ */
+export const ROUTINE_ROW_STALE_MS = 300_000;
+/** Durability crossings named in one wake; past it they are counted. */
+const WAKE_WORN_SHOWN = 8;
+/** A fan-out death line's longest, in characters: five of them stay readable. */
+const FANOUT_DEATH_LINE_CHARS = 200;
 /** How often a sleep looks at its reasons: a wake is never later than this. */
 export const WAKE_TICK_MS = 250;
 /** Error and refusal signatures shown in one wake; past it they are counted. */
@@ -306,6 +346,8 @@ export interface SleepOptions {
   /** The floor: the step interval, slept whatever happens (capped by `capMs`). */
   floorMs: number;
   coalesceMs?: number;
+  /** The window a death or a refusal opens: `WAKE_SETTLE_MS` unless a test says. */
+  settleMs?: number;
   tickMs?: number;
   /** True once the run is ending: a stop request or a watchdog verdict. */
   stopped: () => boolean;
@@ -321,29 +363,45 @@ export interface SleepResult {
 }
 
 /**
- * Sleep until a wake reason has been pending for the coalescing window, the
- * run stops or the cap passes. A reason already pending when the sleep
- * starts wakes it once the floor is slept. Reads the waker and never clears
- * it: what woke the model is the wake's to take (`ProgramWake.sleep`).
+ * Sleep until a wake reason has been pending for its window, the run stops
+ * or the cap passes. Each pending reason's window (`WAKE_SETTLE_MS` for a
+ * death or a refusal, else the coalescing window) counts from when this
+ * sleep first saw it, and the sleep ends at the earliest of them, so a
+ * reason with a two-second window that lands inside a death's ten seconds
+ * wakes at its own, carrying the death. A reason already pending when the
+ * sleep starts counts from the start, and wakes it once the floor is slept.
+ * Reads the waker and never clears it: what woke the model is the wake's to
+ * take (`ProgramWake.sleep`).
  */
 export async function sleepUntilWake(o: SleepOptions): Promise<SleepResult> {
   const start = o.now();
   const cap = Math.max(0, o.capMs);
   const floor = Math.min(Math.max(0, o.floorMs), cap);
   const coalesce = o.coalesceMs ?? WAKE_COALESCE_MS;
+  const settle = Math.max(coalesce, o.settleMs ?? WAKE_SETTLE_MS);
   const tick = o.tickMs ?? WAKE_TICK_MS;
   const slept = (): number => o.now() - start;
+  /** When this sleep first saw each pending reason. */
+  const seen = new Map<WakeReason, number>();
   for (;;) {
     if (o.stopped()) return { fired: "stopped", sleptMs: slept() };
     const now = o.now();
-    if ((o.queuedNotices?.() ?? 0) > 0 && o.waker.first() === undefined) {
+    // A driver's queued notice is its own reason, so it keeps its two seconds while a death settles.
+    if ((o.queuedNotices?.() ?? 0) > 0 && !o.waker.peek().some((r) => r.key === "notice")) {
       o.waker.note({ key: "notice", ts: now, text: "a harness notice", inContext: true });
     }
-    const first = o.waker.first();
-    if (first !== undefined) {
-      const at = Math.max(start + floor, Math.max(first.ts, start) + coalesce);
-      if (now >= at) return { fired: first.key, sleptMs: slept() };
-      if (now - start >= cap) return { fired: first.key, sleptMs: slept() };
+    let due: { at: number; key: WakeKey } | undefined;
+    for (const r of o.waker.peek()) {
+      let from = seen.get(r);
+      // Seen at the start (pending as it began) or within a tick of its note: a late fact's own ts would spend its window.
+      if (from === undefined) seen.set(r, (from = now));
+      const at = from + (SETTLE_KEYS.has(r.key) ? settle : coalesce);
+      if (due === undefined || at < due.at) due = { at, key: r.key };
+    }
+    if (due !== undefined) {
+      const at = Math.max(start + floor, due.at);
+      if (now >= at) return { fired: due.key, sleptMs: slept() };
+      if (now - start >= cap) return { fired: due.key, sleptMs: slept() };
       await o.sleep(Math.max(1, Math.min(tick, at - now, cap - (now - start))));
       continue;
     }
@@ -385,6 +443,28 @@ export interface WakeView {
   now: number;
   /** The routine errors and values the model was already shown (the stack's `ProgramHost.shownDetails`): their lines refer to them. */
   shown?: ReadonlySet<string> | undefined;
+  /** Ended runs the model was shown ended (`endedRunKey`): once stale, their rows are left out (`ROUTINE_ROW_STALE_MS`). */
+  endedShown?: ReadonlySet<string> | undefined;
+  /** Worn items that crossed into low or broken since the last wake, as entries (`wornCrossings`). */
+  worn?: readonly string[] | undefined;
+}
+
+/** An ended run as `ProgramWake` remembers it shown: name, character and start. */
+export const endedRunKey = (r: Pick<RoutineRow, "name" | "character" | "startedAt">): string => `${r.name}\u0000${r.character ?? ""}\u0000${r.startedAt}`;
+
+/**
+ * The routine rows a wake lists: every row but those that ended more than
+ * `ROUTINE_ROW_STALE_MS` ago and that the model was already shown ended (a
+ * kept block or a routine tool showed the run's end, or the stack marked its
+ * error or value shown). `dropped` counts what was left out. Pure.
+ */
+export function freshRoutines(rows: readonly RoutineRow[], now: number, shown: ReadonlySet<string> = new Set(), endedShown: ReadonlySet<string> = new Set()): { rows: RoutineRow[]; dropped: number } {
+  const kept = rows.filter((r) => {
+    if (r.state === "running" || r.endedAt === undefined || now - r.endedAt <= ROUTINE_ROW_STALE_MS) return true;
+    const detail = routineDetailKey(r);
+    return !(endedShown.has(endedRunKey(r)) || (detail !== undefined && shown.has(detail)));
+  });
+  return { rows: kept, dropped: rows.length - kept.length };
 }
 
 /** How an error or refusal signature reads in a wake. */
@@ -450,8 +530,11 @@ export function renderWake(v: WakeView): string {
         : namedReasons(v.reasons);
   const lines: string[] = [`[wake ${v.n} · slept ${sleptWords(v.sleptMs)} · woke for: ${why}]`];
 
-  // Every routine as it stands, in the stack's own words, and the stall fact.
-  lines.push(renderRoutines(v.facts.routines, v.now, v.shown));
+  // Every routine as it stands, in the stack's own words, but for ends long past that the model was shown; and the stall fact.
+  const fresh = freshRoutines(v.facts.routines, v.now, v.shown, v.endedShown);
+  if (fresh.dropped === 0) lines.push(renderRoutines(v.facts.routines, v.now, v.shown));
+  else if (fresh.rows.length > 0) lines.push(`${renderRoutines(fresh.rows, v.now, v.shown)}\nand ${fresh.dropped} that ended earlier, shown before`);
+  else lines.push(`routines: ${fresh.dropped} that ended earlier, shown before`);
   if (!v.facts.routines.some((r) => r.state === "running")) lines.push("no routine is running");
 
   const facts = v.facts.facts;
@@ -524,6 +607,10 @@ export function renderWake(v: WakeView): string {
     for (const l of p.levels ?? []) if (l.from !== l.to) parts.push(`${l.character} level ${l.from} → ${l.to}`);
     parts.push(`quests completed ${p.quests}`, `deaths ${p.deaths}`);
     lines.push(`since you slept: ${parts.join(" · ")}`);
+  }
+  if (v.worn !== undefined && v.worn.length > 0) {
+    const more = v.worn.length > WAKE_WORN_SHOWN ? `; and ${v.worn.length - WAKE_WORN_SHOWN} more` : "";
+    lines.push(`worn down since you slept: ${v.worn.slice(0, WAKE_WORN_SHOWN).join("; ")}${more}`);
   }
   if (v.condition !== undefined) lines.push(...v.condition);
 
@@ -599,7 +686,12 @@ function consoleTail(entries: readonly ProgramLogLine[]): string[] {
 
 function namedReasons(reasons: readonly WakeReason[]): string {
   const texts: string[] = [];
-  for (const r of reasons) if (!texts.includes(r.text)) texts.push(r.text);
+  // At fan-out, the characters that died are one reason, where the first of them stands: a wipe names every one.
+  const died = [...new Set(reasons.flatMap((r) => (r.key === "died" && r.character !== undefined ? [r.character] : [])))];
+  for (const r of reasons) {
+    const text = died.length > 1 && r.key === "died" && r.character !== undefined ? `${died.join(", ")} died` : r.text;
+    if (!texts.includes(text)) texts.push(text);
+  }
   if (texts.length === 0) return "nothing";
   const shown = texts.slice(0, WAKE_REASONS_SHOWN).join("; ");
   return texts.length > WAKE_REASONS_SHOWN ? `${shown}; and ${texts.length - WAKE_REASONS_SHOWN} more` : shown;
@@ -655,8 +747,8 @@ export interface WakeSample {
   inventory?: SnapshotLike["inventory"];
   xp?: { value?: unknown } | null | undefined;
   observation?: { connected?: boolean } | undefined;
-  /** A fan-out run's sample: each character's level and whether its stream is open (the loop's digests). */
-  seats?: readonly { character: string; level: number | null; connected: boolean }[] | undefined;
+  /** A fan-out run's sample: each character's level, whether its stream is open, and whether it is dead or a ghost (the loop's digests). */
+  seats?: readonly { character: string; level: number | null; connected: boolean; dead?: boolean | undefined; ghost?: boolean | undefined }[] | undefined;
 }
 
 /** The run's trajectory, as far as the wake writes to it. */
@@ -686,7 +778,8 @@ export interface WakeSleepOptions {
    * Whether a fresh HUD rides with the block: a turn's message on every
    * driver, and on the fixed loop the request right after a `yield` result.
    * Only a block without one says the character's condition (`conditionLines`);
-   * absent reads as without.
+   * absent reads as without. At fan-out it holds back only who is dead or a
+   * ghost, which the roll-up says: its durability lines show either way.
    */
   hud?: boolean | undefined;
   /**
@@ -727,8 +820,18 @@ export class ProgramWake {
   private blamed = 0;
   /** The last death's time, of a single character (`onDeath`): how long it has been dead. */
   private lastDeathTs: number | undefined;
-  /** The child's latched cause of the last death (`SandboxHost.deathCause`), once the sandbox exists (`useDeathCause`). */
-  private deathCause: (() => Promise<DeathCause | null>) | undefined;
+  /** At fan-out, each character's last death's time: how long it has been dead. */
+  private readonly deathTsOf = new Map<string, number>();
+  /** At fan-out, the characters that died since the last wake, by their last death's time: each gets a death line. */
+  private diedSince = new Map<string, number>();
+  /** The child's latched cause of the last death (`SandboxHost.deathCause`), at fan-out of a character's seat, once the sandbox exists (`useDeathCause`). */
+  private deathCause: ((character?: string) => Promise<DeathCause | null>) | undefined;
+  /** At fan-out, every seat's worn items (`SandboxHost.wornDurabilityAll`), once the sandbox exists (`useWorn`). */
+  private wornRead: (() => Promise<Record<string, SnapshotLike["inventory"]>>) | undefined;
+  /** Each worn item's level as the last wake reported it, by character ("" for a single one) and `slot:item`: what a crossing is measured from. */
+  private readonly wornReported = new Map<string, Map<string, DurabilityLevel>>();
+  /** Ended runs the model was shown ended, in a kept block or a routine tool's answer (`endedRunKey`). */
+  private readonly endedShown = new Set<string>();
   private readonly now: () => number;
   private readonly sleepFn: (ms: number) => Promise<void>;
 
@@ -780,14 +883,23 @@ export class ProgramWake {
     );
   }
 
-  /** Where a death wake reads what killed the character: the sandbox, made after this. Single character only. */
-  useDeathCause(read: () => Promise<DeathCause | null>): void {
+  /** Where a death wake reads what killed the character: the sandbox, made after this. At fan-out it is asked per character. */
+  useDeathCause(read: (character?: string) => Promise<DeathCause | null>): void {
     this.deathCause = read;
+  }
+
+  /** Where a fan-out wake reads every character's worn items: the sandbox, made after this. */
+  useWorn(read: () => Promise<Record<string, SnapshotLike["inventory"]>>): void {
+    this.wornRead = read;
   }
 
   /** A `death` row of the session record: at fan-out, of `character`'s. */
   onDeath(ts: number, character?: string): void {
     if (character === undefined) this.lastDeathTs = Math.max(ts, this.lastDeathTs ?? -Infinity);
+    else {
+      this.deathTsOf.set(character, Math.max(ts, this.deathTsOf.get(character) ?? -Infinity));
+      this.diedSince.set(character, Math.max(ts, this.diedSince.get(character) ?? -Infinity));
+    }
     this.waker.note(
       character === undefined
         ? { key: "died", ts, text: "your character died", inContext: true }
@@ -798,6 +910,11 @@ export class ProgramWake {
   /** Every state sample: the stream closing wakes, and the last reading is what progress is measured from. */
   onSample(snap: WakeSample): void {
     this.lastSample = snap;
+    // A single character's first worn reading is what its first crossing is measured from (`wornCrossings`).
+    if (snap.seats === undefined && !this.wornReported.has("")) {
+      const first = wornReadings(snap.inventory);
+      if (first.length > 0) this.wornReported.set("", new Map(first.map((w) => [`${w.slot}:${w.item}`, w.level] as const)));
+    }
     if (snap.seats !== undefined) {
       // At fan-out each character's stream is its own: any one closing wakes, by name.
       for (const c of snap.seats) {
@@ -836,6 +953,7 @@ export class ProgramWake {
     // What the lines showed: the older ended routines they count but do not show are not news the model has.
     const rows = routinesInView(all).rows;
     for (const r of rows) this.rowsShown.set(runKey(r.name, r.character), r);
+    this.markEndedShown(rows);
     this.waker.forgetWhere((r) => {
       if (r.routine === undefined) return false;
       const run = rows.find((x) => x.name === r.routine!.name && x.character === r.routine!.character);
@@ -901,6 +1019,90 @@ export class ProgramWake {
     return line === undefined ? [] : [line];
   }
 
+  /**
+   * A death line for every character that died since the last wake, from its
+   * seat's latch, oldest death first; a latch from another death than the
+   * record's last for that character is not this one's cause. `diedSince`
+   * is taken as the wake takes its reasons, so the next wake has only the
+   * deaths after it. Fan-out only.
+   */
+  private async fanoutDeaths(diedSince: ReadonlyMap<string, number>): Promise<string[]> {
+    const died = [...diedSince].sort((a, b) => a[1] - b[1]);
+    if (died.length === 0) return [];
+    const lines = await Promise.all(
+      died.map(async ([character, ts]) => {
+        let cause: DeathCause | null = null;
+        try {
+          cause = (await this.deathCause?.(character)) ?? null;
+        } catch {
+          // A latch that failed costs the cause only.
+        }
+        return fanoutDeathLine(character, cause !== null && Math.abs(cause.ts - ts) <= DEATH_MATCH_MS ? cause : null);
+      }),
+    );
+    return ["deaths:", ...lines.map((l) => `  ${l}`)];
+  }
+
+  /**
+   * Every character's worn items now, by character ("" for a single one):
+   * a fan-out run's from its seats (`useWorn`), a single character's from the
+   * last state sample. Empty when there is no reading.
+   */
+  private async wornNow(): Promise<Map<string, SnapshotLike["inventory"]>> {
+    if (this.lastSample?.seats !== undefined) {
+      if (this.wornRead === undefined) return new Map();
+      try {
+        return new Map(Object.entries(await this.wornRead()));
+      } catch {
+        return new Map();
+      }
+    }
+    const inv = this.lastSample?.inventory;
+    return inv === undefined ? new Map() : new Map([["", inv]]);
+  }
+
+  /**
+   * The worn items whose level is worse than the last wake reported it (ok
+   * to low, ok or low to broken), as entries naming the character at
+   * fan-out, the item, its level and reading; and that reading becomes the
+   * one reported. An item first seen (the run's first reading, a resume, a
+   * swap into its slot) is taken as it stands, silently, and a repair
+   * re-arms it the same way. A character with no worn reading keeps the last.
+   */
+  private wornCrossings(worn: ReadonlyMap<string, SnapshotLike["inventory"]>): string[] {
+    const out: string[] = [];
+    for (const [character, inv] of worn) {
+      const readings = wornReadings(inv);
+      if (readings.length === 0) continue;
+      const before = this.wornReported.get(character);
+      const now = new Map<string, DurabilityLevel>();
+      for (const w of readings) {
+        const key = `${w.slot}:${w.item}`;
+        now.set(key, w.level);
+        const was = before?.get(key);
+        if (was !== undefined && LEVEL_RANK[w.level] > LEVEL_RANK[was]) out.push(`${character === "" ? "" : `${character} `}${w.label} ${w.level} (${w.current}/${w.max})`);
+      }
+      this.wornReported.set(character, now);
+    }
+    return out;
+  }
+
+  /**
+   * The conversation lost what it was shown (a CLI compaction, a new
+   * session or thread, a trim, a result the window cut): ended runs are no
+   * longer known shown, so their rows are listed again until a kept block
+   * shows them. Beside every `ProgramHost.forgetShown`.
+   */
+  forgetShown(): void {
+    this.endedShown.clear();
+  }
+
+  /** Remember the ended runs among `rows` as shown ended; bounded, the oldest forgotten first. */
+  private markEndedShown(rows: readonly RoutineRow[]): void {
+    for (const r of rows) if (r.state !== "running") this.endedShown.add(endedRunKey(r));
+    while (this.endedShown.size > ENDED_SHOWN_KEPT) this.endedShown.delete(this.endedShown.values().next().value as string);
+  }
+
   /** Restarts the program was blamed for since the last call. */
   takeBlamedRestarts(): number {
     const n = this.blamed;
@@ -955,6 +1157,9 @@ export class ProgramWake {
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
     const reasons = withoutDeathRefusals(this.waker.take());
+    // Taken with the reasons, before any await: a death row landing during one waits, line and reason alike, for the next wake.
+    const died = this.diedSince;
+    this.diedSince = new Map();
     this.n++;
     const after = this.reading();
     const now = this.now();
@@ -969,10 +1174,18 @@ export class ProgramWake {
       quests: Math.max(0, after.counts.quests - before.counts.quests),
       deaths: Math.max(0, after.counts.deaths - before.counts.deaths),
     };
-    const condition = [
-      ...(reasons.some((r) => r.key === "died") || progress.deaths > 0 ? await this.deathLines() : []),
-      ...(o.hud === true ? [] : conditionLines(this.lastSample, this.lastDeathTs, now)),
-    ];
+    const seats = this.lastSample?.seats;
+    const worn = await this.wornNow();
+    const crossings = this.wornCrossings(worn);
+    const condition =
+      seats === undefined
+        ? [
+            ...(reasons.some((r) => r.key === "died") || progress.deaths > 0 ? await this.deathLines() : []),
+            ...(o.hud === true ? [] : conditionLines(this.lastSample, this.lastDeathTs, now)),
+          ]
+        : [...(await this.fanoutDeaths(died)), ...fanoutConditionLines(seats, worn, this.deathTsOf, now, o.hud === true)];
+    const shownDetails = program.shownDetails();
+    const fresh = freshRoutines(facts.routines, now, shownDetails, this.endedShown);
     const block = this.o.trajectory.scrub(
       renderWake({
         n: this.n,
@@ -984,11 +1197,16 @@ export class ProgramWake {
         signatures: this.signatures,
         progress,
         now,
-        shown: program.shownDetails(),
+        shown: shownDetails,
+        ...(this.endedShown.size > 0 ? { endedShown: this.endedShown } : {}),
+        ...(crossings.length > 0 ? { worn: crossings } : {}),
         ...(condition.length > 0 ? { condition } : {}),
       }),
     );
-    if (o.kept) program.markShown(facts.routines);
+    if (o.kept) {
+      program.markShown(facts.routines);
+      this.markEndedShown(routinesInView(fresh.rows).rows);
+    }
     // The block itself, as the model reads it: `bun wb inspect` shows a wake from its record alone.
     this.o.trajectory.append({
       t: "wake",
@@ -1010,6 +1228,61 @@ export class ProgramWake {
 
 /** How far a latched death's time may sit from the record's death row and still be that death. */
 const DEATH_MATCH_MS = 30_000;
+/** Ended runs remembered as shown; a program that starts a routine per task cannot grow it without bound. */
+const ENDED_SHOWN_KEPT = 2_000;
+/** How bad each durability level is: a crossing is a move up this. */
+const LEVEL_RANK: Readonly<Record<DurabilityLevel, number>> = { ok: 0, low: 1, broken: 2 };
+
+/**
+ * One character's line under a fan-out wake's `deaths:`: "Alfa: killed by
+ * Defias Miner, took 355 in the 10s before: Defias Miner 260 (melee ×3), …",
+ * "Alfa: no hit in the 10s before" (a fall, a drowning), or "Alfa: cause not
+ * seen" when its seat latched none for this death. Cut at
+ * `FANOUT_DEATH_LINE_CHARS`. Pure.
+ */
+export function fanoutDeathLine(character: string, cause: DeathCause | null): string {
+  const window = `${Math.round(DEATH_WINDOW_MS / 1000)}s`;
+  const taken = cause === null ? undefined : damageTaken(cause.damage);
+  const line =
+    cause === null
+      ? `${character}: cause not seen`
+      : cause.killer === undefined || taken === undefined
+        ? `${character}: no hit in the ${window} before`
+        : `${character}: killed by ${cause.killer}, took ${taken.total} in the ${window} before: ${taken.text}`;
+  return line.length > FANOUT_DEATH_LINE_CHARS ? `${line.slice(0, FANOUT_DEATH_LINE_CHARS - 1).trimEnd()}…` : line;
+}
+
+/**
+ * A fan-out wake's condition lines, each naming its character: where no HUD
+ * rides with the block, one line of the characters dead or a ghost and for
+ * how long ("characters: Alfa ghost, died 3m10s ago; Bravo dead, died 40s
+ * ago"); and on every block each character's durability line when its worn
+ * gear is broken or low ("Alfa durability: broken main hand …"), which the
+ * fan-out roll-up never carries. Pure.
+ */
+export function fanoutConditionLines(
+  seats: NonNullable<WakeSample["seats"]>,
+  worn: ReadonlyMap<string, SnapshotLike["inventory"]>,
+  diedAt: ReadonlyMap<string, number>,
+  now: number,
+  hud: boolean,
+): string[] {
+  const out: string[] = [];
+  if (!hud) {
+    const down = seats.flatMap((c) => {
+      if (c.ghost !== true && c.dead !== true) return [];
+      const at = diedAt.get(c.character);
+      return [`${c.character} ${c.ghost === true ? "ghost" : "dead"}${at !== undefined ? `, died ${sleptWords(now - at)} ago` : ""}`];
+    });
+    if (down.length > 0) out.push(`characters: ${down.join("; ")}`);
+  }
+  const names = [...new Set([...seats.map((c) => c.character), ...worn.keys()])];
+  for (const name of names) {
+    const line = durabilityLine(worn.get(name));
+    if (line !== undefined) out.push(`${name} ${line}`);
+  }
+  return out;
+}
 /** A death line's longest, in characters; past it, cut and ended with "…". */
 const DEATH_LINE_CHARS = 240;
 
@@ -1031,7 +1304,8 @@ export function deathLine(cause: DeathCause): string | undefined {
  * reading, or nothing: "character: ghost, died 7m42s ago" (or dead) off the
  * player frame's health and the ghost bit, and the HUD's durability line
  * when worn gear is broken or low (`durabilityLine`). Nothing at fan-out,
- * whose sample is the characters' digests. Pure.
+ * whose sample is the characters' digests: there it is
+ * `fanoutConditionLines`. Pure.
  */
 export function conditionLines(sample: WakeSample | null, diedAt: number | undefined, now: number): string[] {
   if (sample === null || sample.seats !== undefined) return [];
