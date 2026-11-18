@@ -34,7 +34,8 @@
  *
  * The derivation is the live chart's, imported rather than restated
  * (`homeLadderRuns`, `ladderPoints`, `ladderChartLayout`, `paretoFront`), so
- * the card cannot claim a shape the homepage does not draw.
+ * the card cannot claim a shape the homepage does not draw in its default
+ * view (no series picked, so `latest`).
  */
 
 import type { ResultRun } from "@viewer/api-types";
@@ -143,7 +144,7 @@ export interface OgOptions {
   identity?: boolean;
   /** One name above each frontier entry, on by default. */
   labels?: boolean;
-  /** The operator's preview series (`info.json`'s `previewSeries`), which the homepage's ladder leaves out and so does the card. */
+  /** The operator's preview series (`info.json`'s `previewSeries`), which the homepage's ladder leaves out by default and so does the card. */
   preview?: string | null;
 }
 
@@ -264,7 +265,8 @@ function puck(cx: number, cy: number, onFront: boolean, href: string | null): st
  * The card, as an SVG string.
  *
  * Takes the ladder's runs exactly as the homepage's `api.ladder(HOME_EPISODE)`
- * answers them and narrows them the same way (`homeLadderRuns`, free runs out),
+ * answers them and narrows them the same way as its default view
+ * (`homeLadderRuns` with no series picked, free runs out),
  * so the picture and the page agree by construction rather than by a comment
  * asking the next editor to keep them in step. An empty set still returns a
  * valid card — the ground and the wordmark — because a build must never ship
