@@ -298,7 +298,11 @@ signature since a load and of each refusal signature in the run (operator delega
 next wake), the program's own `wake(reason)`, a death, a
 sandbox restart, the event stream closing or a harness notice, and after five
 minutes at the latest; gaining a level or completing a quest does not wake it,
-and a program that wants either calls `wake()`. What it was already shown in
+and a program that wants either calls `wake()`. A refusal is a failure of
+the program's own call: a move its code replaced or stopped, the long-route
+note on a move that went ahead, and a call the character's death refused or
+cut short are none, and neither wake it nor are recorded as one (operator,
+2026-11-18). What it was already shown in
 a tool result wakes no later sleep. The wake block is facts in fixed wording:
 every routine as it stands, new errors and refusals with their hints, what
 changed for the character, and the routines' last console lines, capped. Two
