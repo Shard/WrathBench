@@ -822,7 +822,7 @@ describe("ProgramWake", () => {
     c.schedule(10_000, () => p.push(refusal(c.now(), "drop"), wake));
     const fourth = await wake.sleep(p, { via: "yield", turn: 4, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(fourth.fired).toBe("refusal");
-    expect(fourth.block.split("\n")[0]).toBe("[wake 4 · slept 12s · woke for: new refusal (grind: moveTo drop)]");
+    expect(fourth.block.split("\n")[0]).toBe("[wake 4 · slept 20s · woke for: new refusal (grind: moveTo drop)]");
   });
 
   test("a refusal that lands after the hint drain, before the result returns, still wakes: only what a result carried is delivered", async () => {
@@ -902,7 +902,7 @@ describe("ProgramWake", () => {
     expect(refusalPairOf("cull||moveTo|target_off_mesh")).toBe("|moveTo|target_off_mesh");
     c.schedule(10_000, () => p.push(refusal(c.now(), "walk", "target_off_mesh"), wake));
     const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
-    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 12s · woke for: new refusal (walk: moveTo target_off_mesh)]");
+    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 20s · woke for: new refusal (walk: moveTo target_off_mesh)]");
     // The same refusal from a routine started under a new name is not news.
     c.schedule(10_000, () => p.push(refusal(c.now(), "cull", "target_off_mesh"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true });
@@ -928,7 +928,7 @@ describe("ProgramWake", () => {
       p.push(refusal(c.now() + 1, "dead", "you are dead"), wake);
     });
     const woke = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
-    expect(woke.block.split("\n")[0]).toBe("[wake 1 · slept 12s · woke for: your character died]");
+    expect(woke.block.split("\n")[0]).toBe("[wake 1 · slept 20s · woke for: your character died]");
     // They are still listed among the wake's refusals, with their hints.
     expect(woke.block).toContain("cull moveTo dead — you are dead");
     expect(woke.block).toContain("cull moveTo interrupted — the move stopped because the character died.");
@@ -1484,7 +1484,7 @@ describe("the program loop at fan-out", () => {
     const first = await wake.sleep(p, { via: "yield", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(first.fired).toBe("refusal");
     expect(first.block.split("\n")).toEqual([
-      "[wake 1 · slept 12s · woke for: new refusal (party: castSpell not_ready [Alfa]); new refusal (party: castSpell not_ready [Bravo]); new refusal (party: castSpell out_of_range [Bravo])]",
+      "[wake 1 · slept 20s · woke for: new refusal (party: castSpell not_ready [Alfa]); new refusal (party: castSpell not_ready [Bravo]); new refusal (party: castSpell out_of_range [Bravo])]",
       "routines: none started",
       "no routine is running",
       "refusals:",
@@ -1501,7 +1501,7 @@ describe("the program loop at fan-out", () => {
     c.schedule(20_000, () => p.push(refusal(c.now(), "Charlie", "not_ready"), wake));
     const second = await wake.sleep(p, { via: "yield", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
     expect(second.fired).toBe("refusal");
-    expect(second.block.split("\n")[0]).toBe("[wake 2 · slept 22s · woke for: new refusal (party: castSpell not_ready [Charlie])]");
+    expect(second.block.split("\n")[0]).toBe("[wake 2 · slept 30s · woke for: new refusal (party: castSpell not_ready [Charlie])]");
     expect(second.block).toContain("refusals:\n  party castSpell not_ready [Charlie, Alfa] — the spell is not ready ×2\n  party castSpell out_of_range [Bravo] — move closer");
   });
 
@@ -1513,7 +1513,7 @@ describe("the program loop at fan-out", () => {
       c.schedule(20_000, () => wake.onDeath(c.now(), "Bravo"));
       const woke = await wake.sleep(p, { via: "yield", turn, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: true });
       expect(woke.fired).toBe("died");
-      expect(woke.block.split("\n")[0]).toBe(`[wake ${turn} · slept 22s · woke for: Bravo died]`);
+      expect(woke.block.split("\n")[0]).toBe(`[wake ${turn} · slept 30s · woke for: Bravo died]`);
     }
   });
 
@@ -1530,7 +1530,7 @@ describe("the program loop at fan-out", () => {
     c.schedule(40_000, () => wake.onDeath(c.now(), "Bravo"));
     const first = await wake.sleep(p, { via: "turn-end", turn: 1, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });
     expect(first.fired).toBe("died");
-    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 42s · woke for: Bravo died]");
+    expect(first.block.split("\n")[0]).toBe("[wake 1 · slept 50s · woke for: Bravo died]");
     expect(first.block).toContain("since you slept: Alfa level 20 → 21 · quests completed 0 · deaths 0");
     c.schedule(10_000, () => wake.onSample({ seats: seats(21, false) }));
     const second = await wake.sleep(p, { via: "turn-end", turn: 2, capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, kept: false });

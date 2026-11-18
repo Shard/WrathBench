@@ -709,6 +709,40 @@ const EQUIP_SLOT_NAME: readonly string[] = [
  */
 const DURABILITY_LOW_FRACTION = 0.25;
 
+/** How worn an item reads: broken at 0, low at or under `DURABILITY_LOW_FRACTION` of its maximum, else ok. */
+export type DurabilityLevel = "ok" | "low" | "broken";
+
+export function durabilityLevel(current: number, max: number): DurabilityLevel {
+  return current <= 0 ? "broken" : current <= max * DURABILITY_LOW_FRACTION ? "low" : "ok";
+}
+
+/** One worn item with a maximum durability, as the durability line names it. */
+export interface WornReading {
+  slot: number;
+  /** "main hand Rusted Cleaver": the slot, then the item's name. */
+  label: string;
+  /** What tells this item from the one worn in its slot before it: its id, else its name. */
+  item: string;
+  current: number;
+  max: number;
+  level: DurabilityLevel;
+}
+
+/** Every worn item (slots 0-18) that has a maximum durability, in slot order of the inventory given. */
+export function wornReadings(inventory: SnapshotLike["inventory"]): WornReading[] {
+  const out: WornReading[] = [];
+  for (const it of inventory ?? []) {
+    const slot = it.slot;
+    if (typeof slot !== "number" || slot >= EQUIP_SLOT_NAME.length) continue;
+    const cur = it.durability?.current;
+    const max = it.durability?.max;
+    if (typeof cur !== "number" || typeof max !== "number" || max <= 0) continue;
+    const name = it.name != null ? String(it.name) : it.itemId != null ? `item ${String(it.itemId)}` : "an item";
+    out.push({ slot, label: `${EQUIP_SLOT_NAME[slot]} ${name}`, item: it.itemId != null ? String(it.itemId) : name, current: cur, max, level: durabilityLevel(cur, max) });
+  }
+  return out;
+}
+
 /**
  * "durability: broken main hand Rusted Cleaver (0/40); low chest Patched
  * Vest (9/60) — a broken item gives no stats", or undefined when every worn
@@ -718,15 +752,9 @@ const DURABILITY_LOW_FRACTION = 0.25;
 export function durabilityLine(inventory: SnapshotLike["inventory"]): string | undefined {
   const broken: string[] = [];
   const low: string[] = [];
-  for (const it of inventory ?? []) {
-    const slot = it.slot;
-    if (typeof slot !== "number" || slot >= EQUIP_SLOT_NAME.length) continue;
-    const cur = it.durability?.current;
-    const max = it.durability?.max;
-    if (typeof cur !== "number" || typeof max !== "number" || max <= 0) continue;
-    if (cur > max * DURABILITY_LOW_FRACTION) continue;
-    const name = it.name != null ? String(it.name) : it.itemId != null ? `item ${String(it.itemId)}` : "an item";
-    (cur <= 0 ? broken : low).push(`${EQUIP_SLOT_NAME[slot]} ${name} (${cur}/${max})`);
+  for (const w of wornReadings(inventory)) {
+    if (w.level === "ok") continue;
+    (w.level === "broken" ? broken : low).push(`${w.label} (${w.current}/${w.max})`);
   }
   if (broken.length === 0 && low.length === 0) return undefined;
   const parts: string[] = [];

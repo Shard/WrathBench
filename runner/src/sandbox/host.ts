@@ -25,6 +25,7 @@ import {
 import type { CallRecord } from "@wrathbench/mcp";
 import type { CharacterRoster } from "@wrathbench/mcp/fanout";
 import type { PartySignal } from "@wrathbench/mcp/record";
+import type { SnapshotLike } from "../context";
 import type { RecordSignals, SessionRecord } from "../session-record";
 import type { ContextEvents } from "./signals";
 import type { DeathCause, SnippetDelta } from "./snippet-delta";
@@ -172,10 +173,21 @@ export class SandboxHost extends StackSandboxHost {
    * The cause of the last death the child saw since the last call
    * (`SnippetDeltaRecorder.takeDeath`): for the program loop's death wake.
    * Destructive, and its own latch: the snippet delta's drain is untouched.
+   * At fan-out, `character`'s seat's latch: each seat has its own.
    * Never spawns a child; null when none is running or nothing died.
    */
-  async deathCause(): Promise<DeathCause | null> {
-    const drained = await this.drain("death_cause");
+  async deathCause(character?: string): Promise<DeathCause | null> {
+    const drained = await this.drain("death_cause", {}, character);
     return drained === null ? null : ((drained.value ?? null) as DeathCause | null);
+  }
+
+  /**
+   * Fan-out above 1: every seat's worn items with their durability, by
+   * character name (`child-extension.ts`, `worn_durability`), for a wake's
+   * condition and durability lines. Never spawns a child; empty when none runs.
+   */
+  async wornDurabilityAll(): Promise<Record<string, SnapshotLike["inventory"]>> {
+    const drained = await this.drain("worn_durability_all");
+    return (drained?.value ?? {}) as Record<string, SnapshotLike["inventory"]>;
   }
 }

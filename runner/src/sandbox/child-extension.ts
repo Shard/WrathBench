@@ -253,6 +253,15 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
       context_events: (params) => contextEvents(params.limit ?? CONTEXT_EVENT_CAP),
       snippet_delta: () => snippetDelta.drain(),
       death_cause: () => snippetDelta.takeDeath(),
+      // The worn items' durability, as the HUD's durability line reads it, for a fan-out wake (`wake.ts`), whose
+      // sample is the characters' briefs and carries no inventory: one seat's, or `worn_durability_all` every seat's.
+      worn_durability: () =>
+        toJsonSafe(
+          client.state.inventory
+            .filter((i) => i.slot < 19 && i.durability !== undefined)
+            .map((i) => ({ slot: i.slot, itemId: i.itemId, name: i.name, durability: i.durability })),
+          4,
+        ),
     },
     summarize: (e: StreamEvent): Partial<Pick<EventSummary, "note" | "bystander">> | undefined => {
       const mark = spellLogMarks.get(e);

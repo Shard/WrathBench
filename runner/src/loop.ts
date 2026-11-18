@@ -181,6 +181,12 @@ export function stopRequestOf(signal: AbortSignal | undefined): StopRequest | nu
   return { kind: "terminate", detail: typeof r === "string" ? r : "aborted" };
 }
 
+/** Whether a fan-out brief's character is a ghost (its `self.ghost`, the stack's digest folds it into `dead`). */
+function briefGhost(brief: Record<string, unknown> | undefined): boolean {
+  const g = (brief?.["self"] as Record<string, unknown> | undefined)?.["ghost"];
+  return (g !== null && typeof g === "object" && "value" in g ? (g as { value: unknown }).value : g) === true;
+}
+
 export type LoopOutcome =
   | { kind: "terminated"; reason: TerminationReason; detail?: string }
   /** `notBefore`: the provider's stated reset, when the adapter carried one (adapter.ts). */
@@ -305,8 +311,11 @@ export class ContextBuilder {
         eventCount += s.eventCount ?? 0;
         lastSeq += (s.lastSeq ?? -1) + 1;
       }
-      // Each character's level and stream, for a program-loop wake (`WakeSample.seats`).
-      const seats = this.fanoutDigests.map((d) => ({ character: d.character, level: d.level, connected: d.connected }));
+      // Each character's level, stream and whether it is dead or a ghost, for a program-loop wake (`WakeSample.seats`).
+      const seats = this.fanoutDigests.map((d) => {
+        const ghost = briefGhost(snaps[d.character]);
+        return { character: d.character, level: d.level, connected: d.connected, dead: d.dead && !ghost, ghost };
+      });
       return { eventCount, lastSeq, observation: { connected: this.fanoutDigests.every((d) => d.connected) }, seats } as SnapshotLike;
     } catch {
       return null;
