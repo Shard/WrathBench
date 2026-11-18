@@ -334,6 +334,15 @@ const STEEP_BAD_LIP = { x: -6080, y: -3370, z: 292.96 };
 const STEEP_BAD_LIP_TO = { x: -6140, y: -3370 };
 const STEEP_BAD_BASIN = { x: -6050, y: -3300, z: 258.71 };
 const STEEP_BAD_BASIN_TO = { x: -6121.87, y: -3482.93 };
+// Dun Morogh hillsides a freeplay character was refused climbing at 56-61
+// degrees, which the mesh (built to 60) planned up and the client's 50 does
+// not walk (steep-replan smoke, P9-P11).
+const STEEP_DM_VALLEY = { x: -5725.1, y: -409.7, z: 366.3 };
+const STEEP_DM_VALLEY_TO = { x: -5644.0, y: -499.0 };
+const STEEP_DM_RIDGE = { x: -5746.9, y: -371.4, z: 366.9 };
+const STEEP_DM_RIDGE_TO = { x: -5917.5, y: -266.3 };
+const STEEP_DM_ROAD = { x: -5832.6, y: -291.3, z: 358.4 };
+const STEEP_DM_ROAD_TO = { x: -5698.1, y: -439.3 };
 
 // The swim smoke's shore: the open sea north of Menethil Harbor (map 0,
 // Wetlands, zone 11), where a freeplay run crossed the bay at about 13 y/s
@@ -726,6 +735,24 @@ export const SCENARIOS = {
     level: 80,
     money: 0,
     position: { map: 0, zone: 3, ...STEEP_BAD_BASIN, o: facing(STEEP_BAD_BASIN, STEEP_BAD_BASIN_TO) },
+  },
+  "steep-dunmorogh-valley": {
+    description: "level 80, no money, in the Dun Morogh valley west of Kharanos below a 57 degree hillside (steep-replan smoke: one climb refusal)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 1, ...STEEP_DM_VALLEY, o: facing(STEEP_DM_VALLEY, STEEP_DM_VALLEY_TO) },
+  },
+  "steep-dunmorogh-ridge": {
+    description: "level 80, no money, in the Dun Morogh valley west of Kharanos below a 61 degree ridge (steep-replan smoke: one climb refusal)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 1, ...STEEP_DM_RIDGE, o: facing(STEEP_DM_RIDGE, STEEP_DM_RIDGE_TO) },
+  },
+  "steep-dunmorogh-road": {
+    description: "level 80, no money, on the Dun Morogh road west of Kharanos below a 56 degree hillside (steep-replan smoke: one climb refusal)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 1, ...STEEP_DM_ROAD, o: facing(STEEP_DM_ROAD, STEEP_DM_ROAD_TO) },
   },
   "swim-menethil-shore": {
     description: "level 80, no money, on the shore north of Menethil Harbor facing the open sea (swim smoke: the swimmer)",
