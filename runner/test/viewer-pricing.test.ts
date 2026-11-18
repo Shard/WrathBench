@@ -425,7 +425,10 @@ describe("the hand-held provider table", () => {
     const ds = priceFor({ ...go, model: "deepseek-v4.1-flash" })!;
     expect(ds.id).toBe("opencode-go/deepseek-v4.1-flash");
     expect([ds.input, ds.output, ds.cacheRead]).toEqual([0.15, 0.6, 0.003]);
-    expect(ds.source).toBe("catalogue");
+    // OpenCode's own listing (operator, 2026-11-18), at its off-peak rate, and the row says peak bills double.
+    expect(ds.source).toBe("list");
+    expect(ds.note).toContain("OpenCode Go's own published price");
+    expect(ds.note).toContain("2× in peak hours");
     // Go is a subscription: the listing is a comparison, not a bill.
     expect(ds.asIfMetered).toBe(true);
     for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5"]) expect(priceFor({ ...go, model: m })?.id).toBe(`opencode-go/${m}`);
@@ -439,8 +442,8 @@ describe("the hand-held provider table", () => {
     for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5", "deepseek-v4.1-flash"]) {
       expect(rosterPriceGap({ model: m, apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
     }
-    // A Go model with no row of its own is priced through its catalogue alias (glm-53's entry).
-    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
+    // A Go model with no row of its own is priced through its catalogue alias (glm-5.3-flash's entry).
+    expect(rosterPriceGap({ model: "glm-5.3-flash", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
     // One no entry lists is told to add the alias or a row, never to run the sync.
     expect(rosterPriceGap({ model: "nobody-catalogued-this-1", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("aliases");
     // And a provider-reported charge on this base is never called OpenRouter's.
@@ -957,29 +960,63 @@ describe("a run on the OpenCode Go subscription", () => {
   });
 
   /*
-   * A Go model with no endpoint row of its own reads its catalogue entry's
-   * OpenRouter row through the entry's alias: Go's `glm-5.3` is the
-   * catalogue's `z-ai/glm-5.3`. At 2026-11-16 that is the window from
-   * 2026-10-28: $0.0699 in, $1.40 out, $0.0689 cache read.
+   * Pricing precedence for an OpenCode run (operator, 2026-11-18): OpenCode's
+   * own published per-model price first — its `/models` listing, synced into
+   * the provider's endpoint rows — then the model's OpenRouter listing through
+   * the catalogue alias. Go's `glm-5.3` is in OpenCode's listing at $1.40 in,
+   * $4.40 out, $0.26 cache read; the catalogue's `z-ai/glm-5.3` on OpenRouter
+   * was $0.0699/$1.40/$0.0689 at 2026-11-16, which is what the run read before.
    */
   const glmAt = Date.parse("2026-11-16T06:08:01Z");
-  const glmUsd = ((17_763_781 - 12_862_592) * 0.0699 + 12_862_592 * 0.0689 + 1_047_384 * 1.4) / 1e6;
+  const glmGoUsd = ((17_763_781 - 12_862_592) * 1.4 + 12_862_592 * 0.26 + 1_047_384 * 4.4) / 1e6;
 
-  test("a Go model with no endpoint row is priced at its catalogue entry's listing, as-if-metered", () => {
+  test("an OpenCode run reads OpenCode's own row first, where its listing prices the model", () => {
     const c = runCost({ run: { ...go, model: "glm-5.3", startedAt: glmAt }, tokens: e360, reportedUsd: 0, coverage: allCosted });
     expect(c.actual.basis).toBe("none");
     expect(c.actual.usd).toBeNull();
     expect(c.actual.note).toContain("usage.cost was $0 on 771 of 771 responses");
     expect(c.expected.basis).toBe("list-price");
-    expect(c.expected.priceId).toBe("z-ai/glm-5.3");
+    expect(c.expected.priceId).toBe("opencode-go/glm-5.3");
     expect(c.expected.asIfMetered).toBe(true);
-    expect(c.expected.asOf).toBe("2026-10-28");
-    expect(c.expected.usd).toBeCloseTo(glmUsd, 6);
-    // Said as the alias it went through, and never as the OpenRouter balance's bill.
-    expect(c.expected.note).toContain("glm-5.3 is the catalogue's z-ai/glm-5.3");
-    expect(c.expected.note).toContain("subscription");
+    expect(c.expected.usd).toBeCloseTo(glmGoUsd, 6);
+    expect(c.expected.note).toContain("OpenCode Go's own published price");
     expect(c.expected.note).not.toContain("operator's OpenRouter balance");
     expect(c.usd).toBe(c.expected.usd);
+    // The OpenRouter row it used to read is still on the entry, unread for this run.
+    expect(syncedPrice("z-ai/glm-5.3", glmAt)?.input).toBe(0.0699);
+  });
+
+  /*
+   * The fallback: OpenCode Go serves `glm-5.3-flash`, but no run of it there
+   * has asked the sync for a row, so it reads its catalogue entry's OpenRouter
+   * row through the entry's alias (`z-ai/glm-5.3-flash`), as-if-metered.
+   */
+  const flash = { ...go, model: "glm-5.3-flash", startedAt: glmAt };
+
+  test("an OpenCode run whose model has no OpenCode row falls back to the OpenRouter listing through the alias", () => {
+    expect(providerPrice(flash, glmAt)).toBeNull();
+    const or = syncedPrice("z-ai/glm-5.3-flash", glmAt)!;
+    const c = runCost({ run: flash, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.priceId).toBe("z-ai/glm-5.3-flash");
+    expect(c.expected.asIfMetered).toBe(true);
+    expect(c.expected.usd).toBeCloseTo(((17_763_781 - 12_862_592) * or.input + 12_862_592 * or.cacheRead + 1_047_384 * or.output) / 1e6, 6);
+    // Said as the alias it went through, and never as the OpenRouter balance's bill.
+    expect(c.expected.note).toContain("glm-5.3-flash is the catalogue's z-ai/glm-5.3-flash");
+    expect(c.expected.note).toContain("subscription");
+    expect(c.expected.note).not.toContain("operator's OpenRouter balance");
+  });
+
+  test("an OpenRouter run is unaffected by an OpenCode row for the same model", () => {
+    const orBase = { apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" } as const;
+    for (const model of ["z-ai/glm-5.3", "deepseek/deepseek-v4.1-flash"]) {
+      const row = priceFor({ ...orBase, model }, glmAt)!;
+      expect(row.id).toBe(model);
+      expect(row).toEqual(syncedPrice(model, glmAt)!);
+      expect(row.asIfMetered).toBe(false);
+      expect(row.note).toContain("operator's OpenRouter balance");
+    }
   });
 
   test("the same Go model past its allowance keeps the Extra Usage in both notes, the listing as its cost", () => {
@@ -987,7 +1024,7 @@ describe("a run on the OpenCode Go subscription", () => {
     expect(c.actual.basis).toBe("none");
     expect(c.actual.note).toContain("$0.0042");
     expect(c.actual.note).toContain("Extra Usage");
-    expect(c.expected.usd).toBeCloseTo(glmUsd, 6);
+    expect(c.expected.usd).toBeCloseTo(glmGoUsd, 6);
     expect(c.expected.note).toContain("$0.0042");
   });
 
