@@ -60,8 +60,12 @@ record; `session` shows it once, as `Alfa+1`. A character's session id,
 **Cost.** `run`'s `cost` line is the whole run's whatever the window: the
 provider's own charge where it reported one (OpenRouter's `usage.cost` per
 response, the Claude Code CLI's `total_cost_usd` per session) and the tokens
-the responses reported. The line prices nothing: the list-price figure is the
-viewer's, and `requests` prices a window's tokens at the catalogue's row. A
+the responses reported. The line prices nothing but a paid OpenCode Go run:
+Go is a subscription whose `usage.cost` is the allowance's $0 (or Extra Usage
+past it), never the run's cost, so that line leads with the tokens at the
+catalogue's list row, as-if-metered, and names the `usage.cost` for what it
+is. Otherwise the list-price figure is the viewer's, and `requests` prices a
+window's tokens at the catalogue's row. A
 claude-code run's tokens and model turns are its CLI results' (`num_turns`
 and `usage` on each `claude_result`), because its response records are a
 message's envelopes, only the last carrying usage, and that usage's output is

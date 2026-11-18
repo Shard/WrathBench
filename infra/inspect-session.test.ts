@@ -16,6 +16,8 @@ import { FANOUT_SEP as RUNNER_FANOUT_SEP, SESSIONS_DIR as RUNNER_SESSIONS_DIR } 
 import { Trajectory } from "../runner/src/trajectory";
 import { readRunRow } from "../runner/src/run-reader";
 import { writeLegacy05Run } from "../runner/test/fixtures/legacy05-writer";
+import { CATALOGUE } from "./model-catalogue";
+import { costOf, breakdownTotal, priceFor } from "../runner/viewer/pricing";
 import { reportedCostUsd, scanRunTotals } from "../runner/viewer/tail";
 import { FANOUT_SEP, type InspectStore, main, SESSIONS_DIR, usageSql } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
@@ -213,6 +215,24 @@ const FRESH = "run-fresh";
   writeRun(dir, FRESH, { character: "Newwick", account: "NEWACCT" }, [...OPENROUTER_TURNS, { t: "termination", reason: "episode-limit" }], false);
   await writeRecord(join(dir, "session"), "0123456789abcdee", { name: "Newwick", guid: "6", level: 1, xp: null, xpMax: 400, events: [] }, () => {}, false).close();
 }
+
+/**
+ * Two paid runs on OpenCode Go, a subscription: DeepSeek's responses report
+ * the allowance's $0, GLM's a little Extra Usage past it. DeepSeek has a Go
+ * row of its own; Go's `glm-5.3` is priced through its catalogue alias.
+ */
+const GO_BASE = CATALOGUE.providers["opencode-go"]!.apiBase!;
+const goTurns = (cost: number): Record<string, unknown>[] => [
+  ...[1, 2, 3].flatMap((turn) => [
+    { t: "request", turn, adapter: "openai", messages: "m".repeat(200) },
+    { t: "response", turn, message: { role: "assistant", content: "On it." }, usage: { prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 600 }, cost } },
+  ]),
+  { t: "termination", reason: "episode-limit" },
+];
+const GO_DS = "run-go-deepseek";
+writeRun(join(RUNS, GO_DS), GO_DS, { character: "Gowick", model: "deepseek-v4.1-flash", apiBase: GO_BASE }, goTurns(0), false);
+const GO_GLM = "run-go-glm";
+writeRun(join(RUNS, GO_GLM), GO_GLM, { character: "Glmwick", model: "glm-5.3", apiBase: GO_BASE }, goTurns(0.0014), false);
 
 const STORE = await memoryStore(RUNS);
 
@@ -427,5 +447,34 @@ describe("inspect session", () => {
     expect((await inspect(["session", V1, "--stream", "trace"])).code).toBe(2);
     expect((await inspect(["session", V1, "--character", "../x"])).code).toBe(2);
     expect((await inspect(["trajectory", V1, "--kind", "death"])).code).toBe(2);
+  });
+});
+
+describe("a paid run on the OpenCode Go subscription", () => {
+  /** The viewer's list price for the fixtures' tokens: 3.0k in, 1.8k of it cache read, 150 out. */
+  const listed = (model: string): string => {
+    const row = priceFor({ model, apiBase: GO_BASE, platform: null, driver: "openai", harness: null }, T0)!;
+    const usd = breakdownTotal(costOf({ source: "reported", contextTokens: 0, promptTokens: 3000, completionTokens: 150, totalTokens: 3150, cacheReadTokens: 1800, cacheWriteTokens: null, turns: 3 }, row));
+    return `$${usd.toFixed(4)} at list (${row.id}), as-if-metered`;
+  };
+
+  test("its cost is the tokens at list, the allowance's $0 said for what it is", async () => {
+    const cost = line((await inspect(["run", GO_DS, "--width", "1000"])).out, "cost");
+    expect(cost).toStartWith(`cost       over the run: ${listed("deepseek-v4.1-flash")}: a subscription endpoint, so no actual`);
+    expect(cost).toContain("opencode-go/deepseek-v4.1-flash");
+    expect(cost).toContain("inside the allowance, not the run's cost: usage.cost $0 on 3 of 3 responses");
+    expect(cost).toContain("tokens in 3.0k (cache read 1.8k), out 150, reported on 3 of 3 responses");
+    expect(cost).not.toContain("reported by the provider");
+  });
+
+  test("a Go model with no row of its own is priced through its catalogue alias, its Extra Usage kept as a real charge", async () => {
+    const cost = line((await inspect(["run", GO_GLM, "--width", "1000"])).out, "cost");
+    expect(cost).toStartWith(`cost       over the run: ${listed("glm-5.3")}`);
+    expect(cost).toContain("(z-ai/glm-5.3)");
+    expect(cost).toContain("Extra Usage past a spent allowance, a real charge on top of the plan: usage.cost $0.0042 on 3 of 3 responses");
+  });
+
+  test("an OpenRouter run keeps the provider's own charge", async () => {
+    expect(line((await inspect(["run", V1])).out, "cost")).toContain("$0.0375 reported by the provider on 3 of 3 responses");
   });
 });

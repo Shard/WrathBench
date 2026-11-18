@@ -134,7 +134,8 @@ other.
   clock and froze the objective's wording as @5's. A shorter clock is a new
   id.
 - **Watchdogs.** Idle 20 minutes, which on the program loop counts only while
-  the agent is awake; no-XP off. Tool-call guard 8000, deadmines@5's: one
+  the agent is awake, or four wakes in a row answered without a tool call over
+  twenty minutes; no-XP off. Tool-call guard 8000, deadmines@5's: one
   counter for the one agent, one per member for five.
 - **Ends.** `kill-target` on Edwin VanCleef (entry 639), credited to any of
   the party's characters: cleared, counted. `episode-limit`: counted, not

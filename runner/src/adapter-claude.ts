@@ -816,8 +816,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     }
     sessionId = id;
   };
-  const sleepFor = (via: "turn-end" | "yield", capMs: number) =>
-    programWake!.sleep(program!, {
+  const sleepFor = (via: "turn-end" | "yield", capMs: number) => {
+    watchdogs.noteWakeAnswered();
+    return programWake!.sleep(program!, {
       via,
       turn,
       capMs,
@@ -830,6 +831,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       // A yield result and a turn's message alike stay in the session.
       kept: true,
     });
+  };
   /** Restarts the program was blamed for count toward snippet-runaway as a snippet's do; read on every sample, since one turn can run for hours. */
   const noteBlamedRestarts = (): void => {
     if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
@@ -1005,6 +1007,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                 return;
               }
               toolCalls++;
+              // Acting, at dispatch: a `yield` counts before the sleep it starts (`Watchdogs.noteToolCall`).
+              watchdogs.noteToolCall();
               // A tool call IS model output. Without this the `idle` watchdog
               // would fire mid-turn on a model that is demonstrably working:
               // assistant text can be minutes apart while tool calls stream.

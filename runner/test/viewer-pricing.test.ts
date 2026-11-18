@@ -439,8 +439,10 @@ describe("the hand-held provider table", () => {
     for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5", "deepseek-v4.1-flash"]) {
       expect(rosterPriceGap({ model: m, apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
     }
-    // A Go model with no row yet is told where its row goes, never to run the sync.
-    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("prices.endpoints");
+    // A Go model with no row of its own is priced through its catalogue alias (glm-53's entry).
+    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
+    // One no entry lists is told to add the alias or a row, never to run the sync.
+    expect(rosterPriceGap({ model: "nobody-catalogued-this-1", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("aliases");
     // And a provider-reported charge on this base is never called OpenRouter's.
     const c = runCost({ run: { ...go, model: "mimo-v2.5" }, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 1_000_000 }), reportedUsd: 0.5, coverage: { costed: 1, uncosted: 0 } });
     expect(c.actual.note).not.toContain("OpenRouter");
@@ -939,11 +941,65 @@ describe("a run on the OpenCode Go subscription", () => {
     expect(runCost({ run: go, tokens: e360, reportedUsd: null }).actual.note).toContain("reported no usage.cost");
   });
 
-  test("a paid Go model with no row reads unpriced, never as its responses' $0", () => {
-    const c = runCost({ run: { ...go, model: "glm-5.3" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+  /*
+   * A Go model with no endpoint row of its own reads its catalogue entry's
+   * OpenRouter row through the entry's alias: Go's `glm-5.3` is the
+   * catalogue's `z-ai/glm-5.3`. At 2026-11-16 that is the window from
+   * 2026-10-28: $0.0699 in, $1.40 out, $0.0689 cache read.
+   */
+  const glmAt = Date.parse("2026-11-16T06:08:01Z");
+  const glmUsd = ((17_763_781 - 12_862_592) * 0.0699 + 12_862_592 * 0.0689 + 1_047_384 * 1.4) / 1e6;
+
+  test("a Go model with no endpoint row is priced at its catalogue entry's listing, as-if-metered", () => {
+    const c = runCost({ run: { ...go, model: "glm-5.3", startedAt: glmAt }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.usd).toBeNull();
+    expect(c.actual.note).toContain("usage.cost was $0 on 771 of 771 responses");
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.priceId).toBe("z-ai/glm-5.3");
+    expect(c.expected.asIfMetered).toBe(true);
+    expect(c.expected.asOf).toBe("2026-10-28");
+    expect(c.expected.usd).toBeCloseTo(glmUsd, 6);
+    // Said as the alias it went through, and never as the OpenRouter balance's bill.
+    expect(c.expected.note).toContain("glm-5.3 is the catalogue's z-ai/glm-5.3");
+    expect(c.expected.note).toContain("subscription");
+    expect(c.expected.note).not.toContain("operator's OpenRouter balance");
+    expect(c.usd).toBe(c.expected.usd);
+  });
+
+  test("the same Go model past its allowance keeps the Extra Usage in both notes, the listing as its cost", () => {
+    const c = runCost({ run: { ...go, model: "glm-5.3", startedAt: glmAt }, tokens: e360, reportedUsd: 0.0042, coverage: allCosted });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.note).toContain("$0.0042");
+    expect(c.actual.note).toContain("Extra Usage");
+    expect(c.expected.usd).toBeCloseTo(glmUsd, 6);
+    expect(c.expected.note).toContain("$0.0042");
+  });
+
+  test("a hand-held Go row still wins over the alias: DeepSeek reads the Go listing, not OpenRouter's", () => {
+    const c = runCost({ run: { ...go, startedAt: glmAt }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(c.expected.priceId).toBe("opencode-go/deepseek-v4.1-flash");
+    expect(c.expected.asIfMetered).toBe(true);
+  });
+
+  test("a Go id spelled as an OpenRouter id is priced as-if-metered, never as billed to the OpenRouter balance", () => {
+    const row = priceFor({ ...go, model: "z-ai/glm-5.3" }, glmAt)!;
+    expect(row.id).toBe("z-ai/glm-5.3");
+    expect(row.asIfMetered).toBe(true);
+    expect(row.note).not.toContain("operator's OpenRouter balance");
+  });
+
+  test("a paid Go model the catalogue cannot name reads unpriced, never as its responses' $0", () => {
+    const c = runCost({ run: { ...go, model: "nobody-catalogued-this-1" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
     expect(c.actual.basis).toBe("none");
     expect(c.expected.basis).toBe("none");
-    expect(c.expected.note).toContain("prices.endpoints");
+    expect(c.expected.note).toContain("aliases");
+    // An entry whose only OpenRouter row is its `:free` one is not read as free for a paid Go run.
+    const freeOnly = runCost({ run: { ...go, model: "dots-studio/dots-3-note-preview" }, tokens: e360, reportedUsd: 0, coverage: allCosted });
+    expect(freeOnly.expected.basis).toBe("none");
+    expect(freeOnly.expected.usd).toBeNull();
+    // A declared-free launch on the base keeps its own reading.
+    expect(priceFor({ ...go, model: "glm-5.3", declaredBilling: "free" })?.id).toBe("declared-free");
   });
 
   test("a free Go slug stays free, and keeps its own reading", () => {

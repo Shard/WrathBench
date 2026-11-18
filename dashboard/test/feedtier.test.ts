@@ -307,6 +307,25 @@ describe("a program's errors", () => {
     expect(text("something:else", 4)).toBe("repeated something:else ×4 more");
   });
 
+  test("a public window reads a program error from its words and counts, never a placeholder (operator, 2026-11-18)", () => {
+    const text = (entry: FeedEntry) => {
+      const l = programErrorLine(entry);
+      return l.text.length > 0 ? `${l.label}: ${l.text}` : l.label;
+    };
+    // What the publisher ships: kind, count, since, at, action, status.
+    expect(text(e("program_error", 1, { kind: "repeat", action: "castSpell", status: "not_ready", count: 13, since: 1, at: 2 }))).toBe("refused: castSpell not_ready ×13 more");
+    expect(text(e("program_error", 1, { kind: "repeat", count: 2, since: 1, at: 2 }))).toBe("repeated: ×2 more");
+    expect(text(e("program_error", 1, { kind: "refusal", action: "castSpell", status: "not_ready", at: 1 }))).toBe("refused: castSpell not_ready");
+    expect(text(e("program_error", 1, { kind: "refusal", at: 1 }))).toBe("refused");
+    expect(text(e("program_error", 1, { kind: "error", at: 1 }))).toBe("program error");
+    // The private viewer still names the routine and the character off the signature beside the fields.
+    expect(text(repeat("party|Tankpartyb|moveTo|superseded", 3, 50, { action: "moveTo", status: "superseded" }))).toBe("refused: moveTo superseded ×3 more (routine party, Tankpartyb)");
+    expect(text(repeat("grind||castSpell|not_ready", 3, 50, { action: "castSpell", status: "not_ready" }))).toBe("refused: castSpell not_ready ×3 more (routine grind)");
+    for (const entry of [e("program_error", 1, { kind: "repeat", count: 2 }), e("program_error", 1, { kind: "refusal" }), e("program_error", 1, { kind: "error" })]) {
+      expect(text(entry)).not.toContain("?");
+    }
+  });
+
   test("a repeat's line is quiet, and its hover names the span its count covers where the record says", () => {
     const one = (entry: FeedEntry) => lineOf(groupFeed([entry])[0]!);
     const old = one(repeat("grind||castSpell|not_ready", 12));
