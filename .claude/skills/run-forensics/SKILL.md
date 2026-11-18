@@ -118,11 +118,11 @@ files on either source) and starts from the newest reading before it.
 
 ## Reading the `source` line
 
-`live`, `run`, `trajectory`, `tools`, `pad`, `stuck` and `requests` read ClickHouse, the store the
-collector tails runs into, and say so on a `source` line. `session` reads the
-session record's files, which the store does not hold whole. `audit` and
-`publisher` read the module's audit files and the publisher's state where
-they live.
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `requests` and `messages`
+read ClickHouse, the store the collector tails runs into, and say so on a
+`source` line. `session` reads the session record's files, which the store
+does not hold whole. `audit` and `publisher` read the module's audit files
+and the publisher's state where they live.
 
 - `ClickHouse through <time>, current with the file` or `…, 8s behind the
   file`: normal; a live run trails by a few seconds. Past two minutes the
@@ -163,11 +163,12 @@ prints `per-turn  none for N of M snippet write(s)` when any went unsized.
 
 ## When the checkout is ahead of the deployed image
 
-`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session` and `requests` run the runner pod's copy of
-`infra/inspect-run.ts`; `audit` and `publisher` run this checkout's code. If
-`bun wb` says the file is not in the runner pod, or the pod's copy answers
-`unknown command` or refuses a flag, run this checkout's copy in the pod from
-stdin, the command and its flags after the `-`:
+`live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session`, `requests` and
+`messages` run the runner pod's copy of `infra/inspect-run.ts`; `audit` and
+`publisher` run this checkout's code. If `bun wb` says the file is not in the
+runner pod, or the pod's copy answers `unknown command` or refuses a flag, run
+this checkout's copy in the pod from stdin, the command and its flags after
+the `-`:
 
 ```
 kubectl -n <ns> exec -i deploy/<release>-runner -- bun run - tools <run-id> --since 2h < infra/inspect-run.ts

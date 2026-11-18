@@ -13,7 +13,7 @@ bun wb dashboard shots --out <dir> --run <run-dir> [--run <run-dir>]
 bun wb dashboard shots --serve                             # the stack only: URLs until Ctrl-C
 ```
 
-About 20–30 s. Put `--out` in your scratchpad, then look at the PNGs with
+About a minute. Put `--out` in your scratchpad, then look at the PNGs with
 Read. It writes `private-<state>.png` and `public-<state>.png` for each named
 state, one `path-*.png` per `--path`, and `facts.json` with each page's
 uncaught errors, console errors and third-party requests. It exits 1 when a
