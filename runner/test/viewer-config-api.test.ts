@@ -205,6 +205,35 @@ describe("writes", () => {
     store.close();
   });
 
+  test("with a chatgpt credential a ChatGPT model off codex is a 400 by name, a providers list included, and nothing is written", async () => {
+    const { handle, dbPath } = fixture();
+    const put = async (key: string, body: unknown, method = "PUT") => handle(req(`/api/config/${key}`, { method, body: JSON.stringify(body) }));
+    // With no ChatGPT subscription configured, an OpenRouter GPT entry is an ordinary one.
+    expect((await put("roster/astra-or", { tier: "t0", model: "openai/gpt-6.2-astra" })).status).toBe(200);
+    expect((await put("roster/astra-or", undefined, "DELETE")).status).toBe(200);
+    expect((await put("credentials/chatgpt", { provider: "chatgpt", secretEnv: "CODEX_HOME", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
+    expect((await put("credentials/or-paid", { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
+    for (const [method, key, body] of [
+      ["PUT", "roster/astra", { tier: "t0", model: "openai/gpt-6.2-astra" }],
+      ["PATCH", "roster/glm", { model: "openai/gpt-6.1-sol" }],
+      ["PUT", "roster/luna", { tier: "t0", model: "gpt-6-luna", providers: [{ credential: "or-paid", model: "openai/gpt-6-luna" }] }],
+    ] as const) {
+      const res = await put(key, body, method);
+      expect([method, key, res.status]).toEqual([method, key, 400]);
+      expect(((await res.json()) as { error: string }).error).toMatch(
+        new RegExp(`^${key}: roster policy — \\S+ is a ChatGPT model, and with a chatgpt credential configured ChatGPT models run only via the codex driver: write it as a codex entry on that credential instead`),
+      );
+    }
+    // gpt-oss is open weights, and a codex entry is the ChatGPT model's place.
+    expect((await put("roster/oss", { tier: "t0", model: "openai/gpt-oss-120b" })).status).toBe(200);
+    expect((await put("roster/sol", { tier: "t1", model: "gpt-6.2-sol", driver: "codex", credential: "chatgpt" })).status).toBe(200);
+    const store = new ConfigStore(dbPath, { readonly: true });
+    expect(store.get("roster/astra")).toBeUndefined();
+    expect(store.get("roster/luna")).toBeUndefined();
+    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
+    store.close();
+  });
+
   test("a roster edit naming a key, or a base no credential provider serves, is a 400, and nothing is written", async () => {
     const { handle, dbPath } = fixture();
     for (const [method, path, body] of [

@@ -51,7 +51,7 @@ import { evalPoolAccountNames, evalPoolSizeOf, isEvalPoolAccountName, isPoolAcco
 import { tenantAccountRefusal } from "./tenant-accounts";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
-import { DEFAULT_DRIVER, driverEntry, ROSTER_DRIVERS } from "../runner/src/drivers";
+import { DEFAULT_DRIVER, driverEntry, isChatGptFamily, isClaudeFamily, ROSTER_DRIVERS } from "../runner/src/drivers";
 import { PROVIDER_OPTION_KEYS, type ProviderOption } from "../runner/src/provider-options";
 
 /**
@@ -763,10 +763,8 @@ export function fail(msg: string): never {
   throw new Error(msg);
 }
 
-/** True for models that must ride the claude-code driver (the claude-code harness), and that the codex driver refuses. */
-export function isClaudeFamily(model: string): boolean {
-  return /(^|\/)(claude|opus|sonnet|haiku)/i.test(model);
-}
+/** The roster's model families (runner/src/drivers.ts), re-exported where the roster policy reads them. */
+export { isChatGptFamily, isClaudeFamily };
 
 /**
  * Roster-policy and shape checks for roster entries. `where` names the

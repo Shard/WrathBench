@@ -519,6 +519,38 @@ export function isReferenceRun(r: { driver?: string | null | undefined; unscored
   return driverEntry(r.driver)?.route === true || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
 }
 
+// ------------------------------------------------------- model families
+
+/** True for models that must ride the claude-code driver (the claude-code harness), and that the codex driver refuses. */
+export function isClaudeFamily(model: string): boolean {
+  return /(^|\/)(claude|opus|sonnet|haiku)/i.test(model);
+}
+
+/**
+ * True for OpenAI's ChatGPT models, by their OpenRouter id (`openai/gpt-6.2-astra`)
+ * or a bare slug (`gpt-6.2-sol`, as Codex and OpenCode spell them). The
+ * open-weights `gpt-oss-*` are not ChatGPT models and run anywhere.
+ *
+ * Where a deployment has a ChatGPT subscription these run only through it, on
+ * the codex driver (operator, 2026-11-18: "astra or any chatgpt model should
+ * not be run on openrouter ... they should be using codex"); the rule is
+ * applied with the credentials in hand (`chatgptEntryRefusal`,
+ * roster-refusal.ts), since a deployment without one may still run them on an
+ * endpoint.
+ */
+export function isChatGptFamily(model: string): boolean {
+  return /(^|\/)(chat)?gpt-(?!oss)/i.test(model);
+}
+
+/** The ChatGPT rule's refusal: by name, and what to write instead. */
+export function chatgptModelRefusal(model: string): string {
+  const slug = model.slice(model.lastIndexOf("/") + 1);
+  return (
+    `roster policy — ${model} is a ChatGPT model, and with a chatgpt credential configured ChatGPT models run only via the codex driver: ` +
+    `write it as a codex entry on that credential instead (model ${slug}, driver codex)`
+  );
+}
+
 // ------------------------------------------------------------------ lookups
 
 /** The entry a stored or configured name refers to; undefined for an absent or unknown one. */
