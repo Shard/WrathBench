@@ -143,7 +143,16 @@ locally the module does without an agent action, because a model reinventing
 it would measure the wrong thing. The one deliberate exception is routing
 "move to position" against the server's navmesh, because a client's human
 routes with eyes and the module has none. Nothing is inferred that the wire
-did not say.
+did not say. The route is held to the ground the client walks, not the mesh's:
+the 3.3.5a client walks up nothing steeper than 50 degrees (it compares a
+surface's normal with cos 50, 0.6427876: the "climb angle limit" its binary
+patchers document, and the slope namigator's client-mirroring navmesh uses),
+while the server's mmaps are built walkable to 60 degrees for NPC pathing. So
+the drop guard keeps its 50 degree climb limit, and before a refusal stands
+the module re-plans with ground steeper than the client walks weighted up,
+so a route the guard would refuse goes round the face where the mesh has a way
+(operator decision, 2026-11-18). Rebuilding the mesh at 50 degrees would also
+change creature pathing, and is not done.
 
 **The benchmark's own clauses.** The contracts' authoritative text is the
 stack's, and this document keeps the clauses that are the benchmark's
