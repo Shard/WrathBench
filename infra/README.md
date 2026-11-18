@@ -345,9 +345,9 @@ Steering it, its guards and the config shape are `docs/RUNBOOK.md`, "Steer it"
 and "Config reference".
 
 An episode is started through one interface (`infra/episode-launcher.ts`):
-a child process of the roster, or — on the cluster, for a probe-campaign arm,
-behind the `policy.runPods` setting — its own pod on the arm's image
-(`infra/run-pod.ts`, the chart's `templates/run-pods.yaml`). The contract both
+a child process of the roster, or, on the cluster, its own pod: a
+probe-campaign arm's on the arm's image, behind the `policy.runPods` setting,
+and every codex episode whatever that setting says (`infra/run-pod.ts`, the chart's `templates/run-pods.yaml`). The contract both
 sides honour is `docs/ARCHITECTURE.md`, "Launching a run: the run contract";
 operating it is `docs/RUNBOOK.md`, "Run pods".
 
@@ -366,7 +366,9 @@ instead of a cloud pool, for example an LM Studio box on the LAN
   `secretEnv` is `LMSTUDIO_KEY` and `.env` carries a non-secret
   `LMSTUDIO_KEY=lm-studio` placeholder. Delivery mirrors the cloud entries
   exactly: the key travels only in `.env` (Bun autoloads `/wrathbench/.env`
-  inside the runner container), never through argv. The adapter still sends its
+  inside the runner container), never through argv, and only to a host
+  `WRATHBENCH_LOCAL_MODEL_HOSTS` (the chart's `localModelHosts`) lists; any
+  other is refused. The adapter still sends its
   attribution headers unconditionally; a local server just ignores them.
 
 - **It states what it serves** (operator, 2026-11-14). A local entry carries

@@ -253,7 +253,7 @@ asked for `order: "oldest"`, optionally filtered to a level range or a zone
 the rest visit or flight it was granted in ends (`left_rest` or `landed`), on
 a circuit breaker, or at the end of the run, and every transition is a
 `reflect_window` record. After a sandbox restart the state cache is rebuilt
-from the module's reattach replay (wrath-mcp/module/PROTOCOL.md, "/events"), whose own
+from the module's reattach replay (wrath-mcp/module/PROTOCOL.md, "WebSocket /events"), whose own
 create block carries both flags; until it lands they are unobserved, and the
 gate holds the last reading of each
 rather than reading silence as "not resting" or "not flying" — the same latch
@@ -665,7 +665,7 @@ all a harness that ignores the file ever sees.
 `image` and `command`, the pod runs that command with the flags above as its
 args and the volumes, env and secrets of a run pod, and is judged by the files
 it leaves. It has to accept the flags it is given (or refuse with exit 2), keep
-a heartbeat, write `meta.json` and the `run` row, pause on SIGTERM within the
+a heartbeat, write `meta.json` (its config and the run row), pause on SIGTERM within the
 grace, and record its own turns as `response` records if it wants them
 counted. To land in its campaign square it stamps `config.{campaign,
 campaignVersion, cell, arm}` from its `campaign.json` and `config.ref` from
@@ -895,4 +895,4 @@ on the real corpus it does once per start what the store does once, ever.
 
 ## What is deliberately absent
 
-Results pipeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent play beyond a party of five loops of one model, concurrency beyond a few sequential or lightly parallel characters on one server.
+Perturbation tooling, per-character credentials, multi-agent play beyond a party of five loops of one model.

@@ -591,8 +591,9 @@ the rest of the suite does not need a DOM.
 
 ## Conventions
 
-- Nothing here writes. There is no client method that sends a body, because
-  there is no route that takes one.
+- Nothing here writes but the admin config page (`src/api/config-client.ts`),
+  against routes the viewer mounts only with the admin switch on; every other
+  client method is a read.
 - Paths are root-relative, so the same code runs behind the dev proxy and
   same-origin off the viewer. That is why there is no CORS configuration.
 - Polling intervals are stated at each call site, not hidden in `poll()` —
