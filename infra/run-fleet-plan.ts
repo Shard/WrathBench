@@ -204,7 +204,8 @@ export interface QueueSkip {
 // What bounds the retries is unchanged: a job whose roster exits while
 // enabled is finished for the life of that supervisor (`JobSets.finished`), so
 // a job that can never be satisfied — a dead endpoint — costs at most its
-// remainder once per supervisor boot, or per off/on flip, never a loop.
+// remainder once per supervisor boot, per off/on flip, or per raise of its
+// `repeat` above the one it finished under (`planTick`), never a loop.
 
 /** Counted runs of a roster entry on an episode, in this series: the projection's own number. */
 export type CountedRuns = (ref: string, episode: EpisodeId) => number;
@@ -2782,7 +2783,7 @@ export interface JobSets {
   running: Set<string>;
   /** running jobs waiting for an episode boundary to be SIGTERMed */
   draining: Set<string>;
-  /** jobs whose process exited while enabled (done; not respawned) */
+  /** jobs whose process exited while enabled (not respawned until rearmed: a boot, a flip or a raised repeat) */
   finished: Set<string>;
 }
 
@@ -2790,7 +2791,11 @@ export interface JobActions {
   start: JobSpawn[];
   drain: string[];
   undrain: string[];
-  /** finished jobs now disabled: forget them so a later re-enable respawns */
+  /**
+   * Finished jobs whose spawn is now disabled: forget them so a later
+   * re-enable respawns. A config job is rearmed by the planner already
+   * (`planTick`), a pool one included, which yields no spawn while disabled.
+   */
   rearm: string[];
 }
 
@@ -2858,8 +2863,8 @@ export function applyPause(spawns: JobSpawn[], paused: boolean): JobSpawn[] {
 /**
  * Whether a job whose roster exited on its own (not drained) joins
  * `sets.finished`, which keeps `diffJobs` from starting that name again until
- * the operator disables and re-enables it. A policy job does not: the
- * projection decides whether it runs again. Nor does a party campaign's job:
+ * the operator disables and re-enables it or raises its `repeat`. A policy
+ * job does not: the projection decides whether it runs again. Nor does a party campaign's job:
  * its campaign's tally and `maxAttemptsPerCell` decide, exactly as after a
  * supervisor restart, which empties the set. A party square keeps one job name
  * across its attempts and versions, and its runs end before its roster exits,
@@ -3079,6 +3084,8 @@ export interface SupervisorView {
   running: ReadonlySet<string>;
   /** The jobs whose process finished and that do not run again until rearmed. */
   finished: ReadonlySet<string>;
+  /** The `repeat` each of `finished` was spawned with; absent or unread, a raise rearms nothing. */
+  finishedRepeat?: ReadonlyMap<string, FleetJob["repeat"]>;
   /** Pool jobs with a live process, on the account each was given. */
   assigned: ReadonlyMap<string, string>;
   /** The job each live process was spawned for. */
@@ -3257,6 +3264,24 @@ export function planTick(snap: TickSnapshot): TickPlan {
   const pending = new Map<string, FleetJob>();
   const finished = new Set(sup.finished);
   const unfinished: string[] = [];
+  // A finished config job is rearmed when the operator flips it off (its own
+  // flag, not the evals group's) or raises its `repeat` above the one its
+  // process was spawned with: each costs what it still owes once, and an
+  // unchanged job never respawns. Here rather than in `diffJobs`, because a
+  // disabled pool job holds no account and so yields no spawn to rearm.
+  for (const job of read.jobs) {
+    if (!finished.has(job.name) || sup.running.has(job.name)) continue;
+    const under = sup.finishedRepeat?.get(job.name);
+    const why = !job.enabled
+      ? "disabled after finishing; enable again to respawn"
+      : typeof job.repeat === "number" && typeof under === "number" && job.repeat > under
+        ? `repeat raised from ${under} to ${job.repeat}`
+        : undefined;
+    if (why === undefined) continue;
+    finished.delete(job.name);
+    unfinished.push(job.name);
+    steps.push({ kind: "say", line: `job ${job.name}: rearmed — ${why}`, record: { job: job.name, event: "rearmed", detail: why } });
+  }
   const placedMemo = new Map(sup.placedMemo);
   // The run facts once a tick, shared by the projection and the resume
   // planner. A verdict-less run on a resuming lane reads as paused `offline`

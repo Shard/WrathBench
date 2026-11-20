@@ -24,6 +24,8 @@ export interface TickMemory {
   assigned: Map<string, string>;
   liveJobs: Map<string, FleetJob>;
   sets: JobSets;
+  /** The `repeat` each finished job was spawned with: raising it above that rearms the job (`planTick`). */
+  finishedRepeat: Map<string, FleetJob["repeat"]>;
   pending: Map<string, FleetJob>;
   placedMemo: Map<string, NonNullable<FleetJob["placed"]>>;
   drainReasons: Map<string, string>;
@@ -76,6 +78,7 @@ export function supervisorOf(mem: TickMemory): SupervisorView {
     ownRunIds: new Set([...mem.procs.values()].filter((p) => !p.exited).flatMap((p) => p.runIds)),
     running: mem.sets.running,
     finished: mem.sets.finished,
+    finishedRepeat: mem.finishedRepeat,
     assigned: mem.assigned,
     liveJobs: mem.liveJobs,
     pending: new Set(mem.pending.keys()),

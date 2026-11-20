@@ -4547,6 +4547,43 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
     expect(fillEntries(jobSpawn(job, raised.roster, "RUNNER", "20261014"), "20261014").map((e) => e.runId)).toEqual([`${OX}-20261014`]);
   });
 
+  test("a finished pool job is rearmed by a flip or a raised repeat, once, and an unchanged one never respawns", () => {
+    const at = (repeat: number, enabled = true): FleetConfig => config([{ ref: "ox", episode: "e360", repeat, ...(enabled ? {} : { enabled: false }) }]);
+    const assigned = (plan: ReturnType<typeof planOf>): string[] => plan.queue.assign.map((a) => a.job.name);
+    // The policy's own picks are unfinished too: only this job's entry is read.
+    const unfinished = (plan: ReturnType<typeof planOf>): string[] => plan.memory.unfinished.filter((n) => n === "ox-e360");
+    const rearmed = (plan: ReturnType<typeof planOf>): unknown[] => plan.steps.flatMap((s) => (s.kind === "say" && s.record?.event === "rearmed" ? [s.record] : []));
+    // The live case: x3 met and finished, raised to 5 — 3/5 counted, `finished`.
+    const owing = { runs: SATISFIED, now: NOW, stamp: "20261014", finished: ["ox-e360"] };
+    // Unchanged since it finished: nothing spawns, nothing rearms — the loop guard.
+    const still = planOf(at(5), { ...owing, finishedRepeat: { "ox-e360": 5 } });
+    expect(assigned(still)).toEqual([]);
+    expect(unfinished(still)).toEqual([]);
+    expect(rearmed(still)).toEqual([]);
+    // Nothing remembered (a job finished before this rule): no raise to see, it stays finished.
+    expect(assigned(planOf(at(5), owing))).toEqual([]);
+    // Raised above the repeat it finished under: rearmed, and the remainder spawns this tick.
+    const raised = planOf(at(5), { ...owing, finishedRepeat: { "ox-e360": 3 } });
+    expect(unfinished(raised)).toEqual(["ox-e360"]);
+    expect(rearmed(raised)).toEqual([{ job: "ox-e360", event: "rearmed", detail: "repeat raised from 3 to 5" }]);
+    expect(raised.queue.assign.map((a) => a.job.owed?.copies)).toEqual([{ ox: 2 }]);
+    // The flip, as the observed pool job had it: a disabled job yields no
+    // spawn, so the planner rearms it itself, on the first tick it reads off.
+    const off = planOf(at(5, false), owing);
+    expect(unfinished(off)).toEqual(["ox-e360"]);
+    expect(rearmed(off)).toEqual([{ job: "ox-e360", event: "rearmed", detail: "disabled after finishing; enable again to respawn" }]);
+    expect(off.spawns.map((s) => s.name)).not.toContain("ox-e360");
+    // Back on, the tick after (the memory has forgotten it): the remainder spawns.
+    const on = planOf(at(5), { runs: SATISFIED, now: NOW, stamp: "20261014" });
+    expect(assigned(on)).toEqual(["ox-e360"]);
+    // A flip adds no runs to a job whose count is met: rearmed, and done.
+    const met = planOf(at(3, false), owing);
+    expect(unfinished(met)).toEqual(["ox-e360"]);
+    expect(planOf(at(3), { runs: SATISFIED, now: NOW, stamp: "20261014" }).queue.done.map((j) => j.name)).toEqual(["ox-e360"]);
+    // Off while the evals group is off is the group's doing, not the operator's flip.
+    expect(unfinished(planOf(at(5), { ...owing, evals: false }))).toEqual([]);
+  });
+
   test("a partially satisfied job owes only the remainder, and a redo never reuses a run id — same stamp or a new one", () => {
     const c = config([{ ref: "ox", episode: "e360", repeat: 3 }]);
     // Copy 1 counted; copy 2 was cut by a fleet stop (`manual`); copy 3 never launched.
