@@ -35,9 +35,13 @@
  * "deadmines", and reads something else again: the dungeon board
  * (`/api/dungeons`, derived in `runner/viewer/dungeons.ts`), a row per model
  * condition on its best attempt. Above the table, the scatter's idiom for an
- * attempt: time from launch against bosses killed (`components/DungeonChart`).
- * None of the tier's controls apply to a board, so none is shown; the shell's
- * series still is. The five-agent id has no tab (operator, 2026-11-15), and
+ * attempt (`components/DungeonChart`), with the tier's row of axis views in
+ * its own vocabulary (`DUNGEON_VIEWS` in `lib/dungeons.ts`, on the same
+ * `?view=`): time from launch against bosses killed by default, or the best
+ * attempt's cost against bosses or, for the attempts that got furthest,
+ * against time. The tier's filters and the Pareto toggle are not shown: a
+ * board row is a condition's best attempt, not a mean over an entry's runs,
+ * and the chart already names its fronts. The shell's series still applies. The five-agent id has no tab (operator, 2026-11-15), and
  * an old `?episode=deadmines` link lands on this one (`dungeonRedirect`).
  */
 
@@ -56,7 +60,19 @@ import { InfoHint } from "../components/InfoHint";
 import { useSeriesFilter } from "../components/SeriesSelect";
 import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
 import { DUNGEON_CHOICES, type DungeonChoice, EPISODE_CHOICES, dungeonLabel, dungeonParam, dungeonRedirect, episodeParam } from "../lib/episodes";
-import { attemptHref, attemptTitle, boardHint, boardRowKey, bossesText, bossesTitle, clearTimeText, clearedText } from "../lib/dungeons";
+import {
+  DUNGEON_VIEWS,
+  type DungeonView,
+  attemptHref,
+  attemptTitle,
+  boardHint,
+  boardRowKey,
+  bossesText,
+  bossesTitle,
+  clearTimeText,
+  clearedText,
+  dungeonViewParam,
+} from "../lib/dungeons";
 import {
   RUNGS,
   billingKnown,
@@ -384,7 +400,14 @@ export default function Ladder() {
               <div class="banner bad">{displayError(dungeons.error)}</div>
             </Show>
             <Show when={board()} fallback={<p class="dim loading-chart">loading…</p>}>
-              {(b) => <DungeonBoard board={b()} episode={id()} />}
+              {(b) => (
+                <DungeonBoard
+                  board={b()}
+                  episode={id()}
+                  view={dungeonViewParam(params.view)}
+                  onView={(v) => setParams({ view: v.id === DUNGEON_VIEWS[0]!.id ? undefined : v.id }, { replace: true })}
+                />
+              )}
             </Show>
           </>
         )}
@@ -651,14 +674,27 @@ const BOARD_NOTE =
  * ordered it, under the shell's series, with its chart above it. The chart
  * and the table share one hover, keyed on the row (`boardRowKey`).
  */
-function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice }) {
+function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; view: DungeonView; onView: (v: DungeonView) => void }) {
   // The shell's harness series, as every evals page applies it.
   const series = useSeriesFilter(() => props.board.rows.map((r) => ({ ...r, harnessSeries: r.series })));
   const [hovered, setHovered] = createSignal<string | null>(null);
   return (
     <>
+      {/* The axes, as the tier's row of views: in the URL, the default the short address. */}
+      <div class="ladder-controls">
+        <div class="chips views">
+          <span class="dim">axes</span>
+          <For each={DUNGEON_VIEWS}>
+            {(v) => (
+              <button class={v.id === props.view.id ? "on" : ""} title={v.hint} onClick={() => props.onView(v)}>
+                {v.title}
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
       <div class="wide-scroll">
-        <DungeonChart rows={series.kept()} episode={props.episode} hovered={hovered()} onHover={setHovered} boardNote={BOARD_NOTE} />
+        <DungeonChart rows={series.kept()} episode={props.episode} view={props.view} hovered={hovered()} onHover={setHovered} boardNote={BOARD_NOTE} />
       </div>
       <div class="scroller">
         <table>

@@ -147,10 +147,18 @@ The Deadmines eval is a tab of the ladder page, labelled "deadmines"
 (`?episode=deadmines-solo`), not a tier: its runs are read on the dungeon
 board (`/api/dungeons`, derived in `runner/viewer/dungeons.ts`), and
 `/api/ladder` refuses the id. The tab shows the id's table as the viewer
-ordered it, under the shell's series and none of the tier's other controls,
-and above it the scatter's idiom for an attempt: one point per row at its
-best attempt, time from launch (to the clear, or to the last boss) against
-bosses killed, sharing the table's hover. Both builds show it. The five-agent
+ordered it, under the shell's series, and above it the scatter's idiom for an
+attempt: one point per row at its best attempt, sharing the table's hover,
+with the tier's row of axis views in its own vocabulary on the same `?view=`
+(`DUNGEON_VIEWS` in `src/lib/dungeons.ts`). Time from launch (to the clear,
+or to the last boss) against bosses killed is the default; `cost-bosses` is
+the best attempt's cost against bosses killed, and `cost-time` its cost
+against its time for the attempts that killed seven bosses or more. The cost
+is the ladder's reading of a run's cost (`runner/viewer/run-cost.ts`), summed
+over an attempt's runs. None of the tier's other controls is shown: a board
+row is one attempt, not a mean over an entry's runs, so the filters and the
+Pareto toggle have nothing to narrow, and the chart already names its fronts.
+Both builds show it. The five-agent
 `deadmines` has no tab while it runs only as a probe campaign (operator,
 2026-11-15); the old `/dungeons` page and `?episode=deadmines` land on the
 one tab.

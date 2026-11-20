@@ -2440,6 +2440,11 @@ export interface DungeonAttemptView {
   enteredMs: number | null;
   deaths: number;
   wipes: number;
+  /**
+   * What the attempt cost, in USD: each member run's cost as the ladder reads
+   * it (`runCostReading`), summed; null when any member has no reading.
+   */
+  costUsd: number | null;
 }
 
 /** One model condition on one Deadmines id: its best attempt and how many cleared of how many counted. */

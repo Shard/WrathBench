@@ -21,40 +21,18 @@
 
 import type { ResultRun } from "@viewer/api-types";
 import { XP_FOR_LEVEL } from "@wrathbench/inspector/views/unitframe";
+import { runCostReading } from "@viewer/run-cost";
 
 /* ---------------------------------------------------------------- readings */
 
-/** What one run cost, and on what basis; null when nothing prices it. */
-export interface RunCostReading {
-  usd: number;
-  basis: "reported" | "list-price";
-  /** A figure nobody paid: a free tier, local hardware, a subscription. */
-  asIfMetered: boolean;
-  /** Set only on a reported figure that is partly a backfill (`CostFigure.backfill`). */
-  backfilled?: true;
-}
-
 /**
- * The cost of one run for the chart: what the provider charged when it said,
- * else the price table applied to the run's own tokens.
- *
- * The same fallback the runs table's cost cell takes (`listCost`), which marks
- * the estimate with a `~`. The chart's x-axis is an average, and a free or
- * local model has no provider figure ever — its honest cost is the $0 the
- * price table says. The point carries its basis so the caption can say which
- * runs were priced how.
+ * What one run cost, for the chart's x-axis: the viewer's one definition
+ * (`@viewer/run-cost`), which the dungeon board's attempts read too. The
+ * chart's x-axis is an average of it, so a free or local model sits at the $0
+ * the price table says, and each point carries its basis so the caption can
+ * say which runs were priced how.
  */
-export function runCostReading(r: Pick<ResultRun, "actualCost" | "expectedCost">): RunCostReading | null {
-  const a = r.actualCost;
-  if (a !== null && a.basis !== "none" && a.usd !== null) {
-    return { usd: a.usd, basis: "reported", asIfMetered: a.asIfMetered, ...(a.backfill !== undefined ? { backfilled: true as const } : {}) };
-  }
-  const e = r.expectedCost;
-  if (e !== null && e !== undefined && e.basis !== "none" && e.usd !== null) {
-    return { usd: e.usd, basis: "list-price", asIfMetered: e.asIfMetered };
-  }
-  return null;
-}
+export { type RunCostReading, runCostReading } from "@viewer/run-cost";
 
 /**
  * XP earned over a run, for the chart's y-axis.

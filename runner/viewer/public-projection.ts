@@ -975,6 +975,7 @@ export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
           enteredMs: r.best.enteredMs,
           deaths: r.best.deaths,
           wipes: r.best.wipes,
+          costUsd: r.best.costUsd,
         },
       })),
     })),

@@ -21,6 +21,11 @@
  * - **Bosses** are the eight Deadmines entries, all counted alike, Cookie
  *   included (`DEADMINES_BOSSES`, docs/proposals/GROUP-PLAY.md §6), as the
  *   union over the party's characters by victim.
+ * - **Cost** is what the attempt's member runs cost, each read as the
+ *   ladder reads a run's cost (`runCostReading`: the provider's charge, else
+ *   the price table over the run's own tokens), summed. An attempt with any
+ *   member unpriced has none: a partial sum would put it where no attempt
+ *   was. It is shown and never orders anything.
  * - **Deaths and wipes** are shown and never order anything. A wipe is a
  *   stretch in which every character of the party is dead at once: it starts
  *   when the last one alive dies and ends at the first resurrection.
@@ -34,11 +39,12 @@
 import { partyAttempt } from "../src/campaigns";
 import { conditionKey } from "./condition";
 import { canonicalModelId } from "../../infra/model-catalogue";
+import { runCostReading } from "./run-cost";
 import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
-export const DUNGEON_BOARD_VERSION = 1;
+export const DUNGEON_BOARD_VERSION = 2;
 
 /** The Deadmines bosses by creature entry (docs/proposals/GROUP-PLAY.md §6): Rhahk'Zor, Sneed, Sneed's Shredder, Gilnid, Mr. Smite, Captain Greenskin, Edwin VanCleef, Cookie. */
 export const DEADMINES_BOSSES: readonly number[] = [644, 643, 642, 1763, 646, 647, 639, 645];
@@ -120,6 +126,17 @@ export function wipesOf(characters: readonly CharacterMarks[], size: number): nu
   return wipes;
 }
 
+/** An attempt's cost: its member runs' readings summed, or null when any member has none. */
+export function costOf(runs: readonly Pick<ResultRun, "actualCost" | "expectedCost">[]): number | null {
+  let usd = 0;
+  for (const r of runs) {
+    const c = runCostReading(r);
+    if (c === null) return null;
+    usd += c.usd;
+  }
+  return runs.length === 0 ? null : usd;
+}
+
 /** One attempt, derived. */
 export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
   const runs = members.map((m) => m.run);
@@ -170,6 +187,7 @@ export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
     enteredMs: at(entered.length === 0 ? null : Math.min(...entered)),
     deaths: characters.reduce((n, c) => n + c.deaths.length, 0),
     wipes: wipesOf(characters, size),
+    costUsd: costOf(runs),
   };
 }
 

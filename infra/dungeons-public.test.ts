@@ -40,6 +40,9 @@ describe("/api/dungeons", () => {
       });
       const solo = JSON.stringify(body.boards.find((b) => b.episode === "deadmines-solo"));
       for (const id of SOLO) expect({ publicMode, id, named: solo.includes(`"${id}"`) }).toEqual({ publicMode, id, named: true });
+      // Each row carries its best attempt's cost, the provider's charge summed over its responses, on either handle.
+      const costs = body.boards[0]!.rows.map((r) => [r.best.runIds[0], r.best.costUsd === null ? null : Number(r.best.costUsd.toFixed(2))]).sort();
+      expect({ publicMode, costs }).toEqual({ publicMode, costs: [[DUNGEON_SOLO_RUN, 0.36], [DUNGEON_SOLO_CLEARED_RUN, 4.2]].sort() });
     }
   }, 60_000);
 });

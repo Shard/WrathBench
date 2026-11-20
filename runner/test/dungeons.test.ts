@@ -7,9 +7,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_POLICY, projectModel, type RunFact } from "../src/models";
-import { attemptOf, boardOf, boardsOf, compareAttempts, DEADMINES_BOSSES, wipesOf, type CharacterMarks, type DungeonRun } from "../viewer/dungeons";
+import { attemptOf, boardOf, boardsOf, compareAttempts, costOf, DEADMINES_BOSSES, wipesOf, type CharacterMarks, type DungeonRun } from "../viewer/dungeons";
 import { projectDungeons } from "../viewer/public-projection";
-import type { ResultRun } from "../viewer/api-types";
+import type { CostFigure, ResultRun } from "../viewer/api-types";
 
 const T0 = Date.UTC(2026, 10, 14, 8);
 const MIN = 60_000;
@@ -90,6 +90,35 @@ describe("an attempt", () => {
   });
 });
 
+const fig = (usd: number | null, basis: CostFigure["basis"]): CostFigure => ({ usd, basis, asIfMetered: false, priceId: null, asOf: null, note: "" });
+
+describe("an attempt's cost", () => {
+  test("is each member run's cost as the ladder reads it: the provider's figure, else the list price", () => {
+    expect(attemptOf([solo("a", "kill-target", [], { actualCost: fig(2.5, "reported"), expectedCost: fig(9, "list-price") })]).costUsd).toBe(2.5);
+    expect(attemptOf([solo("a", "kill-target", [], { actualCost: fig(null, "none"), expectedCost: fig(1.25, "list-price") })]).costUsd).toBe(1.25);
+    // A reported $0 is a reading, not a blank.
+    expect(attemptOf([solo("a", "kill-target", [], { actualCost: fig(0, "reported") })]).costUsd).toBe(0);
+  });
+
+  test("an unpriced run has none, and so does a party with any member unpriced; a priced party is its members' sum", () => {
+    expect(attemptOf([solo("a", "kill-target", [])]).costUsd).toBeNull();
+    const priced = party("p", "kill-target", [kill(639, 90)], { actualCost: fig(0.5, "reported") });
+    expect(attemptOf(priced).costUsd).toBe(2.5);
+    const gap = priced.map((m, i) => (i === 2 ? { ...m, run: { ...m.run, actualCost: null } } : m));
+    expect(attemptOf(gap).costUsd).toBeNull();
+    expect(costOf([])).toBeNull();
+  });
+
+  test("a row carries its best attempt's cost, and the cost orders nothing", () => {
+    const runs = [
+      solo("dear", "kill-target", [marks("x", { kills: [kill(639, 90)] })], { actualCost: fig(8, "reported") }),
+      solo("cheap", "kill-target", [marks("x", { kills: [kill(639, 120)] })], { actualCost: fig(1, "reported") }),
+    ];
+    const [row] = boardOf("deadmines-solo", runs).rows;
+    expect([row!.best.runIds[0], row!.best.costUsd]).toEqual(["dear", 8]);
+  });
+});
+
 describe("the order", () => {
   test("cleared first by time to clear; the rest by bosses, then time to the last boss", () => {
     const A = attemptOf([solo("a", "kill-target", [marks("x", { kills: [kill(639, 120)] })])]);
@@ -124,8 +153,9 @@ describe("the order", () => {
   });
 
   test("the published board carries the same numbers", () => {
-    const board = boardOf("deadmines-solo", [solo("s2", "kill-target", [marks("x", { kills: [kill(639, 150)] })])]);
-    const body = { version: 1, boards: [board], now: 1 };
+    const board = boardOf("deadmines-solo", [solo("s2", "kill-target", [marks("x", { kills: [kill(639, 150)] })], { actualCost: fig(3.5, "reported") })]);
+    expect(board.rows[0]!.best.costUsd).toBe(3.5);
+    const body = { version: 2, boards: [board], now: 1 };
     expect(projectDungeons(body)).toEqual(body);
   });
 });

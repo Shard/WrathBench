@@ -822,7 +822,9 @@ pass leaves out, and who reads what is left:
   (the actual figure's note for a tooltip, `basis`, `usd`, `asIfMetered`, the
   backfill mark; the estimate's `basis`, `usd`, `asIfMetered`); the price row
   and its date are on a single run's page. A model's run list carries `actual`
-  only, which is the column it prints.
+  only, which is the column it prints. A dungeon board row's best attempt
+  carries one number, `costUsd`: its runs' costs as the ladder reads each
+  (`runner/viewer/run-cost.ts`), summed, and null when any run has none.
 - **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
   `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
   reads the first six off the run's own row and tuple. It carries
@@ -979,7 +981,15 @@ series selector spelled a second time. The tier and axes chips and the pareto
 front are unchanged. The axes chips are cost, tokens and tool calls, each
 against xp; turns × xp is withdrawn (operator, 2026-11-16), because a turn is
 not one unit across drivers (a claude-code turn is one CLI session), and a
-`?view=turns-xp` link opens cost × xp. What else is above the chart:
+`?view=turns-xp` link opens cost × xp. The Deadmines tab has the same row of
+axes chips on the same `?view=`, in the board's own terms (`DUNGEON_VIEWS` in
+`dashboard/src/lib/dungeons.ts`): time × bosses, the default; cost × bosses;
+and cost × time, which plots only the attempts that killed seven bosses or
+more. Each point is still the row's best attempt as the board chose it, and
+its cost is the ladder's reading of each of the attempt's runs, summed. The
+tab shows none of the tier's other controls, the Pareto toggle included: a
+board row is one attempt rather than a mean over an entry's runs, and its
+chart already names the fronts. What else is above a tier's chart:
 
 - **company** and **family** filters. Company is the model catalogue's own
   company for the model's family (`infra/model-catalogue.json`); family is the
