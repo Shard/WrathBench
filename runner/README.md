@@ -1352,7 +1352,10 @@ replaced or stopped, the long-route note on a move that went ahead and a call
 the character's death refused or cut short are no refusals, and the stack
 sends none for them, operator 2026-11-18), a `wake(reason)` call,
 any character's death, the event
-stream closing, a sandbox restart or a harness notice; each reason opens a
+stream closing, a sandbox restart, a harness notice, or a routine running hot
+(more than `HOT_PER_MINUTE`, sixty, refusals and errors in a minute while the
+model sleeps, measured from the repeat counts the sleep drains at the stack's
+beat, once per start of that routine, operator 2026-11-20); each reason opens a
 window and the sleep ends at the first to close: two seconds, so a cascade is
 one wake, and ten for a death or a refusal (`WAKE_SETTLE_MS`), so a wipe's
 deaths and refusals that land together are one wake; each counts from when

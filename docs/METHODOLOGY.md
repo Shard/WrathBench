@@ -307,8 +307,11 @@ is woken by a routine ending, the first occurrence of each new error
 signature since a load and of each refusal signature in the run (operator delegated,
 2026-11-15: a save no longer re-arms refusals; later ones are counted in the
 next wake), the program's own `wake(reason)`, a death, a
-sandbox restart, the event stream closing or a harness notice, and after five
-minutes at the latest; gaining a level or completing a quest does not wake it,
+sandbox restart, the event stream closing or a harness notice, a routine
+running hot (more than sixty refusals and errors in a minute while the model
+sleeps, once per start of that routine, its reason naming the routine, the
+count and the signature most of them were; operator, 2026-11-20), and after
+five minutes at the latest; gaining a level or completing a quest does not wake it,
 and a program that wants either calls `wake()`. A wake waits two seconds after
 its first reason so a cascade is one wake. A death or a refusal settles for ten
 instead, so the deaths and refusals of a wipe that land together reach the

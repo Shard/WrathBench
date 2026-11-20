@@ -28,7 +28,11 @@
  *    that went ahead, and a call the character's death refused or cut short
  *    (operator, 2026-11-18);
  *  - from the runner: a death (the session record's `death` row), the event
- *    stream closing (the state sample), and a harness notice.
+ *    stream closing (the state sample), a harness notice, and a routine
+ *    running hot: more than `HOT_PER_MINUTE` refusals and errors in a minute
+ *    while the model sleeps, once per start of that routine (`HotMeter`,
+ *    operator, 2026-11-20). Its reason names the routine, the count and the
+ *    signature most of them were.
  *
  * At fan-out (one agent driving several characters) the program is one and
  * its routines are per character: every line names the character, a
@@ -148,7 +152,7 @@ const WAKE_REASONS_SHOWN = 4;
 const ERROR_FRAMES_SHOWN = 3;
 
 /** What can wake a sleeping model. */
-export type WakeKey = "routine_ended" | "error" | "refusal" | "wake" | "died" | "stream_closed" | "sandbox_restart" | "notice";
+export type WakeKey = "routine_ended" | "error" | "refusal" | "running_hot" | "wake" | "died" | "stream_closed" | "sandbox_restart" | "notice";
 /** What ended a sleep: a reason, the five minutes (or a `yield`'s own seconds), or the run ending under it. */
 export type WakeFired = WakeKey | "cap" | "stopped";
 
@@ -326,6 +330,102 @@ export class Waker {
   }
 }
 
+/**
+ * A routine's refusals and errors in a minute past which it is running hot
+ * (operator, 2026-11-20): one a second, held for a minute. A call a routine
+ * awaits takes longer than that when it does anything (a cast's global
+ * cooldown, a walk), so past it the routine is retrying without waiting.
+ * Over five runs' repeat counts the busiest healthy routine, a combat
+ * rotation hitting cooldowns, ran at about 7 a minute; routines that kept
+ * retrying failing moves ran at 40 to 106; the spinners at 300 to 2,000. A
+ * constant, not a knob.
+ */
+export const HOT_PER_MINUTE = 60;
+/** The window `HOT_PER_MINUTE` counts over. */
+const HOT_WINDOW_MS = 60_000;
+/** How often a sleep drains the program to measure it: the stack's beat, which is when its repeat counts arrive. */
+export const HOT_DRAIN_MS = 5_000;
+/** Routine runs remembered as told hot; past it the oldest is forgotten. */
+const HOT_TOLD_KEPT = 2_000;
+
+/**
+ * The routine a signature is of, with the character a refusal names, or
+ * null for one that is no routine's: an error outside every routine
+ * (`|TypeError|…`) or the program's memory (`memory|save`).
+ */
+function routineOfSignature(signature: string): { name: string; character: string } | null {
+  const parts = signature.split("|");
+  if (parts.length < 3 || parts[0] === "") return null;
+  const refusal = refusalOfSignature(signature);
+  return { name: parts[0]!, character: "action" in refusal ? parts.slice(1, -2).join("|") : "" };
+}
+
+/** A signature as a hot wake names it: a refusal's action and status, an error's name and place. */
+function signatureWords(signature: string): string {
+  const refusal = refusalOfSignature(signature);
+  if ("action" in refusal) return `${refusal.action} ${refusal.status}`;
+  const [, name, where] = signature.split("|");
+  return where !== undefined && where !== "" ? `${name} at ${where}` : (name ?? signature);
+}
+
+/**
+ * Each routine's refusals and errors over the last minute, from the repeat
+ * counts a sleep drains: a routine run past `HOT_PER_MINUTE` is one wake
+ * reason, once per start of that routine (a new start, a restart, re-arms
+ * it), so it cannot flap. Counts only what the sleep drained itself: the
+ * drain as a sleep starts covers the awake span before it, whose length is
+ * not a minute's.
+ */
+export class HotMeter {
+  /** By routine and character: the counts drained in the window, each at its drain, by signature. */
+  private readonly window = new Map<string, { at: number; signature: string; n: number }[]>();
+  /** Routine runs already told hot, by routine, character and start. */
+  private readonly told = new Set<string>();
+
+  /** Count a drain's repeats at `now`; the reason for each routine run that just passed the bar. */
+  count(repeats: ProgramFacts["repeats"], routines: readonly RoutineRow[], now: number): WakeReason[] {
+    const touched = new Set<string>();
+    for (const r of repeats) {
+      const who = routineOfSignature(r.signature);
+      if (who === null || r.count <= 0) continue;
+      const key = runKey(who.name, who.character === "" ? undefined : who.character);
+      const list = this.window.get(key) ?? [];
+      list.push({ at: now, signature: r.signature, n: r.count });
+      this.window.set(key, list);
+      touched.add(key);
+    }
+    const out: WakeReason[] = [];
+    for (const [key, list] of this.window) {
+      while (list.length > 0 && list[0]!.at <= now - HOT_WINDOW_MS) list.shift();
+      if (list.length === 0) {
+        this.window.delete(key);
+        continue;
+      }
+      if (!touched.has(key)) continue;
+      const total = list.reduce((n, x) => n + x.n, 0);
+      if (total <= HOT_PER_MINUTE) continue;
+      const [name, character] = key.split("\u0000") as [string, string | undefined];
+      // The run: the routine's row by name, and by character where the row has one.
+      const row = routines.find((x) => x.name === name && (x.character === undefined || character === undefined || x.character === character));
+      const run = `${key}\u0000${row?.startedAt ?? ""}`;
+      if (this.told.has(run)) continue;
+      this.told.add(run);
+      if (this.told.size > HOT_TOLD_KEPT) this.told.delete(this.told.values().next().value as string);
+      const bySig = new Map<string, number>();
+      for (const x of list) bySig.set(x.signature, (bySig.get(x.signature) ?? 0) + x.n);
+      const [top, topN] = [...bySig].sort((a, b) => b[1] - a[1])[0]!;
+      const who = character === undefined || character === "" ? name : `${name} (${character})`;
+      out.push({
+        key: "running_hot",
+        ts: now,
+        text: `routine running hot (${who}: ${total.toLocaleString("en-US")} refusals and errors in the last minute, ${topN.toLocaleString("en-US")} of them ${signatureWords(top)})`,
+        inContext: false,
+      });
+    }
+    return out;
+  }
+}
+
 export interface SleepOptions {
   waker: Waker;
   /** The longest this sleep lasts: `WAKE_CAP_MS`, or a `yield`'s own seconds. */
@@ -340,6 +440,8 @@ export interface SleepOptions {
   stopped: () => boolean;
   /** A notice queued for the next message that no notice hook saw (the driver's own). */
   queuedNotices?: () => number;
+  /** Called on every tick before the reasons are read: where a sleep looks at the program meanwhile (`ProgramWake`'s hot meter). */
+  onTick?: (now: number) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
@@ -373,6 +475,7 @@ export async function sleepUntilWake(o: SleepOptions): Promise<SleepResult> {
   for (;;) {
     if (o.stopped()) return { fired: "stopped", sleptMs: slept() };
     const now = o.now();
+    o.onTick?.(now);
     // A driver's queued notice is its own reason, so it keeps its two seconds while a death settles.
     if ((o.queuedNotices?.() ?? 0) > 0 && !o.waker.peek().some((r) => r.key === "notice")) {
       o.waker.note({ key: "notice", ts: now, text: "a harness notice", inContext: true });
@@ -857,6 +960,8 @@ export interface WakeSleepOptions {
  */
 export class ProgramWake {
   readonly waker = new Waker();
+  /** Each routine's refusals and errors over the last minute while asleep: running hot wakes, once per start. */
+  private readonly hot = new HotMeter();
   /** The run's wakes so far, this process's and those before a resume. */
   private n: number;
   /** What the sleep-start drain took, carried into the next wake. */
@@ -1249,6 +1354,15 @@ export class ProgramWake {
   async sleep(program: WakeProgram, o: WakeSleepOptions): Promise<{ block: string; fired: WakeFired; sleptMs: number }> {
     this.held = mergeFacts(this.held, program.drainFacts());
     const before = this.reading();
+    // While asleep, the program is drained at its beat's pace and each routine's refusals and errors measured (`HotMeter`); what is drained is held for the wake as the first drain is.
+    let measuredAt = this.now();
+    const measure = (now: number): void => {
+      if (now - measuredAt < HOT_DRAIN_MS) return;
+      measuredAt = now;
+      const drained = program.drainFacts();
+      this.held = mergeFacts(this.held, drained);
+      for (const r of this.hot.count(drained.repeats, drained.routines, now)) this.waker.note(r);
+    };
     o.idle?.noteAsleep();
     let woke: SleepResult;
     try {
@@ -1257,6 +1371,7 @@ export class ProgramWake {
         capMs: o.capMs,
         floorMs: o.floorMs,
         stopped: o.stopped,
+        onTick: measure,
         ...(o.queuedNotices !== undefined ? { queuedNotices: o.queuedNotices } : {}),
         now: this.now,
         sleep: this.sleepFn,
