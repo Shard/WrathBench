@@ -1863,11 +1863,9 @@ export const EVENTS_UNCHANGED_LINE = "[events: unchanged since you last saw them
  * still holds that message. Compared as rendered text, not by the newest
  * seq: a `stream_gap` carries the next real event's seq and a sandbox
  * restart renumbers the ring, and either way unequal text sends the window.
- * Reset with the pad (`ThreadContext.reset`) and, beyond it, wherever a
- * turn may not have reached the thread (a failed turn, a thread that lost
- * turns). The fixed loop never uses this: it regenerates the turn's message
- * and keeps none of the earlier ones, so its model never holds an earlier
- * window.
+ * Reset with the pad (`ThreadContext.reset`). The fixed loop never uses
+ * this: it regenerates the turn's message and keeps none of the earlier
+ * ones, so its model never holds an earlier window.
  */
 export class EventsSeen {
   /** The window's lines as the conversation holds them, or undefined when it holds none it can be trusted to. */
@@ -1891,8 +1889,9 @@ export class EventsSeen {
  * loop: the pad is sent whole only when the conversation does not already
  * hold it as it stands. That is
  * the first message of a thread (a new episode, a resumed run, a thread the
- * CLI could not continue), the first after the CLI compacted the thread, and
- * any message after the pad changed outside the conversation: a snippet's or
+ * CLI could not continue), the first after the CLI compacted the thread or
+ * after a turn that may not have kept its message (an errored or failed
+ * turn, a thread that lost turns), and any message after the pad changed outside the conversation: a snippet's or
  * a routine's `scratchpad.write`, or anything else the model's own pad tools
  * did not do. A `write_scratchpad` or an `edit_scratchpad` the model made is
  * in the conversation, so the pad it leaves is known, as long as what it
@@ -1942,7 +1941,7 @@ export class ThreadContext {
   readonly pad = new PadSeen();
   readonly events = new EventsSeen();
 
-  /** The thread lost what it held, or may have (a compaction, another thread, a rollout that could not be read): the next message sends the pad and the event window whole. */
+  /** The thread lost what it held, or may have (a compaction, another thread, a rollout that could not be read, an errored or failed turn, lost turns): the next message sends the pad and the event window whole. */
   reset(): void {
     this.pad.reset();
     this.events.reset();

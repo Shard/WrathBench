@@ -1465,8 +1465,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
               if (codexUsageRegressed(prev, cumulative)) {
                 // The thread lost turns (its rollout could not be written):
                 // the delta floors at zero and the next turn counts from here.
-                // A lost turn may be the last that showed the event window.
-                thread?.events.reset();
+                // A lost turn may be the last that showed the pad or the event window.
+                thread?.reset();
                 trajectory.append({
                   t: "harness",
                   kind: "usage_regressed",
@@ -1512,8 +1512,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
               break;
             }
             // A failed turn may not have kept its message in the thread: the
-            // next message sends the event window whole.
-            thread?.events.reset();
+            // next message sends the pad and the event window whole.
+            thread?.reset();
             const errText = JSON.stringify(msg["error"] ?? msg["message"] ?? msg).slice(0, 2_000);
             failureTexts.push(errText);
             failure ??= detectCodexFailure(errText);

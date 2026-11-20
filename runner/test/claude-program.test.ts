@@ -363,11 +363,16 @@ describe("the event window on claude-code's program loop", () => {
     expect(r.messages[2]).toContain(fullWindow(1, 5));
   }, 60_000);
 
-  test("an errored turn may not have kept its message: the window goes whole after it", async () => {
-    const r = await claudeProgramRun({ calls: TRIPS(4), maxTurns: 4, events: () => evs(1, 5), fake: { WB_FAKE_ERROR_TURN: "2" } });
+  test("an errored turn may not have kept its message: the window and the pad go whole after it", async () => {
+    const calls = TRIPS(4);
+    calls[0] = [...calls[0]!, { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } }];
+    const r = await claudeProgramRun({ calls, maxTurns: 4, events: () => evs(1, 5), fake: { WB_FAKE_ERROR_TURN: "2" } });
     expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(r.messages[1]).toEndWith(UNCHANGED);
     expect(r.messages[2]).toContain(fullWindow(1, 5));
+    expect(r.messages[2]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nGoldshire");
     expect(r.messages[3]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(r.messages[3]).toEndWith(UNCHANGED);
   }, 60_000);
 });
 

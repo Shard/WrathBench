@@ -15,7 +15,7 @@ import { leaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { runCodexEpisode } from "../src/adapter-codex";
 import { loadRunConfig } from "../src/config";
-import { EVENTS_UNCHANGED_LINE, formatEventLine } from "../src/context";
+import { EVENTS_UNCHANGED_LINE, formatEventLine, scratchpadUnchangedLine } from "../src/context";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
@@ -346,11 +346,16 @@ describe("the event window on codex's program loop", () => {
     expect(messages.map((m) => m.includes(fullWindow(1, 5)))).toEqual([true, true, true]);
   }, 60_000);
 
-  test("a thread that lost turns sends the window whole after it", async () => {
+  test("a thread that lost turns sends the window and the pad whole after it", async () => {
     // `regress`: the third turn's total reads as though the second never happened.
-    const r = await codexProgramRun(TRIPS(4), { maxTurns: 4, events: () => evs(1, 5), mode: "regress" });
+    const calls = TRIPS(4);
+    calls[0] = [...calls[0]!, { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } }];
+    const r = await codexProgramRun(calls, { maxTurns: 4, events: () => evs(1, 5), mode: "regress" });
     expect(r.records.some((x) => x.t === "harness" && x["kind"] === "usage_regressed")).toBe(true);
-    expect((r.rec["userMessages"] as string[]).map((m) => m.includes(EVENTS_UNCHANGED_LINE))).toEqual([false, true, true, false]);
+    const messages = r.rec["userMessages"] as string[];
+    expect(messages.map((m) => m.includes(EVENTS_UNCHANGED_LINE))).toEqual([false, true, true, false]);
+    expect(messages.map((m) => m.endsWith(scratchpadUnchangedLine("# plan\nGoldshire".length)))).toEqual([false, true, true, false]);
+    expect(messages[3]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nGoldshire");
   }, 60_000);
 
   test("a failed turn may not have kept its message: the window goes whole after it", async () => {

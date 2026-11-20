@@ -56,7 +56,7 @@ describe("the thread context, as a pure rule", () => {
     // A pad reset of its own (the model's own write) leaves the window known.
     t.pad.wrote("x", "y");
     expect(t.events.sendWhole(lines(evs(2, 6)))).toBe(false);
-    // An events-only reset (a failed turn) leaves the pad known.
+    // An events-only reset leaves the pad known.
     expect(t.pad.sendWhole("# plan")).toBe(true);
     t.events.reset();
     expect(t.pad.sendWhole("# plan")).toBe(false);
