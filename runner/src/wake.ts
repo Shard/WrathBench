@@ -44,7 +44,8 @@
  *
  * What a wake shows is facts only (`renderWake`, pure): why it woke, every
  * routine as it stands, new errors with the lines of the model's files,
- * refusals with their hints unchanged, moves that replaced one another,
+ * refusals with their hints unchanged (each signature in its newest
+ * occurrence's words, not its first's), moves that replaced one another,
  * `wake` calls, what changed for the character, and the routines' last
  * console lines. No advice and no judgement of stalls: "last action 3s ago"
  * and "no routine is running" are the two stall facts.
@@ -461,6 +462,43 @@ export interface SignatureLine {
    * the character are one line naming each, as the stack's hint lines are.
    */
   seat?: { head: string; character: string; hint: string } | undefined;
+  /**
+   * What the line says before the occurrence's own words: an error's routine,
+   * a refusal's routine, action and status. A later occurrence of the
+   * signature keeps it and says its own words after it (`withNewest`).
+   */
+  lead?: string | undefined;
+}
+
+/**
+ * A repeat of a signature as the stack drains it, with its newest occurrence
+ * where the stack carries one (wrath-mcp's `ProgramRepeat.newest`: a refusal's
+ * hint, an error's text and frames). Read as optional, so a stack that does
+ * not carry it counts the repeat and leaves the line as it stood.
+ */
+type RepeatWithNewest = ProgramFacts["repeats"][number] & { newest?: Newest };
+/** A repeat's newest occurrence: a refusal's hint, or an error's text and frames. */
+type Newest = { text: string; frames?: string[] };
+
+/** The newest occurrence a repeat carries, if any. */
+const newestOf = (r: ProgramFacts["repeats"][number]): Newest | undefined => {
+  const n = (r as RepeatWithNewest).newest;
+  return n !== undefined && typeof n.text === "string" ? n : undefined;
+};
+
+/**
+ * `line` as a later occurrence of its signature says it: the same lead, the
+ * newest occurrence's words, and for an error its frames. A line from before
+ * `lead` was kept is left as it stood. Pure.
+ */
+export function withNewest(line: SignatureLine, newest: { text: string; frames?: readonly string[] | undefined }): SignatureLine {
+  if (line.lead === undefined) return line;
+  if (line.kind === "error") return { ...line, text: `${line.lead} ${newest.text}`, frames: newest.frames ?? line.frames };
+  return {
+    ...line,
+    text: `${line.lead} — ${newest.text}`,
+    ...(line.seat !== undefined ? { seat: { ...line.seat, hint: newest.text } } : {}),
+  };
 }
 
 /** "45s", "4m05s", "1h05m". */
@@ -479,18 +517,18 @@ const ago = (now: number, ts: number): string => `${sleptWords(now - ts)} ago`;
 /** The line an error or refusal signature reads as, from its fresh fact. */
 export function signatureLineOf(fact: ProgramFact): { signature: string; line: SignatureLine } | null {
   if (fact.kind === "error") {
-    return { signature: fact.error.signature, line: { kind: "error", text: `${label(fact)} ${fact.error.text}`, frames: fact.error.frames } };
+    return { signature: fact.error.signature, line: { kind: "error", text: `${label(fact)} ${fact.error.text}`, frames: fact.error.frames, lead: label(fact) } };
   }
   if (fact.kind === "refusal") {
     const head = `${label(fact)} ${fact.action} ${fact.status}`;
     return {
       signature: fact.signature,
-      line: { kind: "refusal", text: `${head} — ${fact.hint}`, frames: [], ...(fact.seat !== undefined ? { seat: { head, character: fact.seat, hint: fact.hint } } : {}) },
+      line: { kind: "refusal", text: `${head} — ${fact.hint}`, frames: [], lead: head, ...(fact.seat !== undefined ? { seat: { head, character: fact.seat, hint: fact.hint } } : {}) },
     };
   }
   if (fact.kind === "ended" && fact.routine.state === "threw" && fact.routine.error !== undefined) {
     const e = fact.routine.error;
-    return { signature: e.signature, line: { kind: "error", text: `${label(fact.routine)} ${e.text}`, frames: e.frames } };
+    return { signature: e.signature, line: { kind: "error", text: `${label(fact.routine)} ${e.text}`, frames: e.frames, lead: label(fact.routine) } };
   }
   return null;
 }
@@ -713,12 +751,15 @@ function namedReasons(reasons: readonly WakeReason[]): string {
 /** Two drains as one span: facts in order, repeats summed by signature, the console's tail with repeats folded (`foldConsole`), the routines as they stand now. */
 export function mergeFacts(a: ProgramFacts | null, b: ProgramFacts): ProgramFacts {
   if (a === null) return b;
-  const repeats = new Map<string, { signature: string; count: number; ts: number }>();
+  const repeats = new Map<string, RepeatWithNewest>();
   for (const r of [...a.repeats, ...b.repeats]) {
     const prev = repeats.get(r.signature);
     if (prev === undefined) repeats.set(r.signature, { ...r });
     else {
       prev.count += r.count;
+      // The newest occurrence is the later drain's.
+      const newest = newestOf(r);
+      if (newest !== undefined && r.ts >= prev.ts) prev.newest = newest;
       prev.ts = Math.max(prev.ts, r.ts);
     }
   }
@@ -822,7 +863,9 @@ export class ProgramWake {
    * records cover from here to the wake (`since`, `at`).
    */
   private drainedAt: number;
+  /** Every error and refusal signature seen this run, as its newest occurrence says it, and that occurrence's time. */
   private readonly signatures = new Map<string, SignatureLine>();
+  private readonly signatureTs = new Map<string, number>();
   private lastSample: WakeSample | null = null;
   private connected: boolean | undefined;
   /** At fan-out, whether each character's stream was open at the last sample. */
@@ -869,11 +912,9 @@ export class ProgramWake {
 
   /** `ProgramOptions.onFact`: record the fact, remember how its signature reads, and wake for it if it wakes. */
   readonly onFact = (fact: ProgramFact): void => {
+    // Every occurrence that arrives as a fact is the signature's newest: a later wake names it as it last happened.
     const s = signatureLineOf(fact);
-    if (s !== null && !this.signatures.has(s.signature)) {
-      this.signatures.set(s.signature, s.line);
-      if (this.signatures.size > 1_000) this.signatures.delete(this.signatures.keys().next().value as string);
-    }
+    if (s !== null) this.noteSignature(s.signature, s.line, fact.ts);
     if (fact.kind === "restart" && fact.blamed) this.blamed++;
     try {
       this.o.trajectory.append(factRecord(fact));
@@ -886,6 +927,24 @@ export class ProgramWake {
     if (reason.key === "routine_ended" && reason.routine !== undefined && shownOver(this.rowsShown.get(runKey(reason.routine.name, reason.routine.character)), reason.routine.startedAt)) return;
     this.waker.note(reason);
   };
+
+  /**
+   * Keep `line` as how `signature` reads, unless an occurrence newer than `ts`
+   * already set it. Bounded: past a thousand signatures the least recently
+   * seen is forgotten.
+   */
+  private noteSignature(signature: string, line: SignatureLine, ts: number): void {
+    const was = this.signatureTs.get(signature);
+    if (was !== undefined && ts < was) return;
+    this.signatures.delete(signature);
+    this.signatures.set(signature, line);
+    this.signatureTs.set(signature, ts);
+    if (this.signatures.size > 1_000) {
+      const oldest = this.signatures.keys().next().value as string;
+      this.signatures.delete(oldest);
+      this.signatureTs.delete(oldest);
+    }
+  }
 
   /** The sandbox's `onNotice`, beside the trajectory's: a notice wakes. */
   onNotice(n: Pick<HarnessNotice, "kind" | "ts">): void {
@@ -1169,6 +1228,12 @@ export class ProgramWake {
     }
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
+    // A repeat names its signature as its newest occurrence said it, where the stack carries that.
+    for (const r of facts.repeats) {
+      const newest = newestOf(r);
+      const line = this.signatures.get(r.signature);
+      if (newest !== undefined && line !== undefined) this.noteSignature(r.signature, withNewest(line, newest), r.ts);
+    }
     const reasons = this.waker.take();
     // Taken with the reasons, before any await: a death row landing during one waits, line and reason alike, for the next wake.
     const died = this.diedSince;
