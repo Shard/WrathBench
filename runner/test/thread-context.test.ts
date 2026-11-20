@@ -1,8 +1,9 @@
 /**
  * A scaffold's thread context (`ThreadContext`, context.ts): on codex, the
  * program loop sends the pad only when the thread does not hold it, and
- * sends it whole after the thread lost it. The event window goes whole on
- * every message, and the snippet loop's messages, prompt and tools are its
+ * sends it whole after the thread lost it, and the event window by the same
+ * rule (`EventsSeen`; the drivers' resets are in claude-program and
+ * program-sandbox). The snippet loop's messages, prompt and tools are its
  * own, untouched. Against fakes: the fake codex CLI and a scripted sandbox.
  */
 import { describe, expect, test } from "bun:test";
@@ -12,7 +13,7 @@ import { Scratchpad, type EventSummary } from "@wrathbench/mcp";
 import { runCodexEpisode } from "../src/adapter-codex";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, loopOf, threadContextOf } from "../src/config";
-import { formatEventLine, ThreadContext } from "../src/context";
+import { assembleContext, EVENTS_UNCHANGED_LINE, formatEventLine, ThreadContext } from "../src/context";
 import { EpisodicLog } from "../src/episodic";
 import { buildSystemPrompt } from "../src/prompt";
 import { configFromArgs } from "../src/run";
@@ -40,6 +41,49 @@ describe("the thread context, as a pure rule", () => {
     expect(t.pad.sendWhole("# plan")).toBe(false);
     t.reset();
     expect(t.pad.sendWhole("# plan")).toBe(true);
+  });
+
+  const lines = (es: EventSummary[]): string => es.map(formatEventLine).join("\n");
+
+  test("the event window: whole the first time, a line while its lines are the same, whole on any new one and after a reset", () => {
+    const t = new ThreadContext();
+    expect(t.events.sendWhole(lines(evs(1, 5)))).toBe(true);
+    expect(t.events.sendWhole(lines(evs(1, 5)))).toBe(false);
+    expect(t.events.sendWhole(lines(evs(2, 6)))).toBe(true);
+    expect(t.events.sendWhole(lines(evs(2, 6)))).toBe(false);
+    t.reset();
+    expect(t.events.sendWhole(lines(evs(2, 6)))).toBe(true);
+    // A pad reset of its own (the model's own write) leaves the window known.
+    t.pad.wrote("x", "y");
+    expect(t.events.sendWhole(lines(evs(2, 6)))).toBe(false);
+    // An events-only reset leaves the pad known.
+    expect(t.pad.sendWhole("# plan")).toBe(true);
+    t.events.reset();
+    expect(t.pad.sendWhole("# plan")).toBe(false);
+    expect(t.events.sendWhole(lines(evs(2, 6)))).toBe(true);
+  });
+
+  test("compared as text, not by the newest seq: a gap carries the next real event's seq", () => {
+    const t = new ThreadContext();
+    expect(t.events.sendWhole(lines([...evs(1, 5), ev(6, { opcode: "stream_gap", data: { missed: 3 } })]))).toBe(true);
+    expect(t.events.sendWhole(lines([...evs(2, 5), ev(6, { opcode: "stream_gap", data: { missed: 3 } }), ev(6)]))).toBe(true);
+    // A restart's ring renumbered: same opcodes and data, other seqs.
+    expect(t.events.sendWhole(lines(evs(1, 5).map((e) => ({ ...e, seq: e.seq + 100 }))))).toBe(true);
+  });
+
+  test("assembly: the line in the window's place, the window whole without the flag, and an empty window as it was", () => {
+    const base = { stateSummary: "== state ==", scratchpad: "# plan", notices: [], turn: 4 };
+    const whole = assembleContext({ ...base, events: evs(1, 5), folded: 3 });
+    expect(whole).toContain(`[events: last 5, newest last; 3 ambient movement and party-frame events folded into state only]\n${lines(evs(1, 5))}`);
+    expect(assembleContext({ ...base, events: evs(1, 5), folded: 3, eventsUnchanged: false })).toBe(whole);
+    const line = assembleContext({ ...base, events: evs(1, 5), folded: 3, eventsUnchanged: true });
+    expect(line).toBe(whole.replace(/\[events: last 5[^\n]*\n(?:#[^\n]*\n)*#5[^\n]*/, EVENTS_UNCHANGED_LINE));
+    expect(line).toContain(`== state ==\n\n${EVENTS_UNCHANGED_LINE}\n\n[scratchpad`);
+    // The part reader still finds the events part under its header.
+    expect(messageParts(line).events).toBe(EVENTS_UNCHANGED_LINE);
+    // Nothing to stand in for: an empty or all-ambient window renders as it always has.
+    expect(assembleContext({ ...base, events: [], eventsUnchanged: true })).toBe(assembleContext({ ...base, events: [] }));
+    expect(assembleContext({ ...base, events: [], folded: 2, eventsUnchanged: true })).toBe(assembleContext({ ...base, events: [], folded: 2 }));
   });
 });
 

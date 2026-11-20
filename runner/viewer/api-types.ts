@@ -841,6 +841,8 @@ export interface EventsServedEntry extends EntryBase {
   ambient?: number;
   moreOpcodes?: number;
   folded?: number;
+  /** The turn's message stood a line for an event window its thread already held (`EventsSeen`); `count` is then 0. */
+  unchanged?: boolean;
 }
 
 /**

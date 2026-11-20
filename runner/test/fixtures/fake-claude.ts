@@ -36,6 +36,9 @@
  * $WB_FAKE_SESSION_TURN=<n> names another session on the default turn's
  * `result` from turn n on, as a CLI that started a new session would.
  *
+ * $WB_FAKE_ERROR_TURN=<n> ends the default turn n with an errored `result`
+ * (`is_error`, an API error's words), as a CLI whose API call failed does.
+ *
  * $WB_FAKE_CONTEXT_STEP=<tokens> makes the default turn's API call read that
  * many tokens per turn so far from the cache, and $WB_FAKE_CONTEXT_WINDOW
  * puts the model's window on the `result` envelope's `modelUsage`.
@@ -473,11 +476,12 @@ for await (const chunk of Bun.stdin.stream()) {
       }
     }
 
+    const errored = Bun.env["WB_FAKE_ERROR_TURN"] !== undefined && turn === Number(Bun.env["WB_FAKE_ERROR_TURN"]);
     emit({
       type: "result",
-      subtype: "success",
-      is_error: false,
-      result: `turn ${turn} done`,
+      subtype: errored ? "error_during_execution" : "success",
+      is_error: errored,
+      result: errored ? "API Error: 500 Internal server error" : `turn ${turn} done`,
       num_turns: 2,
       duration_ms: 12,
       duration_api_ms: 7,

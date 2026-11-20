@@ -9,12 +9,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Scratchpad } from "@wrathbench/mcp";
+import { Scratchpad, type EventSummary } from "@wrathbench/mcp";
 import { Workspace } from "@wrathbench/mcp/workspace";
 import { leaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { runCodexEpisode } from "../src/adapter-codex";
 import { loadRunConfig } from "../src/config";
+import { EVENTS_UNCHANGED_LINE, formatEventLine, scratchpadUnchangedLine } from "../src/context";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
@@ -49,6 +50,19 @@ function host(runDir: string, wake: ProgramWake, stub: Stub, secret: string): Sa
   hosts.push(h);
   return h;
 }
+
+/** A sandbox whose context events are `of`'s, by the message's index (from 0), rather than the stub's stream. */
+function overrideEvents(sandbox: SandboxHost, of: ((message: number) => EventSummary[]) | undefined): void {
+  if (of === undefined) return;
+  let n = 0;
+  (sandbox as unknown as { contextEvents: () => Promise<unknown> }).contextEvents = () => Promise.resolve({ events: of(n++), folded: 0 });
+}
+
+const T0 = Date.UTC(2030, 0, 2, 12, 0, 0);
+/** Chat events seq `from`..`to`. */
+const evs = (from: number, to: number): EventSummary[] =>
+  Array.from({ length: to - from + 1 }, (_, i) => ({ seq: from + i, ts: T0 + (from + i) * 1000, opcode: "SMSG_MESSAGECHAT", data: { text: `line ${from + i}` } }) as EventSummary);
+const fullWindow = (from: number, to: number): string => `[events: last ${to - from + 1}, newest last]\n${evs(from, to).map(formatEventLine).join("\n")}`;
 
 const LOGIN = 'await connect(); return (await sdk.createSession({ character: "Thalvorn", race: 1, class: 2 })).character;';
 
@@ -149,7 +163,20 @@ function fakeCodexHome(): string {
 }
 
 /** A program-loop codex run over a real sandbox, its CLI the fake playing `calls` (one list per turn). */
-async function codexProgramRun(calls: unknown[][], o: { maxTurns?: number; idleMs?: number; signal?: AbortSignal } = {}) {
+async function codexProgramRun(
+  calls: unknown[][],
+  o: {
+    maxTurns?: number;
+    idleMs?: number;
+    signal?: AbortSignal;
+    /** The event window each turn's message is built from, by the message's index (from 0), in place of the stub's stream. */
+    events?: (message: number) => EventSummary[];
+    /** The fake's `WB_FAKE_MODE`; `tools` unless said. */
+    mode?: string;
+    /** `WB_FAKE_ROLLOUT`'s entries; null writes none, so every read fails. A rollout of every turn unless said. */
+    rollout?: unknown[] | null;
+  } = {},
+) {
   const runDir = tempDir("wrathbench-program-codex-");
   const config = {
     ...loadRunConfig({
@@ -175,6 +202,8 @@ async function codexProgramRun(calls: unknown[][], o: { maxTurns?: number; idleM
   const lease = await leaseSessionSecret({ moduleUrl: module.url, token: TOKEN, account: "RUNNER", env: { WRATHBENCH_MODULE_SECRET: PORT_SECRET } });
   const sandbox = host(runDir, wake, module, lease.secret!);
   expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
+  overrideEvents(sandbox, o.events);
+  const rollout = o.rollout === null ? undefined : (o.rollout ?? calls.map((_, i) => ({ total: 10_000 * (i + 1) })));
   const record = join(runDir, "fake-record.json");
   const started = Date.now();
   const outcome = await runCodexEpisode({
@@ -189,11 +218,11 @@ async function codexProgramRun(calls: unknown[][], o: { maxTurns?: number; idleM
     env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "/tmp", CODEX_HOME: fakeCodexHome() },
     // A thread whose rollout the CLI writes, as the real one does: the thread context trusts only a turn it could read.
     extraEnv: {
-      WB_FAKE_MODE: "tools",
+      WB_FAKE_MODE: o.mode ?? "tools",
       WB_FAKE_RECORD: record,
       WB_FAKE_CALLS: JSON.stringify(calls),
       WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a60",
-      WB_FAKE_ROLLOUT: JSON.stringify(calls.map((_, i) => ({ total: 10_000 * (i + 1) }))),
+      ...(rollout !== undefined ? { WB_FAKE_ROLLOUT: JSON.stringify(rollout) } : {}),
     },
     killGraceMs: 500,
     programWake: wake,
@@ -275,5 +304,117 @@ describe("the program loop on the codex driver, through the fake CLI", () => {
     expect(r.ms).toBeLessThan(15_000);
     expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([["turn-end", "stopped"]]);
     expect(r.records.some((x) => x.t === "watchdog")).toBe(false);
+  }, 60_000);
+});
+
+// ------------------------------------------------- the event window's rule
+
+/** Each turn starts a trip whose end wakes the next; the last turn does nothing. */
+const TRIPS = (turns: number): unknown[][] => [
+  [
+    { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
+    { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
+  ],
+  ...Array.from({ length: turns - 2 }, (_, i) => [{ name: "start_routine", arguments: { name: "trip", args: { to: `stop ${i}` } } }]),
+  [],
+];
+const rollout = (turns: number, compactAt?: number): unknown[] =>
+  Array.from({ length: turns }, (_, i) => ({ total: 10_000 * (i + 1), ...(i + 1 === compactAt ? { compact: { pre: 440_000, post: 50_000 } } : {}) }));
+
+describe("the event window on codex's program loop", () => {
+  test("a window the thread already holds is a line; a new event sends it whole again", async () => {
+    const r = await codexProgramRun(TRIPS(4), { maxTurns: 4, events: (n) => (n < 3 ? evs(1, 5) : evs(1, 6)) });
+    const messages = r.rec["userMessages"] as string[];
+    expect(messages.length).toBe(4);
+    expect(messages[0]).toContain(fullWindow(1, 5));
+    expect(messages[1]).toContain(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`);
+    expect(messages[2]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(messages[3]).toContain(fullWindow(1, 6));
+  }, 60_000);
+
+  test("a compaction the rollout shows sends the window whole in the next message", async () => {
+    const r = await codexProgramRun(TRIPS(3), { maxTurns: 3, events: () => evs(1, 5), rollout: rollout(3, 2) });
+    const messages = r.rec["userMessages"] as string[];
+    expect(r.records.some((x) => x.t === "harness" && x["kind"] === "compaction")).toBe(true);
+    expect(messages[1]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(messages[2]).toContain(fullWindow(1, 5));
+  }, 60_000);
+
+  test("a turn whose rollout could not be read may have hidden a compaction: every message sends the window whole", async () => {
+    const r = await codexProgramRun(TRIPS(3), { maxTurns: 3, events: () => evs(1, 5), rollout: null });
+    const messages = r.rec["userMessages"] as string[];
+    expect(messages.map((m) => m.includes(fullWindow(1, 5)))).toEqual([true, true, true]);
+  }, 60_000);
+
+  test("a thread that lost turns sends the window and the pad whole after it", async () => {
+    // `regress`: the third turn's total reads as though the second never happened.
+    const calls = TRIPS(4);
+    calls[0] = [...calls[0]!, { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } }];
+    const r = await codexProgramRun(calls, { maxTurns: 4, events: () => evs(1, 5), mode: "regress" });
+    expect(r.records.some((x) => x.t === "harness" && x["kind"] === "usage_regressed")).toBe(true);
+    const messages = r.rec["userMessages"] as string[];
+    expect(messages.map((m) => m.includes(EVENTS_UNCHANGED_LINE))).toEqual([false, true, true, false]);
+    expect(messages.map((m) => m.endsWith(scratchpadUnchangedLine("# plan\nGoldshire".length)))).toEqual([false, true, true, false]);
+    expect(messages[3]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nGoldshire");
+  }, 60_000);
+
+  test("a failed turn may not have kept its message: the window goes whole after it", async () => {
+    // `flaky`: the first turn fails before its calls, and its queued notice
+    // wakes the next, which resumes the thread. The fake writes no rollout
+    // for the failed turn, so the unread rollout resets the thread as well.
+    const r = await codexProgramRun([[], ...TRIPS(3)], { maxTurns: 4, events: () => evs(1, 5), mode: "flaky" });
+    expect(r.records.some((x) => x.t === "codex_result" && x["status"] === "failed")).toBe(true);
+    expect((r.rec["userMessages"] as string[]).map((m) => m.includes(EVENTS_UNCHANGED_LINE))).toEqual([false, false, true, true]);
+  }, 60_000);
+
+  test("a thread other than the one before holds nothing: the window goes whole once the CLI names it", async () => {
+    // Every turn starts a thread of its own. The message that reaches a new
+    // thread is the one built for the old (the CLI names its thread only once
+    // the turn has started), so the second is the line; every later one is whole.
+    const r = await codexProgramRun(TRIPS(4), { maxTurns: 4, events: () => evs(1, 5), mode: "new-thread" });
+    expect((r.rec["userMessages"] as string[]).map((m) => m.includes(EVENTS_UNCHANGED_LINE))).toEqual([false, true, false, false]);
+  }, 60_000);
+});
+
+describe("the event window on the fixed loop", () => {
+  test("keeps no earlier turn message, so every request carries the window whole", async () => {
+    const runDir = tempDir("wrathbench-program-window-");
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 50, stateIntervalMs: 1, loop: "program", yield: true }),
+      runId: "run-program-window",
+      token: "run-program-window",
+    };
+    const trajectory = new Trajectory(runDir);
+    trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
+    const wake = new ProgramWake({ trajectory, tickMs: 20, coalesceMs: 100 });
+    const module = startStub();
+    stubs.push(module);
+    const lease = await leaseSessionSecret({ moduleUrl: module.url, token: TOKEN, account: "RUNNER", env: { WRATHBENCH_MODULE_SECRET: PORT_SECRET } });
+    const sandbox = host(runDir, wake, module, lease.secret!);
+    expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
+    overrideEvents(sandbox, () => evs(1, 5));
+    const requests: ChatRequest[] = [];
+    const stub = new StubAdapter([
+      { content: null, toolCalls: [{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }, { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } }] },
+      { content: "waiting", toolCalls: [] },
+      { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 1 } }] },
+    ]);
+    const outcome = await runLoop({
+      config,
+      adapter: { label: "stub", complete: (req) => (requests.push(req), stub.complete(req)) },
+      sandbox,
+      scratchpad: new Scratchpad(join(runDir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      programWake: wake,
+    });
+    trajectory.close();
+    expect(outcome).toEqual({ kind: "terminated", reason: "stub-complete" });
+    const users = requests.map((q) => String(q.messages.at(-1)!.content));
+    expect(users.length).toBeGreaterThanOrEqual(3);
+    // The request holds one user message, this turn's: the earlier ones are not kept.
+    expect(requests.every((q) => q.messages.filter((m) => m.role === "user").length === 1)).toBe(true);
+    expect(users.every((u) => u.includes(fullWindow(1, 5)) && !u.includes(EVENTS_UNCHANGED_LINE))).toBe(true);
   }, 60_000);
 });

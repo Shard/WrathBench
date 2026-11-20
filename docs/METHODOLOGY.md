@@ -291,9 +291,15 @@ timeout hint rode about twenty requests. The fold moves only at a trim, so it
 breaks no cache prefix of its own, and the last two turns are never folded, so
 a result is read in full on the turn it arrives and the turn after. The CLI
 scaffolds keep and compact their own conversation, so neither the trim nor the
-fold applies to them. One CLI driver turn can run for hours, which leaves the
-HUD seen at its two ends only, so on claude-code each snippet result ends with
-what changed since the previous one: party members' transitions, chat from
+fold applies to them. On their program loop a turn whose event window is
+exactly the one the conversation's last message showed carries one line
+saying the events are unchanged since the model last saw them, in place of
+the window; any new event sends it whole, as do the first message of a
+session or thread, a compaction, an errored turn, a thread that lost turns
+and a turn whose rollout could not be read. The fixed loop always sends it
+whole, since it keeps no earlier turn's message (operator, 2026-11-20). One
+CLI driver turn can run for hours, which leaves the HUD seen at its two ends
+only, so on claude-code each snippet result ends with what changed since the previous one: party members' transitions, chat from
 others, damage taken, level and quest changes, at most 600 characters, and
 nothing when nothing changed (operator, 2026-10-21). Codex and pi do not take
 it yet, and the fixed loop never does, since it rebuilds the HUD every turn. Old turns are dropped, so the scratchpad is the only durable
@@ -353,7 +359,7 @@ as `corpseHostiles`, read before the first reclaim goes out, so a routine
 that reclaims has the fact too (operator, 2026-11-20). On
 codex, whose conversation holds what it was sent, the turn's message carries
 the scratchpad only when the thread does not already hold it as it stands; the
-event window goes every time.
+event window follows the context policy's rule for an unchanged window.
 
 **Reflection is the model's to take, and only at rest or in flight** (2026-08-30). A
 `reflect` tool spends a turn thinking instead of acting, only while the

@@ -1627,6 +1627,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             // The record this whole wind-down existed to collect. It is on
             // disk now, so stop waiting and tear down.
             finishWindDown("result");
+            // An errored turn may not have kept its message in the session:
+            // the next message sends the pad and the event window whole.
+            if (msg["is_error"] === true) thread?.reset();
             // Gated on is_error: a successful turn's text is model output.
             if (msg["is_error"] === true) limit ??= detectLimit(resultText);
             if (msg["is_error"] === true && limit === null) {

@@ -1465,11 +1465,21 @@ drivers' turn messages follow a thread context (`ThreadContext`,
 `threadContextOf`); the snippet loop and the fixed loop never do. The
 scratchpad goes whole only when the thread does not already hold it as it
 stands (`PadSeen`): the first
-message of a thread, the first after a compaction or a turn whose rollout
-could not be read, and any after the pad changed outside the conversation (a
-snippet's or a routine's write); after the model's own `write_scratchpad` or
+message of a thread, the first after a compaction, a turn whose rollout
+could not be read or a turn that may not have kept its message (an errored
+`result` on claude-code, a `turn.failed` or `error` on codex, a codex thread
+whose total went down, `usage_regressed`, so it lost turns), and any after
+the pad changed outside the conversation (a snippet's or a routine's write);
+after the model's own `write_scratchpad` or
 `edit_scratchpad` the thread holds it, and a line with its size stands in its
-place. The event window goes whole on every message. On claude-code the
+place. The event window follows the same thread (`EventsSeen`, operator
+2026-11-20): when its rendered lines are exactly those the thread's last
+message showed, one line, `[events: unchanged since you last saw them in this
+conversation, so not repeated]`, stands in their place, and its
+`events_served` record has `count` 0 and `unchanged`. Compared as text, not
+by the newest seq, so a `stream_gap` or a restart's renumbered ring sends it
+whole. Every reset of the pad resets it. The fixed loop never takes this: it keeps no earlier turn's
+message, so its every request carries the window whole. On claude-code the
 reset comes at the `compact_boundary` envelope itself, since one turn may
 hold several compactions, and at a `session_id` other than the one before. A
 resumed run's thread is new, so its first message is plain. The message that reaches a thread the

@@ -11,6 +11,7 @@ import {
   CONTEXT_POLICY,
   assembleContext,
   eventWindow,
+  formatEventLine,
   formatStateSummary,
   messageWindow,
   messageWindowCut,
@@ -557,6 +558,10 @@ export class ContextBuilder {
     // thread does not hold it as it is.
     const scratchpad = this.o.scratchpad.read();
     const padUnchanged = thread !== undefined && !thread.pad.sendWhole(scratchpad);
+    // And the event window only when the thread does not already hold these
+    // very lines (`EventsSeen`). Never on the fixed loop, which passes no
+    // thread: its earlier turn messages are not kept, so nothing holds them.
+    const eventsUnchanged = thread !== undefined && events.length > 0 && !thread.events.sendWhole(events.map(formatEventLine).join("\n"));
     // Scrubbed of the run's registered secrets as a whole, after the pure
     // assembly: a notice (the crash notice's stderr tail), a chat line or an
     // event a snippet's text came back in, and the scratchpad all reach the
@@ -579,18 +584,24 @@ export class ContextBuilder {
         turn: this.turn,
         ...(wake !== undefined ? { wake } : {}),
         ...(padUnchanged ? { scratchpadUnchanged: true } : {}),
+        ...(eventsUnchanged ? { eventsUnchanged: true } : {}),
       }),
     );
     // What the model was shown, and how many ambient events the span folded —
     // the same shape the recent_events tool logs. The ambient packets
-    // themselves were never shown; logging them was most of the file.
-    this.o.trajectory.append({
-      t: "events_served",
-      via: "context",
-      count: events.length,
-      events,
-      ...(folded > 0 ? { folded } : {}),
-    });
+    // themselves were never shown; logging them was most of the file. A
+    // window the thread already held was not shown again: none, and marked so.
+    this.o.trajectory.append(
+      eventsUnchanged
+        ? { t: "events_served", via: "context", count: 0, events: [], unchanged: true }
+        : {
+            t: "events_served",
+            via: "context",
+            count: events.length,
+            events,
+            ...(folded > 0 ? { folded } : {}),
+          },
+    );
     return contextText;
   }
 }
