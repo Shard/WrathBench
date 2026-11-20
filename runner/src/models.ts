@@ -224,6 +224,19 @@ export function effectiveTier(declared: Tier, earned: Witnesses): Tier {
 }
 
 /**
+ * Whether a model holds the witness that would move it up the ladder were its
+ * declared tier not where an operator put it — the `*` beside its tier: a `t0`
+ * with a counted level-`promoteAtLevel` e90, a declared `t2` with a counted
+ * level-`deadminesAtLevel` e360. Never a `t1`, which climbs on its own, nor a
+ * `t3`, the top.
+ */
+export function holdsWitness(s: { declaredTier: Tier; earnedPromotion: boolean; earnedDeadmines?: boolean }): boolean {
+  if (s.declaredTier === "t0") return s.earnedPromotion;
+  if (s.declaredTier === "t2") return s.earnedDeadmines === true;
+  return false;
+}
+
+/**
  * Why a model may not be scheduled on an episode, in the words `--status`,
  * `--dry-run` and a gated job use: what opens it. A tier budget for `e90` and
  * `e360` (promotion buys the `e360`), and for the Deadmines evals the `e360`

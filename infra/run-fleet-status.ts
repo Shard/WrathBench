@@ -144,6 +144,7 @@ import {
   STATS_EPISODES,
   TIER_TABLE,
   TIERS,
+  holdsWitness,
   verdictForGroups,
 } from "../runner/src/models";
 import { GROUPS_ENV, groupsEnvValue, groupsFromEnv, type Groups } from "../runner/viewer/groups";
@@ -648,12 +649,13 @@ export function formatModels(
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
   /**
    * The tier column. A climb is shown as the move it was (`t1>t2`, `t1>t3`); a held
-   * witness is shown as a held witness (`t0*`), because a trial model that has
-   * earned promotion is exactly the row an operator is looking for when deciding
-   * what to promote — and the old table could only say `promoted, 0/0`.
+   * witness is shown as a held witness (`t0*`, `t2*`: `holdsWitness`), because a
+   * pinned model that has earned the next rung is exactly the row an operator is
+   * looking for when deciding what to move up — and the old table could only say
+   * `promoted, 0/0`.
    */
   const tierCell = (s: ModelState): string =>
-    s.tier !== s.declaredTier ? `${s.declaredTier}>${s.tier}` : s.earnedPromotion ? `${s.tier}*` : s.tier;
+    s.tier !== s.declaredTier ? `${s.declaredTier}>${s.tier}` : holdsWitness(s) ? `${s.tier}*` : s.tier;
   const cell = (s: ModelState, ep: "e90" | "e360"): string => {
     const st = s.perEpisode[ep]!;
     if (!s.eligible.includes(ep)) return "-";

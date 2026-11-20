@@ -2428,6 +2428,11 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(text).toContain("tiers e90/e360/deadmines-solo t0 1/0/0, t1 3/0/0, t2 3/1/0, t3 3/1/3");
     const t3 = modelStatesOf(rosterModels(roster), [...runs, run("stealth/ox-alpha:free", "e360", 4, { bestLevel: 8 })]);
     expect(formatModels(t3, new Set(), NOW).join("\n")).toMatch(/ox +free +t1>t3 +promoted/);
+    // A declared t2 is a pin: its star is the e360 witness that would move it to t3, never the e90 one it has spent.
+    const pinned = { ...roster, ox: { ...roster["ox"]!, tier: "t2" as const } };
+    expect(formatModels(modelStatesOf(rosterModels(pinned), runs), new Set(), NOW).join("\n")).toMatch(/ox +free +t2 +active/);
+    const l8 = [...runs, run("stealth/ox-alpha:free", "e360", 4, { bestLevel: 8 })];
+    expect(formatModels(modelStatesOf(rosterModels(pinned), l8), new Set(), NOW).join("\n")).toMatch(/ox +free +t2\* +active/);
   });
 
   test("idle: unlimited — the box past its tier gets one continuous freeplay session at a time", () => {

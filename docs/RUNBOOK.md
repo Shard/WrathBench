@@ -509,7 +509,8 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
-            a climb.
+            a climb. A declared t2 with a counted level-8 e360 shows `t2*` the same way: it has
+            earned the Deadmines, and moving it to t3 runs them.
 policy      Only where runs execute. `maxSessions { <driver>: n }` — how many sessions of a driver
             one host carries at once, whichever credential pays (each CLI session is a process and a
             sandbox): the one cap that is not a credential's. Absent: none beyond the slots.
