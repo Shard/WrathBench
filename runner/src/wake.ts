@@ -28,7 +28,11 @@
  *    that went ahead, and a call the character's death refused or cut short
  *    (operator, 2026-11-18);
  *  - from the runner: a death (the session record's `death` row), the event
- *    stream closing (the state sample), and a harness notice.
+ *    stream closing (the state sample), a harness notice, and a routine
+ *    running hot: more than `HOT_PER_MINUTE` refusals and errors in a minute
+ *    while the model sleeps, once per start of that routine (`HotMeter`,
+ *    operator, 2026-11-20). Its reason names the routine, the count and the
+ *    signature most of them were.
  *
  * At fan-out (one agent driving several characters) the program is one and
  * its routines are per character: every line names the character, a
@@ -44,10 +48,15 @@
  *
  * What a wake shows is facts only (`renderWake`, pure): why it woke, every
  * routine as it stands, new errors with the lines of the model's files,
- * refusals with their hints unchanged, moves that replaced one another,
+ * refusals with their hints unchanged (each signature in its newest
+ * occurrence's words, not its first's), moves that replaced one another,
  * `wake` calls, what changed for the character, and the routines' last
  * console lines. No advice and no judgement of stalls: "last action 3s ago"
- * and "no routine is running" are the two stall facts.
+ * and "no routine is running" are the two stall facts. Deaths and quests
+ * count from the previous block, so a death in the awake turn before a sleep
+ * is counted by the wake its reason brings; and a death's cause is taken
+ * from the child as its row lands, so a sandbox restart before the wake does
+ * not lose it.
  *
  * Two lines are on the failure path only (operator delegated, 2026-11-15),
  * so a character that never dies and keeps its gear sees neither. A wake that
@@ -143,7 +152,7 @@ const WAKE_REASONS_SHOWN = 4;
 const ERROR_FRAMES_SHOWN = 3;
 
 /** What can wake a sleeping model. */
-export type WakeKey = "routine_ended" | "error" | "refusal" | "wake" | "died" | "stream_closed" | "sandbox_restart" | "notice";
+export type WakeKey = "routine_ended" | "error" | "refusal" | "running_hot" | "wake" | "died" | "stream_closed" | "sandbox_restart" | "notice";
 /** What ended a sleep: a reason, the five minutes (or a `yield`'s own seconds), or the run ending under it. */
 export type WakeFired = WakeKey | "cap" | "stopped";
 
@@ -321,6 +330,102 @@ export class Waker {
   }
 }
 
+/**
+ * A routine's refusals and errors in a minute past which it is running hot
+ * (operator, 2026-11-20): one a second, held for a minute. A call a routine
+ * awaits takes longer than that when it does anything (a cast's global
+ * cooldown, a walk), so past it the routine is retrying without waiting.
+ * Over five runs' repeat counts the busiest healthy routine, a combat
+ * rotation hitting cooldowns, ran at about 7 a minute; routines that kept
+ * retrying failing moves ran at 40 to 106; the spinners at 300 to 2,000. A
+ * constant, not a knob.
+ */
+export const HOT_PER_MINUTE = 60;
+/** The window `HOT_PER_MINUTE` counts over. */
+const HOT_WINDOW_MS = 60_000;
+/** How often a sleep drains the program to measure it: the stack's beat, which is when its repeat counts arrive. */
+export const HOT_DRAIN_MS = 5_000;
+/** Routine runs remembered as told hot; past it the oldest is forgotten. */
+const HOT_TOLD_KEPT = 2_000;
+
+/**
+ * The routine a signature is of, with the character a refusal names, or
+ * null for one that is no routine's: an error outside every routine
+ * (`|TypeError|…`) or the program's memory (`memory|save`).
+ */
+function routineOfSignature(signature: string): { name: string; character: string } | null {
+  const parts = signature.split("|");
+  if (parts.length < 3 || parts[0] === "") return null;
+  const refusal = refusalOfSignature(signature);
+  return { name: parts[0]!, character: "action" in refusal ? parts.slice(1, -2).join("|") : "" };
+}
+
+/** A signature as a hot wake names it: a refusal's action and status, an error's name and place. */
+function signatureWords(signature: string): string {
+  const refusal = refusalOfSignature(signature);
+  if ("action" in refusal) return `${refusal.action} ${refusal.status}`;
+  const [, name, where] = signature.split("|");
+  return where !== undefined && where !== "" ? `${name} at ${where}` : (name ?? signature);
+}
+
+/**
+ * Each routine's refusals and errors over the last minute, from the repeat
+ * counts a sleep drains: a routine run past `HOT_PER_MINUTE` is one wake
+ * reason, once per start of that routine (a new start, a restart, re-arms
+ * it), so it cannot flap. Counts only what the sleep drained itself: the
+ * drain as a sleep starts covers the awake span before it, whose length is
+ * not a minute's.
+ */
+export class HotMeter {
+  /** By routine and character: the counts drained in the window, each at its drain, by signature. */
+  private readonly window = new Map<string, { at: number; signature: string; n: number }[]>();
+  /** Routine runs already told hot, by routine, character and start. */
+  private readonly told = new Set<string>();
+
+  /** Count a drain's repeats at `now`; the reason for each routine run that just passed the bar. */
+  count(repeats: ProgramFacts["repeats"], routines: readonly RoutineRow[], now: number): WakeReason[] {
+    const touched = new Set<string>();
+    for (const r of repeats) {
+      const who = routineOfSignature(r.signature);
+      if (who === null || r.count <= 0) continue;
+      const key = runKey(who.name, who.character === "" ? undefined : who.character);
+      const list = this.window.get(key) ?? [];
+      list.push({ at: now, signature: r.signature, n: r.count });
+      this.window.set(key, list);
+      touched.add(key);
+    }
+    const out: WakeReason[] = [];
+    for (const [key, list] of this.window) {
+      while (list.length > 0 && list[0]!.at <= now - HOT_WINDOW_MS) list.shift();
+      if (list.length === 0) {
+        this.window.delete(key);
+        continue;
+      }
+      if (!touched.has(key)) continue;
+      const total = list.reduce((n, x) => n + x.n, 0);
+      if (total <= HOT_PER_MINUTE) continue;
+      const [name, character] = key.split("\u0000") as [string, string | undefined];
+      // The run: the routine's row by name, and by character where the row has one.
+      const row = routines.find((x) => x.name === name && (x.character === undefined || character === undefined || x.character === character));
+      const run = `${key}\u0000${row?.startedAt ?? ""}`;
+      if (this.told.has(run)) continue;
+      this.told.add(run);
+      if (this.told.size > HOT_TOLD_KEPT) this.told.delete(this.told.values().next().value as string);
+      const bySig = new Map<string, number>();
+      for (const x of list) bySig.set(x.signature, (bySig.get(x.signature) ?? 0) + x.n);
+      const [top, topN] = [...bySig].sort((a, b) => b[1] - a[1])[0]!;
+      const who = character === undefined || character === "" ? name : `${name} (${character})`;
+      out.push({
+        key: "running_hot",
+        ts: now,
+        text: `routine running hot (${who}: ${total.toLocaleString("en-US")} refusals and errors in the last minute, ${topN.toLocaleString("en-US")} of them ${signatureWords(top)})`,
+        inContext: false,
+      });
+    }
+    return out;
+  }
+}
+
 export interface SleepOptions {
   waker: Waker;
   /** The longest this sleep lasts: `WAKE_CAP_MS`, or a `yield`'s own seconds. */
@@ -335,6 +440,8 @@ export interface SleepOptions {
   stopped: () => boolean;
   /** A notice queued for the next message that no notice hook saw (the driver's own). */
   queuedNotices?: () => number;
+  /** Called on every tick before the reasons are read: where a sleep looks at the program meanwhile (`ProgramWake`'s hot meter). */
+  onTick?: (now: number) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
@@ -368,6 +475,7 @@ export async function sleepUntilWake(o: SleepOptions): Promise<SleepResult> {
   for (;;) {
     if (o.stopped()) return { fired: "stopped", sleptMs: slept() };
     const now = o.now();
+    o.onTick?.(now);
     // A driver's queued notice is its own reason, so it keeps its two seconds while a death settles.
     if ((o.queuedNotices?.() ?? 0) > 0 && !o.waker.peek().some((r) => r.key === "notice")) {
       o.waker.note({ key: "notice", ts: now, text: "a harness notice", inContext: true });
@@ -461,6 +569,43 @@ export interface SignatureLine {
    * the character are one line naming each, as the stack's hint lines are.
    */
   seat?: { head: string; character: string; hint: string } | undefined;
+  /**
+   * What the line says before the occurrence's own words: an error's routine,
+   * a refusal's routine, action and status. A later occurrence of the
+   * signature keeps it and says its own words after it (`withNewest`).
+   */
+  lead?: string | undefined;
+}
+
+/**
+ * A repeat of a signature as the stack drains it, with its newest occurrence
+ * where the stack carries one (wrath-mcp's `ProgramRepeat.newest`: a refusal's
+ * hint, an error's text and frames). Read as optional, so a stack that does
+ * not carry it counts the repeat and leaves the line as it stood.
+ */
+type RepeatWithNewest = ProgramFacts["repeats"][number] & { newest?: Newest };
+/** A repeat's newest occurrence: a refusal's hint, or an error's text and frames. */
+type Newest = { text: string; frames?: string[] };
+
+/** The newest occurrence a repeat carries, if any. */
+const newestOf = (r: ProgramFacts["repeats"][number]): Newest | undefined => {
+  const n = (r as RepeatWithNewest).newest;
+  return n !== undefined && typeof n.text === "string" ? n : undefined;
+};
+
+/**
+ * `line` as a later occurrence of its signature says it: the same lead, the
+ * newest occurrence's words, and for an error its frames. A line from before
+ * `lead` was kept is left as it stood. Pure.
+ */
+export function withNewest(line: SignatureLine, newest: { text: string; frames?: readonly string[] | undefined }): SignatureLine {
+  if (line.lead === undefined) return line;
+  if (line.kind === "error") return { ...line, text: `${line.lead} ${newest.text}`, frames: newest.frames ?? line.frames };
+  return {
+    ...line,
+    text: `${line.lead} — ${newest.text}`,
+    ...(line.seat !== undefined ? { seat: { ...line.seat, hint: newest.text } } : {}),
+  };
 }
 
 /** "45s", "4m05s", "1h05m". */
@@ -479,18 +624,18 @@ const ago = (now: number, ts: number): string => `${sleptWords(now - ts)} ago`;
 /** The line an error or refusal signature reads as, from its fresh fact. */
 export function signatureLineOf(fact: ProgramFact): { signature: string; line: SignatureLine } | null {
   if (fact.kind === "error") {
-    return { signature: fact.error.signature, line: { kind: "error", text: `${label(fact)} ${fact.error.text}`, frames: fact.error.frames } };
+    return { signature: fact.error.signature, line: { kind: "error", text: `${label(fact)} ${fact.error.text}`, frames: fact.error.frames, lead: label(fact) } };
   }
   if (fact.kind === "refusal") {
     const head = `${label(fact)} ${fact.action} ${fact.status}`;
     return {
       signature: fact.signature,
-      line: { kind: "refusal", text: `${head} — ${fact.hint}`, frames: [], ...(fact.seat !== undefined ? { seat: { head, character: fact.seat, hint: fact.hint } } : {}) },
+      line: { kind: "refusal", text: `${head} — ${fact.hint}`, frames: [], lead: head, ...(fact.seat !== undefined ? { seat: { head, character: fact.seat, hint: fact.hint } } : {}) },
     };
   }
   if (fact.kind === "ended" && fact.routine.state === "threw" && fact.routine.error !== undefined) {
     const e = fact.routine.error;
-    return { signature: e.signature, line: { kind: "error", text: `${label(fact.routine)} ${e.text}`, frames: e.frames } };
+    return { signature: e.signature, line: { kind: "error", text: `${label(fact.routine)} ${e.text}`, frames: e.frames, lead: label(fact.routine) } };
   }
   return null;
 }
@@ -713,12 +858,15 @@ function namedReasons(reasons: readonly WakeReason[]): string {
 /** Two drains as one span: facts in order, repeats summed by signature, the console's tail with repeats folded (`foldConsole`), the routines as they stand now. */
 export function mergeFacts(a: ProgramFacts | null, b: ProgramFacts): ProgramFacts {
   if (a === null) return b;
-  const repeats = new Map<string, { signature: string; count: number; ts: number }>();
+  const repeats = new Map<string, RepeatWithNewest>();
   for (const r of [...a.repeats, ...b.repeats]) {
     const prev = repeats.get(r.signature);
     if (prev === undefined) repeats.set(r.signature, { ...r });
     else {
       prev.count += r.count;
+      // The newest occurrence is the later drain's.
+      const newest = newestOf(r);
+      if (newest !== undefined && r.ts >= prev.ts) prev.newest = newest;
       prev.ts = Math.max(prev.ts, r.ts);
     }
   }
@@ -817,6 +965,8 @@ export interface WakeSleepOptions {
  */
 export class ProgramWake {
   readonly waker = new Waker();
+  /** Each routine's refusals and errors over the last minute while asleep: running hot wakes, once per start. */
+  private readonly hot = new HotMeter();
   /** The run's wakes so far, this process's and those before a resume. */
   private n: number;
   /** What the sleep-start drain took, carried into the next wake. */
@@ -827,8 +977,12 @@ export class ProgramWake {
    * records cover from here to the wake (`since`, `at`).
    */
   private drainedAt: number;
+  /** Every error and refusal signature seen this run, as its newest occurrence says it, and that occurrence's time. */
   private readonly signatures = new Map<string, SignatureLine>();
+  private readonly signatureTs = new Map<string, number>();
   private lastSample: WakeSample | null = null;
+  /** The session record's counts as the last wake block read them: what the next block's deaths and quests count from. */
+  private countsShown: WakeCounts | null = null;
   private connected: boolean | undefined;
   /** At fan-out, whether each character's stream was open at the last sample. */
   private readonly connectedOf = new Map<string, boolean>();
@@ -844,6 +998,10 @@ export class ProgramWake {
   private diedSince = new Map<string, number>();
   /** The child's latched cause of the last death (`SandboxHost.deathCause`), at fan-out of a character's seat, once the sandbox exists (`useDeathCause`). */
   private deathCause: ((character?: string) => Promise<DeathCause | null>) | undefined;
+  /** Causes taken from the latch as their death rows landed, by character ("" for a single one): kept across a sandbox restart (`keepCause`). */
+  private readonly causeKept = new Map<string, DeathCause>();
+  /** The latch read in flight per character, so the wake's own read waits for it. */
+  private readonly causeReads = new Map<string, Promise<void>>();
   /** At fan-out, every seat's worn items (`SandboxHost.wornDurabilityAll`), once the sandbox exists (`useWorn`). */
   private wornRead: (() => Promise<Record<string, SnapshotLike["inventory"]>>) | undefined;
   /** Each worn item's level as the last wake reported it, by character ("" for a single one) and `slot:item`: what a crossing is measured from. */
@@ -874,11 +1032,9 @@ export class ProgramWake {
 
   /** `ProgramOptions.onFact`: record the fact, remember how its signature reads, and wake for it if it wakes. */
   readonly onFact = (fact: ProgramFact): void => {
+    // Every occurrence that arrives as a fact is the signature's newest: a later wake names it as it last happened.
     const s = signatureLineOf(fact);
-    if (s !== null && !this.signatures.has(s.signature)) {
-      this.signatures.set(s.signature, s.line);
-      if (this.signatures.size > 1_000) this.signatures.delete(this.signatures.keys().next().value as string);
-    }
+    if (s !== null) this.noteSignature(s.signature, s.line, fact.ts);
     if (fact.kind === "restart" && fact.blamed) this.blamed++;
     try {
       this.o.trajectory.append(factRecord(fact));
@@ -891,6 +1047,24 @@ export class ProgramWake {
     if (reason.key === "routine_ended" && reason.routine !== undefined && shownOver(this.rowsShown.get(runKey(reason.routine.name, reason.routine.character)), reason.routine.startedAt)) return;
     this.waker.note(reason);
   };
+
+  /**
+   * Keep `line` as how `signature` reads, unless an occurrence newer than `ts`
+   * already set it. Bounded: past a thousand signatures the least recently
+   * seen is forgotten.
+   */
+  private noteSignature(signature: string, line: SignatureLine, ts: number): void {
+    const was = this.signatureTs.get(signature);
+    if (was !== undefined && ts < was) return;
+    this.signatures.delete(signature);
+    this.signatures.set(signature, line);
+    this.signatureTs.set(signature, ts);
+    if (this.signatures.size > 1_000) {
+      const oldest = this.signatures.keys().next().value as string;
+      this.signatures.delete(oldest);
+      this.signatureTs.delete(oldest);
+    }
+  }
 
   /** The sandbox's `onNotice`, beside the trajectory's: a notice wakes. */
   onNotice(n: Pick<HarnessNotice, "kind" | "ts">): void {
@@ -923,6 +1097,48 @@ export class ProgramWake {
         ? { key: "died", ts, text: "your character died", inContext: true }
         : { key: "died", ts, text: `${character} died`, inContext: true, character },
     );
+    this.keepCause(character);
+  }
+
+  /**
+   * Take the child's latched cause as a death row lands and keep it here, so
+   * a sandbox restart between the death and its wake (the child and its
+   * latch gone) does not cost the wake its death line. Reads for one
+   * character queue behind each other; a read that finds nothing leaves the
+   * wake's own read to find it.
+   */
+  private keepCause(character?: string): void {
+    const read = this.deathCause;
+    if (read === undefined) return;
+    const key = character ?? "";
+    const next = (this.causeReads.get(key) ?? Promise.resolve()).then(async () => {
+      try {
+        const cause = await read(character);
+        if (cause !== null) this.causeKept.set(key, cause);
+      } catch {
+        // A latch that failed costs the kept cause only.
+      }
+    });
+    this.causeReads.set(key, next);
+  }
+
+  /**
+   * The newest cause of a death of `character` (a single character's with
+   * none): the child's latch now, else the one kept as the death row landed.
+   * Taken: a cause is one death line's.
+   */
+  private async takeCause(character?: string): Promise<DeathCause | null> {
+    const key = character ?? "";
+    await this.causeReads.get(key);
+    try {
+      const live = (await this.deathCause?.(character)) ?? null;
+      if (live !== null) this.causeKept.set(key, live);
+    } catch {
+      // A latch that failed leaves the kept cause.
+    }
+    const cause = this.causeKept.get(key) ?? null;
+    this.causeKept.delete(key);
+    return cause;
   }
 
   /** Every state sample: the stream closing wakes, and the last reading is what progress is measured from. */
@@ -1021,16 +1237,13 @@ export class ProgramWake {
    * The cause of the death this wake carries, as the child latched it, or
    * nothing: a latch from another death than the record's last (a child
    * restarted between) is not this one's cause. Taken only by a death wake,
-   * so a wake with none leaves it for the one the death row brings.
+   * so a wake with none leaves it for the one the death row brings. The
+   * cause kept as the death row landed stands in for a latch a sandbox
+   * restart emptied (`keepCause`).
    */
   private async deathLines(): Promise<string[]> {
     if (this.deathCause === undefined) return [];
-    let cause: DeathCause | null;
-    try {
-      cause = await this.deathCause();
-    } catch {
-      return [];
-    }
+    const cause = await this.takeCause();
     if (cause === null) return [];
     if (this.lastDeathTs !== undefined && Math.abs(cause.ts - this.lastDeathTs) > DEATH_MATCH_MS) return [];
     const line = deathLine(cause);
@@ -1049,12 +1262,8 @@ export class ProgramWake {
     if (died.length === 0) return [];
     const lines = await Promise.all(
       died.map(async ([character, ts]) => {
-        let cause: DeathCause | null = null;
-        try {
-          cause = (await this.deathCause?.(character)) ?? null;
-        } catch {
-          // A latch that failed costs the cause only.
-        }
+        // A latch that failed costs the cause only.
+        const cause = await this.takeCause(character);
         return fanoutDeathLine(character, cause !== null && Math.abs(cause.ts - ts) <= DEATH_MATCH_MS ? cause : null);
       }),
     );
@@ -1150,6 +1359,15 @@ export class ProgramWake {
   async sleep(program: WakeProgram, o: WakeSleepOptions): Promise<{ block: string; fired: WakeFired; sleptMs: number }> {
     this.held = mergeFacts(this.held, program.drainFacts());
     const before = this.reading();
+    // While asleep, the program is drained at its beat's pace and each routine's refusals and errors measured (`HotMeter`); what is drained is held for the wake as the first drain is.
+    let measuredAt = this.now();
+    const measure = (now: number): void => {
+      if (now - measuredAt < HOT_DRAIN_MS) return;
+      measuredAt = now;
+      const drained = program.drainFacts();
+      this.held = mergeFacts(this.held, drained);
+      for (const r of this.hot.count(drained.repeats, drained.routines, now)) this.waker.note(r);
+    };
     o.idle?.noteAsleep();
     let woke: SleepResult;
     try {
@@ -1158,6 +1376,7 @@ export class ProgramWake {
         capMs: o.capMs,
         floorMs: o.floorMs,
         stopped: o.stopped,
+        onTick: measure,
         ...(o.queuedNotices !== undefined ? { queuedNotices: o.queuedNotices } : {}),
         now: this.now,
         sleep: this.sleepFn,
@@ -1174,12 +1393,20 @@ export class ProgramWake {
     }
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
+    // A repeat names its signature as its newest occurrence said it, where the stack carries that.
+    for (const r of facts.repeats) {
+      const newest = newestOf(r);
+      const line = this.signatures.get(r.signature);
+      if (newest !== undefined && line !== undefined) this.noteSignature(r.signature, withNewest(line, newest), r.ts);
+    }
     const reasons = this.waker.take();
     // Taken with the reasons, before any await: a death row landing during one waits, line and reason alike, for the next wake.
     const died = this.diedSince;
     this.diedSince = new Map();
     this.n++;
     const after = this.reading();
+    // Deaths and quests count from the last block, not the sleep's start: a death in the awake turn before it is this wake's to count, as its reason is.
+    const counted = this.countsShown ?? before.counts;
     const now = this.now();
     const levels = [...(after.levels ?? [])].flatMap(([character, to]) => {
       const from = before.levels?.get(character);
@@ -1189,9 +1416,10 @@ export class ProgramWake {
       ...(before.level !== undefined && after.level !== undefined ? { level: { from: before.level, to: after.level } } : {}),
       ...(levels.length > 0 ? { levels } : {}),
       ...(before.level !== undefined && before.level === after.level && before.xp !== undefined && after.xp !== undefined ? { xp: Math.max(0, after.xp - before.xp) } : {}),
-      quests: Math.max(0, after.counts.quests - before.counts.quests),
-      deaths: Math.max(0, after.counts.deaths - before.counts.deaths),
+      quests: Math.max(0, after.counts.quests - counted.quests),
+      deaths: Math.max(0, after.counts.deaths - counted.deaths),
     };
+    this.countsShown = after.counts;
     const seats = this.lastSample?.seats;
     const worn = await this.wornNow();
     const crossings = this.wornCrossings(worn);
