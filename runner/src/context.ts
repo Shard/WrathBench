@@ -11,7 +11,9 @@
  *     records (`foldToolResult`), its most recent block verbatim ]
  *   [ one fresh user message assembled by `assembleContext`:
  *       the turn number, harness notices, state summary, last EVENT_WINDOW
- *       events, scratchpad ]
+ *       events, scratchpad; on a scaffold's program loop the events and the
+ *       pad give way to a line when its thread already holds them as they
+ *       are (`ThreadContext`) ]
  *
  * The window grows to MESSAGE_WINDOW_MAX and is then cut back by one block of
  * MESSAGE_WINDOW_TRIM messages, rather than sliding one message per turn. The
@@ -1520,6 +1522,14 @@ export interface ContextInputs {
    * run always has.
    */
   scratchpadUnchanged?: boolean | undefined;
+  /**
+   * The event window is not repeated: the conversation already holds these
+   * very lines, from the last message that showed them (`EventsSeen`, a
+   * scaffold's program loop). A line says so in their place. Ignored when the
+   * window is empty; absent or false renders the window whole, as every
+   * other run always has.
+   */
+  eventsUnchanged?: boolean | undefined;
 }
 
 /**
@@ -1798,6 +1808,8 @@ export function assembleContext(inputs: ContextInputs): string {
     // Everything fetched was ambient: say so, rather than "none yet" over a
     // stream that is plainly running.
     parts.push(`[events]\nno non-ambient events; ${excluded} ambient movement and party-frame events folded into state only`);
+  } else if (inputs.eventsUnchanged === true) {
+    parts.push(EVENTS_UNCHANGED_LINE);
   } else {
     const note = excluded > 0 ? `; ${excluded} ambient movement and party-frame events folded into state only` : "";
     parts.push(
@@ -1835,6 +1847,43 @@ export function renderNotices(notices: readonly Pick<HarnessNotice, "kind" | "te
  */
 export function scratchpadUnchangedLine(chars: number): string {
   return `[scratchpad ${scratchpadSizeLabel(chars)}: unchanged since you last saw it in this conversation, so not repeated]`;
+}
+
+/**
+ * The line that stands for an event window the conversation already holds as
+ * it is (`ContextInputs.eventsUnchanged`). It opens with `[events`, so a
+ * reader that cuts a message into parts still finds the events part.
+ */
+export const EVENTS_UNCHANGED_LINE = "[events: unchanged since you last saw them in this conversation, so not repeated]";
+
+/**
+ * What a scaffold's conversation holds of the event window, on the program
+ * loop (operator, 2026-11-20): the window is sent whole unless the last
+ * message that carried it showed exactly these lines and the conversation
+ * still holds that message. Compared as rendered text, not by the newest
+ * seq: a `stream_gap` carries the next real event's seq and a sandbox
+ * restart renumbers the ring, and either way unequal text sends the window.
+ * Reset with the pad (`ThreadContext.reset`) and, beyond it, wherever a
+ * turn may not have reached the thread (a failed turn, a thread that lost
+ * turns). The fixed loop never uses this: it regenerates the turn's message
+ * and keeps none of the earlier ones, so its model never holds an earlier
+ * window.
+ */
+export class EventsSeen {
+  /** The window's lines as the conversation holds them, or undefined when it holds none it can be trusted to. */
+  private known: string | undefined;
+
+  /** Whether a message sends the window `lines` whole; when it does, the conversation holds them from then on. */
+  sendWhole(lines: string): boolean {
+    if (lines.length > 0 && lines === this.known) return false;
+    this.known = lines;
+    return true;
+  }
+
+  /** The conversation lost, or may have lost, the last message that showed the window. */
+  reset(): void {
+    this.known = undefined;
+  }
 }
 
 /**
@@ -1885,15 +1934,18 @@ export class PadSeen {
 
 /**
  * A scaffold's thread context: what its conversation already holds of the
- * scratchpad (`PadSeen`), so a turn's message does not repeat it. Used on
- * codex, on the program loop (`threadContextOf`, config.ts).
+ * scratchpad (`PadSeen`) and of the event window (`EventsSeen`), so a turn's
+ * message does not repeat them. Used on claude-code and codex, on the
+ * program loop (`threadContextOf`, config.ts).
  */
 export class ThreadContext {
   readonly pad = new PadSeen();
+  readonly events = new EventsSeen();
 
-  /** The thread lost what it held, or may have (a compaction, another thread, a rollout that could not be read): the next message sends the pad whole. */
+  /** The thread lost what it held, or may have (a compaction, another thread, a rollout that could not be read): the next message sends the pad and the event window whole. */
   reset(): void {
     this.pad.reset();
+    this.events.reset();
   }
 }
 

@@ -9,11 +9,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Scratchpad, SecretRedactor, type ToolProgram } from "@wrathbench/mcp";
+import { Scratchpad, SecretRedactor, type EventSummary, type ToolProgram } from "@wrathbench/mcp";
 import { Workspace } from "@wrathbench/mcp/workspace";
 import { leaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { MCP_SERVER_NAME, MCP_TOOL_TIMEOUT_ENV, claudeArgs, mcpToolNames, programToolEnv, runClaudeEpisode } from "../src/adapter-claude";
 import { loadRunConfig, threadContextOf } from "../src/config";
+import { EVENTS_UNCHANGED_LINE, formatEventLine } from "../src/context";
 import { EpisodicLog } from "../src/episodic";
 import { CODEX_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, buildSystemPrompt } from "../src/prompt";
 import { ReflectGate } from "../src/reflect";
@@ -67,6 +68,8 @@ interface ProgramRun {
   fake?: Record<string, string>;
   /** Fields laid over every state sample after login: the character as the HUD and the wake read it. */
   sample?: Record<string, unknown>;
+  /** The event window each turn's message is built from, by the message's index (from 0), in place of the stub's stream. */
+  events?: (message: number) => EventSummary[];
 }
 
 /** A program-loop claude-code run over a real sandbox, its CLI the fake playing `calls`. */
@@ -112,6 +115,11 @@ async function claudeProgramRun(o: ProgramRun) {
     const real = sandbox.stateSnapshot.bind(sandbox);
     const over = o.sample;
     (sandbox as unknown as { stateSnapshot: () => Promise<unknown> }).stateSnapshot = async () => ({ ...((await real()) as object), ...over });
+  }
+  if (o.events !== undefined) {
+    const of = o.events;
+    let n = 0;
+    (sandbox as unknown as { contextEvents: () => Promise<unknown> }).contextEvents = () => Promise.resolve({ events: of(n++), folded: 0 });
   }
   const record = join(runDir, "fake-record.json");
   const started = Date.now();
@@ -304,6 +312,62 @@ describe("the program loop on the claude-code driver, through the fake CLI", () 
     for (let k = 0; k < 50 && (await wakes()).length === 0; k++) await Bun.sleep(100);
     expect(await wakes()).toEqual([["yield", "stopped"]]);
     expect(r.records.some((x) => x.t === "watchdog")).toBe(false);
+  }, 60_000);
+});
+
+// ------------------------------------------------- the event window's rule
+
+const T0 = Date.UTC(2030, 0, 2, 12, 0, 0);
+/** Chat events seq `from`..`to`. */
+const evs = (from: number, to: number): EventSummary[] =>
+  Array.from({ length: to - from + 1 }, (_, i) => ({ seq: from + i, ts: T0 + (from + i) * 1000, opcode: "SMSG_MESSAGECHAT", data: { text: `line ${from + i}` } }) as EventSummary);
+const fullWindow = (from: number, to: number): string => `[events: last ${to - from + 1}, newest last]\n${evs(from, to).map(formatEventLine).join("\n")}`;
+/** Each turn starts a trip whose end wakes the next; the last turn does nothing. */
+const TRIPS = (turns: number): unknown[][] => [
+  [
+    { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
+    { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
+  ],
+  ...Array.from({ length: turns - 2 }, (_, i) => [{ name: "start_routine", arguments: { name: "trip", args: { to: `stop ${i}` } } }]),
+  [],
+];
+
+describe("the event window on claude-code's program loop", () => {
+  test("a window the session already holds is a line; a new event sends it whole again", async () => {
+    const r = await claudeProgramRun({ calls: TRIPS(4), maxTurns: 4, events: (n) => (n < 3 ? evs(1, 5) : evs(1, 6)) });
+    expect(r.messages.length).toBe(4);
+    expect(r.messages[0]).toContain(fullWindow(1, 5));
+    expect(r.messages[1]).toContain(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`);
+    expect(r.messages[1]).not.toContain("#5 SMSG_MESSAGECHAT");
+    expect(r.messages[2]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(r.messages[3]).toContain(fullWindow(1, 6));
+    // What the model was shown, on the record: nothing, marked unchanged.
+    const served = r.records.filter((x) => x.t === "events_served" && x["via"] === "context");
+    expect(served.map((x) => [x["count"], x["unchanged"] ?? false])).toEqual([
+      [5, false],
+      [0, true],
+      [0, true],
+      [6, false],
+    ]);
+  }, 60_000);
+
+  test("a compaction, at its boundary, sends the window whole in the next message", async () => {
+    const r = await claudeProgramRun({ calls: TRIPS(3), maxTurns: 3, events: () => evs(1, 5), fake: { WB_FAKE_COMPACT_TURN: "2" } });
+    expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(r.messages[2]).toContain(fullWindow(1, 5));
+  }, 60_000);
+
+  test("a session the CLI names that is not the one before: the window goes whole", async () => {
+    const r = await claudeProgramRun({ calls: TRIPS(3), maxTurns: 3, events: () => evs(1, 5), fake: { WB_FAKE_SESSION_TURN: "2" } });
+    expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(r.messages[2]).toContain(fullWindow(1, 5));
+  }, 60_000);
+
+  test("an errored turn may not have kept its message: the window goes whole after it", async () => {
+    const r = await claudeProgramRun({ calls: TRIPS(4), maxTurns: 4, events: () => evs(1, 5), fake: { WB_FAKE_ERROR_TURN: "2" } });
+    expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
+    expect(r.messages[2]).toContain(fullWindow(1, 5));
+    expect(r.messages[3]).toContain(EVENTS_UNCHANGED_LINE);
   }, 60_000);
 });
 
