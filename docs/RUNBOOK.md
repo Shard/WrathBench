@@ -309,10 +309,10 @@ first credential that serves its model and has room ("Credentials").
   done`. To get more runs, raise `repeat`; flipping the job off and on adds
   none.
 - A job whose process exits while enabled is finished for the life of that
-  supervisor, even if a copy did not count. A supervisor restart, or flipping
-  the job off and on, retries what it still owes, so a job that can never be
-  satisfied (a dead endpoint) costs its remainder once per boot or flip and
-  never loops.
+  supervisor, even if a copy did not count. A supervisor restart, flipping the
+  job off and on, or raising its `repeat` above the one it was spawned with
+  retries what it still owes, so a job that can never be satisfied (a dead
+  endpoint) costs its remainder once per boot, flip or raise and never loops.
 - A malformed edit is complained about and ignored; the last good config
   keeps running. `bun wb fleet dry-run` checks one first. The store validates
   every write, so a rejected config is rare: a shape the running code does

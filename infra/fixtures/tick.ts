@@ -38,6 +38,8 @@ export interface TickFixture {
   held?: (account: string) => string | undefined;
   running?: readonly RunningJob[];
   finished?: readonly string[];
+  /** The `repeat` each finished job was spawned with. */
+  finishedRepeat?: Readonly<Record<string, number>>;
   usage?: readonly SubscriptionUsage[];
   readHolds?: ReadonlyMap<string, ReadHold>;
   evals?: boolean;
@@ -111,6 +113,7 @@ export function snapshotOf(config: FleetConfig, o: TickFixture = {}): TickSnapsh
       ownRunIds: new Set(running.flatMap((j) => j.runIds ?? [])),
       running: new Set(running.map((j) => j.name)),
       finished: new Set(o.finished ?? []),
+      finishedRepeat: new Map(Object.entries(o.finishedRepeat ?? {})),
       assigned,
       liveJobs,
       pending: new Set(),

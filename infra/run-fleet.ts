@@ -1003,6 +1003,8 @@ async function main(): Promise<void> {
   reclaimServerState("boot");
   const procs = new Map<string, JobProc>();
   const sets: JobSets = { running: new Set(), draining: new Set(), finished: new Set() };
+  /** The `repeat` each finished job was spawned with (`TickMemory.finishedRepeat`); an entry is read only while its name is finished. */
+  const finishedRepeat = new Map<string, FleetJob["repeat"]>();
   let stopping = false;
   let wasIdle = false;
   /** When the Codex homes were last swept; the first tick after boot sweeps. */
@@ -1080,6 +1082,7 @@ async function main(): Promise<void> {
     assigned,
     liveJobs,
     sets,
+    finishedRepeat,
     pending,
     placedMemo,
     drainReasons,
@@ -1456,6 +1459,7 @@ async function main(): Promise<void> {
         liveJobs.delete(name);
         if (!drained) sets.finished.add(name);
         if (!finishesOnExit(job)) sets.finished.delete(name);
+        if (sets.finished.has(name) && job !== undefined) finishedRepeat.set(name, job.repeat);
         const acct = assigned.get(name);
         assigned.delete(name);
         session.finished++;

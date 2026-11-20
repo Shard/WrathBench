@@ -178,6 +178,7 @@ export function runScenario(sc: Scenario): Record<string, unknown> {
     assigned,
     liveJobs,
     sets: { running: runningNames, draining: new Set(), finished: new Set(sc.finished ?? []) },
+    finishedRepeat: new Map(),
     pending: new Map((sc.pending ?? []).map((j) => [j.name, j])),
     placedMemo: new Map(Object.entries(sc.placedMemo ?? {})),
     drainReasons: new Map(),
