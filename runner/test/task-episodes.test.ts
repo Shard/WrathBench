@@ -218,15 +218,15 @@ describe("the public projection of the task episodes", () => {
     const tier = (id: string) => ({ id, minutes: 240, idleMinutes: 20, noXpMinutes: null, toolCalls: 8000, objectiveAllowed: true, scored: true, summary: id, members: 1, overrides: 0, lapsed: 0, derived: 0 });
     const episodes = projectEpisodes({ episodes: ["e90", "deadmines-solo", "deadmines"].map(tier), untiered: 0, now: 1 } as unknown as Parameters<typeof projectEpisodes>[0]);
     expect(episodes.episodes.map((e) => e.id)).toEqual(["e90", "deadmines-solo"]);
-    // What a t2 model's Deadmines eval waits on is as public as the eval (operator, 2026-11-15).
+    // What a t3 model's Deadmines eval waits on is as public as the eval (operator, 2026-11-15).
     const wait = "; not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360, on a tier that buys them";
     const stats = { counted: 1, attempts: 1, extras: 0, target: 3, bestLevel: null };
     const row = (why: string) => ({
-      name: "m", model: "m", effort: null, platform: null, harness: "wrathbench", billing: "metered", declaredTier: "t2", tier: "t2",
+      name: "m", model: "m", effort: null, platform: null, harness: "wrathbench", billing: "metered", declaredTier: "t3", tier: "t3",
       earnedPromotion: true, earnedDeadmines: true, idle: "none", status: "ok", eligible: ["e90", "e360", "deadmines-solo", "deadmines"],
       perEpisode: { e90: stats, "deadmines-solo": stats, deadmines: stats }, ladder: null, schedulable: { ok: true, why, extras: false }, runs: [], newestRunId: null, lastError: null,
     });
-    const tiers = Object.fromEntries(["t0", "t1", "t2"].map((t) => [t, { runsPerEpisode: { e90: 1, e360: 1 }, promotesTo: null, label: t }]));
+    const tiers = Object.fromEntries(["t0", "t1", "t2", "t3"].map((t) => [t, { runsPerEpisode: { e90: 1, e360: 1 }, promotesTo: null, label: t }]));
     const project = (why: string) =>
       projectModels({ models: [row(why)], roster: { path: null, shape: "roster", count: 1, excluded: [] }, policy: { promoteAtLevel: 5, series: "1.0", tiers, maxSessions: {} }, ladderMs: [], harness: "all", now: 1 } as unknown as Parameters<typeof projectModels>[0]).models[0]!;
     const projected = project(`schedulable on e90, e360${wait}`);
@@ -239,16 +239,16 @@ describe("the public projection of the task episodes", () => {
       "targets met on e90, e360, deadmines-solo — unlimited sessions while its account is idle",
     );
     expect(project("schedulable on deadmines, e90").schedulable.why).toBe("schedulable on e90");
-    // A list of nothing else loses the list, never naming the id (the scheduler's own line for a t2
+    // A list of nothing else loses the list, never naming the id (the scheduler's own line for a t3
     // entry opted into the five-agent id with every other target met).
     expect(project("schedulable on deadmines").schedulable.why).toBe("schedulable");
     expect(project("cooling until 12:00").schedulable.why).toBe("cooling until 12:00");
   });
 
-  test("the scheduler's own lines for a t2 entry opted into both ids never name the five-agent one in public", () => {
+  test("the scheduler's own lines for a t3 entry opted into both ids never name the five-agent one in public", () => {
     const now = Date.now();
     const policy = { ...DEFAULT_POLICY, series: "1.0" };
-    const entry = { name: "s", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true } as unknown as RosterModel;
+    const entry = { name: "s", model: "sonnet", driver: "claude-code", tier: "t3", deadmines: true } as unknown as RosterModel;
     const lines: string[] = [];
     for (const level of [7, 8]) {
       const s = projectModel(entry, [countedFact(entry, "e90", 6, { now, series: "1.0" }), countedFact(entry, "e360", level, { now, series: "1.0" })], policy, { now });

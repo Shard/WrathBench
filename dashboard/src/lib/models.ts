@@ -26,7 +26,7 @@ import { canonicalModelId } from "../../../infra/model-catalogue";
  * column: it says only where a run may execute, which is the platform's
  * business, and the tier is what buys runs.
  *
- * On the word "tier": it means a rung of the EVIDENCE ladder (t0/t1/t2),
+ * On the word "tier": it means a rung of the EVIDENCE ladder (t0 to t3),
  * never an episode. The episode columns are named by their ids.
  */
 export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "freeplay", "extras", "note", "newest run"] as const;
@@ -40,7 +40,7 @@ export function columnClass(column: (typeof MODEL_COLUMNS)[number]): string {
 }
 
 /** The ladder's order, so "higher" is a comparison rather than a string sort. */
-const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2 };
+const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2, t3: 3 };
 
 /**
  * The highest tier this model has actually stood on.
@@ -180,15 +180,28 @@ export function isPromoted(row: Pick<ModelRowView, "tier" | "declaredTier">): bo
  * the climb itself moved to the hover, and the ↑ beside the name still marks a
  * row that moved.
  *
- * The `*` stays: a held witness (`t0*`) is a trial model that has earned a
- * promotion its tier will not let it spend, which is exactly the row an operator
- * scans for when deciding what to promote. It is a promotion, not a second tier. A model that
- * is both promoted and holding an unspent witness (declared t2, scheduled back
- * to t1, `earnedPromotion`) shows the star: the witness is still true of it.
+ * The `*` stays: a held witness (`holdsWitness`) is a pinned model that has
+ * earned the next rung its tier will not let it climb, which is exactly the row
+ * an operator scans for when deciding what to move up. It is a promotion, not a
+ * second tier. The public build has no `earnedDeadmines`, so a `t2*` is the
+ * operator's page's alone.
  */
 export function tierOf(row: ModelRowView): string {
   const tier = highestTierOf(row);
-  return row.earnedPromotion && !isPromoted(row) ? `${tier}*` : tier;
+  return holdsWitness(row) && !isPromoted(row) ? `${tier}*` : tier;
+}
+
+/**
+ * Whether a model holds the witness that would move it up the ladder were its
+ * declared tier not where an operator put it (operator, 2026-11-20): a `t0` with
+ * a counted level-5 e90, a declared `t2` with a counted level-8 e360. Never a
+ * `t1`, which climbs on its own, nor a `t3`, the top. Mirrors `holdsWitness` in
+ * runner/src/models.ts.
+ */
+export function holdsWitness(row: Pick<ModelRowView, "declaredTier" | "earnedPromotion" | "earnedDeadmines">): boolean {
+  if (row.declaredTier === "t0") return row.earnedPromotion;
+  if (row.declaredTier === "t2") return row.earnedDeadmines === true;
+  return false;
 }
 
 /** The tier cell's hover: what the model was admitted to, and what it earned. */
@@ -204,7 +217,8 @@ export function tierTitle(row: ModelRowView): string {
   if (TIER_RANK[row.declaredTier] > TIER_RANK[row.tier]) {
     return `${budget(row.declaredTier)} in the config, scheduled on ${row.tier} — ${earned}`;
   }
-  if (row.earnedPromotion) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
+  if (holdsWitness(row) && row.declaredTier === "t2") return `${budget(row.tier)} — has earned the Deadmines (a counted e360 reached the Deadmines level); move it to t3 to run them`;
+  if (holdsWitness(row)) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
   return `${budget(row.tier)} — ${earned}`;
 }
 

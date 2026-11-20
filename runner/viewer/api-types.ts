@@ -2651,7 +2651,7 @@ export interface ApiError {
 export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
 
 /** A rung of the evidence ladder; mirrors `TIERS` in `runner/src/models.ts`. */
-export type TierView = "t0" | "t1" | "t2";
+export type TierView = "t0" | "t1" | "t2" | "t3";
 
 /** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
 export type IdleModeView = "none" | "unlimited";

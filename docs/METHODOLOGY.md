@@ -511,17 +511,22 @@ like a request that got no answer at all, it pauses the run
 `provider-unresponsive`, a provider's pause (operator, 2026-11-18).
 
 **The tier is the evidence budget.** How much a model runs is one word on its
-roster entry, denominated in runs, and the only thing that sets a run count:
-`t0` trial (one `e90`, held), `t1` standard (three), `t2` long (three plus one
-`e360`, and three `deadmines-solo` attempts). The five-agent `deadmines` runs
-only where the roster entry opts in as well, because it needs five sessions on
-one credential at once, which is a fact about the lane and not the model
-(operator, 2026-11-14). Promotion is a threshold applied to every model alike — one counted
-`e90` reaching level 5 climbs `t1` to `t2` — never a judgement, and so is the
-door to the Deadmines evals: the attempts `t2` buys are spent only once a
-counted `e360` reaches level 8, and no tier stands in for that (operator,
-2026-11-15). The model is told neither. Billing buys no runs and costs none;
-it decides only where a run may execute.
+roster entry, denominated in runs, and the only thing that sets a run count.
+Each promotion step is its own tier (operator, 2026-11-20): `t0` trial (one
+`e90`, held), `t1` standard (three), `t2` long (three plus one `e360`), `t3`
+Deadmines (`t2`'s runs and three `deadmines-solo` attempts). The five-agent
+`deadmines` runs only where the roster entry opts in as well, because it needs
+five sessions on one credential at once, which is a fact about the lane and not
+the model (operator, 2026-11-14). Promotion is a threshold applied to every
+model alike, never a judgement: one counted `e90` reaching level 5 climbs `t1`
+to `t2`, and one counted `e360` reaching level 8 climbs it on to `t3`. That
+same witness is the door to the Deadmines evals: the attempts `t3` buys are
+spent only once a counted `e360` reaches level 8, and no tier stands in for
+that (operator, 2026-11-15). Only a declared `t1` climbs. A declared `t0`
+holds the ladder, and a declared `t2` or `t3` is the operator's pin and stays
+where it was put, so a `t2` entry runs its `e360` and never the Deadmines evals
+(operator, 2026-11-20). The model is told none of this. Billing buys no runs and
+costs none; it decides only where a run may execute.
 
 **To a reader, free means literally free, and subscription usage is not
 free** (operator, 2026-11-16). A run or a model is marked free, and hidden by

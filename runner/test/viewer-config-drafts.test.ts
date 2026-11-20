@@ -147,7 +147,7 @@ describe("the draft routes", () => {
     expect((none.body as { error: string }).error).toMatch(/tier/);
     const bad = await call(db, "POST", "proposed/promote", { model: "z-ai/glm-6", name: "glm-6", tier: "t9" }, {}, ATTRIBUTED);
     expect(bad.status).toBe(400);
-    expect((bad.body as { error: string }).error).toMatch(/tier must be one of t0, t1, t2/);
+    expect((bad.body as { error: string }).error).toMatch(/tier must be one of t0, t1, t2, t3/);
     // Strict, as an entry is: a key the promotion does not read is refused, not dropped.
     const stray = await call(db, "POST", "proposed/promote", { model: "z-ai/glm-6", name: "glm-6", tier: "t0", billing: "free" }, {}, ATTRIBUTED);
     expect(stray.status).toBe(400);

@@ -384,8 +384,11 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             (docs/METHODOLOGY.md, "The tier is the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
-              one counted level-5 e90), t2 long (e90 x3 + e360 x1, and the Deadmines attempts once
-              a counted e360 reaches level 8 — no tier opens those without it). The table is code
+              one counted level-5 e90), t2 long (e90 x3 + e360 x1, climbs to t3 on one counted
+              level-8 e360), t3 Deadmines (t2's runs and the Deadmines attempts, spent only once a
+              counted e360 reaches level 8 — no tier opens those without it). Only a declared t1
+              climbs: a declared t2 or t3 is a pin and stays put, so t2 buys the e360 and never
+              the Deadmines (--status shows a climb as t1>t2 or t1>t3). The table is code
               (`TIER_TABLE`, runner/src/models.ts) — a bespoke volume is a NAMED tier added there,
               not a number edited into one entry. On EVERY entry.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
@@ -499,14 +502,15 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               freeplay with no scored field. Its probe runs map back to it by name, so copies of
               one model never pool.
             `deadmines` — `true` or absent: opts the entry into the five-agent Deadmines
-              episode, which its tier then buys as it buys the one-agent one (`t2`: three
+              episode, which its tier then buys as it buys the one-agent one (`t3`: three
               attempts each, opened by a counted level-8 e360; docs/EPISODES.md). Refused with
               `campaignOnly`. Still held until
               `policy.rehearsed` names `deadmines`, and behind the scored-episode hold.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
-            a climb.
+            a climb. A declared t2 with a counted level-8 e360 shows `t2*` the same way: it has
+            earned the Deadmines, and moving it to t3 runs them.
 policy      Only where runs execute. `maxSessions { <driver>: n }` — how many sessions of a driver
             one host carries at once, whichever credential pays (each CLI session is a process and a
             sandbox): the one cap that is not a credential's. Absent: none beyond the slots.
@@ -1688,7 +1692,7 @@ rename.
 
 The `queue` normally holds only the pinned jobs: the supervisor fills free
 pool accounts from the roster by policy — each model's tier budget
-(`t0`/`t1`/`t2`, "Config reference"), `e90` for everyone, `e360` once earned,
+(`t0` to `t3`, "Config reference"), `e90` for everyone, `e360` once earned,
 the Deadmines evals once a counted `e360` reaches `deadminesAtLevel` on a tier
 that buys them,
 models with no counted run yet first, then shorter episode first, fewest

@@ -32,7 +32,7 @@ import type { DraftFetchResponse, DraftPriceView, DraftPromoteBody, E90TokenProf
 import { fmtTokens } from "./format";
 
 /** The tiers a roster entry may carry. The policy names them; these are the ones the page offers. */
-export const TIERS = ["t0", "t1", "t2"] as const;
+export const TIERS = ["t0", "t1", "t2", "t3"] as const;
 /** What an entry does with an account once its tier is spent. Absent = none. */
 export const IDLES = ["none", "unlimited"] as const;
 /** Where a run may physically execute. Absent = derived from the model and its base. */

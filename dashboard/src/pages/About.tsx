@@ -11,7 +11,7 @@
  * the members are exactly what the ladder compares — and the overridden count,
  * which the ladder has no view of, links to the runs table.
  *
- * "Episode" here is the ruleset, never the evidence budget: a *tier* (t0/t1/t2)
+ * "Episode" here is the ruleset, never the evidence budget: a *tier* (t0 to t3)
  * is how many runs a model is bought, and the two words are kept apart on this
  * page because a reader who conflates them misreads every count on it.
  *

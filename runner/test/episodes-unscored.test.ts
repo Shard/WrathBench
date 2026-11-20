@@ -51,11 +51,11 @@ describe("an unscored episode is never evidence", () => {
     expect(scored).toEqual(POLICY_EPISODES as EpisodeId[]);
     // The five-agent Deadmines id is bought only where the entry opts in, and
     // either Deadmines id only once a counted e360 reached level 8.
-    const m: RosterModel = { name: "m", model: "m", tier: "t2", deadmines: true };
+    const m: RosterModel = { name: "m", model: "m", tier: "t3", deadmines: true };
     const witness = [countedFact(m, "e360", 8, { now: NOW })];
     const s = projectModel(m, witness, DEFAULT_POLICY, { now: NOW });
     for (const id of scored) expect(s.perEpisode[id]?.target).toBeGreaterThan(0);
-    const plain = projectModel({ name: "m", model: "m", tier: "t2" }, witness, DEFAULT_POLICY, { now: NOW });
+    const plain = projectModel({ name: "m", model: "m", tier: "t3" }, witness, DEFAULT_POLICY, { now: NOW });
     expect(plain.perEpisode.deadmines?.target).toBe(0);
     expect(plain.perEpisode["deadmines-solo"]?.target).toBe(3);
   });

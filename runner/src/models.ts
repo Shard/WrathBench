@@ -114,36 +114,61 @@ export const STATS_EPISODES: readonly EpisodeId[] = EPISODE_IDS;
  * thing beside the tier. Minting `t0a`/`t0b` to approximate dollars is the accretion this
  * table exists to stop.
  */
-export const TIERS = ["t0", "t1", "t2"] as const;
+export const TIERS = ["t0", "t1", "t2", "t3"] as const;
 export type Tier = (typeof TIERS)[number];
 
 export interface TierSpec {
   /** The counted runs this tier buys, per scored episode. Zero: not eligible. */
   runsPerEpisode: Record<ScoredEpisodeId, number>;
   /**
-   * The tier a counted `e90` reaching level `promoteAtLevel` promotes into, or
-   * null when the ladder is held here. Held is not "level zero": a `t0` model is
-   * not unpromoted, it is not admitted to the ladder, and its witness is still
-   * recorded so that moving it to `t1` promotes it on evidence it already has.
+   * The next rung of the ladder, or null at the top or where the ladder is
+   * held. Held is not "level zero": a `t0` model is not unpromoted, it is not
+   * admitted to the ladder, and its witness is still recorded so that moving
+   * it to `t1` promotes it on evidence it already has.
    */
   promotesTo: Tier | null;
+  /**
+   * The witness that climbs this rung to `promotesTo`: `promotion`, a counted
+   * `e90` at `promoteAtLevel`; `deadmines`, a counted `e360` at
+   * `deadminesAtLevel`. Null where `promotesTo` is.
+   */
+  climbsOn: keyof Witnesses | null;
   /** What `--status` calls it. */
   label: string;
 }
 
+/** What a model has earned, read from its counted runs (`modelStates`). */
+export interface Witnesses {
+  /** A counted `e90` reached `promoteAtLevel`. */
+  promotion: boolean;
+  /** A counted `e360` reached `deadminesAtLevel`. */
+  deadmines: boolean;
+}
+
 /*
- * `t2` also buys three attempts on each Deadmines id (operator, 2026-11-14),
- * spent only once the model has earned them: a counted `e360` reaching level
- * `deadminesAtLevel` (operator, 2026-11-15). The same threshold for every
- * model, so no new word. The five-agent id (`deadmines`) is bought only where
- * the roster entry opts in as well (`RosterModel.deadmines`), because it needs
- * five sessions on one credential at once; `targetFor` applies both.
+ * Each promotion step is its own tier (operator, 2026-11-20): `t2` buys the
+ * `e360`, `t3` the Deadmines evals on top — three attempts on each id
+ * (operator, 2026-11-14), spent only once a counted `e360` has reached
+ * `deadminesAtLevel` (operator, 2026-11-15), which is also what climbs `t2` to
+ * `t3`, so even a declared `t3` waits on it. The five-agent id (`deadmines`)
+ * is bought only where the roster entry opts in as well
+ * (`RosterModel.deadmines`), because it needs five sessions on one credential
+ * at once; `targetFor` applies both.
  */
 export const TIER_TABLE: Record<Tier, TierSpec> = {
-  t0: { runsPerEpisode: { e90: 1, e360: 0, deadmines: 0, "deadmines-solo": 0 }, promotesTo: null, label: "trial" },
-  t1: { runsPerEpisode: { e90: 3, e360: 0, deadmines: 0, "deadmines-solo": 0 }, promotesTo: "t2", label: "standard" },
-  t2: { runsPerEpisode: { e90: 3, e360: 1, deadmines: 3, "deadmines-solo": 3 }, promotesTo: null, label: "long" },
+  t0: { runsPerEpisode: { e90: 1, e360: 0, deadmines: 0, "deadmines-solo": 0 }, promotesTo: null, climbsOn: null, label: "trial" },
+  t1: { runsPerEpisode: { e90: 3, e360: 0, deadmines: 0, "deadmines-solo": 0 }, promotesTo: "t2", climbsOn: "promotion", label: "standard" },
+  t2: { runsPerEpisode: { e90: 3, e360: 1, deadmines: 0, "deadmines-solo": 0 }, promotesTo: "t3", climbsOn: "deadmines", label: "long" },
+  t3: { runsPerEpisode: { e90: 3, e360: 1, deadmines: 3, "deadmines-solo": 3 }, promotesTo: null, climbsOn: null, label: "Deadmines" },
 };
+
+/**
+ * The one declared tier that climbs (operator, 2026-11-20). Any other declared
+ * tier is where the operator put the model and it stays there: `t0` holds the
+ * ladder, and a declared `t2` or `t3` is a pin, so a `t2` entry keeps its `e360`
+ * and never reaches the Deadmines however far it gets.
+ */
+export const LADDER_ENTRY: Tier = "t1";
 
 /**
  * What a rehearsal has cleared to score (`SchedulingPolicy.rehearsed`): the
@@ -180,33 +205,70 @@ export function rehearsalHold(ep: EpisodeId, harness: string, policy: Pick<Sched
 }
 
 /**
- * The tier a model is actually scheduled under: its declared tier, advanced
- * once if it has earned promotion (a counted `e90` at `promoteAtLevel`) and its
- * tier promotes. Derived every tick and
- * never written back — the config states where a model was ADMITTED, the run
- * history states what it EARNED, and the two are read together rather than one
- * overwriting the other. So an operator may hand-promote by editing the tier,
- * and that never fabricates a promotion record.
+ * The tier a model is actually scheduled under: a declared `t1` walked up the
+ * ladder one rung per witness it holds (`climbsOn`), any other declared tier
+ * as declared (`LADDER_ENTRY`). Derived every tick and never written back —
+ * the config states where a model was ADMITTED, the run history states what
+ * it EARNED, and the two are read together rather than one overwriting the
+ * other. So an operator may hand-place a model by editing the tier, and that
+ * never fabricates a promotion record.
  */
-export function effectiveTier(declared: Tier, earnedPromotion: boolean): Tier {
-  const to = TIER_TABLE[declared].promotesTo;
-  return earnedPromotion && to !== null ? to : declared;
+export function effectiveTier(declared: Tier, earned: Witnesses): Tier {
+  if (declared !== LADDER_ENTRY) return declared;
+  let tier = declared;
+  for (;;) {
+    const { promotesTo, climbsOn } = TIER_TABLE[tier];
+    if (promotesTo === null || climbsOn === null || !earned[climbsOn]) return tier;
+    tier = promotesTo;
+  }
+}
+
+/**
+ * Whether a model holds the witness that would move it up the ladder were its
+ * declared tier not where an operator put it — the `*` beside its tier: a `t0`
+ * with a counted level-`promoteAtLevel` e90, a declared `t2` with a counted
+ * level-`deadminesAtLevel` e360. Never a `t1`, which climbs on its own, nor a
+ * `t3`, the top.
+ */
+export function holdsWitness(s: { declaredTier: Tier; earnedPromotion: boolean; earnedDeadmines?: boolean }): boolean {
+  if (s.declaredTier === "t0") return s.earnedPromotion;
+  if (s.declaredTier === "t2") return s.earnedDeadmines === true;
+  return false;
 }
 
 /**
  * Why a model may not be scheduled on an episode, in the words `--status`,
  * `--dry-run` and a gated job use: what opens it. A tier budget for `e90` and
  * `e360` (promotion buys the `e360`), and for the Deadmines evals the `e360`
- * witness on top of a tier that buys them (operator, 2026-11-15).
+ * witness on top of a tier that buys them (operator, 2026-11-15). Given the
+ * entry's declared tier it says which: the thresholds that climb a `t1` there
+ * (from `current`, the rung it stands on, when known), or that the declared
+ * tier is a pin that never will.
  */
-export function ineligibleWhy(ep: EpisodeId, policy: Pick<SchedulingPolicy, "promoteAtLevel" | "deadminesAtLevel"> = DEFAULT_POLICY): string {
+export function ineligibleWhy(
+  ep: EpisodeId,
+  policy: Pick<SchedulingPolicy, "promoteAtLevel" | "deadminesAtLevel"> = DEFAULT_POLICY,
+  declared?: Tier,
+  current?: Tier,
+): string {
+  const top = declared === undefined ? undefined : effectiveTier(declared, { promotion: true, deadmines: true });
+  const pinned = (what: string): string =>
+    declared === "t0" ? `declared t0: a trial tier holds the ladder and buys no ${what}` : `declared ${declared}: a manual tier, it does not climb to the ${what}`;
   if (isTaskEpisode(ep)) {
-    return (
-      `the Deadmines evals open on level ${policy.deadminesAtLevel} in a counted e360, on a tier that buys them` +
-      (isPartyEpisode(ep) ? " and a roster entry that says deadmines: true" : "")
-    );
+    const party = isPartyEpisode(ep) ? " and a roster entry that says deadmines: true" : "";
+    if (top !== undefined && TIER_TABLE[top].runsPerEpisode[ep] === 0) return pinned("Deadmines (t3)");
+    if (declared === LADDER_ENTRY) {
+      const toT3 = `to t3 on level ${policy.deadminesAtLevel} in a counted e360${party}`;
+      return current === "t2"
+        ? `the Deadmines evals are t3's: a t1 climbs ${toT3}`
+        : `the Deadmines evals are t3's: a t1 climbs to t2 on level ${policy.promoteAtLevel} in a counted e90, then ${toT3}`;
+    }
+    return `the Deadmines evals open on level ${policy.deadminesAtLevel} in a counted e360, on a tier that buys them${party}`;
   }
-  if (ep === "e360") return `its tier buys no e360 runs — earn it with a level-${policy.promoteAtLevel} e90, or set a tier that includes it`;
+  if (ep === "e360") {
+    if (top !== undefined && TIER_TABLE[top].runsPerEpisode.e360 === 0) return pinned("e360 (t2)");
+    return `its tier buys no e360 runs — earn it with a level-${policy.promoteAtLevel} e90, or set a tier that includes it`;
+  }
   return `its tier buys no ${ep} runs`;
 }
 
@@ -870,9 +932,10 @@ export interface ModelState {
   /** The tier the config admitted this model to — what an operator wrote. */
   declaredTier: Tier;
   /**
-   * The tier it is scheduled under: `declaredTier`, advanced once if it earned
-   * promotion and that tier promotes. Equal to `declaredTier` for a `t0` model
-   * however well it plays, and for one an operator hand-promoted.
+   * The tier it is scheduled under (`effectiveTier`): a declared `t1` advanced
+   * one rung per witness it holds. Equal to `declaredTier` for any other
+   * declared tier however well the model plays: `t0` holds the ladder and a
+   * declared `t2` or `t3` is a pin.
    */
   tier: Tier;
   /**
@@ -884,8 +947,9 @@ export interface ModelState {
   earnedPromotion: boolean;
   /**
    * A counted `e360` in this series reached `deadminesAtLevel`: what opens the
-   * Deadmines evals a tier buys (operator, 2026-11-15). No tier opens them
-   * without it, a hand-placed `t2` included.
+   * Deadmines evals a tier buys (operator, 2026-11-15), and the witness that
+   * climbs a `t1` from `t2` to `t3`. No tier opens them without it, a declared
+   * `t3` included.
    */
   earnedDeadmines: boolean;
   /** What it does with an account once its tier is spent. */
@@ -2552,14 +2616,14 @@ export function projectModel(
   }
 
   // The tier the model is actually scheduled under: what the config admitted it
-  // to, advanced once if it earned promotion and its tier promotes. `t0` holds
-  // the ladder, so a trial model keeps its witness and gains nothing from it
-  // until an operator moves it up — which is what makes that move cost no
-  // re-runs. The Deadmines evals its tier buys open on the e360 witness alone
-  // (operator, 2026-11-15).
+  // to, and for a declared t1 one rung up per witness it holds (operator,
+  // 2026-11-20). `t0` holds the ladder, so a trial model keeps its witness and
+  // gains nothing from it until an operator moves it up — which is what makes
+  // that move cost no re-runs. The Deadmines evals a tier buys open on the e360
+  // witness alone (operator, 2026-11-15).
   const earnedPromotion = witnessed(perEpisode.e90, policy.promoteAtLevel);
   const earnedDeadmines = witnessed(perEpisode.e360, policy.deadminesAtLevel);
-  const tier = effectiveTier(r.tier, earnedPromotion);
+  const tier = effectiveTier(r.tier, { promotion: earnedPromotion, deadmines: earnedDeadmines });
   // A probe-only driver's entry is no scored lane's: its tier buys nothing
   // until the operator promotes the driver (`DriverEntry.probeOnly`). A
   // campaignOnly entry is the same on any driver.
@@ -2685,7 +2749,7 @@ export function projectModel(
   }
   const anyCounted = eligible.some((ep) => (perEpisode[ep]?.counted ?? 0) > 0);
   // "promoted" is the earned word, so it is said only when the ladder actually
-  // moved this model — never for one hand-placed on t2, and never for a t0
+  // moved this model — never for one hand-placed on t2 or t3, and never for a t0
   // model holding a promotion witness it has not been allowed to spend.
   const climbed = tier !== r.tier;
   state.status = !anyCounted ? "new" : climbed ? "promoted" : "active";
@@ -2856,13 +2920,16 @@ function ownVerdict(s: ModelState, policy: Pick<SchedulingPolicy, "promoteAtLeve
 }
 
 /**
- * What a model whose tier buys the Deadmines evals is still waiting on, said
- * beside its verdict so `--status` and `--dry-run` never leave a `t2` model's
- * missing Deadmines attempts unexplained; empty when there is nothing to say.
+ * What a model on its `e360` that can still reach the Deadmines evals (a `t1`
+ * climbed to `t2`, or a declared `t3`) is waiting on, said beside its verdict so
+ * `--status` and `--dry-run` never leave its missing Deadmines attempts
+ * unexplained; empty when there is nothing to say, a pinned `t2` included.
  */
-function deadminesWait(s: Pick<ModelState, "tier" | "earnedDeadmines">, policy: Pick<SchedulingPolicy, "promoteAtLevel" | "deadminesAtLevel">): string {
-  if (s.earnedDeadmines || TIER_TABLE[s.tier].runsPerEpisode["deadmines-solo"] === 0) return "";
-  return `; not yet on deadmines-solo: ${ineligibleWhy("deadmines-solo", policy)}`;
+function deadminesWait(s: Pick<ModelState, "tier" | "declaredTier" | "earnedDeadmines">, policy: Pick<SchedulingPolicy, "promoteAtLevel" | "deadminesAtLevel">): string {
+  if (s.earnedDeadmines || TIER_TABLE[s.tier].runsPerEpisode.e360 === 0) return "";
+  const top = effectiveTier(s.declaredTier, { promotion: true, deadmines: true });
+  if (TIER_TABLE[top].runsPerEpisode["deadmines-solo"] === 0) return "";
+  return `; not yet on deadmines-solo: ${ineligibleWhy("deadmines-solo", policy, s.declaredTier, s.tier)}`;
 }
 
 /** What a model owing nothing does with a spare account, said after its verdict; empty for `idle: "none"`. */
@@ -3275,7 +3342,7 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
     // if it earned promotion. For a `t0` model the bet is off — the ladder is
     // held — so its upper and lower agree, which is the honest reading of a
     // trial: one run, and no more without an operator deciding.
-    const climbed = TIER_TABLE[effectiveTier(s.declaredTier, true)].runsPerEpisode;
+    const climbed = TIER_TABLE[effectiveTier(s.declaredTier, { promotion: true, deadmines: true })].runsPerEpisode;
     // The level episodes only: a task episode's attempts wait on the
     // scored gate and on rehearsals the operator reads, so they are not yet
     // work this figure can put a clock on.

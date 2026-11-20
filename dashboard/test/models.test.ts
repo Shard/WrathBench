@@ -93,12 +93,24 @@ describe("the tier order", () => {
     // A config edit that lowers the declared tier must not read as un-climbing.
     expect(highestTierOf({ declaredTier: "t2", tier: "t1" })).toBe("t2");
     expect(highestTierOf({ declaredTier: "t0", tier: "t0" })).toBe("t0");
+    expect(highestTierOf({ declaredTier: "t1", tier: "t3" })).toBe("t3");
   });
 
   test("the cell shows one tier, and a held witness still wears its star", () => {
     expect(tierOf(row({ declaredTier: "t1", tier: "t2", earnedPromotion: true }))).toBe("t2");
     expect(tierOf(row({ declaredTier: "t0", tier: "t0", earnedPromotion: true }))).toBe("t0*");
     expect(tierOf(row())).toBe("t1");
+  });
+
+  test("the star is the witness a pin keeps from climbing: t0's e90, a declared t2's e360, never t1 or t3 (operator, 2026-11-20)", () => {
+    const t2 = { declaredTier: "t2", tier: "t2", earnedPromotion: true } as const;
+    expect(tierOf(row({ ...t2, earnedDeadmines: true }))).toBe("t2*");
+    expect(tierTitle(row({ ...t2, earnedDeadmines: true }))).toBe("tier t2 — has earned the Deadmines (a counted e360 reached the Deadmines level); move it to t3 to run them");
+    // Only the e90 witness: a pinned t2 has already spent that, so no star.
+    expect(tierOf(row(t2))).toBe("t2");
+    expect(tierTitle(row(t2))).not.toContain("holds the ladder");
+    expect(tierOf(row({ declaredTier: "t3", tier: "t3", earnedPromotion: true, earnedDeadmines: true }))).toBe("t3");
+    expect(tierOf(row({ declaredTier: "t1", tier: "t1", earnedDeadmines: true }))).toBe("t1");
   });
 
   test("highest tier first, then the name — so a poll cannot reshuffle the table", () => {
@@ -128,9 +140,10 @@ describe("promoted and highest tier agree", () => {
   });
 
   test("a witness earned while lowered still wears its star", () => {
-    // Pinned choice: the star answers "has this model earned rung 1", which is
-    // still true here, even though the row is not shown as promoted.
-    expect(tierOf(row({ declaredTier: "t2", tier: "t1", earnedPromotion: true }))).toBe("t2*");
+    // The star answers "has this model earned the rung its declared tier keeps
+    // it from", which is still true here, even though the row is not shown as promoted.
+    expect(tierOf(row({ declaredTier: "t2", tier: "t1", earnedPromotion: true, earnedDeadmines: true }))).toBe("t2*");
+    expect(tierOf(row({ declaredTier: "t2", tier: "t1", earnedPromotion: true }))).toBe("t2");
     // The hover has to say the same thing the cell does: highest tier t2,
     // scheduled lower — never "tier t1", which would contradict the `t2*`.
     expect(tierTitle(row({ declaredTier: "t2", tier: "t1", earnedPromotion: true }))).toContain("scheduled on t1");

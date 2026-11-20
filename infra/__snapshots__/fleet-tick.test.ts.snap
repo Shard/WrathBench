@@ -94,7 +94,7 @@ exports[`the supervisor's tick over fixture states a boot with no credentials 1`
 }
 `;
 
-exports[`the supervisor's tick over fixture states a fresh boot: e90 for every t1/t2 model, credentials in order 1`] = `
+exports[`the supervisor's tick over fixture states a fresh boot: e90 for every t1/t3 model, credentials in order 1`] = `
 {
   "io": {
     "ended": [],
@@ -920,7 +920,7 @@ exports[`the supervisor's tick over fixture states an account held by a run outs
 }
 `;
 
-exports[`the supervisor's tick over fixture states e360: a t2 model past its e90s owes e360 1`] = `
+exports[`the supervisor's tick over fixture states e360: a t3 model past its e90s owes e360 1`] = `
 {
   "io": {
     "ended": [],
@@ -1258,7 +1258,7 @@ exports[`the supervisor's tick over fixture states e360: a t2 model past its e90
 }
 `;
 
-exports[`the supervisor's tick over fixture states Deadmines solo: a t2 model with an L8 e360 opens the solo id on an eval world 1`] = `
+exports[`the supervisor's tick over fixture states Deadmines solo: a t3 model with an L8 e360 opens the solo id on an eval world 1`] = `
 {
   "io": {
     "ended": [],
