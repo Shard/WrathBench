@@ -85,15 +85,37 @@ describe("what is code", () => {
 describe("a snippet's result, its JSON-in-a-string value laid out", () => {
   test("the `=>` value that is JSON written as a string is pretty-printed; the rest is left alone", () => {
     const text = 'ok (7ms)\n=> "[[234,{\\"x\\":1}]]"\n--- since your last snippet ---\nquests: new';
-    expect(prettyResult(text)).toBe('ok (7ms)\n=> [[234,{"x":1}]]\n--- since your last snippet ---\nquests: new');
+    expect(prettyResult(text)).toBe('ok (7ms)\n=> [[234, { x: 1 }]]\n--- since your last snippet ---\nquests: new');
   });
 
-  test("laid out compactly: what fits on a line stays on one", () => {
-    const log = { a: [["Talin Keeneye", 183, "The Boar Hunter", "accepted"], ["Talin Keeneye", 234, "Coldridge Valley Mail Delivery", "accepted"]], n: 4 };
-    expect(compactJson(log)).toBe(
-      ['{', '  "a": [', '    ["Talin Keeneye",183,"The Boar Hunter","accepted"],', '    ["Talin Keeneye",234,"Coldridge Valley Mail Delivery","accepted"]', "  ],", '  "n": 4', "}"].join("\n"),
+  test("laid out compactly: what fits in 80 columns stays on one line, an array fills its lines", () => {
+    // A quest log as a snippet returned it: each entry one or two lines, not a value a line.
+    const log = {
+      a: [["Invented Giver", 183, "The Boar Hunter", "accepted"], ["Invented Giver", 234, "Coldridge Valley Mail Delivery", "accepted"]],
+      qg: [["Invented Giver", "available", 0]],
+      log: [
+        [183, "The Boar Hunter", [{ kind: "kill", entry: 708, required: 12, have: 0, done: false }]],
+        [234, "Coldridge Valley Mail Delivery", [{ kind: "collect", entry: 2188, required: 1, have: 1, done: true }]],
+      ],
+    };
+    const out = compactJson(log);
+    expect(out).toBe(
+      [
+        "{",
+        '  a: [["Invented Giver", 183, "The Boar Hunter", "accepted"],',
+        '    ["Invented Giver", 234, "Coldridge Valley Mail Delivery", "accepted"]],',
+        '  qg: [["Invented Giver", "available", 0]],',
+        '  log: [[183, "The Boar Hunter",',
+        '      [{ kind: "kill", entry: 708, required: 12, have: 0, done: false }]],',
+        '    [234, "Coldridge Valley Mail Delivery",',
+        '      [{ kind: "collect", entry: 2188, required: 1, have: 1, done: true }]]]',
+        "}",
+      ].join("\n"),
     );
-    expect(compactJson({ x: 1 })).toBe('{"x":1}');
+    expect(Math.max(...out.split("\n").map((l) => l.length))).toBeLessThanOrEqual(80);
+    expect(compactJson({ x: 1, "a b": [] })).toBe('{ x: 1, "a b": [] }');
+    // An object too long for its line is a member a line.
+    expect(compactJson({ name: "n".repeat(50), title: "t".repeat(30) })).toBe(`{\n  name: "${"n".repeat(50)}",\n  title: "${"t".repeat(30)}"\n}`);
   });
 
   test("a value that is a plain string, or not JSON inside, is left as it was", () => {

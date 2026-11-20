@@ -335,7 +335,7 @@ describe("code and edits, drawn", () => {
     expect(texts(write!, "pre.block .syn-com")).toEqual(["// done"]);
     expect(texts(snippet!, "pre.block .syn-kw")).toEqual(["return"]);
     // The value it returned as a JSON string, laid out.
-    expect(texts(snippet!, "pre.block")[1]).toBe('ok (1ms) => {"xp":7066}');
+    expect(texts(snippet!, "pre.block")[1]).toBe("ok (1ms) => { xp: 7066 }");
     expect(host.textContent).toContain("1m");
     expect(host.textContent).not.toContain('{"seconds":60}');
     dispose();

@@ -193,22 +193,65 @@ export function isCodePath(path: string | undefined): boolean {
   return /\.(m|c)?[jt]sx?$/i.test(path);
 }
 
-/** A JSON value this short stays on one line when laid out. */
-const JSON_LINE = 72;
+/** The column a laid-out JSON line keeps within, its indent and key included. */
+const JSON_WIDTH = 80;
+
+/** A key as a JavaScript literal writes it: bare where it is a name, quoted where it is not. */
+function keyOf(k: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
+}
+
+function entriesOf(value: object): [string, unknown][] {
+  return Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
+}
+
+/** A value on one line, spaced the way prettier spaces a literal: `[1, 2]`, `{ a: 1 }`. */
+function flatJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(flatJson).join(", ")}]`;
+  const entries = entriesOf(value);
+  return entries.length === 0 ? "{}" : `{ ${entries.map(([k, v]) => `${keyOf(k)}: ${flatJson(v)}`).join(", ")} }`;
+}
 
 /**
- * JSON laid out compactly: a value that fits on a line stays on one, and only
- * what does not is broken over lines, a level of indent each. A quest log of
- * small arrays reads as a few lines rather than one number per line.
+ * A value laid out for reading, the way the sandbox prints one beside it: a
+ * literal with its keys bare where they can be, spaced as prettier spaces
+ * one. Whatever fits on its line (`JSON_WIDTH`, its indent and key counted)
+ * stays on one line. An object that does not breaks to a member a line. An
+ * array that does not fills its lines instead, its members packed side by
+ * side up to the width with its brackets hugging the first and last of them,
+ * so a quest log entry, `[183, "The Boar Hunter", [{ kind: "kill", … }]]`,
+ * takes one or two lines rather than ten.
  */
-export function compactJson(value: unknown, indent = ""): string {
-  const flat = JSON.stringify(value);
-  if (flat === undefined) return "null";
-  if (flat.length + indent.length <= JSON_LINE || value === null || typeof value !== "object") return flat;
+export function compactJson(value: unknown, indent = "", lead = 0): string {
+  const one = flatJson(value);
+  if (value === null || typeof value !== "object" || indent.length + lead + one.length <= JSON_WIDTH) return one;
   const inner = `${indent}  `;
-  if (Array.isArray(value)) return `[\n${value.map((v) => inner + compactJson(v, inner)).join(",\n")}\n${indent}]`;
-  const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
-  return `{\n${entries.map(([k, v]) => `${inner}${JSON.stringify(k)}: ${compactJson(v, inner)}`).join(",\n")}\n${indent}}`;
+  if (Array.isArray(value)) {
+    const lines: string[] = [];
+    let line = "";
+    value.forEach((v, k) => {
+      const comma = k < value.length - 1 ? "," : "";
+      const flat = flatJson(v) + comma;
+      // The first line starts after the bracket; the rest at the inner indent.
+      const at = lines.length === 0 ? indent.length + lead + 1 : inner.length;
+      if (line.length > 0 && at + line.length + 1 + flat.length <= JSON_WIDTH) line += ` ${flat}`;
+      else {
+        if (line.length > 0) lines.push(line);
+        const start = lines.length === 0 ? indent.length + lead + 1 : inner.length;
+        // A member too long for a line of its own is laid out by the same rule, from where it starts.
+        line = start + flat.length <= JSON_WIDTH ? flat : compactJson(v, inner) + comma;
+      }
+    });
+    if (line.length > 0) lines.push(line);
+    return `[${lines.join(`\n${inner}`)}]`;
+  }
+  return `{\n${entriesOf(value)
+    .map(([k, v]) => {
+      const key = `${keyOf(k)}: `;
+      return `${inner}${key}${compactJson(v, inner, key.length)}`;
+    })
+    .join(",\n")}\n${indent}}`;
 }
 
 /** A JSON string literal whose content is itself JSON, laid out; null for anything else. */
@@ -230,7 +273,7 @@ function prettyJsonString(literal: string): string | null {
  * A snippet's result with its value laid out, where the value is JSON the
  * snippet returned as a string (`return JSON.stringify(…)`): the sandbox
  * prints a string value quoted, so it comes back as one long line of escaped
- * JSON after the `=> `. That line is replaced by the JSON, pretty-printed;
+ * JSON after the `=> `. That line is replaced by the value, laid out (`compactJson`);
  * null when the result has no such line, so the caller draws the text as it
  * was.
  */
