@@ -1023,7 +1023,7 @@ function writeDungeonRuns(runsDir: string, now: number): Promise<void> {
   const fanout = { characters: 5, accounts, staged: DM_CHARACTERS.map((character, i) => ({ character, account: accounts[i]! })) };
   const soloRaw = (model: string): Record<string, unknown> => ({ model, episode: "deadmines-solo", directive: solo.objective, fanout, task: { definition: taskHash("deadmines-solo") }, watchdogs: { episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCallsPerEpisode: 8000 });
   const writes: Promise<void>[] = [];
-  // Cleared in 1h41m, after a wipe: every boss but Cookie.
+  // Cleared in 1h41m, after a wipe: the route's seven, and Cookie on the ship.
   writes.push(
     writeDungeonRun(
       runsDir,
@@ -1031,7 +1031,7 @@ function writeDungeonRuns(runsDir: string, now: number): Promise<void> {
       soloRaw("fixture/dungeon-model"),
       DM_CHARACTERS.map((name, i) => ({
         name,
-        ...(i === 0 ? { enter: 4, kills: [[644, 18], [643, 35], [642, 34], [1763, 47], [646, 62], [647, 80], [639, 101]] as [number, number][] } : {}),
+        ...(i === 0 ? { enter: 4, kills: [[644, 18], [643, 35], [642, 34], [1763, 47], [646, 62], [647, 80], [645, 92], [639, 101]] as [number, number][] } : {}),
         deaths: [55],
         resurrects: [58],
       })),

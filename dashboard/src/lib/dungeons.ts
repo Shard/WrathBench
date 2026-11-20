@@ -11,7 +11,11 @@ import { characterSeriesLabel, timeTicks } from "./ladder";
 import { paretoSteps } from "./pareto";
 import { partyHref } from "./party";
 
-/** The Deadmines bosses by entry, in the board's order (docs/proposals/GROUP-PLAY.md §6). */
+/**
+ * The seven bosses on the route to Edwin VanCleef by entry, in the board's
+ * order (docs/proposals/GROUP-PLAY.md §6; `DEADMINES_REQUIRED` in the
+ * viewer): what an attempt's bosses are counted of (operator, 2026-11-20).
+ */
 export const BOSS_NAMES: ReadonlyMap<number, string> = new Map([
   [644, "Rhahk'Zor"],
   [643, "Sneed"],
@@ -20,8 +24,16 @@ export const BOSS_NAMES: ReadonlyMap<number, string> = new Map([
   [646, "Mr. Smite"],
   [647, "Captain Greenskin"],
   [639, "Edwin VanCleef"],
-  [645, "Cookie"],
 ]);
+
+/** Cookie's column tooltip: an optional boss off the route, counted toward nothing. */
+export const COOKIE_TITLE =
+  "Cookie, the Deadmines boss off the route to Edwin VanCleef: whether the best attempt killed him. An optional extra, never among the bosses counted and never part of the order.";
+
+/** Cookie on the best attempt: killed, or a dash. */
+export function cookieText(a: Pick<DungeonAttemptView, "cookie">): string {
+  return a.cookie === true ? "yes" : "—";
+}
 
 /** Each id's heading on the board. */
 export function boardTitle(episode: EpisodeIdView): string {
@@ -45,7 +57,7 @@ export function clearTimeText(a: DungeonAttemptView): string {
   return a.cleared && a.timeToClearMs !== null ? fmtDuration(a.timeToClearMs) : "—";
 }
 
-/** The bosses killed, as a count of the eight. */
+/** The route's bosses killed, as a count of the seven. */
 export function bossesText(a: DungeonAttemptView): string {
   return `${a.bosses.length}/${BOSS_NAMES.size}`;
 }
@@ -116,10 +128,10 @@ export const COST_AXIS: DungeonAxis = {
   missing: () => "no cost recorded",
 };
 
-/** Distinct bosses killed, of the eight. */
+/** Distinct bosses killed, of the route's seven; Cookie is not among them. */
 export const BOSSES_AXIS: DungeonAxis = {
   label: "bosses",
-  caption: `bosses killed, of ${BOSS_NAMES.size}`,
+  caption: `bosses killed, of ${BOSS_NAMES.size} on the route`,
   scale: "linear",
   ticks: () => bossTicks(),
   better: "higher",
@@ -148,9 +160,9 @@ export interface DungeonView {
  *
  * - **time × bosses**, the default: speed against progress.
  * - **cost × bosses**: what an attempt cost against how far it got.
- * - **cost × time**: among the attempts that killed seven bosses or all
- *   eight, which is every clear (VanCleef is the seventh or the eighth), what
- *   each cost against how long it took; both lower is better.
+ * - **cost × time**: among the attempts that killed all seven bosses on the
+ *   route, with or without Cookie, what each cost against how long it took;
+ *   both lower is better.
  *
  * Cost is on x wherever it is drawn, as on the ladder: the layout's log axis
  * is x's alone (`ladderChartLayout`).
@@ -161,7 +173,7 @@ export const DUNGEON_VIEWS: readonly DungeonView[] = [
   {
     id: "cost-time",
     title: "cost × time",
-    hint: `${COST_AXIS.caption} against ${TIME_AXIS.caption}, for the attempts that killed 7 or 8 bosses`,
+    hint: `${COST_AXIS.caption} against ${TIME_AXIS.caption}, for the attempts that killed all ${BOSS_NAMES.size} bosses on the route`,
     x: COST_AXIS,
     y: TIME_AXIS,
     minBosses: 7,
@@ -241,7 +253,7 @@ export function clearTimeTicks(maxMs: number): number[] {
   return ticks;
 }
 
-/** The bosses axis: every count from none to all eight, so a step is a boss. */
+/** The bosses axis: every count from none to all seven, so a step is a boss. */
 export const bossTicks = (): number[] => Array.from({ length: BOSS_NAMES.size + 1 }, (_, i) => i);
 
 /**
@@ -262,5 +274,6 @@ export function pointTitle(p: DungeonPoint): string {
   const a = p.row.best;
   const reading = a.cleared && a.timeToClearMs !== null ? `cleared in ${fmtDuration(a.timeToClearMs)}` : `last boss ${fmtDuration(a.lastBossMs)} from launch`;
   const cost = a.costUsd === null || a.costUsd === undefined ? "" : `, ${fmtUsd(a.costUsd)}`;
-  return `${p.label}: ${reading}, ${bossesText(a)} bosses${cost}; ${clearedText(p.row)} counted attempts cleared`;
+  const cookie = a.cookie === true ? " and Cookie" : "";
+  return `${p.label}: ${reading}, ${bossesText(a)} bosses${cookie}${cost}; ${clearedText(p.row)} counted attempts cleared`;
 }

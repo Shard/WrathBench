@@ -971,6 +971,7 @@ export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
           reason: r.best.reason,
           timeToClearMs: r.best.timeToClearMs,
           bosses: [...r.best.bosses],
+          cookie: r.best.cookie,
           lastBossMs: r.best.lastBossMs,
           enteredMs: r.best.enteredMs,
           deaths: r.best.deaths,

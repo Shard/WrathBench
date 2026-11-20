@@ -2433,8 +2433,11 @@ export interface DungeonAttemptView {
   /** The verdict the attempt ended on (a member's own, never `party-ended`). */
   reason: string | null;
   timeToClearMs: number | null;
-  /** The Deadmines boss entries killed, in the board's boss order. */
+  /** The route's boss entries killed (`DEADMINES_REQUIRED`, seven), in the board's boss order. */
   bosses: number[];
+  /** Whether Cookie, the boss off the route, was killed: an optional extra that counts toward nothing. */
+  cookie: boolean;
+  /** When the last of the route's bosses died. */
   lastBossMs: number | null;
   /** When the first character entered the instance. */
   enteredMs: number | null;

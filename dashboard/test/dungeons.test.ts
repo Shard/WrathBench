@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { DungeonAttemptView, DungeonRowView } from "../src/api/client";
-import { DUNGEON_VIEWS, attemptHref, boardRowKey, bossTicks, clearTimeTicks, dungeonPoints, dungeonViewParam, pointTitle, standingKeys } from "../src/lib/dungeons";
+import { BOSS_NAMES, COOKIE_TITLE, DUNGEON_VIEWS, attemptHref, bossesText, cookieText, boardRowKey, bossTicks, clearTimeTicks, dungeonPoints, dungeonViewParam, pointTitle, standingKeys } from "../src/lib/dungeons";
 import { ladderChartLayout } from "../src/lib/ladder";
 
 const attempt = (o: Partial<DungeonAttemptView> = {}): DungeonAttemptView => ({
@@ -22,6 +22,7 @@ const attempt = (o: Partial<DungeonAttemptView> = {}): DungeonAttemptView => ({
   enteredMs: 60_000,
   deaths: 0,
   wipes: 0,
+  cookie: false,
   costUsd: null,
   ...o,
 });
@@ -60,8 +61,8 @@ describe("dungeonPoints", () => {
   });
 
   test("an uncleared attempt that got further faster never hides a cleared one's label", () => {
-    // Every boss but VanCleef in an hour, against a clear in 1h40m without Cookie: 7 and 7.
-    const quick = row("quick", attempt({ bosses: [644, 643, 642, 1763, 646, 647, 645], lastBossMs: 3_600_000 }));
+    // Every route boss but VanCleef in an hour, and Cookie, against a clear in 1h40m without him: 6 and 7.
+    const quick = row("quick", attempt({ bosses: [644, 643, 642, 1763, 646, 647], cookie: true, lastBossMs: 3_600_000 }));
     const behind = row("behind", attempt({ bosses: [644], lastBossMs: 5_000_000 }));
     const stand = standingKeys(dungeonPoints([cleared, quick, behind]).points);
     expect(stand.has(boardRowKey(cleared))).toBe(true);
@@ -82,7 +83,8 @@ describe("dungeonPoints", () => {
   test("the hover reads the attempt the point is placed at", () => {
     const [fast, slow] = dungeonPoints([cleared, partway]).points;
     expect(pointTitle(fast!)).toContain("cleared in");
-    expect(pointTitle(fast!)).toContain("7/8 bosses");
+    expect(pointTitle(fast!)).toContain("7/7 bosses");
+    expect(pointTitle(fast!)).not.toContain("Cookie");
     expect(pointTitle(fast!)).toContain("1 of 2");
     expect(pointTitle(slow!)).toContain("last boss");
   });
@@ -91,7 +93,7 @@ describe("dungeonPoints", () => {
     const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
     const points = dungeonPoints([cleared, partway]).points;
     const layout = ladderChartLayout(points, box, { scale: "linear", ticks: clearTimeTicks, better: "lower" }, { ticks: bossTicks, better: "higher" });
-    expect(layout.yTicks).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(layout.yTicks).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     // Time on the playtime axis's own steps, ending at or past the latest point: 1h40m is under the 2h tick.
     expect(layout.xTicks).toEqual([0, 1_800_000, 3_600_000, 5_400_000, 7_200_000]);
     expect(layout.placed.every((d) => d.cx <= box.x1)).toBe(true);
@@ -104,9 +106,9 @@ describe("dungeonPoints", () => {
 
 describe("the views", () => {
   const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
-  const all = [644, 643, 642, 1763, 646, 647, 639, 645];
-  const clear8 = row("eight", attempt({ cleared: true, reason: "kill-target", timeToClearMs: 7_000_000, bosses: all, lastBossMs: 7_000_000, costUsd: 4.2 }));
-  const clear7 = row("seven", attempt({ cleared: true, reason: "kill-target", timeToClearMs: 5_000_000, bosses: all.slice(0, 7), lastBossMs: 5_000_000, costUsd: 9 }));
+  const all = [644, 643, 642, 1763, 646, 647, 639];
+  const clear8 = row("eight", attempt({ cleared: true, reason: "kill-target", timeToClearMs: 7_000_000, bosses: all, cookie: true, lastBossMs: 7_000_000, costUsd: 4.2 }));
+  const clear7 = row("seven", attempt({ cleared: true, reason: "kill-target", timeToClearMs: 5_000_000, bosses: all, lastBossMs: 5_000_000, costUsd: 9 }));
   const short = row("short", attempt({ bosses: [644, 643, 642], lastBossMs: 4_200_000, costUsd: 0.36 }));
   const unpriced = row("unpriced", attempt({ bosses: [644], lastBossMs: 1_000_000, costUsd: null }));
   const view = (id: string) => dungeonViewParam(id);
@@ -120,13 +122,13 @@ describe("the views", () => {
   test("cost × bosses places the best attempt at its cost, on the ladder's log cost axis; an unpriced one is named, not plotted", () => {
     const m = dungeonPoints([clear8, short, unpriced], view("cost-bosses"));
     expect(m.points.map((p) => [p.model, p.x, p.y])).toEqual([
-      ["eight", 4.2, 8],
+      ["eight", 4.2, 7],
       ["short", 0.36, 3],
     ]);
     expect(m.omitted.map((o) => o.why)).toEqual(["no cost recorded"]);
     const layout = ladderChartLayout(m.points, box, view("cost-bosses").x, view("cost-bosses").y);
     expect(layout.xMinorTicks.length).toBeGreaterThan(0);
-    expect(layout.yTicks).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(layout.yTicks).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(layout.cue.text).toBe("↖ better");
   });
 
@@ -136,14 +138,14 @@ describe("the views", () => {
     expect(dungeonPoints([none]).omitted.map((o) => o.why)).toEqual(["no boss killed"]);
   });
 
-  test("cost × time plots only the attempts at 7 or 8 bosses, and less of both is better", () => {
+  test("cost × time plots only the attempts that killed the route's seven, with or without Cookie, and less of both is better", () => {
     const v = view("cost-time");
     const m = dungeonPoints([clear8, clear7, short, unpriced], v);
     expect(m.points.map((p) => [p.model, p.x, p.y])).toEqual([
       ["eight", 4.2, 7_000_000],
       ["seven", 9, 5_000_000],
     ]);
-    expect(m.omitted.map((o) => o.why)).toEqual(["3 of 8 bosses", "1 of 8 bosses"]);
+    expect(m.omitted.map((o) => o.why)).toEqual(["3 of 7 bosses", "1 of 7 bosses"]);
     // Neither beats the other on both: both stand.
     expect(standingKeys(m.points, v)).toEqual(new Set([boardRowKey(clear8), boardRowKey(clear7)]));
     const layout = ladderChartLayout(m.points, box, v.x, v.y, standingKeys(m.points, v));
@@ -157,10 +159,27 @@ describe("the views", () => {
     expect(stand.has(boardRowKey(dear))).toBe(false);
   });
 
-  test("the hover names the cost when the attempt has one", () => {
+  test("the hover names the cost when the attempt has one, and Cookie when he died", () => {
     const [p] = dungeonPoints([clear8], view("cost-bosses")).points;
     expect(pointTitle(p!)).toContain("$4.20");
+    expect(pointTitle(p!)).toContain("7/7 bosses and Cookie");
     const [q] = dungeonPoints([short]).points;
     expect(pointTitle({ ...q!, row: { ...short, best: { ...short.best, costUsd: null } } })).not.toContain("$");
+  });
+});
+
+describe("Cookie (operator, 2026-11-20)", () => {
+  test("the bosses are the route's seven, and Cookie is not among them", () => {
+    expect([...BOSS_NAMES.keys()]).toEqual([644, 643, 642, 1763, 646, 647, 639]);
+    expect(BOSS_NAMES.has(645)).toBe(false);
+    expect(bossesText(attempt({ bosses: [644, 643, 642, 1763, 646, 647, 639], cookie: true }))).toBe("7/7");
+  });
+
+  test("the table's extra reads yes or a dash, and its tooltip says it counts toward nothing", () => {
+    expect(cookieText(attempt({ cookie: true }))).toBe("yes");
+    expect(cookieText(attempt())).toBe("—");
+    // A board from before the field.
+    expect(cookieText({} as { cookie: boolean })).toBe("—");
+    expect(COOKIE_TITLE).toContain("optional");
   });
 });

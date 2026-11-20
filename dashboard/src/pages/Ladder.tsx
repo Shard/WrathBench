@@ -71,6 +71,8 @@ import {
   bossesTitle,
   clearTimeText,
   clearedText,
+  COOKIE_TITLE,
+  cookieText,
   dungeonViewParam,
 } from "../lib/dungeons";
 import {
@@ -667,7 +669,7 @@ export default function Ladder() {
 }
 
 const BOARD_NOTE =
-  "The fixed Deadmines episode from a staged level-20 party, one agent driving all five characters. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the eight, then time to the last. Deaths and wipes are shown and never order a row.";
+  "The fixed Deadmines episode from a staged level-20 party, one agent driving all five characters. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the seven on the route to VanCleef, then time to the last. Cookie, off the route, is an optional extra. Deaths, wipes and Cookie are shown and never order a row.";
 
 /**
  * One dungeon tab: the board's table for its id, as the viewer derived and
@@ -704,7 +706,10 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; 
               <th>harness</th>
               <th class="right" title="counted attempts that cleared, of the counted attempts">cleared</th>
               <th class="right" title="the best attempt's time from launch to Edwin VanCleef's death">time</th>
-              <th class="right" title="the best attempt's bosses killed, of the eight">bosses</th>
+              <th class="right" title="the best attempt's bosses killed, of the seven on the route to Edwin VanCleef">bosses</th>
+              <th class="right" title={COOKIE_TITLE}>
+                cookie
+              </th>
               <th class="right" title="the best attempt's deaths, over every character">deaths</th>
               <th class="right" title="the best attempt's wipes: every character dead at once">wipes</th>
             </tr>
@@ -712,7 +717,7 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; 
           <tbody>
             <Show when={series.kept().length === 0}>
               <tr>
-                <td colSpan={7} class="dim">
+                <td colSpan={8} class="dim">
                   no counted attempts
                 </td>
               </tr>
@@ -754,6 +759,9 @@ function DungeonRow(props: { row: DungeonRowView; hovered: string | null; onHove
       </td>
       <td class="right mono" title={bossesTitle(r().best)}>
         {bossesText(r().best)}
+      </td>
+      <td class={r().best.cookie ? "right mono ok" : "right mono dim"} title={COOKIE_TITLE}>
+        {cookieText(r().best)}
       </td>
       <td class="right mono">{r().best.deaths}</td>
       <td class="right mono">{r().best.wipes}</td>

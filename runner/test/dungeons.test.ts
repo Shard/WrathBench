@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_POLICY, projectModel, type RunFact } from "../src/models";
-import { attemptOf, boardOf, boardsOf, compareAttempts, costOf, DEADMINES_BOSSES, wipesOf, type CharacterMarks, type DungeonRun } from "../viewer/dungeons";
+import { attemptOf, boardOf, boardsOf, compareAttempts, costOf, DEADMINES_BOSSES, DEADMINES_REQUIRED, wipesOf, type CharacterMarks, type DungeonRun } from "../viewer/dungeons";
 import { projectDungeons } from "../viewer/public-projection";
 import type { CostFigure, ResultRun } from "../viewer/api-types";
 
@@ -59,7 +59,7 @@ describe("an attempt", () => {
         marks("Healpartyc", { kills: [kill(644, 20), kill(645, 60)] }),
       ], { endedAt: T0 + 103 * MIN }),
     ]);
-    expect(a).toMatchObject({ counted: true, cleared: true, timeToClearMs: 101 * MIN, enteredMs: 4 * MIN, bosses: [644, 639, 645], lastBossMs: 101 * MIN, reason: "kill-target", party: null });
+    expect(a).toMatchObject({ counted: true, cleared: true, timeToClearMs: 101 * MIN, enteredMs: 4 * MIN, bosses: [644, 639], cookie: true, lastBossMs: 101 * MIN, reason: "kill-target", party: null });
   });
 
   test("ending on the clock, or a member's idle or call ceiling, is counted and not cleared", () => {
@@ -75,10 +75,24 @@ describe("an attempt", () => {
     expect(a.runIds).toHaveLength(5);
   });
 
-  test("bosses are the eight entries, counted alike, as the union over characters by victim", () => {
-    expect(DEADMINES_BOSSES).toEqual([644, 643, 642, 1763, 646, 647, 639, 645]);
+  test("bosses are the route's seven, counted alike, as the union over characters by victim (operator, 2026-11-20)", () => {
+    expect(DEADMINES_REQUIRED).toEqual([644, 643, 642, 1763, 646, 647, 639]);
+    // Cookie is still a Deadmines boss to the timeline and the camera.
+    expect(DEADMINES_BOSSES).toEqual([...DEADMINES_REQUIRED, 645]);
     const a = attemptOf([solo("a", "episode-limit", [marks("x", { kills: [kill(643, 30, "s"), kill(642, 31, "sh"), kill(100, 5)] }), marks("y", { kills: [kill(643, 30, "s")] })])]);
     expect(a.bosses).toEqual([643, 642]);
+    expect(a.cookie).toBe(false);
+  });
+
+  test("Cookie is an extra: shown, never a boss counted, never the last boss's time, never the order", () => {
+    const route = [kill(644, 10), kill(643, 20), kill(642, 21)];
+    const withCookie = attemptOf([solo("c", "episode-limit", [marks("x", { kills: [...route, kill(645, 80)] })])]);
+    expect(withCookie).toMatchObject({ bosses: [644, 643, 642], cookie: true, lastBossMs: 21 * MIN });
+    const quicker = attemptOf([solo("q", "episode-limit", [marks("x", { kills: [kill(644, 5), kill(643, 15), kill(642, 18)] })])]);
+    expect([withCookie, quicker].sort(compareAttempts).map((x) => x.runIds[0])).toEqual(["q", "c"]);
+    // A clear at seven is the whole route, with or without Cookie.
+    const all7 = DEADMINES_REQUIRED.map((e, i) => kill(e, 10 + i));
+    expect(attemptOf([solo("s", "kill-target", [marks("x", { kills: all7 })])]).bosses).toHaveLength(7);
   });
 
   test("a wipe is every character dead at once, until the first resurrection", () => {
@@ -155,7 +169,7 @@ describe("the order", () => {
   test("the published board carries the same numbers", () => {
     const board = boardOf("deadmines-solo", [solo("s2", "kill-target", [marks("x", { kills: [kill(639, 150)] })], { actualCost: fig(3.5, "reported") })]);
     expect(board.rows[0]!.best.costUsd).toBe(3.5);
-    const body = { version: 2, boards: [board], now: 1 };
+    const body = { version: 3, boards: [board], now: 1 };
     expect(projectDungeons(body)).toEqual(body);
   });
 });

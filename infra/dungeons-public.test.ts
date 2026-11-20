@@ -43,6 +43,9 @@ describe("/api/dungeons", () => {
       // Each row carries its best attempt's cost, the provider's charge summed over its responses, on either handle.
       const costs = body.boards[0]!.rows.map((r) => [r.best.runIds[0], r.best.costUsd === null ? null : Number(r.best.costUsd.toFixed(2))]).sort();
       expect({ publicMode, costs }).toEqual({ publicMode, costs: [[DUNGEON_SOLO_RUN, 0.36], [DUNGEON_SOLO_CLEARED_RUN, 4.2]].sort() });
+      // The route's seven are its bosses; Cookie, killed on the ship, rides beside them as the extra.
+      const bosses = body.boards[0]!.rows.map((r) => [r.best.runIds[0], r.best.bosses.length, r.best.cookie]).sort();
+      expect({ publicMode, bosses }).toEqual({ publicMode, bosses: [[DUNGEON_SOLO_RUN, 3, false], [DUNGEON_SOLO_CLEARED_RUN, 7, true]].sort() });
     }
   }, 60_000);
 });

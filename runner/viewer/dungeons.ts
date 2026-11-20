@@ -18,9 +18,12 @@
  *   went idle or reached its call ceiling, is counted and not cleared.
  * - **Time to clear** runs from launch (the earliest member's start) to the
  *   VanCleef kill as the server reported it, so a run's teardown is not in it.
- * - **Bosses** are the eight Deadmines entries, all counted alike, Cookie
- *   included (`DEADMINES_BOSSES`, docs/proposals/GROUP-PLAY.md §6), as the
- *   union over the party's characters by victim.
+ * - **Bosses** are the seven on the route to Edwin VanCleef, counted alike
+ *   (`DEADMINES_REQUIRED`), as the union over the party's characters by
+ *   victim (operator, 2026-11-20). Cookie, the eighth Deadmines boss, is off
+ *   the route and the objective names only VanCleef, so an attempt at seven
+ *   never chose to skip anything: Cookie is an optional extra, shown on the
+ *   attempt (`cookie`) and never counted among its bosses or in the order.
  * - **Cost** is what the attempt's member runs cost, each read as the
  *   ladder reads a run's cost (`runCostReading`: the provider's charge, else
  *   the price table over the run's own tokens), summed. An attempt with any
@@ -44,10 +47,21 @@ import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
-export const DUNGEON_BOARD_VERSION = 2;
+export const DUNGEON_BOARD_VERSION = 3;
 
-/** The Deadmines bosses by creature entry (docs/proposals/GROUP-PLAY.md §6): Rhahk'Zor, Sneed, Sneed's Shredder, Gilnid, Mr. Smite, Captain Greenskin, Edwin VanCleef, Cookie. */
+/**
+ * Every Deadmines boss by creature entry (docs/proposals/GROUP-PLAY.md §6):
+ * Rhahk'Zor, Sneed, Sneed's Shredder, Gilnid, Mr. Smite, Captain Greenskin,
+ * Edwin VanCleef, Cookie. What a timeline or the camera calls a boss kill;
+ * the board counts the route's seven (`DEADMINES_REQUIRED`).
+ */
 export const DEADMINES_BOSSES: readonly number[] = [644, 643, 642, 1763, 646, 647, 639, 645];
+
+/** Cookie: a Deadmines boss off the route to VanCleef, an optional extra on the board. */
+export const DEADMINES_EXTRA_ENTRY = 645;
+
+/** The seven bosses on the route to VanCleef, in the board's order: the bosses an attempt is counted by. */
+export const DEADMINES_REQUIRED: readonly number[] = DEADMINES_BOSSES.filter((e) => e !== DEADMINES_EXTRA_ENTRY);
 
 /** Edwin VanCleef: the kill that clears the episode (the definitions' `end`). */
 export const DEADMINES_END_ENTRY = 639;
@@ -158,11 +172,12 @@ export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
   const kills = characters.flatMap((c) => c.kills);
   const bossKills = new Map<string, { entry: number; ts: number }>();
   for (const k of kills) {
-    if (k.entry === null || !DEADMINES_BOSSES.includes(k.entry)) continue;
+    if (k.entry === null || !DEADMINES_REQUIRED.includes(k.entry)) continue;
     const prev = bossKills.get(k.victimGuid);
     if (prev === undefined || k.ts < prev.ts) bossKills.set(k.victimGuid, { entry: k.entry, ts: k.ts });
   }
-  const bosses = [...new Set([...bossKills.values()].map((b) => b.entry))].sort((a, b) => DEADMINES_BOSSES.indexOf(a) - DEADMINES_BOSSES.indexOf(b));
+  const bosses = [...new Set([...bossKills.values()].map((b) => b.entry))].sort((a, b) => DEADMINES_REQUIRED.indexOf(a) - DEADMINES_REQUIRED.indexOf(b));
+  const cookie = kills.some((k) => k.entry === DEADMINES_EXTRA_ENTRY);
   const at = (ts: number | null): number | null => (ts === null || !Number.isFinite(launchedAt) ? null : Math.max(0, ts - launchedAt));
   const endKill = [...bossKills.values()].filter((b) => b.entry === DEADMINES_END_ENTRY).sort((a, b) => a.ts - b.ts)[0];
   const ended = runs.some((r) => r.terminationReason === "kill-target");
@@ -183,6 +198,7 @@ export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
     reason: own?.terminationReason ?? null,
     timeToClearMs: cleared ? at(clearTs) : null,
     bosses,
+    cookie,
     lastBossMs: at(lastBoss),
     enteredMs: at(entered.length === 0 ? null : Math.min(...entered)),
     deaths: characters.reduce((n, c) => n + c.deaths.length, 0),

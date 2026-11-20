@@ -984,8 +984,10 @@ not one unit across drivers (a claude-code turn is one CLI session), and a
 `?view=turns-xp` link opens cost × xp. The Deadmines tab has the same row of
 axes chips on the same `?view=`, in the board's own terms (`DUNGEON_VIEWS` in
 `dashboard/src/lib/dungeons.ts`): time × bosses, the default; cost × bosses;
-and cost × time, which plots only the attempts that killed seven bosses or
-more. Each point is still the row's best attempt as the board chose it, and
+and cost × time, which plots only the attempts that killed all seven bosses
+on the route to VanCleef, with or without Cookie, the optional extra the
+table shows in a column of its own (operator, 2026-11-20). Each point is
+still the row's best attempt as the board chose it, and
 its cost is the ladder's reading of each of the attempt's runs, summed. The
 tab shows none of the tier's other controls, the Pareto toggle included: a
 board row is one attempt rather than a mean over an entry's runs, and its
