@@ -6,14 +6,19 @@
  *                   dead adapter or a model that stops producing output.
  *                   Also a model that has stopped acting (operator,
  *                   2026-11-18): on the program loop, consecutive wakes
- *                   answered with no tool call, as many as fit the idle
- *                   window at the wake cap (`ceil(idleMs / WAKE_CAP_MS)`,
- *                   four at twenty minutes), with no tool call for idleMs of
- *                   wall clock, sleep included. A reply resets the first
- *                   clock, so a model that answers every wake in a few words
- *                   and never acts would otherwise hold its world to the
- *                   episode limit. Any tool call is acting, `yield` included:
- *                   a model that yields while its routine plays has acted.
+ *                   answered without acting, as many as fit the idle window
+ *                   at the wake cap (`ceil(idleMs / WAKE_CAP_MS)`, four at
+ *                   twenty minutes), with no act for idleMs of wall clock,
+ *                   sleep included. A reply resets the first clock, so a
+ *                   model that answers every wake in a few words and never
+ *                   acts would otherwise hold its world to the episode limit.
+ *                   Any tool call is acting, `yield` included: a model that
+ *                   yields while its routine plays has acted. So is a rise
+ *                   in (level, xp) since the previous sleep (operator,
+ *                   2026-11-20): codex has no `yield`, so a reply is its only
+ *                   sleep, and a model whose routine is gaining xp has not
+ *                   given up. A quest turn-in is not read on its own; below
+ *                   the level cap it pays xp, which is.
  *   no-xp           no increase in (level, xp) for noXpMs, measured from the
  *                   first observed progress value — a session that never forms
  *                   is `idle`'s problem, not this one's.
@@ -55,11 +60,11 @@ export interface WatchdogVerdict {
 export class Watchdogs {
   private readonly startedAt: number;
   private lastModelOutputAt: number;
-  /** When the model last called a tool, any tool: the no-action half of `idle`. */
-  private lastToolCallAt: number;
-  /** Whether a tool call came since the program loop last put the model to sleep. */
+  /** When the model last acted (a tool call, or a rise in (level, xp)): the no-action half of `idle`. */
+  private lastActedAt: number;
+  /** Whether the model acted since the program loop last put it to sleep. */
   private actedSinceSleep = false;
-  /** Wakes answered in a row with no tool call (`noteWakeAnswered`). */
+  /** Wakes answered in a row without acting (`noteWakeAnswered`). */
   private wakesWithoutAction = 0;
   /** The no-action verdict's detail, once the rule has met. */
   private stoppedActing: string | null = null;
@@ -99,7 +104,7 @@ export class Watchdogs {
   ) {
     this.startedAt = this.now() - Math.max(0, elapsedBeforeMs);
     this.lastModelOutputAt = this.now();
-    this.lastToolCallAt = this.now();
+    this.lastActedAt = this.now();
     this.ends = endConditionsOf({ stopAtLevel: opts.stopAtLevel ?? null, end: opts.end });
     this.stopAtLevel = levelTargetOf(this.ends);
   }
@@ -119,7 +124,12 @@ export class Watchdogs {
    * `yield` counts as acting before the sleep it starts.
    */
   noteToolCall(): void {
-    this.lastToolCallAt = this.now();
+    this.noteActed();
+  }
+
+  /** A tool call or a rise in (level, xp): either resets the no-action count and clock. */
+  private noteActed(): void {
+    this.lastActedAt = this.now();
     this.actedSinceSleep = true;
     this.wakesWithoutAction = 0;
   }
@@ -127,9 +137,11 @@ export class Watchdogs {
   /**
    * The program loop is about to put the model to sleep (a turn's end, or a
    * `yield`, whose call has already been noted): it has answered what it was
-   * handed. With no tool call since the previous sleep, that was a wake
-   * answered without acting. Counted at the sleep's start, and only here:
-   * a capacity backoff holds the idle clock (`noteAsleep`) but is no answer.
+   * handed. With no tool call and no rise in (level, xp) since the previous
+   * sleep, that was a wake answered without acting. Counted at the sleep's
+   * start, and only here: a capacity backoff holds the idle clock
+   * (`noteAsleep`) but is no answer. Progress arrives on the state ticker,
+   * which samples through the sleep on every driver (`startStateTicker`).
    */
   noteWakeAnswered(): void {
     const acted = this.actedSinceSleep;
@@ -140,9 +152,9 @@ export class Watchdogs {
     }
     this.wakesWithoutAction++;
     if (this.cfg.idleMs === null || this.stoppedActing !== null) return;
-    const quietMs = this.now() - this.lastToolCallAt;
+    const quietMs = this.now() - this.lastActedAt;
     if (this.wakesWithoutAction >= Math.ceil(this.cfg.idleMs / WAKE_CAP_MS) && quietMs >= this.cfg.idleMs) {
-      this.stoppedActing = `no tool call for ${quietMs}ms: ${this.wakesWithoutAction} wakes in a row answered without one`;
+      this.stoppedActing = `no tool call and no level/xp progress for ${quietMs}ms: ${this.wakesWithoutAction} wakes in a row answered without either`;
     }
   }
 
@@ -173,13 +185,18 @@ export class Watchdogs {
       this.targetReached = level;
     }
     const current = { level: level ?? 0, xp: xp ?? 0 };
-    if (
-      this.lastProgress === null ||
+    if (this.lastProgress === null) {
+      // The first value seen, a resume's included, is where progress is measured from, not a rise.
+      this.lastProgress = current;
+      this.lastProgressAt = this.now();
+    } else if (
       current.level > this.lastProgress.level ||
       (current.level === this.lastProgress.level && current.xp > this.lastProgress.xp)
     ) {
       this.lastProgress = current;
       this.lastProgressAt = this.now();
+      // A character still gaining is not a model that has given up (`idle`).
+      this.noteActed();
     } else if (this.lastProgressAt === null) {
       this.lastProgressAt = this.now();
     }

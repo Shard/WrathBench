@@ -1203,7 +1203,7 @@ describe("the fixed loop on the program loop", () => {
     const records = readTrajectory(s.dir);
     // Four five-minute wakes answered without a tool call, then the sleep that found the verdict.
     expect(records.filter((r) => r.t === "wake").map((w) => w["fired"])).toEqual(["cap", "cap", "cap", "cap", "stopped"]);
-    expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call for \d+ms: 4 wakes in a row answered without one$/);
+    expect(records.find((r) => r.t === "watchdog")?.["detail"]).toMatch(/^no tool call and no level\/xp progress for \d+ms: 4 wakes in a row answered without either$/);
   });
 
   test("a settled wipe is one wake answered, and a model that only talks through wipes still ends idle on the idle window's clock, not sooner", async () => {
@@ -1224,7 +1224,7 @@ describe("the fixed loop on the program loop", () => {
     for (const w of died) expect(String(w["block"]).split("\n")[0]).toEndWith("woke for: Alfa, Bravo, Charlie died]");
     // Four wakes in a row came within minutes; the verdict waited for twenty of no tool call, and counted each wipe once.
     const detail = String(records.find((r) => r.t === "watchdog")?.["detail"]);
-    const m = /^no tool call for (\d+)ms: (\d+) wakes in a row answered without one$/.exec(detail);
+    const m = /^no tool call and no level\/xp progress for (\d+)ms: (\d+) wakes in a row answered without either$/.exec(detail);
     expect(m).not.toBeNull();
     expect(Number(m![1])).toBeGreaterThanOrEqual(20 * 60_000);
     expect(Number(m![2])).toBeLessThanOrEqual(died.length);

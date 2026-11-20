@@ -209,7 +209,7 @@ describe("idle: a model that answers wakes without acting (operator, 2026-11-18)
     }
     c.tick(5 * MIN);
     talk(w);
-    expect(w.check()).toEqual({ reason: "idle", detail: `no tool call for ${20 * MIN}ms: 4 wakes in a row answered without one` });
+    expect(w.check()).toEqual({ reason: "idle", detail: `no tool call and no level/xp progress for ${20 * MIN}ms: 4 wakes in a row answered without either` });
   });
 
   test("the replies keep the output clock fresh: without the no-action rule the run would hold its world to the limit", () => {
@@ -316,7 +316,7 @@ describe("idle: a model that answers wakes without acting (operator, 2026-11-18)
     expect(w.check()).toBeNull();
     c.tick(5 * MIN);
     talk(w);
-    expect(w.check()?.detail).toBe(`no tool call for ${10 * MIN}ms: 2 wakes in a row answered without one`);
+    expect(w.check()?.detail).toBe(`no tool call and no level/xp progress for ${10 * MIN}ms: 2 wakes in a row answered without either`);
   });
 
   test("off with the idle watchdog", () => {
@@ -327,6 +327,108 @@ describe("idle: a model that answers wakes without acting (operator, 2026-11-18)
     for (let k = 0; k < 40; k++) {
       c.tick(5 * MIN);
       talk(w);
+    }
+    expect(w.check()).toBeNull();
+  });
+});
+
+describe("idle: a model whose character is still progressing has acted (operator, 2026-11-20)", () => {
+  const MIN = 60_000;
+  const tier = watchdogConfigSchema.parse({ idleMs: 20 * MIN, noXpMs: 0, episodeMs: 360 * MIN, maxSandboxRestarts: 3 });
+  /**
+   * One five-minute sleep, sampled once a minute as the state ticker samples
+   * it through the sleep, then the wake answered in words alone. `xpAt` is the
+   * xp each sample reads, by minute of the sleep.
+   */
+  const sleepAndTalk = (w: Watchdogs, c: ReturnType<typeof clock>, level: number, xpAt: (minute: number) => number): void => {
+    w.noteAsleep();
+    for (let m = 1; m <= 5; m++) {
+      c.tick(MIN);
+      w.noteProgress(level, xpAt(m));
+    }
+    w.noteAwake();
+    w.noteModelOutput();
+    w.noteWakeAnswered();
+  };
+
+  test("text-only wakes while a routine gains xp never end idle", () => {
+    // The GPT-6.2 Sol e360s: codex has no yield, so a reply is its sleep, while its routine gained 300-800 xp a wake.
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteProgress(20, 0);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    let xp = 0;
+    for (let k = 0; k < 60; k++) {
+      sleepAndTalk(w, c, 20, () => (xp += 100));
+      expect(w.check()).toBeNull();
+    }
+  });
+
+  test("a level-up with xp back near zero is progress", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteProgress(20, 9_000);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    for (let k = 0; k < 3; k++) sleepAndTalk(w, c, 20, () => 9_000);
+    sleepAndTalk(w, c, 21, (m) => (m === 5 ? 50 : 9_000));
+    expect(w.check()).toBeNull();
+    // Counted from the level-up: four more flat wakes are the window again.
+    for (let k = 0; k < 3; k++) sleepAndTalk(w, c, 21, () => 50);
+    expect(w.check()).toBeNull();
+    sleepAndTalk(w, c, 21, () => 50);
+    expect(w.check()?.reason).toBe("idle");
+  });
+
+  test("text-only wakes with no progress still end idle at four wakes and twenty minutes; a flat sample, the first included, is not progress", () => {
+    // Haiku's run: routines stopped, "xp +0" wakes answered in a few words.
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    // The first sample (a resume's too) is where progress is measured from, not a rise.
+    for (let k = 1; k <= 3; k++) {
+      sleepAndTalk(w, c, 12, () => 4_000);
+      expect(w.check()).toBeNull();
+    }
+    sleepAndTalk(w, c, 12, () => 4_000);
+    expect(w.check()).toEqual({
+      reason: "idle",
+      detail: `no tool call and no level/xp progress for ${20 * MIN}ms: 4 wakes in a row answered without either`,
+    });
+  });
+
+  test("a wake whose sleep progressed resets the count and the clock between flat ones", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteProgress(15, 1_000);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    for (let k = 0; k < 3; k++) sleepAndTalk(w, c, 15, () => 1_000);
+    expect(w.check()).toBeNull();
+    // One sleep the routine gained in.
+    sleepAndTalk(w, c, 15, (m) => 1_000 + 100 * m);
+    for (let k = 0; k < 3; k++) {
+      sleepAndTalk(w, c, 15, () => 1_500);
+      expect(w.check()).toBeNull();
+    }
+    sleepAndTalk(w, c, 15, () => 1_500);
+    expect(w.check()?.reason).toBe("idle");
+  });
+
+  test("progress late in the window restarts its clock: a burst of flat wakes after it is not twenty minutes", () => {
+    const c = clock();
+    const w = new Watchdogs(tier, c.now);
+    w.noteProgress(15, 1_000);
+    w.noteToolCall();
+    w.noteWakeAnswered();
+    c.tick(19 * MIN);
+    w.noteProgress(15, 1_200);
+    for (let k = 0; k < 6; k++) {
+      c.tick(10_000);
+      w.noteModelOutput();
+      w.noteWakeAnswered();
     }
     expect(w.check()).toBeNull();
   });

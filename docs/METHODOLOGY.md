@@ -490,7 +490,10 @@ the window at the five-minute cap (four at twenty minutes), with no tool call
 across the whole window, sleep included. The window, not the count alone, is
 what keeps a burst of wakes seconds apart from reading as idleness. Any tool
 call is acting, `yield` included: a model that yields while its routine plays
-has acted.
+has acted. So is a rise in level or xp since the previous sleep (operator,
+2026-11-20): a driver without `yield` sleeps only by replying, and a model
+whose routine is still gaining has not given up. The stop needs the whole
+window with neither a tool call nor progress.
 
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and
