@@ -615,8 +615,14 @@ own with a chart (operator, 2026-11-15): a row per model condition on its best
 attempt with "k of n cleared" printed and a row shown from n = 1. The
 five-agent `deadmines` has no tab while it runs only as a probe campaign
 (operator, 2026-11-15); as an eval it would get its own, never pooled or
-ranked against the one-agent id's. Cleared rows come first, by time to clear from launch;
-the rest by distinct bosses killed, all eight counted alike, Cookie included.
+ranked against the one-agent id's. An attempt is cleared when it killed all
+seven bosses on the route to Edwin VanCleef and ended on his kill (operator,
+2026-11-20); one that killed VanCleef having skipped a route boss is not.
+Cleared rows come first, by time to clear from launch; the rest by distinct
+bosses killed of the seven, counted alike, then time to the last. Cookie is
+off the route and the objective names only VanCleef, so Cookie is an optional
+extra, shown and never counted among the bosses or in the order (operator,
+2026-11-20).
 Deaths and wipes are shown and never order a row. Rung 6 is a 5-man dungeon
 done with others in freeplay, a group of agents in a dungeon, and is not read
 from these evals: a staged dungeon is a different measurement from the climb

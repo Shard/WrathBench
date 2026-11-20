@@ -979,7 +979,7 @@ function writeDungeonRun(
   runId: string,
   raw: Record<string, unknown>,
   characters: DungeonCharacter[],
-  o: { startedAt: number; minutes: number; reason: string; fanout: boolean },
+  o: { startedAt: number; minutes: number; reason: string; fanout: boolean; turnUsd?: number },
 ): Promise<void> {
   const dir = join(runsDir, runId);
   mkdirSync(dir, { recursive: true });
@@ -990,7 +990,9 @@ function writeDungeonRun(
   for (let turn = 1; turn <= 3; turn++) {
     clock = o.startedAt + turn * 60_000;
     traj.append({ t: "request", turn, adapter: "stub", promptChars: 9000 });
-    traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}.` } });
+    // The provider's charge per call, as OpenRouter reports it, so the board's cost has a reading.
+    const usage = o.turnUsd === undefined ? {} : { usage: { prompt_tokens: 9000, completion_tokens: 400, cost: o.turnUsd } };
+    traj.append({ t: "response", turn, message: { role: "assistant", content: `Turn ${turn}.` }, ...usage });
   }
   const writers = characters.map((c, i) => {
     const sdir = o.fanout ? join(dir, SESSIONS_DIR, c.name) : sessionDirOf(dir);
@@ -1021,7 +1023,7 @@ function writeDungeonRuns(runsDir: string, now: number): Promise<void> {
   const fanout = { characters: 5, accounts, staged: DM_CHARACTERS.map((character, i) => ({ character, account: accounts[i]! })) };
   const soloRaw = (model: string): Record<string, unknown> => ({ model, episode: "deadmines-solo", directive: solo.objective, fanout, task: { definition: taskHash("deadmines-solo") }, watchdogs: { episodeMs: 14_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCallsPerEpisode: 8000 });
   const writes: Promise<void>[] = [];
-  // Cleared in 1h41m, after a wipe: every boss but Cookie.
+  // Cleared in 1h41m, after a wipe: the route's seven, and Cookie on the ship.
   writes.push(
     writeDungeonRun(
       runsDir,
@@ -1029,11 +1031,11 @@ function writeDungeonRuns(runsDir: string, now: number): Promise<void> {
       soloRaw("fixture/dungeon-model"),
       DM_CHARACTERS.map((name, i) => ({
         name,
-        ...(i === 0 ? { enter: 4, kills: [[644, 18], [643, 35], [642, 34], [1763, 47], [646, 62], [647, 80], [639, 101]] as [number, number][] } : {}),
+        ...(i === 0 ? { enter: 4, kills: [[644, 18], [643, 35], [642, 34], [1763, 47], [646, 62], [647, 80], [645, 92], [639, 101]] as [number, number][] } : {}),
         deaths: [55],
         resurrects: [58],
       })),
-      { startedAt: now - 4 * 3_600_000, minutes: 102, reason: "kill-target", fanout: true },
+      { startedAt: now - 4 * 3_600_000, minutes: 102, reason: "kill-target", fanout: true, turnUsd: 1.4 },
     ),
   );
   // Not cleared: three bosses before the clock ran out.
@@ -1043,7 +1045,7 @@ function writeDungeonRuns(runsDir: string, now: number): Promise<void> {
       DUNGEON_SOLO_RUN,
       soloRaw("fixture/second-model"),
       DM_CHARACTERS.map((name, i) => ({ name, ...(i === 0 ? { enter: 9, kills: [[644, 30], [643, 70], [642, 71]] as [number, number][] } : {}), ...(i === 1 ? { deaths: [40, 90] } : {}) })),
-      { startedAt: now - 5 * 3_600_000, minutes: 240, reason: "episode-limit", fanout: true },
+      { startedAt: now - 5 * 3_600_000, minutes: 240, reason: "episode-limit", fanout: true, turnUsd: 0.12 },
     ),
   );
   // Five agents of one model: the tank's run met the clock, the rest ended with it.
