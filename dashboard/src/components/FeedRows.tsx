@@ -689,17 +689,6 @@ function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPrese
   );
 }
 
-/** A record opened from its line: the record, under the line that already named it. */
-function BareDetail(props: { entry: FeedEntry }) {
-  return (
-    <div class="entry">
-      <div class="body">
-        <pre class="block">{detailOf(props.entry)}</pre>
-      </div>
-    </div>
-  );
-}
-
 /**
  * A call to one of codex's own tools (`codex_tool_call`): code mode's `exec`
  * above all, whose input is a script calling the run's tools. The script is
