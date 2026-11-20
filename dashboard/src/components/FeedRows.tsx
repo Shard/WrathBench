@@ -19,7 +19,7 @@ import type { ActionsEntry, EventsServedEntry, FeedEntry, ReflectionWindowView }
 import { rawPath, SNAPSHOT_MODE } from "../api/client";
 import { actionLines, isActionsEntry, keepLines, sameLine, type MoveVerdict } from "../lib/actionlog";
 import type { CallGroup, FeedGroup, ResponseGroup, TurnGroup } from "../lib/feedgroup";
-import { deployChips, eventsHead, leadChips, lineOf, milestoneLine, programErrorLine, replyLine, type Chip } from "../lib/feedline";
+import { deployChips, endLine, eventsHead, leadChips, lineOf, milestoneLine, programErrorLine, replyLine, type Chip } from "../lib/feedline";
 import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, tsOf, type ActionRun, type FeedKind, type FeedRow, type Surface, type Tally } from "../lib/feedtier";
 import { expandedBy, harnessFields, isHarnessEntry, noticeView, splitNotices, stateLine, type ExpandPreset } from "../lib/feedview";
 import { fmtElapsed, fmtLatency, fmtTokens, paneText, stamp } from "../lib/format";
@@ -865,6 +865,10 @@ function FullRow(props: { g: FeedGroup; ctx: FeedCtx; opened?: boolean }) {
       if (isHarnessEntry(g.entry)) return <NoticeRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} bare={props.opened} />;
       if (isActionsEntry(g.entry)) return <ActionsRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} startOpen={props.opened} />;
       if (g.entry.t === "codex_tool_call") return <CodexToolRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} bare={props.opened} />;
+      // The run's end and the watchdog that called it: a line, the record behind its toggle.
+      if (g.entry.t === "termination" || g.entry.t === "watchdog") {
+        return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} line={endLine(g.entry)} bad={false} startOpen={props.opened} />;
+      }
       // A wake no yield claimed (codex's turn end), opened: the block the model woke to, as it read it.
       const block = (g.entry as { block?: unknown }).block;
       if (g.entry.t === "wake" && props.opened === true && typeof block === "string") {

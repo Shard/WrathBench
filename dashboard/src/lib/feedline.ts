@@ -275,6 +275,19 @@ export function claudeSystemLine(entry: FeedEntry): string {
   }
 }
 
+/**
+ * A `termination` or `watchdog` record as one line: its reason, then its
+ * detail with the spans the writers give in milliseconds as durations
+ * (`idle — no tool call for 20m49s: 5 wakes in a row answered without one`).
+ * A public watchdog carries its reason alone.
+ */
+export function endLine(entry: FeedEntry): string {
+  const e = entry as unknown as Record<string, unknown>;
+  const reason = str(e["reason"]) ?? entry.t;
+  const detail = str(e["detail"])?.replace(/\b(\d+)ms\b/g, (_, n: string) => fmtLatency(Number(n)));
+  return detail !== undefined ? `${reason} — ${detail}` : reason;
+}
+
 /** A `deploy` record no write claimed, in words. */
 export function deployLine(entry: FeedEntry): { text: string; failed: boolean } {
   const e = entry as unknown as Record<string, unknown>;
@@ -336,6 +349,9 @@ export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
         }
         case "claude_system":
           return { ...base, label: "claude", text: claudeSystemLine(entry) };
+        case "termination":
+        case "watchdog":
+          return { ...base, label: entry.t, text: clip(endLine(entry)) };
         case "codex_tool_call": {
           // Code mode's script, by its first line; a public window has the name and the time.
           const input = str(e["input"]);
