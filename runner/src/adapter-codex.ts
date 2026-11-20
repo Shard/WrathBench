@@ -74,7 +74,7 @@
  * code mode's included, as a `codex_tool_call` (`codexToolCallRecord`): both
  * for the operator only.
  * Our tools — whatever `toolsFor` (tools.ts) serves the run: on the program
- * loop fifteen, sixteen with `yield` (off on codex unless a launch asks), and
+ * loop fifteen, sixteen with `yield` (on unless a launch turns it off), and
  * three roster tools more at fan-out; on the snippet loop the nine, or twelve
  * at fan-out; `search_reference` less on a run without the wiki. The CLI lists
  * whatever the server serves, and the approval below is per server — arrive via
@@ -1067,6 +1067,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     tickMs: o.watchdogTickMs,
     stopped: done,
     onSample: () => {
+      // A restart the program was blamed for counts at the next sample, as on claude-code: a turn that yields can run for many minutes.
+      if (programWake !== undefined) for (let k = programWake.takeBlamedRestarts(); k > 0; k--) watchdogs.noteSandboxRestart();
       const verdict = watchdogs.check();
       if (verdict !== null)
         endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict }, { windDown: true });

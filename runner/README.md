@@ -1308,7 +1308,7 @@ writes its loop into the config (`loop`, `launchLoopOf`): `--loop` and
 |---|---|---|
 | `openai` (the fixed loop) | `program`, `yield` on | the one form that sleeps on the fixed loop |
 | `claude-code` | `program`, `yield` on | its one turn can run for hours, so `yield` is its sleep within it |
-| `codex` | `program`, `yield` off | as measured; its turn-end pause is the sleep |
+| `codex` | `program`, `yield` on | the same tool surface as the other drivers; its turn-end pause sleeps too |
 | `pi` | `snippet` | its adapter has no sleep yet |
 | `stub`, `reference` | `snippet` | not a model; the reference's route needs bindings that persist |
 
@@ -1441,7 +1441,7 @@ record as `mcpToolTimeoutMs`). codex ends its turn every few calls, so its
 turn-end sleep fires often. claude-code's CLI closes a turn only when the
 model replies with no tool call, and one turn can run for hours, so there
 `yield` is the usual sleep. Either sleep also ends on a stop request or a
-watchdog verdict, and on claude-code the state ticker counts a restart the
+watchdog verdict, and on both the state ticker counts a restart the
 program was blamed for at its next sample rather than at the next turn.
 
 A CLI session keeps what it was sent, so on the program loop the CLI

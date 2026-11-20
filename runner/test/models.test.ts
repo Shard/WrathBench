@@ -1417,8 +1417,9 @@ describe("a target counts the runs of the loop its entry launches (operator, 202
     expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "openai" })).toBe(true);
     expect(countsTowardTarget({ loop: "program" }, { driver: "openai" })).toBe(false);
     expect(countsTowardTarget({}, { driver: "openai" })).toBe(false);
-    expect(countsTowardTarget({ loop: "program" }, { driver: "codex" })).toBe(true);
-    expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "codex" })).toBe(false);
+    // codex launches with yield (operator, 2026-11-20): a run from before, without it, is another condition.
+    expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "codex" })).toBe(true);
+    expect(countsTowardTarget({ loop: "program" }, { driver: "codex" })).toBe(false);
     expect(countsTowardTarget({ loop: "program", yield: true }, { driver: "claude-code" })).toBe(true);
     expect(countsTowardTarget({}, { driver: "claude-code" })).toBe(false);
     expect(countsTowardTarget({}, { driver: "pi" })).toBe(true);

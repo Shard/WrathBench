@@ -163,7 +163,7 @@ describe("--loop: config, tuple and the thread context", () => {
     expect("loop" in tSnippet).toBe(false);
     expect(tProgram.loop).toBe("program");
     expect("context" in tProgram).toBe(false);
-    expect(Object.keys(tProgram).at(-1)).toBe("loop");
+    expect(Object.keys(tProgram).slice(-2)).toEqual(["loop", "yield"]);
   });
 
   test("the snippet tool list is the one it always was", () => {

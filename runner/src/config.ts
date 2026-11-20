@@ -1161,8 +1161,8 @@ export function runsProgramLoop(driver: Driver): boolean {
 
 /**
  * The loop a fresh launch runs when it does not say (operator, 2026-11-14):
- * the program loop wherever it is built — the fixed loop and claude-code
- * with `yield`, codex without (`yieldDefaultOf`) — and the snippet loop on
+ * the program loop wherever it is built — the fixed loop, claude-code and
+ * codex, each with `yield` (`yieldDefaultOf`) — and the snippet loop on
  * the drivers that are not a model (the stub and the scripted reference,
  * `isUnscoredDriver`) and on pi until its program adapter exists. A fan-out
  * run takes the same default as a solo run on its driver: one program drives
@@ -1175,13 +1175,12 @@ export function defaultLoopOf(c: { driver: Driver; fanout?: unknown }): { loop: 
 
 /**
  * Whether the program loop has `yield` on a driver when a launch does not
- * say (operator, 2026-11-14): on the fixed loop, whose turn-end sleep alone
- * never slept, and on claude-code, whose one turn can run for hours so
- * `yield` is its sleep within it; off on codex, which ends a turn every few
- * calls and was measured without it. Never on a driver that is not a model.
+ * say: on every driver that runs it, so each serves the same tool surface
+ * (operator, 2026-11-20; codex ran without it before). Never on a driver
+ * that is not a model. `--yield false` still turns it off for one launch.
  */
 export function yieldDefaultOf(driver: Driver): boolean {
-  return runsProgramLoop(driver) && !isUnscoredDriver(driver) && entryOf(driver).programYieldOff !== true;
+  return runsProgramLoop(driver) && !isUnscoredDriver(driver);
 }
 
 /**

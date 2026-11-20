@@ -17,7 +17,7 @@ import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
 import { comparabilityOf, promptHash } from "../src/comparability";
 import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindow, scratchpadUnchangedLine, type HistoryMessage } from "../src/context";
 import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
-import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, scoredWaitFor } from "../src/config";
+import { defaultLoopOf, harnessOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, scoredWaitFor } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote } from "../src/fanout-run";
 import { runLoop } from "../src/loop";
@@ -29,6 +29,7 @@ import {
   PROGRAM_YIELD_TAIL,
   programPromptOf,
   resumeSessionNote,
+  steeringOf,
   SYSTEM_PROMPT,
 } from "../src/prompt";
 import { carryProgramFiles, configFromArgs, dropCarriedProgramFiles } from "../src/run";
@@ -76,25 +77,34 @@ describe("config, flags and the tuple", () => {
     expect(tSnippet.promptHash).toBe(promptHash(SYSTEM_PROMPT));
   });
 
-  test("the default loop: the program loop with yield on the fixed loop and claude-code, without it on codex, the snippet loop elsewhere", () => {
+  test("the default loop: the program loop with yield on the fixed loop, claude-code and codex, the snippet loop elsewhere", () => {
     const MODEL = ["--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x", "--model", "m"];
     const openai = configFromArgs([...MODEL, "--driver", "openai", "--episode", "freeplay"], {});
     expect([openai.loop, openai.yield]).toEqual(["program", true]);
     const off = configFromArgs([...MODEL, "--driver", "openai", "--episode", "freeplay", "--yield", "false"], {});
     expect([off.loop, off.yield]).toEqual(["program", undefined]);
+    // A fresh codex launch carries yield like every other program-loop driver (operator, 2026-11-20), and its tuple says so.
     const codex = configFromArgs([...MODEL, "--driver", "codex", "--credential", "chatgpt-1", "--episode", "freeplay"], {});
-    expect([codex.loop, codex.yield]).toEqual(["program", undefined]);
+    expect([codex.loop, codex.yield]).toEqual(["program", true]);
     expect(comparabilityOf(codex, "harness-1.0-1-gabc").loop).toBe("program");
+    expect(comparabilityOf(codex, "harness-1.0-1-gabc").yield).toBe(true);
+    // --yield false still turns it off for one launch.
+    const codexOff = configFromArgs([...MODEL, "--driver", "codex", "--credential", "chatgpt-1", "--episode", "freeplay", "--yield", "false"], {});
+    expect([codexOff.loop, codexOff.yield]).toEqual(["program", undefined]);
+    expect(comparabilityOf(codexOff, "harness-1.0-1-gabc").yield).toBeUndefined();
     const cc = configFromArgs([...MODEL, "--driver", "claude-code", "--episode", "freeplay"], {});
     expect([cc.loop, cc.yield]).toEqual(["program", true]);
     expect(defaultLoopOf({ driver: "pi" })).toEqual({ loop: "snippet", yield: false });
     expect(defaultLoopOf({ driver: "reference" })).toEqual({ loop: "snippet", yield: false });
     // A fan-out run takes its driver's default: one program drives every character.
     expect(defaultLoopOf({ driver: "openai", fanout: { characters: 2 } })).toEqual({ loop: "program", yield: true });
-    expect(defaultLoopOf({ driver: "codex", fanout: { characters: 2 } })).toEqual({ loop: "program", yield: false });
+    expect(defaultLoopOf({ driver: "codex", fanout: { characters: 2 } })).toEqual({ loop: "program", yield: true });
+    expect(defaultLoopOf({ driver: "claude-code", fanout: { characters: 2 } })).toEqual({ loop: "program", yield: true });
     expect(defaultLoopOf({ driver: "pi", fanout: { characters: 2 } })).toEqual({ loop: "snippet", yield: false });
     expect(launchLoopOf({ driver: "openai" }, { loop: "program" })).toEqual({ loop: "program", yield: true });
     expect(launchLoopOf({ driver: "codex" }, { yield: true })).toEqual({ loop: "program", yield: true });
+    expect(launchLoopOf({ driver: "codex" }, {})).toEqual({ loop: "program", yield: true });
+    expect(launchLoopOf({ driver: "codex" }, { yield: false })).toEqual({ loop: "program" });
     expect(launchLoopOf({ driver: "openai" }, { loop: "snippet" })).toEqual({ loop: "snippet" });
   });
 
@@ -281,6 +291,17 @@ describe("the program prompt", () => {
     expect(codexProgram).toContain("- yield: sleep until something wakes you.");
     expect(codexProgram.endsWith(`${PROGRAM_BODY_TAIL} ${PROGRAM_YIELD_TAIL}`)).toBe(true);
     expect(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000, programPromptOf({}))).toBe(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000));
+  });
+
+  test("a fresh codex launch's prompt renders yield's bullet and closing sentence, as the codex driver builds it", () => {
+    const config = configFromArgs(
+      ["--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x", "--model", "m", "--driver", "codex", "--credential", "chatgpt-1", "--episode", "freeplay"],
+      {},
+    );
+    // The arguments `runCodexEpisode` writes its instructions file from.
+    const rendered = buildSystemPrompt(steeringOf(config), config.episode, harnessOf("codex"), config.wiki, config.watchdogs.episodeMs, programPromptOf(config));
+    expect(rendered).toContain("\n- yield: sleep until something wakes you.");
+    expect(rendered.endsWith(`${PROGRAM_BODY_TAIL} ${PROGRAM_YIELD_TAIL}`)).toBe(true);
   });
 
   test("yield adds one bullet and one closing sentence, and nothing else", () => {
