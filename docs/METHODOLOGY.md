@@ -348,7 +348,9 @@ hostile creatures in view within 20 yards of its corpse, by name and level,
 and says there are none only from within reclaim range, where the server has
 sent the ghost everything round its corpse: routines that reclaimed the
 moment they could died again, at the same spot, to the camp that had killed
-them (operator, 2026-11-20). On
+them (operator, 2026-11-20). `reclaimCorpse`'s result carries the same words
+as `corpseHostiles`, read before the first reclaim goes out, so a routine
+that reclaims has the fact too (operator, 2026-11-20). On
 codex, whose conversation holds what it was sent, the turn's message carries
 the scratchpad only when the thread does not already hold it as it stands; the
 event window goes every time.
