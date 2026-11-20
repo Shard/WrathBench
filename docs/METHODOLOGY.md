@@ -271,7 +271,11 @@ One fixed context for every model (`runner/src/context.ts`): the fixed system
 prompt, a window of recent messages trimmed in blocks so the provider cache
 prefix survives, and one fresh deterministic message — the turn number,
 harness notices, a HUD summary of already-observed fields, recent events and
-the full scratchpad. Recent events leave out a creature's emote unless it is
+the full scratchpad. The HUD's quest line says where each complete quest is
+turned in, as the centre of the turn-in area `questAreas` serves, once an
+accept or a call has asked for it; nothing is asked to fill it: a model spent
+hours making for a valley exit it had invented, never asking again for the
+turn-in area of the quest it carried (operator, 2026-11-20). Recent events leave out a creature's emote unless it is
 the character's pet or is targeting the character, since a town's NPCs repeat
 theirs endlessly; players' emotes stay (operator, 2026-10-30). Creature
 threat updates and world-state updates are ambient like movement: readable in

@@ -367,6 +367,14 @@ export interface SnapshotLike {
    * what the client's quest log shows) once it has arrived.
    */
   questLog?: { questId?: unknown; complete?: unknown; title?: unknown; level?: unknown }[];
+  /**
+   * The turn-in areas of the log's complete quests, as `questAreas` serves
+   * them (the `objectiveIndex` -1 polygons of the server's
+   * `SMSG_QUEST_POI_QUERY_RESPONSE`, held in `state.questPois`): one row per
+   * area, for a quest whose areas an accept or a `questAreas` call has
+   * already asked for. Nothing is asked to fill it.
+   */
+  turnIns?: { questId?: unknown; map?: unknown; points?: { x?: unknown; y?: unknown }[] }[];
   characters?: ObservedLike;
   nearby?: Record<string, unknown>;
   /**
@@ -780,11 +788,35 @@ export function questLabel(q: { questId?: unknown; title?: unknown }): string {
  * before the level is known, and no bracket for an open quest without one.
  * The snippet delta keeps the bare label: its own words already say done.
  */
-function questEntry(q: { questId?: unknown; title?: unknown; complete?: unknown; level?: unknown }): string {
+function questEntry(q: { questId?: unknown; title?: unknown; complete?: unknown; level?: unknown }, turnIn?: string): string {
   const tags: string[] = [];
   if (typeof q.level === "number") tags.push(String(q.level));
-  if (q.complete === true) tags.push("done");
+  if (q.complete === true) tags.push(turnIn === undefined ? "done" : `done, ${turnIn}`);
   return tags.length === 0 ? questLabel(q) : `${questLabel(q)} [${tags.join(" ")}]`;
+}
+
+/**
+ * "turn in at (-6036,-208)", or "… on map 1" when the area is on another map
+ * than the character's: the centre (the mean of its corners) of a complete
+ * quest's turn-in area, the `objectiveIndex` -1 polygon `questAreas` serves,
+ * one on the character's map first. Undefined while no answer for the quest
+ * holds one. The NPC is not named: neither the area nor the quest's template
+ * answer carries who ends it. Pure.
+ */
+export function turnInAt(
+  turnIns: SnapshotLike["turnIns"],
+  questId: unknown,
+  posMap: number | undefined,
+): string | undefined {
+  const areas = (turnIns ?? []).filter(
+    (t) => t.questId === questId && typeof t.map === "number" && Array.isArray(t.points) && t.points.some((p) => typeof p.x === "number" && typeof p.y === "number"),
+  );
+  const area = areas.find((t) => t.map === posMap) ?? areas[0];
+  if (area === undefined) return undefined;
+  const corners = (area.points ?? []).filter((p): p is { x: number; y: number } => typeof p.x === "number" && typeof p.y === "number");
+  const x = Math.round(corners.reduce((sum, p) => sum + p.x, 0) / corners.length);
+  const y = Math.round(corners.reduce((sum, p) => sum + p.y, 0) / corners.length);
+  return `turn in at (${x},${y})${area.map === posMap ? "" : ` on map ${String(area.map)}`}`;
 }
 
 /**
@@ -797,12 +829,18 @@ function questEntry(q: { questId?: unknown; title?: unknown; complete?: unknown;
  * prints the number and never a colour, whose grey cut-off is the client's
  * judgement against the character's level. Completion rides in the bracket,
  * so the line needs no group labels. A title not yet answered prints as the
- * bare id.
+ * bare id. A complete quest's bracket also says where it is turned in
+ * (`turnInAt`; operator, 2026-11-20), from the areas `questAreas` serves:
+ * a model hours into the wrong exit of a valley had never asked again for
+ * the turn-in area of the quest it was carrying.
  */
-function questLine(ql: NonNullable<SnapshotLike["questLog"]>): string {
+function questLine(ql: NonNullable<SnapshotLike["questLog"]>, turnIns: SnapshotLike["turnIns"], posMap: number | undefined): string {
   const complete = ql.filter((q) => q.complete === true);
   const open = ql.filter((q) => q.complete !== true);
-  return `quests: ${[...complete, ...open].map(questEntry).join(", ")}`;
+  return `quests: ${[
+    ...complete.map((q) => questEntry(q, turnInAt(turnIns, q.questId, posMap))),
+    ...open.map((q) => questEntry(q)),
+  ].join(", ")}`;
 }
 
 /** The marker over a questgiver when it has something for you now, else undefined. */
@@ -1373,7 +1411,7 @@ export function formatStateSummary(
   } else if (ql.length === 0) {
     lines.push("quests: none");
   } else {
-    lines.push(questLine(ql));
+    lines.push(questLine(ql, snapshot.turnIns, typeof pos?.map === "number" ? pos.map : undefined));
   }
 
   // achievements — count and points only. The full list is tens of lines of

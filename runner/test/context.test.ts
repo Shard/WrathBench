@@ -14,6 +14,7 @@ import {
   foldToolResult,
   lastTurnGrowth,
   trimExpected,
+  turnInAt,
   type ChatMessage,
   type ContextInputs,
   type HistoryMessage,
@@ -680,6 +681,48 @@ describe("formatStateSummary: quest titles, nearby priority, bag summary", () =>
     expect(line(open, "quests: ")).toBe("quests: 5 Lost Lantern [8]");
     const done = formatStateSummary({ questLog: [{ questId: 5, complete: true, title: "Lost Lantern", level: 8 }] }, { sessionLive: true });
     expect(line(done, "quests: ")).toBe("quests: 5 Lost Lantern [8 done]");
+  });
+
+  test("a complete quest says where it is turned in: the centre of its questAreas turn-in area", () => {
+    const text = formatStateSummary(
+      {
+        self: { position: { value: { map: 0, x: -6100, y: 380, z: 400 } } },
+        questLog: [
+          { questId: 21, complete: true, title: "Field Notes", level: 6 },
+          { questId: 22, complete: false, title: "Ridge Patrol", level: 7 },
+          { questId: 23, complete: true, title: "Far Letter", level: 8 },
+          { questId: 24, complete: true, title: "Unasked", level: 5 },
+        ],
+        turnIns: [
+          // A square round the questgiver: its centre, rounded as the ghost line rounds.
+          { questId: 21, map: 0, points: [{ x: -6040, y: -210 }, { x: -6030, y: -210 }, { x: -6030, y: -200 }, { x: -6040, y: -201 }] },
+          // On another map: named with its map.
+          { questId: 23, map: 1, points: [{ x: 1000, y: 2000 }, { x: 1002, y: 2004 }] },
+        ],
+      },
+      { sessionLive: true },
+    );
+    // Quest 24's areas were never asked for: done, and nothing more. An open quest carries none.
+    expect(line(text, "quests: ")).toBe(
+      "quests: 21 Field Notes [6 done, turn in at (-6035,-205)], 23 Far Letter [8 done, turn in at (1001,2002) on map 1], " +
+        "24 Unasked [5 done], 22 Ridge Patrol [7]",
+    );
+  });
+
+  test("a turn-in area on the character's map is preferred; a quest with no level still says done first", () => {
+    const turnIns = [
+      { questId: 31, map: 1, points: [{ x: 5, y: 5 }] },
+      { questId: 31, map: 0, points: [{ x: 10, y: 20 }, { x: 20, y: 30 }] },
+    ];
+    expect(turnInAt(turnIns, 31, 0)).toBe("turn in at (15,25)");
+    expect(turnInAt(turnIns, 31, 530)).toBe("turn in at (5,5) on map 1");
+    expect(turnInAt(turnIns, 32, 0)).toBeUndefined();
+    expect(turnInAt([{ questId: 31, map: 0, points: [] }], 31, 0)).toBeUndefined();
+    const text = formatStateSummary(
+      { self: { position: { value: { map: 0, x: 0, y: 0, z: 0 } } }, questLog: [{ questId: 31, complete: true }], turnIns },
+      { sessionLive: true },
+    );
+    expect(line(text, "quests: ")).toBe("quests: 31 [done, turn in at (15,25)]");
   });
 
   // Eight guards nearer than anything else, then the NPCs worth walking to.
