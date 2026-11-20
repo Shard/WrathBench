@@ -525,7 +525,7 @@ spent only once a counted `e360` reaches level 8, and no tier stands in for
 that (operator, 2026-11-15). Only a declared `t1` climbs. A declared `t0`
 holds the ladder, and a declared `t2` or `t3` is the operator's pin and stays
 where it was put, so a `t2` entry runs its `e360` and never the Deadmines evals
-(operator, 2026-11-20). The model is told neither. Billing buys no runs and
+(operator, 2026-11-20). The model is told none of this. Billing buys no runs and
 costs none; it decides only where a run may execute.
 
 **To a reader, free means literally free, and subscription usage is not
