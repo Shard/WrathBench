@@ -56,6 +56,28 @@
  * under it. A routine's moves, a move whose call is off the window, and every
  * move of a run recorded without the stamp stay rows.
  *
+ * Joined by time: a `deploy` a write set off and the `wake` a `yield` ended
+ * on are drawn on that call's card, not as rows: the deploy says on the card
+ * what the write's result already half says, and the wake's block is the
+ * yield's result text. Their stamp inside the call's `[dispatchTs, result]`
+ * is what joins them (`indexJoins`).
+ *
+ * Envelopes: a reply with no text that only called tools is the envelope its
+ * calls came in, and the calls have cards. It is not a row. What it alone
+ * says moves onto its card as the card's `lead`: pi's reasoning size, stop
+ * reason, error and output tokens, the fixed loop's output tokens. The
+ * writers put it on different sides of its call — before it on pi and the
+ * fixed loop, which write the reply before the tool runs and the call after;
+ * after it on claude-code, which holds a message until the next one starts,
+ * and on codex, which writes an item's when the next item lands — so the
+ * harness says which way to look. An envelope no card claims (a call the CLI
+ * never ran, one still in flight) stays a row. claude-code's thinking
+ * estimate, which the viewer sums onto the reply record after the markers
+ * (`ResponseEntry.thinkingTokens`), is the model's next output's, card or
+ * reply in words. A card's think time is its dispatch minus the last thing
+ * that fed the model, except on codex, where code mode dispatches from a
+ * script.
+ *
  * A card's duration is the result's `ts` minus the call's `dispatchTs`, which
  * every writer stamps with the moment it handed the call to the tool. That is
  * the only reading for a stamped call: the field shapes above say how records
@@ -91,9 +113,32 @@ export interface ResponseGroup {
   /**
    * Time since the last thing that fed the model — the preceding request on
    * the fixed loop (pure model latency), the previous response or tool result
-   * under the claude driver's 1:N stream. Null off the window's top edge.
+   * under the claude driver's 1:N stream. Null off the window's top edge, and
+   * on a codex run, whose driver writes a reply when the CLI's next item
+   * arrives, so the gap is that item's, not the model's.
    */
   latencyMs: number | null;
+  /** What led to this reply; null when nothing did. See `Lead`. */
+  lead: Lead | null;
+}
+
+/**
+ * What a model output carried besides itself, taken off the records around
+ * it that are not rows of their own (the module comment, "Envelopes").
+ */
+export interface Lead {
+  /**
+   * The model's time before this call: its dispatch minus the last thing that
+   * fed the model (a result, the turn's request, a reply). Null on a codex
+   * run, where code mode dispatches calls from a script with no model between
+   * them, and under `THINK_MIN_MS`, where it is a script's or one reply's
+   * calls following one another.
+   */
+  thinkMs: number | null;
+  /** claude-code: the thinking tokens the CLI estimated while the model worked towards this output. */
+  thinkingTokens: number | null;
+  /** The envelope of tool calls this call came in, where the writer puts it before its call (pi, the fixed loop). */
+  envelope: ResponseEntry | null;
 }
 
 /** One tool call: the call, its code when it was a snippet, and its result. */
@@ -106,6 +151,12 @@ export interface CallGroup {
   actions: ActionsEntry[];
   /** The `move` records of this call's own moves, which its action lines already show; see the module comment. */
   moves: FeedEntry[];
+  /** The program deploys this call's write set off (`deploy` records), joined by time; see "Joined by time". */
+  deploys: FeedEntry[];
+  /** The `wake` record of a `yield`, whose block is the call's result text. */
+  wake: FeedEntry | null;
+  /** What led to the call; null when nothing did. */
+  lead: Lead | null;
   /**
    * `result.ts − call.dispatchTs` (see module comment). On an unstamped
    * legacy call, `result.ts − call.ts` when the shape says the call was
@@ -188,6 +239,7 @@ function takeCall(
   i: number,
   actionsByCall: ReadonlyMap<number, ActionsEntry[]>,
   movesByCall: ReadonlyMap<number, FeedEntry[]>,
+  joins: Joins,
 ): { group: CallGroup; skipped: FeedEntry[]; next: number } {
   const first = entries[i]!;
   let call: ToolCallEntry | null = null;
@@ -233,10 +285,22 @@ function takeCall(
 
   const actions = typeof call?.dispatchTs === "number" ? (actionsByCall.get(call.dispatchTs) ?? []) : [];
   const moves = typeof call?.dispatchTs === "number" ? (movesByCall.get(call.dispatchTs) ?? NO_MOVES) : NO_MOVES;
+  const byTime = call !== null ? joins.byCall.get(call.i) : undefined;
   return {
-    group: { kind: "call", call, snippet, result, actions, moves, durationMs: callDuration(call, result) },
+    group: {
+      kind: "call",
+      call,
+      snippet,
+      result,
+      actions,
+      moves,
+      deploys: byTime?.deploys ?? NO_MOVES,
+      wake: byTime?.wake ?? null,
+      lead: null,
+      durationMs: callDuration(call, result),
+    },
     // Joined records render inside the card, not before it.
-    skipped: skipped.filter((s) => !joined(s, actionsByCall) && !ownMove(s, movesByCall)),
+    skipped: skipped.filter((s) => !joined(s, actionsByCall) && !ownMove(s, movesByCall) && !joins.claimed.has(s)),
     next,
   };
 }
@@ -299,6 +363,106 @@ function joined(e: FeedEntry, actionsByCall: ReadonlyMap<number, ActionsEntry[]>
   return typeof callTs === "number" && (actionsByCall.get(callTs)?.includes(e as ActionsEntry) ?? false);
 }
 
+/** The records joined to a call by time, by the call's entry index, and every record so claimed. */
+interface Joins {
+  byCall: Map<number, { deploys: FeedEntry[]; wake: FeedEntry | null }>;
+  claimed: Set<FeedEntry>;
+}
+
+/** The tools whose call can set a deploy off: a write to the program. */
+const DEPLOYING_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit_file", "delete_file"]);
+
+/**
+ * How far before a call a record it set off may sit. The post-hoc writers
+ * append the call after it ran, so what it caused (a deploy, a yield's wake)
+ * is on the file first; a handful of rows covers the envelope and markers
+ * that can land between.
+ */
+const JOIN_BEHIND = 8;
+
+/**
+ * Join each `deploy` to the write that set it off and each yield's `wake` to
+ * its `yield`, by time: the record's stamp falls inside the call's
+ * `[dispatchTs, result.ts]`. The writers put these records on either side of
+ * the call (before it on the post-hoc appenders, between the call and its
+ * result on the fixed loop), so position alone cannot say whose they are;
+ * the window can, and it is tight. A codex wake (`via: "turn-end"`) has no
+ * call and is never joined: it is the only record of that wait.
+ */
+function indexJoins(entries: readonly FeedEntry[]): Joins {
+  const out: Joins = { byCall: new Map(), claimed: new Set() };
+  for (let c = 0; c < entries.length; c++) {
+    const call = entries[c]!;
+    if (call.t !== "tool_call") continue;
+    const name = (call as ToolCallEntry).name;
+    const dispatched = (call as ToolCallEntry).dispatchTs;
+    if (typeof dispatched !== "number" || (name !== "yield" && !DEPLOYING_TOOLS.has(name ?? ""))) continue;
+    let r = c + 1;
+    while (r < entries.length && r - c <= LOOKAHEAD && !(isResult(entries[r]!) && resultMatches(call as ToolCallEntry, null, entries[r] as SnippetResultEntry))) {
+      if (entries[r]!.t === "tool_call" || entries[r]!.t === "request") break;
+      r++;
+    }
+    const result = entries[r];
+    if (result === undefined || !isResult(result)) continue;
+    let deploys: FeedEntry[] | undefined;
+    let wake: FeedEntry | null = null;
+    for (let k = Math.max(0, c - JOIN_BEHIND); k < r; k++) {
+      const e = entries[k]!;
+      if (out.claimed.has(e) || e.ts < dispatched || e.ts > result.ts) continue;
+      if (e.t === "deploy" && name !== "yield") (deploys ??= []).push(e);
+      else if (e.t === "wake" && name === "yield" && wake === null && (e as { via?: unknown }).via !== "turn-end") wake = e;
+      else continue;
+      out.claimed.add(e);
+    }
+    if (deploys !== undefined || wake !== null) out.byCall.set(call.i, { deploys: deploys ?? NO_MOVES, wake });
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------- envelopes */
+
+/** A model time this short is calls following one another, not the model. */
+export const THINK_MIN_MS = 500;
+
+/**
+ * The prefix a CLI puts on the run's own tools. A name without it, on such a
+ * run, is a tool the CLI did not route to the run (the model asked for one
+ * that does not exist, say), so it can never be one of the run's calls.
+ */
+const CLI_PREFIX: Readonly<Record<string, string>> = {
+  "claude-code": "mcp__wrathbench__",
+  codex: "wrathbench.",
+  pi: "mcp__wrathbench__",
+};
+
+/** A tool name as a call card names it, or null when on this run it cannot be one of the run's calls. */
+export function envelopeTool(name: string, harness: string | null): string | null {
+  const prefix = harness !== null ? CLI_PREFIX[harness] : undefined;
+  if (prefix === undefined) return name;
+  return name.startsWith(prefix) ? name.slice(prefix.length) : null;
+}
+
+/** A reply with no text that only called tools: the envelope the calls came in, which have cards of their own. */
+export function isEnvelope(e: ResponseEntry): boolean {
+  return (e.text ?? "").trim().length === 0 && (e.tools ?? []).length > 0 && e.kind !== "compaction";
+}
+
+/** Whether a reply's envelope names this card's tool. */
+function envelopeNames(e: ResponseEntry, g: CallGroup, harness: string | null): boolean {
+  const name = g.call?.name ?? g.result?.name ?? (g.snippet !== null ? "run_snippet" : undefined);
+  return name !== undefined && (e.tools ?? []).some((t) => envelopeTool(t, harness) === name);
+}
+
+/**
+ * Where a harness writes a call's envelope: before the call (pi, the fixed
+ * loop: the reply is on the file before the tool runs and the call is
+ * appended after) or after it (claude-code holds an assistant message until
+ * the next one arrives; codex writes an item's when the next item lands).
+ */
+const ENVELOPE_AFTER: ReadonlySet<string> = new Set(["claude-code", "codex"]);
+/** How many of the latest cards an after-the-call envelope may belong to: codex can finish items out of order. */
+const ENVELOPE_BEHIND = 3;
+
 /** How long a paired call took; see the module comment for the two readings. */
 function callDuration(call: ToolCallEntry | null, result: SnippetResultEntry | null): number | null {
   if (call === null || result === null) return null;
@@ -327,6 +491,11 @@ export function anchorOf(g: FeedGroup): number {
   }
 }
 
+function sameLead(a: Lead | null, b: Lead | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.thinkMs === b.thinkMs && a.thinkingTokens === b.thinkingTokens && a.envelope === b.envelope;
+}
+
 /** Whether two derivations of a group are interchangeable, member for member. */
 function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
   if (a.kind !== b.kind) return false;
@@ -334,7 +503,7 @@ function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
     case "turn":
       return a.request === (b as TurnGroup).request && a.events === (b as TurnGroup).events;
     case "response":
-      return a.entry === (b as ResponseGroup).entry && a.latencyMs === (b as ResponseGroup).latencyMs;
+      return a.entry === (b as ResponseGroup).entry && a.latencyMs === (b as ResponseGroup).latencyMs && sameLead(a.lead, (b as ResponseGroup).lead);
     case "call": {
       const o = b as CallGroup;
       return (
@@ -342,6 +511,10 @@ function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
         a.snippet === o.snippet &&
         a.result === o.result &&
         a.durationMs === o.durationMs &&
+        a.wake === o.wake &&
+        sameLead(a.lead, o.lead) &&
+        a.deploys.length === o.deploys.length &&
+        a.deploys.every((x, k) => x === o.deploys[k]) &&
         a.actions.length === o.actions.length &&
         a.actions.every((x, k) => x === o.actions[k]) &&
         a.moves.length === o.moves.length &&
@@ -363,28 +536,54 @@ function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
  * rebuild the DOM (and fold state) of all ~200 settled rows to add one. The
  * scalar fields are compared too — a prepended page can give the window's
  * first response an anchor it lacked, and that row must re-render.
+ *
+ * `harness` is the run's (`wrathbench`, `claude-code`, `codex`, `pi`), which
+ * says where a call's envelope sits and whether a gap before a call is the
+ * model's ("Envelopes", the module comment).
  */
-export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGroup[] = []): FeedGroup[] {
+export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGroup[] = [], harness: string | null = null): FeedGroup[] {
   const recycled = new Map<number, FeedGroup>();
   for (const g of prev) recycled.set(anchorOf(g), g);
 
-  const out: FeedGroup[] = [];
-  const emit = (g: FeedGroup): void => {
+  /** Rows in order; a slot is nulled when what it held turns out to belong to a card. */
+  const out: (FeedGroup | null)[] = [];
+  const emit = (g: FeedGroup): number => {
     const old = recycled.get(anchorOf(g));
     out.push(old !== undefined && sameGroup(g, old) ? old : g);
+    return out.length - 1;
   };
 
   const actionsByCall = indexActions(entries);
   const movesByCall = indexMoves(entries, actionsByCall);
+  const joins = indexJoins(entries);
+  const hidden = (s: FeedEntry): boolean => joined(s, actionsByCall) || ownMove(s, movesByCall) || joins.claimed.has(s);
+
+  const after = harness !== null && ENVELOPE_AFTER.has(harness);
+  const timed = harness !== "codex";
 
   /** ts of the last entry that fed or was the model, for response latency. */
   let lastActivityTs: number | null = null;
+  /** ts of the last thing that fed the model — a result, a request, a reply — for a call's think time. */
+  let lastFedTs: number | null = null;
+  /** claude-code's thinking estimate not yet given to an output (`ResponseEntry.thinkingTokens`). */
+  let thinking = null as number | null;
+  /** An envelope written before its call, waiting for that call's card (pi, the fixed loop). */
+  let pending: { slot: number; entry: ResponseEntry; latencyMs: number | null } | null = null;
+  /** The latest cards since the turn began, for an envelope written after its call; claimed ones are taken out. */
+  let recent: CallGroup[] = [];
+
+  const takeThinking = (): number | null => {
+    const n = thinking;
+    thinking = null;
+    return n;
+  };
+
   let i = 0;
   while (i < entries.length) {
     const e = entries[i]!;
 
     // Drawn inside its call's card, wherever it sits.
-    if (joined(e, actionsByCall) || ownMove(e, movesByCall)) {
+    if (hidden(e)) {
       i++;
       continue;
     }
@@ -400,9 +599,11 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
       }
       const req = entries[j];
       if (req !== undefined && req.t === "request") {
-        for (const s of between) if (!joined(s, actionsByCall) && !ownMove(s, movesByCall)) emit({ kind: "plain", entry: s });
+        for (const s of between) if (!hidden(s)) emit({ kind: "plain", entry: s });
         emit({ kind: "turn", request: req as RequestEntry, events: e as EventsServedEntry });
-        if (req.ts > 0) lastActivityTs = req.ts;
+        if (req.ts > 0) lastActivityTs = lastFedTs = req.ts;
+        pending = null;
+        recent = [];
         i = j + 1;
         continue;
       }
@@ -416,28 +617,74 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
     if (e.t === "request") {
       // Its context events are off the top of the window.
       emit({ kind: "turn", request: e as RequestEntry, events: null });
-      if (e.ts > 0) lastActivityTs = e.ts;
+      if (e.ts > 0) lastActivityTs = lastFedTs = e.ts;
+      pending = null;
+      recent = [];
       i++;
       continue;
     }
 
     if (e.t === "response") {
+      const r = e as ResponseEntry;
       const latencyMs =
-        lastActivityTs !== null && e.ts > 0 && e.ts >= lastActivityTs
+        timed && lastActivityTs !== null && e.ts > 0 && e.ts >= lastActivityTs
           ? e.ts - lastActivityTs
           : null;
-      emit({ kind: "response", entry: e as ResponseEntry, latencyMs });
       if (e.ts > 0) lastActivityTs = e.ts;
       i++;
+      // The thinking that led to the model's next output, whichever record that turns out to be.
+      if (typeof r.thinkingTokens === "number" && r.thinkingTokens > 0) thinking = (thinking ?? 0) + r.thinkingTokens;
+      if (isEnvelope(r)) {
+        if (after) {
+          // Its call's card is already drawn: the latest that names its tool, and no other envelope has.
+          let hit = -1;
+          for (let k = recent.length - 1; k >= 0 && k >= recent.length - ENVELOPE_BEHIND; k--) {
+            if (envelopeNames(r, recent[k]!, harness)) {
+              hit = k;
+              break;
+            }
+          }
+          if (hit !== -1) {
+            recent.splice(hit, 1);
+            continue;
+          }
+        } else {
+          // Its card comes next; held in place, a row only if none does.
+          pending = { slot: emit({ kind: "response", entry: r, latencyMs, lead: null }), entry: r, latencyMs };
+          continue;
+        }
+      }
+      // A reply in words, or an envelope no card claims (a call the CLI never ran, or one still running).
+      const tokens = takeThinking();
+      emit({ kind: "response", entry: r, latencyMs, lead: tokens === null ? null : { thinkMs: null, thinkingTokens: tokens, envelope: null } });
+      if (!isEnvelope(r) && (r.text ?? "").trim().length > 0 && e.ts > 0) lastFedTs = e.ts;
       continue;
     }
 
     if (e.t === "tool_call" || e.t === "snippet" || isResult(e)) {
-      const taken = takeCall(entries, i, actionsByCall, movesByCall);
+      const taken = takeCall(entries, i, actionsByCall, movesByCall, joins);
       for (const s of taken.skipped) emit({ kind: "plain", entry: s });
-      emit(taken.group);
-      const r = taken.group.result;
-      if (r !== null && r.ts > 0) lastActivityTs = r.ts;
+      let group = taken.group;
+      if (group.call !== null) {
+        let envelope: ResponseEntry | null = null;
+        let fallbackMs: number | null = null;
+        if (pending !== null && envelopeNames(pending.entry, group, harness)) {
+          out[pending.slot] = null;
+          envelope = pending.entry;
+          fallbackMs = pending.latencyMs;
+        }
+        pending = null;
+        const dispatched = group.call.dispatchTs;
+        const gap = typeof dispatched === "number" && lastFedTs !== null ? dispatched - lastFedTs : fallbackMs;
+        const thinkMs = timed && gap !== null && gap >= THINK_MIN_MS ? gap : null;
+        const thinkingTokens = takeThinking();
+        if (thinkMs !== null || thinkingTokens !== null || envelope !== null) group = { ...group, lead: { thinkMs, thinkingTokens, envelope } };
+      }
+      emit(group);
+      if (group.call !== null) recent.push(group);
+      const r = group.result;
+      if (r !== null && r.ts > 0) lastActivityTs = lastFedTs = r.ts;
+      else if (r === null) lastFedTs = null;
       i = taken.next;
       continue;
     }
@@ -445,5 +692,5 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
     emit({ kind: "plain", entry: e });
     i++;
   }
-  return out;
+  return out.filter((g): g is FeedGroup => g !== null);
 }

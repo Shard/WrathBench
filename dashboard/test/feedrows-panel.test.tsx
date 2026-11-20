@@ -158,8 +158,8 @@ describe("the feed's two tiers, drawn", () => {
   });
 
   test("a reply's blank lines at either end are not drawn; one that is only whitespace draws as an empty reply", async () => {
-    // "all" opens the line a text-less reply folds to into its card, so the
-    // whitespace-only reply's card is drawn and can be compared.
+    // "all" opens the line a text-less reply folds to; opened, it adds nothing
+    // the line did not say, for the whitespace-only reply as for the empty one.
     const { host, dispose } = await mount(
       () => [
         e("response", 100, { turn: 1, text: "\n\nHeading to the mill.\n\nThen the fence.\n" }),
@@ -170,10 +170,11 @@ describe("the feed's two tiers, drawn", () => {
       () => "all",
     );
     expect([...host.querySelectorAll("pre.block")].map((p) => p.textContent)).toEqual(["Heading to the mill.\n\nThen the fence.", "At the mill."]);
-    const [blank, empty] = [host.children[1]!, host.children[3]!].map((r) => r.querySelector(".act .entry"));
-    expect(blank).not.toBeNull();
-    expect(blank!.querySelector(".body")).toBeNull();
-    expect(blank!.innerHTML.replace("turn 2", "turn 4").replace(/>[^<]*:[^<]*</g, "><")).toBe(empty!.innerHTML.replace(/>[^<]*:[^<]*</g, "><"));
+    const [blank, empty] = [host.children[1]!, host.children[3]!];
+    expect(blank!.querySelector(".act.open")).not.toBeNull();
+    expect(blank!.querySelector(".act .entry")).toBeNull();
+    expect(empty!.querySelector(".act .entry")).toBeNull();
+    expect(blank!.querySelector(".act-line")!.innerHTML.replace(/>[^<]*:[^<]*</g, "><")).toBe(empty!.querySelector(".act-line")!.innerHTML.replace(/>[^<]*:[^<]*</g, "><"));
     dispose();
   });
 
@@ -253,7 +254,8 @@ describe("the feed's two tiers, drawn", () => {
     expect(run.querySelectorAll(".act > .entry")).toHaveLength(0);
     click(run.querySelectorAll(".act-line")[2]!);
     const card = run.querySelector(".act > .entry")!;
-    expect(texts(card, ".head .t")).toEqual(["state_summary"]);
+    // The line it opened from names it: the card under it does not again.
+    expect(texts(card, ".head .t")).toEqual([]);
     expect(texts(card, "pre.block")).toContain("level 7 · 62% health");
     dispose();
   });

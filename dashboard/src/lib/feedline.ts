@@ -7,11 +7,11 @@
  * full row is still one click under either. Pure, like its neighbours.
  */
 
-import type { ActionsEntry, EventsServedEntry, FeedEntry } from "@viewer/api-types";
-import type { FeedGroup } from "./feedgroup";
+import type { ActionsEntry, EventsServedEntry, FeedEntry, ResponseEntry } from "@viewer/api-types";
+import type { FeedGroup, Lead } from "./feedgroup";
 import { FAILED_RECORDS, callName, kindOf, moveRefused, repeatCount, tallyLabel, tallyNotes, tsOf, type FeedKind, type Surface } from "./feedtier";
 import { harnessFields, noticeView, splitNotices, stateLine } from "./feedview";
-import { fmtDuration, stamp } from "./format";
+import { fmtDuration, fmtLatency, fmtTokens, fmtUsd, stamp } from "./format";
 
 export interface LineView {
   kind: FeedKind;
@@ -179,6 +179,110 @@ export function programErrorLine(entry: FeedEntry): { label: string; text: strin
   return { label: routine !== undefined ? "routine error" : "program error", text: `${error !== undefined ? clip(firstLine(error)) : ""}${whose(routine, who)}`.trim(), title: signature };
 }
 
+/** A muted figure on a card's head; `err` draws it in the error colour; `title` is its hover. */
+export interface Chip {
+  text: string;
+  title?: string | undefined;
+  err?: boolean | undefined;
+}
+
+/** How a reply ending reads when it is not the ordinary end of a reply or of its tool calls. */
+const ORDINARY_STOPS: ReadonlySet<string> = new Set(["toolUse", "tool_use", "tool_calls", "stop", "end_turn", "endTurn"]);
+
+/**
+ * What led to a model output, as chips (`Lead`, `lib/feedgroup.ts`): the
+ * model's time before the call, its thinking, its envelope's output tokens,
+ * and an envelope's unusual ending or error. Absent fields draw nothing, so a
+ * public window, which carries none of the envelope's bookkeeping, shows the
+ * think time alone.
+ */
+export function leadChips(lead: Lead | null): Chip[] {
+  if (lead === null) return [];
+  const out: Chip[] = [];
+  if (lead.thinkMs !== null) out.push({ text: `think ${fmtLatency(lead.thinkMs)}`, title: "the model's time before this call: from what last fed it to the call" });
+  if (lead.thinkingTokens !== null && lead.thinkingTokens > 0) out.push({ text: `~${fmtTokens(lead.thinkingTokens)} thinking`, title: "thinking tokens, as the CLI estimated them" });
+  const env = lead.envelope;
+  if (env !== null) {
+    if (typeof env.thinkingChars === "number" && env.thinkingChars > 0) out.push({ text: `${fmtTokens(env.thinkingChars)} chars thinking` });
+    const completion = env.usage?.completion;
+    if (typeof completion === "number" && completion > 0) out.push({ text: `${fmtTokens(completion)} out`, title: "output tokens of the reply this call came in" });
+    if (typeof env.stopReason === "string" && !ORDINARY_STOPS.has(env.stopReason)) out.push({ text: `stop ${env.stopReason}`, err: true });
+    if (typeof env.error === "string" && env.error.length > 0) out.push({ text: "error", title: env.error, err: true });
+  }
+  return out;
+}
+
+/** What a call's deploys say that its result does not: a failed one, with its error on the hover. */
+export function deployChips(deploys: readonly FeedEntry[]): Chip[] {
+  const out: Chip[] = [];
+  for (const d of deploys) {
+    const e = d as unknown as Record<string, unknown>;
+    if (e["ok"] === false) out.push({ text: "deploy failed", title: str(e["error"]), err: true });
+  }
+  return out;
+}
+
+/** A tool name as recorded on a reply, less the CLI's prefix for the run's own tools. */
+export function toolLabel(name: string): string {
+  return name.replace(/^mcp__wrathbench__|^wrathbench\./, "");
+}
+
+/** A pi summarisation call in figures: tokens in and out, and pi's price for it. */
+export function compactionLine(e: ResponseEntry): string {
+  const parts: string[] = [];
+  if (e.usage !== undefined) parts.push(`${fmtTokens(e.usage.prompt)} in · ${fmtTokens(e.usage.completion)} out`);
+  if (typeof e.piCostUsd === "number") parts.push(fmtUsd(e.piCostUsd));
+  return parts.join(" · ");
+}
+
+/** A reply that is not a row of words: a compaction call, an envelope no card claimed, an empty or errored reply. */
+export function replyLine(e: ResponseEntry): { label: string; text: string; failed: boolean } {
+  if (e.kind === "compaction") return { label: "compaction call", text: compactionLine(e), failed: false };
+  const tools = (e.tools ?? []).map(toolLabel);
+  const stop = typeof e.stopReason === "string" && !ORDINARY_STOPS.has(e.stopReason) ? e.stopReason : undefined;
+  const failed = stop === "error" || (typeof e.error === "string" && e.error.length > 0);
+  const parts = [tools.join(", "), stop !== undefined ? `stop ${stop}` : "", typeof e.error === "string" ? firstLine(e.error) : ""].filter((s) => s.length > 0);
+  if (parts.length === 0 && e.usage !== undefined) parts.push(`${fmtTokens(e.usage.completion)} out`);
+  return { label: tools.length > 0 ? "call" : "response", text: clip(parts.join(" · ")), failed };
+}
+
+/** A `claude_system` record in words: the CLI's own bookkeeping, never its raw type and subtype. */
+export function claudeSystemLine(entry: FeedEntry): string {
+  const e = entry as unknown as Record<string, unknown>;
+  const subtype = str(e["subtype"]) ?? "system";
+  switch (subtype) {
+    case "init": {
+      const model = str(e["model"]);
+      const version = str(e["claude_code_version"]);
+      return ["session start", model, version !== undefined ? `cli ${version}` : undefined].filter((s) => s !== undefined).join(" · ");
+    }
+    case "compact_boundary": {
+      const m = (e["compact_metadata"] ?? {}) as Record<string, unknown>;
+      const pre = num(m["pre_tokens"]);
+      const post = num(m["post_tokens"]);
+      return ["compaction", str(m["trigger"]), pre !== undefined ? `${fmtTokens(pre)}${post !== undefined ? ` → ${fmtTokens(post)}` : ""} tokens` : undefined].filter((s) => s !== undefined).join(" · ");
+    }
+    case "thinking_tokens": {
+      const n = num(e["estimated_tokens"]);
+      return n !== undefined ? `thinking ~${fmtTokens(n)} tokens` : "thinking";
+    }
+    default: {
+      const rest = fieldsLine(entry, ["type", "subtype", "session_id", "uuid"]);
+      const words = subtype.replaceAll("_", " ");
+      return clip(rest.length > 0 ? `${words} · ${rest}` : words);
+    }
+  }
+}
+
+/** A `deploy` record no write claimed, in words. */
+export function deployLine(entry: FeedEntry): { text: string; failed: boolean } {
+  const e = entry as unknown as Record<string, unknown>;
+  if (e["ok"] === false) return { text: clip(`failed${str(e["error"]) !== undefined ? ` · ${firstLine(str(e["error"])!)}` : ""}`), failed: true };
+  const routines = Array.isArray(e["routines"]) ? (e["routines"] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const n = num(e["deploy"]);
+  return { text: clip([n !== undefined ? `${n}` : "", routines.length > 0 ? `routines ${routines.join(", ")}` : ""].filter((s) => s.length > 0).join(" · ")), failed: false };
+}
+
 /** One row as one line. */
 export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
   const kind = kindOf(g, surface);
@@ -186,8 +290,11 @@ export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
   switch (g.kind) {
     case "turn":
       return { kind, label: `turn ${g.request.turn ?? "?"}`, text: "", failed: false, ts, turn: g.request.turn };
-    case "response":
-      return { kind, label: "response", text: clip((g.entry.text ?? "").length > 0 ? g.entry.text! : (g.entry.tools ?? []).join(", ")), failed: false, ts, turn: g.entry.turn };
+    case "response": {
+      if ((g.entry.text ?? "").trim().length > 0) return { kind, label: "response", text: clip(g.entry.text!), failed: false, ts, turn: g.entry.turn };
+      const r = replyLine(g.entry);
+      return { kind, label: r.label, text: r.text, failed: r.failed, ts, turn: g.entry.turn };
+    }
     case "call": {
       const r = g.result;
       const text = r === null ? "no result yet" : firstLine(splitNotices(r.text ?? "").body);
@@ -225,6 +332,12 @@ export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
           const reasons = Array.isArray(e["reasons"]) ? (e["reasons"] as unknown[]).filter((x): x is string => typeof x === "string") : [];
           const slept = num(e["sleptMs"]);
           return { ...base, label: "wake", text: [slept !== undefined ? `slept ${fmtDuration(slept)}` : "", reasons.join(", ")].filter((s) => s.length > 0).join(" · ") };
+        }
+        case "claude_system":
+          return { ...base, label: "claude", text: claudeSystemLine(entry) };
+        case "deploy": {
+          const d = deployLine(entry);
+          return { ...base, label: "deploy", text: d.text, failed: d.failed };
         }
         default:
           return { ...base, label: entry.t, text: clip(fieldsLine(entry, [])), failed: FAILED_RECORDS.has(entry.t) };

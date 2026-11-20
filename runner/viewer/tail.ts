@@ -221,12 +221,20 @@ interface OpenAiToolCall {
   name?: unknown;
 }
 
-function toolCallNames(message: unknown): string[] {
+/**
+ * The tools a reply called, by name as the writer recorded it. The fixed loop
+ * writes the OpenAI shape (`tool_calls`, the name under `function`); the CLI
+ * drivers write `tool_uses` (`{ id, name, input }`), with the CLI's own prefix
+ * still on the name (`mcp__wrathbench__…`, `wrathbench.…`). Both are read; the
+ * prefix is left for the page, which is what tells a call the CLI routed to
+ * the run's tools from one it refused.
+ */
+export function toolCallNames(message: unknown): string[] {
   if (message === null || typeof message !== "object") return [];
-  const calls = (message as { tool_calls?: unknown }).tool_calls;
-  if (!Array.isArray(calls)) return [];
+  const m = message as { tool_calls?: unknown; tool_uses?: unknown };
+  const calls = Array.isArray(m.tool_calls) ? m.tool_calls : Array.isArray(m.tool_uses) ? m.tool_uses : [];
   return calls.map((c: OpenAiToolCall) => {
-    const n = c.function?.name ?? c.name;
+    const n = c?.function?.name ?? c?.name;
     return typeof n === "string" ? n : "?";
   });
 }
@@ -344,6 +352,12 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       if (usage !== null) base["usage"] = usage;
       // A CLI's summarisation call (pi), which the token totals count apart.
       if (rec["kind"] === "compaction") base["kind"] = "compaction";
+      // pi's own account of the reply: how much it reasoned, why it stopped,
+      // what it cost, and an errored reply's message, capped by the writer.
+      if (typeof rec["thinkingChars"] === "number") base["thinkingChars"] = rec["thinkingChars"];
+      if (typeof rec["stopReason"] === "string") base["stopReason"] = rec["stopReason"];
+      if (typeof rec["piCostUsd"] === "number") base["piCostUsd"] = rec["piCostUsd"];
+      if (typeof rec["error"] === "string") base["error"] = clip(rec["error"], 600).text;
       base["clipped"] = c.clipped;
       return base;
     }
@@ -2351,6 +2365,17 @@ function isServedEntry(rec: Record<string, unknown>): boolean {
   return !(rec["t"] === "claude_system" && rec["subtype"] === "thinking_tokens");
 }
 
+/**
+ * A `thinking_tokens` marker's increment. The markers' `estimated_tokens` is
+ * a running total within one message, so the deltas are what sum across the
+ * messages between two replies; 0 for any other record.
+ */
+function thinkingDeltaOf(rec: Record<string, unknown>): number {
+  if (rec["t"] !== "claude_system" || rec["subtype"] !== "thinking_tokens") return 0;
+  const d = rec["estimated_tokens_delta"];
+  return typeof d === "number" && Number.isFinite(d) && d > 0 ? d : 0;
+}
+
 /** A complete line that is not JSON must surface, never vanish. */
 function unparseable(text: string, i: number, start: number, end: number): EntrySummary {
   return { i, t: "unparseable-line", ts: 0, start, end, line: clip(text, 400).text, clipped: true };
@@ -2405,6 +2430,12 @@ export class TrajectoryTail {
   private readonly systemTextAt = new Map<string, number>();
   /** Per-turn codex usage for records written before the driver logged it; see `CodexUsageCorrector`. */
   private readonly codexUsage = new CodexUsageCorrector();
+  /**
+   * The claude-code thinking estimate since the last served `response`: the
+   * `thinking_tokens` markers are not served (`isServedEntry`), so their sum
+   * rides on the next reply's summary as `thinkingTokens` instead.
+   */
+  private thinkingSince = 0;
   /** The turn in flight at an instant, from the lines read so far: the session record's rows are joined to turns by it. */
   private turns = new TurnIndex();
   /** Whether this is a v1 run, whose game side is its session record's; latched once seen. */
@@ -2511,6 +2542,7 @@ export class TrajectoryTail {
       this.reflectMarks.length = 0;
       this.systemTextAt.clear();
       this.codexUsage.reset();
+      this.thinkingSince = 0;
       this.lastTsSeen = null;
       this.spanEntries.length = 0;
       this.sawClaudeSystem = false;
@@ -2646,11 +2678,18 @@ export class TrajectoryTail {
           // After the accumulators, so a record that is not served still counts
           // toward everything derived from the file, and after the offset above,
           // so the byte range of every later entry — what `raw` reads — stands.
-          if (!isServedEntry(rec)) return;
+          if (!isServedEntry(rec)) {
+            this.thinkingSince += thinkingDeltaOf(rec);
+            return;
+          }
           if (rec["t"] === "request" && typeof rec["systemText"] === "string" && typeof rec["systemHash"] === "string") {
             this.systemTextAt.set(rec["systemHash"], i);
           }
           summary = summarize(rec, i, start, end);
+          if (rec["t"] === "response" && this.thinkingSince > 0) {
+            summary["thinkingTokens"] = this.thinkingSince;
+            this.thinkingSince = 0;
+          }
         } catch {
           summary = unparseable(text, i, start, end);
         }

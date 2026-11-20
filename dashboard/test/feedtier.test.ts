@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FeedEntry } from "../../runner/viewer/api-types";
 import { groupFeed, type FeedGroup } from "../src/lib/feedgroup";
-import { lineOf, milestoneLine, programErrorLine } from "../src/lib/feedline";
+import { deployChips, leadChips, lineOf, milestoneLine, programErrorLine } from "../src/lib/feedline";
 import {
   ACTIONS,
   KINDS,
@@ -358,5 +358,52 @@ describe("a row as one line", () => {
     expect(one([e("harness", 1, { kind: "resolved_model", model: "a/b" })])).toMatchObject({ kind: "record", label: "harness", text: "resolved_model · model: a/b" });
     expect(one([e("actions", 1, { routine: true, actions: [note("loot"), note("say", { status: 0 })] })])).toMatchObject({ label: "routine", text: "1 loot · 1 chat line · 1 failed", failed: true });
     expect(one([e("wake", 1, { sleptMs: 90_000, reasons: ["combat", "timer"] })]).text).toContain("combat, timer");
+  });
+
+  test("the CLI's bookkeeping in words, never its type and subtype", () => {
+    const one = (entries: FeedEntry[]) => lineOf(groupFeed(entries)[0]!);
+    expect(one([e("claude_system", 1, { type: "system", subtype: "init", model: "claude-opus-5-5", claude_code_version: "2.1.321", tools: ["x"] })])).toMatchObject({ label: "claude", text: "session start · claude-opus-5-5 · cli 2.1.321" });
+    expect(one([e("claude_system", 1, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 267_258, post_tokens: 4_105 } })]).text).toBe("compaction · auto · 267k → 4.1k tokens");
+    expect(one([e("claude_system", 1, { type: "system", subtype: "thinking_tokens", estimated_tokens: 150 })]).text).toBe("thinking ~150 tokens");
+    // A public window's skeleton: the subtype alone.
+    expect(one([e("claude_system", 1, { type: "system", subtype: "status" })]).text).toBe("status");
+    expect(one([e("claude_system", 1, { type: "system", subtype: "status", status: "compacting", session_id: "s", uuid: "u" })]).text).toBe("status · status: compacting");
+  });
+
+  test("a deploy no write claimed, and a reply with no words", () => {
+    const one = (entries: FeedEntry[]) => lineOf(groupFeed(entries)[0]!);
+    expect(one([e("deploy", 1, { ok: true, deploy: 9, routines: ["errand", "grind"] })])).toMatchObject({ label: "deploy", text: "9 · routines errand, grind", failed: false });
+    expect(one([e("deploy", 1, { ok: false, error: "SyntaxError: x\n at main.ts:3" })])).toMatchObject({ label: "deploy", text: "failed · SyntaxError: x", failed: true });
+    // An envelope no card claimed: the tools it asked for, the CLI's prefix off.
+    expect(one([e("response", 1, { text: "", tools: ["mcp__wrathbench__run_snippet"] })])).toMatchObject({ kind: "record", label: "call", text: "run_snippet" });
+    expect(one([e("response", 1, { text: "", tools: [], stopReason: "error", error: "upstream 500" })])).toMatchObject({ label: "response", text: "stop error · upstream 500", failed: true });
+    expect(one([e("response", 1, { kind: "compaction", text: "", tools: [], usage: { prompt: 40_000, completion: 900 }, piCostUsd: 0.0123 })])).toMatchObject({ label: "compaction call", text: "40k in · 900 out · $0.012" });
+    // A codex turn that wrote nothing still counted its tokens.
+    expect(one([e("response", 1, { text: "", tools: [], usage: { prompt: 9_000, completion: 767 } })]).text).toBe("767 out");
+  });
+});
+
+describe("what led to a call, as chips", () => {
+  const env = (extra: Record<string, unknown>) => e("response", 1, { text: "", tools: ["mcp__wrathbench__run_snippet"], ...extra }) as never;
+
+  test("think time, thinking and an envelope's own figures", () => {
+    expect(leadChips(null)).toEqual([]);
+    expect(leadChips({ thinkMs: 3_003, thinkingTokens: 150, envelope: null }).map((c) => c.text)).toEqual(["think 3.0s", "~150 thinking"]);
+    expect(leadChips({ thinkMs: null, thinkingTokens: null, envelope: env({ thinkingChars: 2_280, usage: { prompt: 1, completion: 121 }, stopReason: "toolUse" }) }).map((c) => c.text)).toEqual(["2.3k chars thinking", "121 out"]);
+  });
+
+  test("an unusual ending and an error are in the error colour, the error's text on the hover", () => {
+    const chips = leadChips({ thinkMs: null, thinkingTokens: null, envelope: env({ stopReason: "length", error: "max tokens" }) });
+    expect(chips).toEqual([
+      { text: "stop length", err: true },
+      { text: "error", title: "max tokens", err: true },
+    ]);
+  });
+
+  test("a deploy shows on its write's card only when it failed", () => {
+    expect(deployChips([e("deploy", 1, { ok: true, deploy: 3 })])).toEqual([]);
+    expect(deployChips([e("deploy", 1, { ok: false, error: "SyntaxError" })])).toEqual([{ text: "deploy failed", title: "SyntaxError", err: true }]);
+    // A public window's skeleton says nothing either way.
+    expect(deployChips([e("deploy", 1)])).toEqual([]);
   });
 });

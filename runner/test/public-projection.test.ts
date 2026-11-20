@@ -2495,7 +2495,8 @@ describe("a snippet call's code is published once", () => {
   test("the raw line's byte range, a request's and a reply's bookkeeping and an events batch's tallies are not published", () => {
     const out = window([
       entry({ i: 0, t: "request", turn: 1, adapter: "openai", messageCount: 4, systemChars: 90, promptChars: 1200, usage: { prompt: 9 } }),
-      entry({ i: 1, t: "response", turn: 1, text: "hi", tools: ["run_snippet"], outChars: 2, usage: { completion: 3, cost: 0.1 } }),
+      // pi's own fields too: a provider's error text and the reply's bookkeeping stay the operator's.
+      entry({ i: 1, t: "response", turn: 1, text: "hi", tools: ["run_snippet"], outChars: 2, usage: { completion: 3, cost: 0.1 }, thinkingChars: 9, stopReason: "error", piCostUsd: 0.1, error: "upstream 500" }),
       entry({ i: 2, t: "events_served", via: "tool", count: 2, opcodes: ["SMSG_X×2"], ambient: 5, moreOpcodes: 1, folded: 3 }),
     ]);
     expect(Object.keys(out[0]!).sort()).toEqual(["i", "messageCount", "promptChars", "t", "ts", "turn"]);
