@@ -93,11 +93,11 @@ is not a model. **Each CLI scaffold is its own comparability group**
 whole reason a scaffold is tagged apart from `wrathbench`, and disjoint ids
 keep its rows from pooling with another harness's. What a scaffold does per
 model that cannot be configured out is stated with its label (principle 3):
-`codex` gives GPT-6 models its code mode and collaboration tools. The fixed
-loop and claude-code sleep through a `yield` tool, claude-code because its one
-turn can run for hours; codex runs without it, as measured, its end of turn
-being the sleep; pi runs the program loop only once its adapter waits on a
-wake, and until then runs only as probe-campaign squares (operator,
+`codex` gives GPT-6 models its code mode and collaboration tools. Every
+driver on the program loop sleeps through a `yield` tool, so each serves the
+same tool surface; codex runs from before it did are their own condition
+(operator, 2026-11-20). pi runs the program loop only once its adapter waits
+on a wake, and until then runs only as probe-campaign squares (operator,
 2026-11-14). A harness
 setting has the harness's default and may be overridden per roster entry, as a
 recorded run dimension like effort rather than per-model tuning (operator,

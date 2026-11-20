@@ -175,17 +175,11 @@ export interface DriverEntry {
    * after each turn becomes the sleep, and `yield` sleeps inside a turn
    * (`adapter-codex.ts`, `adapter-claude.ts`). codex ends a turn every few
    * calls; claude-code's one turn can run for hours, so `yield` is its usual
-   * sleep. Absent on pi, whose adapter has no sleep yet; the fixed loop runs
-   * it whatever this says.
+   * sleep. `yield` is on by default wherever the program loop runs
+   * (`yieldDefaultOf`, config.ts). Absent on pi, whose adapter has no sleep
+   * yet; the fixed loop runs it whatever this says.
    */
   programLoop?: true;
-  /**
-   * The program loop runs without `yield` unless a launch asks for it
-   * (`yieldDefaultOf`, config.ts; operator, 2026-11-14): codex, which ends a
-   * turn every few calls and was measured without it. Absent: `yield` is on
-   * by default wherever the program loop runs.
-   */
-  programYieldOff?: true;
   /** Whether a roster entry may name it. */
   roster: boolean;
   /**
@@ -379,7 +373,6 @@ export const DRIVER_TABLE = {
     harness: "codex",
     kind: "scaffold",
     programLoop: true,
-    programYieldOff: true,
     roster: true,
     sessionCap: true,
     endpoint: false,
