@@ -1461,10 +1461,12 @@ CLI moved to unannounced is the one meant for the old thread: the CLI names
 its thread only once the turn has started.
 
 Time asleep is not `idle`, and neither is a few words at every wake: a model
-that answers its wakes without a tool call is idle once it has done so for as
+that answers its wakes without acting is idle once it has done so for as
 many wakes in a row as fit the idle window at the five-minute cap (four, at
-twenty minutes) and has called no tool for the whole window, sleep included
-(operator, 2026-11-18). Any tool call is acting, `yield` included. A restart the program is blamed for (a blocked
+twenty minutes) and has not acted for the whole window, sleep included
+(operator, 2026-11-18). Any tool call is acting, `yield` included, and so is a
+rise in (level, xp) since the previous sleep, as the state ticker samples it
+through the sleep (operator, 2026-11-20). A restart the program is blamed for (a blocked
 event loop with no snippet in flight) counts toward `snippet-runaway` as a
 snippet's does. A resume finds the workspace where it was, and the stack loads
 the program and starts the routines that were running from the top before the
@@ -1581,8 +1583,8 @@ until the resume re-leases the token, which rotates it.
 ## Watchdogs
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`
-(no model output, or on the program loop wakes answered without a tool call
-for the same window), `no-xp` (no level/XP progress once progress was first
+(no model output, or on the program loop wakes answered with neither a tool
+call nor level/xp progress for the same window), `no-xp` (no level/XP progress once progress was first
 observed; off by default and on every episode, so only a run or a campaign
 definition that names a threshold has it), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).
