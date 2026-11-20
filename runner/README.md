@@ -1220,7 +1220,14 @@ queried quests one at a time to learn their levels. The number is the one the
 client colours its quest log from, printed raw rather than as a colour, since
 the grey cut-off is the client's judgement against the character's level; a
 quest that scales to the player shows the character's level, as the core
-resolves it. The nearby line keeps six
+resolves it. A complete quest's bracket also says where it is turned in,
+`[6 done, turn in at (-6035,-205)]`, with `on map N` when that is another map
+than the character's (`turnInAt`; operator, 2026-11-20): the mean of the
+corners of its `objectiveIndex` -1 area, read from `state.questPois`, which
+holds what an accept or a `questAreas` call already asked. The HUD asks for
+nothing, so after a sandbox restart a quest shows it again only once the
+model's own call has. Neither the area nor the quest's template answer names
+the NPC who ends it, so the line names none. The nearby line keeps six
 entries but fills them in order with whatever has the character targeted, the
 two nearest, then NPCs to act on (a quest to take or hand in, a vendor,
 trainer, flight master, innkeeper or banker), then the rest; it was filled by

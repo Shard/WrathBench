@@ -241,6 +241,19 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
     }));
     snap["units"] = toJsonSafe(units, 4);
     snap["bag"] = toJsonSafe(client.state.bag(), 4);
+    // The turn-in areas of the log's complete quests, for the quest line
+    // (`turnInAt` in context.ts): the `objectiveIndex` -1 polygons of the
+    // answers `questAreas` and an accept already got. Read, never asked for.
+    snap["turnIns"] = toJsonSafe(
+      client.state.questLog
+        .filter((q) => q.complete)
+        .flatMap((q) =>
+          (client.state.questPois.get(q.questId)?.value ?? [])
+            .filter((poi) => poi.objectiveIndex === -1)
+            .map((poi) => ({ questId: q.questId, map: poi.map, points: poi.points.map((p) => ({ x: p.x, y: p.y })) })),
+        ),
+      4,
+    );
     // Our own buff and debuff bar, named (`aurasOf` falls back to the
     // spellbook when the module served no name), for the HUD's `auras` line.
     const selfGuid = client.state.self.guid;
