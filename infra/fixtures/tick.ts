@@ -4,7 +4,7 @@
  * supervisor's own tick (`planTick`) over a fixture without the I/O.
  */
 import type { EpisodeId, FleetConfig, FleetJob, JobSource } from "../run-fleet-config";
-import { planTick, type TickPlan, type TickSnapshot } from "../run-fleet-plan";
+import { holdsAssignment, planTick, type TickPlan, type TickSnapshot } from "../run-fleet-plan";
 import type { ReadHold, RunPodsSetting, WorldsSetting } from "../run-fleet-credentials";
 import type { RunFact, UnstampedRun } from "../../runner/src/models";
 import { emptyModelLists } from "../../runner/src/model-lists";
@@ -25,6 +25,8 @@ export interface RunningJob {
   probe?: FleetJob["probe"];
   /** The run ids its process plays. */
   runIds?: readonly string[];
+  /** The job as the tick that spawned it planned it, kept verbatim; the fields above then only name it. */
+  job?: FleetJob;
 }
 
 export interface TickFixture {
@@ -69,7 +71,7 @@ export function snapshotOf(config: FleetConfig, o: TickFixture = {}): TickSnapsh
   const assigned = new Map<string, string>();
   for (const j of running) {
     const source = j.source ?? "policy";
-    liveJobs.set(j.name, {
+    const job: FleetJob = j.job ?? {
       refs: [...j.refs],
       ref: j.refs.join("+"),
       episode: j.episode ?? "e90",
@@ -82,8 +84,9 @@ export function snapshotOf(config: FleetConfig, o: TickFixture = {}): TickSnapsh
       ...(j.accounts !== undefined ? { accounts: [...j.accounts] } : {}),
       ...(j.fanout !== undefined ? { fanout: j.fanout } : {}),
       ...(j.probe !== undefined ? { probe: j.probe } : {}),
-    });
-    if (source !== "pinned") assigned.set(j.name, j.account);
+    };
+    liveJobs.set(j.name, job);
+    if (holdsAssignment(job)) assigned.set(j.name, j.account);
   }
   return {
     config,

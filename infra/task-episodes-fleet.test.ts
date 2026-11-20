@@ -17,6 +17,7 @@ import { parseFleet, type FleetConfig } from "./run-fleet-config";
 import { planOf } from "./fixtures/tick";
 import { episodeFlags, resolve } from "./run-roster";
 import { stagingHash, taskLaunchFile } from "./task-launch";
+import { fillEntries, jobSpawn } from "./run-fleet-plan";
 import { configFromArgs } from "../runner/src/run";
 import { writeCampaignFile } from "../runner/src/campaign-file";
 import { tempDirs } from "../runner/test/fixtures/temp-dirs";
@@ -178,6 +179,40 @@ describe("a deadmines-solo pick", () => {
     expect(c).toMatchObject({ episode: "deadmines-solo", ref: "son" });
     expect(loadRunConfig(c).fanout?.accounts).toEqual(spawn.accounts!);
   });
+});
+
+describe("a deadmines-solo pick, the tick after it spawned", () => {
+  const cfg = fleet({ son: SON });
+  const runs = owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t2" }, cfg.policy);
+  const pick = plan(cfg, runs).picks[0]!;
+  const party = ["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05"];
+  // The job exactly as the spawning tick planned it: it carries an account,
+  // the first it drew, and is still the policy's.
+  const runId = fillEntries(jobSpawn(pick.job, cfg.roster, pick.account, STAMP), STAMP)[0]!.runId!;
+  const live = { name: pick.job.name, account: pick.account, refs: pick.job.refs, job: pick.job, runIds: [runId] };
+  // Its run before it is on disk (the launch is still staging), and once it is.
+  const playing: RunFact = {
+    ...countedFact({ model: "sonnet", driver: "claude-code", effort: "max" }, "deadmines-solo", null, { now: NOW, series: cfg.policy.series! }),
+    runId,
+    account: "EVAL01",
+    fanoutAccounts: party,
+    startedAt: NOW - 60_000,
+    endedAt: null,
+    terminationReason: null,
+  };
+  for (const [when, facts] of [["staging", runs], ["playing", [...runs, playing]]] as const) {
+    test(`is kept on the party it drew, never drained as gone from the config (${when})`, () => {
+      const p = planOf(cfg, { runs: facts, now: NOW, stamp: STAMP, worlds: { max: 4 }, running: [live] });
+      expect(p.drainReasons.get(pick.job.name)).toBeUndefined();
+      const spawns = p.spawns.filter((s) => s.name === pick.job.name);
+      expect(spawns).toHaveLength(1);
+      expect(spawns[0]).toMatchObject({ enabled: true, account: "EVAL01", accounts: party });
+      // No second party drawn for it, and nothing re-planned for its model.
+      expect(p.picks).toEqual([]);
+      expect(p.holds.filter((h) => h.name === "son")).toEqual([]);
+      expect(p.spawns.flatMap((s) => s.accounts ?? [s.account]).filter((a) => a.startsWith("EVAL"))).toEqual(party);
+    });
+  }
 });
 
 describe("a five-agent pick, once rehearsed", () => {

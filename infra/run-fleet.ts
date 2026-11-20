@@ -119,6 +119,7 @@ import {
   resumesInPlace,
   serverIdentity,
   healthReady,
+  holdsAssignment,
   type ServerIdentity,
   tailOf,
   TICK_MS,
@@ -1240,7 +1241,7 @@ async function main(): Promise<void> {
     spawnedNames.add(spawn.name);
     if (pj !== undefined) {
       liveJobs.set(spawn.name, pj);
-      if (pj.account === undefined) assigned.set(spawn.name, spawn.account);
+      if (holdsAssignment(pj)) assigned.set(spawn.name, spawn.account);
       pending.delete(spawn.name);
       if (pj.attempt !== undefined) announcedPicks.delete(`${spawn.name}:${pj.attempt}`);
     }

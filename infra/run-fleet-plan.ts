@@ -3090,6 +3090,19 @@ export interface SupervisorView {
 }
 
 /**
+ * Whether a live job goes in `SupervisorView.assigned`, the one rule for the
+ * live supervisor, `--status` (`supervisorFromState`) and the tick fixture:
+ * every job but a pinned one, whose account is the config's and which the
+ * config yields each tick. A policy pick on a task episode carries an account
+ * of its own, the first of the party it drew (`withTaskAccounts`), and is
+ * assigned all the same, or the tick finds a live job nothing yields and
+ * drains it as gone from the config.
+ */
+export function holdsAssignment(job: Pick<FleetJob, "source">): boolean {
+  return job.source !== "pinned";
+}
+
+/**
  * Everything a tick reads, read once: the config, every run's facts, the
  * credentials' readings and holds, the worlds, run pods and accounts, the
  * supervisor's own jobs, and the clock. `planTick` decides from this alone.
