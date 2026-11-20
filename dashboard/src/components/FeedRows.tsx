@@ -24,7 +24,10 @@ import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, tsOf, t
 import { expandedBy, harnessFields, isHarnessEntry, noticeView, splitNotices, stateLine, type ExpandPreset } from "../lib/feedview";
 import { fmtElapsed, fmtLatency, fmtTokens, paneText, stamp } from "../lib/format";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
+import { Code, DiffBlock } from "./FeedCode";
 import { FeedIcon } from "./FeedIcon";
+import { isCodePath, prettyResult } from "../lib/syntax";
+import { argsView, execOutput, type ArgsView } from "../lib/toolargs";
 
 /**
  * The text an entry type puts in its body and head. Only types that still
@@ -69,7 +72,7 @@ const FOLD_LINES = 3;
  * without it, a block clicked once would ignore every later preset change and
  * the control would look broken on exactly the rows someone had touched.
  */
-function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
+function FoldBlock(props: { text: string; defaultOpen?: boolean; code?: boolean | undefined }) {
   const [over, setOver] = createSignal<boolean | null>(null);
   createEffect(on(() => props.defaultOpen, () => setOver(null), { defer: true }));
   const open = (): boolean => over() ?? props.defaultOpen === true;
@@ -84,7 +87,7 @@ function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
   const foldable = (): boolean => lines() > FOLD_LINES;
   return (
     <>
-      <pre class={`block ${foldable() && !open() ? "fold" : ""}`}>{props.text}</pre>
+      <pre class={`block ${foldable() && !open() ? "fold" : ""}`}>{props.code === true ? <Code text={props.text} /> : props.text}</pre>
       <Show when={foldable()}>
         <button class="toggle" onClick={() => setOpen(!open())}>
           {open() ? "collapse" : `expand · ${lines()} lines`}
@@ -99,12 +102,12 @@ function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
  * dropped (`paneText`), and nothing at all when no text is left — an empty
  * reply and one that is only newlines draw the same.
  */
-function FoldBody(props: { text: string; defaultOpen: boolean }) {
+function FoldBody(props: { text: string; defaultOpen: boolean; code?: boolean | undefined }) {
   const text = createMemo(() => paneText(props.text));
   return (
     <Show when={text().length > 0}>
       <div class="body">
-        <FoldBlock text={text()} defaultOpen={props.defaultOpen} />
+        <FoldBlock text={text()} defaultOpen={props.defaultOpen} code={props.code} />
       </div>
     </Show>
   );
@@ -307,6 +310,17 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
   });
   const name = (): string =>
     g().call?.name ?? g().result?.name ?? (g().snippet !== null ? "run_snippet" : "?");
+  /** How the args draw instead of as JSON (`lib/toolargs.ts`); null for a snippet, whose input is its code, and for JSON. */
+  const view = createMemo((): ArgsView | null => (g().snippet !== null ? null : argsView(name(), g().call?.args, g().call?.clipped === true)));
+  /** The file an edit or a write is to, for the head. */
+  const path = (): string | undefined => {
+    const v = view();
+    return v !== null && (v.kind === "edit" || v.kind === "write") ? v.path : undefined;
+  };
+  /** Whether the input is TypeScript to highlight: a snippet, or a program file. */
+  const code = (): boolean => g().snippet !== null || (name().endsWith("_file") && isCodePath(path()));
+  /** A snippet's result with a value it returned as a JSON string laid out. */
+  const resultText = (body: string): string => (name() === "run_snippet" ? (prettyResult(body) ?? body) : body);
   const turn = (): number | undefined => (g().call ?? g().snippet ?? g().result)?.turn;
   const anyTs = (): number => g().call?.ts ?? g().snippet?.ts ?? g().result?.ts ?? 0;
   /*
@@ -361,6 +375,11 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
             <span>call {g().call!.call}</span>
           </Show>
         </Show>
+        <Show when={path()}>{(p) => <span class="path" title={p()}>{p()}</span>}</Show>
+        <Show when={view()?.kind === "edit" && (view() as { replaceAll: boolean }).replaceAll}>
+          <span class="dim">every match</span>
+        </Show>
+        <Show when={view()?.kind === "line" ? (view() as { text: string }).text : ""}>{(t) => <span class="path" title={t()}>{t()}</span>}</Show>
         <Show when={g().durationMs !== null}>
           <span class="lat" title="from the call's dispatch to its result">
             {fmtLatency(g().durationMs)}
@@ -391,7 +410,29 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
         </Show>
       </div>
       <Show when={open()}>
-        <FoldBody text={input()} defaultOpen={expandedBy(props.preset, "call")} />
+        <Show
+          when={view()}
+          keyed
+          fallback={<FoldBody text={input()} defaultOpen={expandedBy(props.preset, "call")} code={g().snippet !== null} />}
+        >
+          {(shown) => {
+            switch (shown.kind) {
+              case "edit":
+                return (
+                  <div class="body">
+                    <DiffBlock old={shown.old} new={shown.new} code={code()} defaultOpen={expandedBy(props.preset, "call")} />
+                  </div>
+                );
+              case "write":
+                return <FoldBody text={shown.content} defaultOpen={expandedBy(props.preset, "call")} code={code()} />;
+              case "text":
+                return <FoldBody text={shown.text} defaultOpen={expandedBy(props.preset, "call")} />;
+              default:
+                // A one-line call says it all on its head.
+                return null;
+            }
+          }}
+        </Show>
         <Show when={g().actions.length > 0}>
           <ActionLines records={g().actions} preset={props.preset} />
         </Show>
@@ -411,9 +452,10 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
              * to a reader looking for exactly them (lib/feedview.ts).
              */
             const split = createMemo(() => splitNotices(r().text ?? ""));
+            const body = createMemo(() => resultText(split().body));
             return (
               <>
-                <FoldBody text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
+                <FoldBody text={body()} defaultOpen={expandedBy(props.preset, "call")} />
                 <Show when={split().notices.length > 0}>
                   <div class="body notices">
                     <NoticeCallout lines={split().notices} />
@@ -647,6 +689,43 @@ function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPrese
   );
 }
 
+/**
+ * A call to one of codex's own tools (`codex_tool_call`): code mode's `exec`
+ * above all, whose input is a script calling the run's tools. The script is
+ * highlighted and its output drawn as the text it printed; a public window
+ * carries neither and draws the head alone.
+ */
+function CodexToolRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset; bare?: boolean | undefined }) {
+  const e = (): Record<string, unknown> => props.entry as unknown as Record<string, unknown>;
+  const name = (): string => (typeof e()["name"] === "string" ? (e()["name"] as string) : "codex tool");
+  const input = (): string => (typeof e()["input"] === "string" ? (e()["input"] as string) : "");
+  const output = createMemo((): string => execOutput(e()["output"]) ?? (typeof e()["output"] === "string" ? (e()["output"] as string) : ""));
+  const status = (): string | undefined => (typeof e()["status"] === "string" ? (e()["status"] as string) : undefined);
+  return (
+    <div class="entry" classList={{ bad: status() !== undefined && status() !== "completed" }}>
+      <Show when={props.bare !== true}>
+        <div class="head">
+          <FeedIcon kind="record" />
+          <span class="t">{name()}</span>
+          <Show when={props.entry.turn !== undefined}>
+            <span>turn {props.entry.turn}</span>
+          </Show>
+          <Show when={status() !== undefined && status() !== "completed"}>
+            <span class="err">{status()}</span>
+          </Show>
+          <span class="spacer" />
+          <When ts={props.entry.ts} />
+          <Show when={props.entry.clipped === true}>
+            <RawLink runId={props.runId} i={props.entry.i} />
+          </Show>
+        </div>
+      </Show>
+      <FoldBody text={input()} defaultOpen={props.bare === true || expandedBy(props.preset, "call")} code={name() === "exec"} />
+      <FoldBody text={output()} defaultOpen={expandedBy(props.preset, "call")} />
+    </div>
+  );
+}
+
 /** A record opened from its line: the record, under the line that already named it. */
 function BareDetail(props: { entry: FeedEntry }) {
   return (
@@ -785,6 +864,16 @@ function FullRow(props: { g: FeedGroup; ctx: FeedCtx; opened?: boolean }) {
       if (g.entry.t === "state") return <StateRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} startOpen={props.opened} />;
       if (isHarnessEntry(g.entry)) return <NoticeRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} bare={props.opened} />;
       if (isActionsEntry(g.entry)) return <ActionsRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} startOpen={props.opened} />;
+      if (g.entry.t === "codex_tool_call") return <CodexToolRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} bare={props.opened} />;
+      // A wake no yield claimed (codex's turn end), opened: the block the model woke to, as it read it.
+      const block = (g.entry as { block?: unknown }).block;
+      if (g.entry.t === "wake" && props.opened === true && typeof block === "string") {
+        return (
+          <div class="entry">
+            <FoldBody text={block} defaultOpen />
+          </div>
+        );
+      }
       if (g.entry.t === "milestone" || g.entry.t === "quest_complete") {
         return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} line={milestoneLine(g.entry)} bad={kind() === "death"} startOpen={props.opened} />;
       }

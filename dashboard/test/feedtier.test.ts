@@ -381,6 +381,16 @@ describe("a row as one line", () => {
     // A codex turn that wrote nothing still counted its tokens.
     expect(one([e("response", 1, { text: "", tools: [], usage: { prompt: 9_000, completion: 767 } })]).text).toBe("767 out");
   });
+
+  test("codex's own tool calls and file changes", () => {
+    const one = (entries: FeedEntry[]) => lineOf(groupFeed(entries)[0]!);
+    expect(one([e("codex_tool_call", 1, { name: "exec", status: "completed", input: "text(await tools.mcp__wrathbench__state_summary({}));\ntext(1);" })])).toMatchObject({ label: "exec", text: "text(await tools.mcp__wrathbench__state_summary({}));", failed: false });
+    expect(one([e("codex_tool_call", 1, { name: "exec", status: "failed", input: "x" })]).failed).toBe(true);
+    // A public window: the skeleton alone.
+    expect(one([e("codex_tool_call", 1)])).toMatchObject({ label: "codex tool", text: "" });
+    expect(one([e("codex_item", 1, { type: "file_change", body: JSON.stringify({ type: "file_change", changes: [{ path: "main.ts", kind: "update" }] }) })])).toMatchObject({ label: "file change", text: "update main.ts" });
+    expect(one([e("codex_item", 1, { type: "web_search", body: "{}" })]).label).toBe("codex_item");
+  });
 });
 
 describe("what led to a call, as chips", () => {

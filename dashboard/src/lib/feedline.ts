@@ -12,6 +12,7 @@ import type { FeedGroup, Lead } from "./feedgroup";
 import { FAILED_RECORDS, callName, kindOf, moveRefused, repeatCount, tallyLabel, tallyNotes, tsOf, type FeedKind, type Surface } from "./feedtier";
 import { harnessFields, noticeView, splitNotices, stateLine } from "./feedview";
 import { fmtDuration, fmtLatency, fmtTokens, fmtUsd, stamp } from "./format";
+import { fileChanges } from "./toolargs";
 
 export interface LineView {
   kind: FeedKind;
@@ -335,6 +336,17 @@ export function lineOf(g: FeedGroup, surface: Surface = {}): LineView {
         }
         case "claude_system":
           return { ...base, label: "claude", text: claudeSystemLine(entry) };
+        case "codex_tool_call": {
+          // Code mode's script, by its first line; a public window has the name and the time.
+          const input = str(e["input"]);
+          const status = str(e["status"]);
+          return { ...base, label: str(e["name"]) ?? "codex tool", text: input !== undefined ? clip(firstLine(input)) : "", failed: status !== undefined && status !== "completed" };
+        }
+        case "codex_item": {
+          const changes = fileChanges(e["body"]);
+          if (changes === null) return { ...base, label: entry.t, text: clip(fieldsLine(entry, [])) };
+          return { ...base, label: "file change", text: clip(changes.map((c) => `${c.kind} ${c.path}`).join(", ")) };
+        }
         case "deploy": {
           const d = deployLine(entry);
           return { ...base, label: "deploy", text: d.text, failed: d.failed };
