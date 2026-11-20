@@ -183,7 +183,7 @@ function Chips(props: { chips: readonly Chip[] }) {
   return (
     <For each={props.chips}>
       {(c) => (
-        <span class={c.err === true ? "err" : "dim"} title={c.title}>
+        <span class={c.err === true ? "tally-chip err" : "tally-chip dim"} title={c.title}>
           {c.text}
         </span>
       )}
