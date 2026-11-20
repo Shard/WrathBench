@@ -802,9 +802,26 @@ export interface RequestEntry extends EntryBase {
 export interface ResponseEntry extends EntryBase {
   t: "response";
   text?: string;
+  /** The tools the reply called, as recorded: a CLI driver's names keep the CLI's prefix (`mcp__wrathbench__run_snippet`). */
   tools?: string[];
   outChars?: number;
   usage?: ReportedUsage;
+  /** `compaction` on a CLI's summarisation call (pi), which has no text and no tools. */
+  kind?: string;
+  /** pi: the characters of reasoning the reply carried. */
+  thinkingChars?: number;
+  /** pi: why the reply ended (`toolUse`, `stop`, `length`, `error`, `aborted`). */
+  stopReason?: string;
+  /** pi: what the reply cost, by pi's own price table. */
+  piCostUsd?: number;
+  /** pi: an errored reply's message. */
+  error?: string;
+  /**
+   * claude-code: the thinking tokens the CLI estimated since the previous
+   * reply, summed off the `thinking_tokens` markers the feed does not serve.
+   * They led to the model's next output, which this reply's record precedes.
+   */
+  thinkingTokens?: number;
 }
 
 export interface SnippetEntry extends EntryBase {

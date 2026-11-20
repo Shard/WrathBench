@@ -749,7 +749,6 @@ export default function RunDetail() {
    * value so settled groups keep their object identity and `<For>` reuses
    * their DOM instead of rebuilding every row per tail append.
    */
-  const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
   /** What the run was driven with, for the rows a surface files differently (`lib/feedtier.ts`). */
   const surface = createMemo<Surface>(
     () => {
@@ -759,6 +758,8 @@ export default function RunDetail() {
     {},
     { equals: (x, y) => x.loop === y.loop && x.harness === y.harness },
   );
+  // The harness says where a call's envelope sits and whether a gap before a call is the model's.
+  const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev, surface().harness ?? null), []);
   /** The window's `move` verdicts, for the action lines of the moves they end. */
   const verdicts = createMemo(() => moveVerdicts(entries()), undefined, { equals: sameVerdicts });
 

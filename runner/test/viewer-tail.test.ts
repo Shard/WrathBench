@@ -175,6 +175,21 @@ describe("TrajectoryTail", () => {
     expect(added[1]!["line"]).toBe("not json at all");
   });
 
+  test("claude-code's thinking markers are not served; their sum rides on the next reply", async () => {
+    const path = tempFile();
+    const marker = (est: number, delta: number, ts: number) => JSON.stringify({ t: "claude_system", ts, turn: 1, type: "system", subtype: "thinking_tokens", estimated_tokens: est, estimated_tokens_delta: delta });
+    const reply = (ts: number) => JSON.stringify({ t: "response", ts, turn: 1, message: { role: "assistant", content: null, tool_uses: [{ id: "a", name: "mcp__wrathbench__yield", input: {} }] } });
+    writeFileSync(path, [marker(50, 50, 1), marker(150, 100, 2), reply(3), reply(4), marker(30, 30, 5), ""].join("\n"));
+    const tail = new TrajectoryTail(path);
+    const added = await tail.scan();
+    expect(added.map((e) => e.t)).toEqual(["response", "response"]);
+    expect(added[0]!["thinkingTokens"]).toBe(150);
+    expect(added[1]!["thinkingTokens"]).toBeUndefined();
+    // Markers still waiting for a reply carry over to the one that lands later.
+    appendFileSync(path, `${reply(6)}\n`);
+    expect((await tail.scan())[0]!["thinkingTokens"]).toBe(30);
+  });
+
   test("blank lines are skipped without shifting byte offsets", async () => {
     const path = tempFile();
     writeFileSync(path, '{"t":"state","ts":1}\n\n{"t":"state","ts":2,"level":9}\n');
@@ -210,6 +225,41 @@ describe("TrajectoryTail", () => {
 });
 
 describe("summarize", () => {
+  test("a response names its tools in either writer's shape, prefix kept", () => {
+    const loop = summarize({ t: "response", ts: 1, message: { role: "assistant", content: null, tool_calls: [{ id: "a", function: { name: "run_snippet", arguments: "{}" } }] } }, 0, 0, 1);
+    expect(loop["tools"]).toEqual(["run_snippet"]);
+    // The CLI drivers' shape (claude-code, codex, pi): `tool_uses`, the CLI's prefix on the name.
+    const cli = summarize(
+      {
+        t: "response",
+        ts: 1,
+        message: { role: "assistant", content: null, tool_uses: [{ id: "t1", name: "mcp__wrathbench__edit_file", input: { path: "main.ts" } }, { id: "t2", name: "wrathbench.yield", input: {} }] },
+      },
+      0,
+      0,
+      1,
+    );
+    expect(cli["tools"]).toEqual(["mcp__wrathbench__edit_file", "wrathbench.yield"]);
+    expect(cli["text"]).toBe("");
+  });
+
+  test("a pi reply carries its thinking, stop reason, cost and error", () => {
+    const s = summarize(
+      { t: "response", ts: 1, message: { role: "assistant", content: null, tool_uses: [{ id: "x", name: "mcp__wrathbench__run_snippet", input: {} }] }, stopReason: "error", thinkingChars: 228, piCostUsd: 0.0012, error: "e".repeat(900) },
+      0,
+      0,
+      1,
+    );
+    expect(s["thinkingChars"]).toBe(228);
+    expect(s["stopReason"]).toBe("error");
+    expect(s["piCostUsd"]).toBe(0.0012);
+    expect((s["error"] as string).startsWith("e".repeat(600))).toBe(true);
+    expect((s["error"] as string).length).toBeLessThan(700);
+    // A reply without them carries none.
+    const plain = summarize({ t: "response", ts: 1, message: { role: "assistant", content: "hi" } }, 0, 0, 1);
+    expect(plain["thinkingChars"] ?? plain["stopReason"] ?? plain["piCostUsd"] ?? plain["error"]).toBeUndefined();
+  });
+
   test("drops the message array of a request but keeps its shape", () => {
     const rec = {
       t: "request",

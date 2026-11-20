@@ -180,7 +180,10 @@ export const RECORDS: Readonly<Record<string, FeedKind>> = {
   state: "state",
   events_served: "events",
   actions: "other",
+  // A codex turn-end wake; a yield's is on its card (`lib/feedgroup.ts`), so a wait is counted once.
   wake: "sleep",
+  // A deploy no write in the window set off; one that a write did is on that write's card.
+  deploy: "record",
   routine: "record",
   episodic: "record",
   reflect_window: "record",

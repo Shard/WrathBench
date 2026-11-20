@@ -19,7 +19,7 @@ import type { ActionsEntry, EventsServedEntry, FeedEntry, ReflectionWindowView }
 import { rawPath, SNAPSHOT_MODE } from "../api/client";
 import { actionLines, isActionsEntry, keepLines, sameLine, type MoveVerdict } from "../lib/actionlog";
 import type { CallGroup, FeedGroup, ResponseGroup, TurnGroup } from "../lib/feedgroup";
-import { eventsHead, lineOf, milestoneLine, programErrorLine } from "../lib/feedline";
+import { deployChips, eventsHead, leadChips, lineOf, milestoneLine, programErrorLine, replyLine, type Chip } from "../lib/feedline";
 import { countLabel, kindOf, runLines, tallyLabel, tallyNotes, tierFeed, tsOf, type ActionRun, type FeedKind, type FeedRow, type Surface, type Tally } from "../lib/feedtier";
 import { expandedBy, harnessFields, isHarnessEntry, noticeView, splitNotices, stateLine, type ExpandPreset } from "../lib/feedview";
 import { fmtElapsed, fmtLatency, fmtTokens, paneText, stamp } from "../lib/format";
@@ -172,24 +172,43 @@ function When(props: { ts: number }) {
   );
 }
 
-function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset; kind: FeedKind }) {
+/**
+ * A card's head figures past its name: muted, an error one in the error
+ * colour, each with its hover where the figure alone would be cryptic.
+ */
+function Chips(props: { chips: readonly Chip[] }) {
+  return (
+    <For each={props.chips}>
+      {(c) => (
+        <span class={c.err === true ? "err" : "dim"} title={c.title}>
+          {c.text}
+        </span>
+      )}
+    </For>
+  );
+}
+
+function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset; kind: FeedKind; bare?: boolean | undefined }) {
   const parts = createMemo(() => bodyOf(props.entry));
   return (
     <div class="entry">
-      <div class="head">
-        <FeedIcon kind={props.kind} />
-        <span class="t">{props.entry.t}</span>
-        <Show when={props.entry.turn !== undefined}>
-          <span>turn {props.entry.turn}</span>
-        </Show>
-        <span>{parts().head}</span>
-        <span class="spacer" />
-        <When ts={props.entry.ts} />
-        <Show when={props.entry.clipped === true}>
-          <RawLink runId={props.runId} i={props.entry.i} />
-        </Show>
-      </div>
-      <FoldBody text={parts().text} defaultOpen={expandedBy(props.preset, "detail")} />
+      {/* Opened from its line, the line is the head. */}
+      <Show when={props.bare !== true}>
+        <div class="head">
+          <FeedIcon kind={props.kind} />
+          <span class="t">{props.entry.t}</span>
+          <Show when={props.entry.turn !== undefined}>
+            <span>turn {props.entry.turn}</span>
+          </Show>
+          <span>{parts().head}</span>
+          <span class="spacer" />
+          <When ts={props.entry.ts} />
+          <Show when={props.entry.clipped === true}>
+            <RawLink runId={props.runId} i={props.entry.i} />
+          </Show>
+        </div>
+      </Show>
+      <FoldBody text={parts().text} defaultOpen={props.bare === true || expandedBy(props.preset, "detail")} />
     </div>
   );
 }
@@ -230,28 +249,39 @@ function TurnRow(props: { g: TurnGroup; runId: string; reflecting: boolean }) {
   );
 }
 
-/** The model's reply, with how long the model took to produce it. */
-function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPreset; reflecting: boolean }) {
+/**
+ * The model's reply, with how long the model took to produce it. A reply
+ * with no words (a compaction call, an envelope no card claimed, an empty or
+ * errored reply) is its head alone, saying what it was.
+ */
+function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPreset; reflecting: boolean; bare?: boolean | undefined }) {
   const e = (): ResponseGroup["entry"] => props.g.entry;
+  const worded = (): boolean => (e().text ?? "").trim().length > 0;
+  const reply = createMemo(() => (worded() ? null : replyLine(e())));
+  // Opened from its line, a reply with no words has nothing the line did not say.
+  if (props.bare === true && !worded()) return null;
   return (
-    <div class={`entry ${props.reflecting ? "reflecting" : ""}`}>
-      <div class="head">
-        <FeedIcon kind="response" />
-        <span class="t">response</span>
-        <Show when={e().turn !== undefined}>
-          <span>turn {e().turn}</span>
-        </Show>
-        <Show when={props.g.latencyMs !== null}>
-          <span class="lat">{fmtLatency(props.g.latencyMs)}</span>
-        </Show>
-        <span>{(e().tools ?? []).join(", ")}</span>
-        <span class="spacer" />
-        <When ts={e().ts} />
-        <Show when={e().clipped === true}>
-          <RawLink runId={props.runId} i={e().i} />
-        </Show>
-      </div>
-      <FoldBody text={e().text ?? ""} defaultOpen={expandedBy(props.preset, "response")} />
+    <div class={`entry ${props.reflecting ? "reflecting" : ""}`} classList={{ bad: reply()?.failed === true }}>
+      <Show when={props.bare !== true}>
+        <div class="head">
+          <FeedIcon kind={worded() ? "response" : "record"} />
+          <span class="t">{reply()?.label ?? "response"}</span>
+          <Show when={e().turn !== undefined}>
+            <span>turn {e().turn}</span>
+          </Show>
+          <Show when={props.g.latencyMs !== null}>
+            <span class="lat">{fmtLatency(props.g.latencyMs)}</span>
+          </Show>
+          <Show when={reply()}>{(r) => <span>{r().text}</span>}</Show>
+          <Chips chips={leadChips(props.g.lead)} />
+          <span class="spacer" />
+          <When ts={e().ts} />
+          <Show when={e().clipped === true}>
+            <RawLink runId={props.runId} i={e().i} />
+          </Show>
+        </div>
+      </Show>
+      <FoldBody text={e().text ?? ""} defaultOpen={props.bare === true || expandedBy(props.preset, "response")} />
     </div>
   );
 }
@@ -265,7 +295,7 @@ function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPre
  * card exists to remove. The duration is `result.ts − call.ts` and only shown
  * when the writer recorded the call before running it (see lib/feedgroup.ts).
  */
-function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; reflecting: boolean; kind: FeedKind }) {
+function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; reflecting: boolean; kind: FeedKind; bare?: boolean | undefined }) {
   const g = (): CallGroup => props.g;
   /** The input text: the snippet's code, else the call's args. */
   const input = createMemo((): string => {
@@ -286,10 +316,12 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
    * code is, how it ended and what it put on the wire. Every other tool's
    * card is short already and is drawn whole.
    */
-  const folds = (): boolean => props.kind === "snippet";
+  const folds = (): boolean => props.kind === "snippet" && props.bare !== true;
   const [over, setOver] = createSignal<boolean | null>(null);
   createEffect(on(() => props.preset, () => setOver(null), { defer: true }));
   const open = (): boolean => !folds() || (over() ?? expandedBy(props.preset, "call"));
+  /** What led to the call and what its write set off, as figures on the head. */
+  const chips = createMemo((): Chip[] => [...leadChips(g().lead), ...deployChips(g().deploys)]);
   const codeLines = createMemo(() => {
     const code = paneText(input());
     return code.length === 0 ? 0 : code.split("\n").length;
@@ -311,24 +343,30 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
             <FeedIcon kind="chevron" />
           </button>
         </Show>
-        <FeedIcon kind={props.kind} />
-        <span class="t">{name()}</span>
-        {/* The surface's own three tools, named where a reader will look for
-            them: they are why a window exists, and they read as ordinary tool
-            calls otherwise. Independent of the accent — a `reflect` that was
-            refused opens no window and is still one of these. */}
-        <Show when={isReflectTool(name())}>
-          <span class="reflect-tag">reflection</span>
-        </Show>
-        <Show when={turn() !== undefined}>
-          <span>turn {turn()}</span>
-        </Show>
-        <Show when={g().call?.call !== undefined}>
-          <span>call {g().call!.call}</span>
+        {/* Opened from its line, the line already names the call, its turn and its time. */}
+        <Show when={props.bare !== true}>
+          <FeedIcon kind={props.kind} />
+          <span class="t">{name()}</span>
+          {/* The surface's own three tools, named where a reader will look for
+              them: they are why a window exists, and they read as ordinary tool
+              calls otherwise. Independent of the accent — a `reflect` that was
+              refused opens no window and is still one of these. */}
+          <Show when={isReflectTool(name())}>
+            <span class="reflect-tag">reflection</span>
+          </Show>
+          <Show when={turn() !== undefined}>
+            <span>turn {turn()}</span>
+          </Show>
+          <Show when={g().call?.call !== undefined}>
+            <span>call {g().call!.call}</span>
+          </Show>
         </Show>
         <Show when={g().durationMs !== null}>
-          <span class="lat">{fmtLatency(g().durationMs)}</span>
+          <span class="lat" title="from the call's dispatch to its result">
+            {fmtLatency(g().durationMs)}
+          </span>
         </Show>
+        <Chips chips={chips()} />
         <Show when={!open()}>
           <span>
             {codeLines()} {codeLines() === 1 ? "line" : "lines"}
@@ -339,7 +377,9 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
           <TallyChips tally={closedTally()} />
         </Show>
         <span class="spacer" />
-        <When ts={anyTs()} />
+        <Show when={props.bare !== true}>
+          <When ts={anyTs()} />
+        </Show>
         <Show when={g().call?.clipped === true}>
           <RawLink runId={props.runId} i={g().call!.i} label="raw call" />
         </Show>
@@ -508,21 +548,24 @@ function ActionLines(props: { records: readonly ActionsEntry[]; preset: ExpandPr
 function ActionsRow(props: { entry: ActionsEntry; runId: string; preset: ExpandPreset; startOpen?: boolean | undefined }) {
   return (
     <div class="entry">
-      <div class="head">
-        <FeedIcon kind="other" />
-        <span class="t">actions</span>
-        <Show when={props.entry.routine === true}>
-          <span>routine</span>
-        </Show>
-        <Show when={props.entry.turn !== undefined}>
-          <span>turn {props.entry.turn}</span>
-        </Show>
-        <span class="spacer" />
-        <When ts={props.entry.ts} />
-        <Show when={props.entry.clipped === true}>
-          <RawLink runId={props.runId} i={props.entry.i} />
-        </Show>
-      </div>
+      {/* Opened from its line, the line is the head. */}
+      <Show when={props.startOpen !== true}>
+        <div class="head">
+          <FeedIcon kind="other" />
+          <span class="t">actions</span>
+          <Show when={props.entry.routine === true}>
+            <span>routine</span>
+          </Show>
+          <Show when={props.entry.turn !== undefined}>
+            <span>turn {props.entry.turn}</span>
+          </Show>
+          <span class="spacer" />
+          <When ts={props.entry.ts} />
+          <Show when={props.entry.clipped === true}>
+            <RawLink runId={props.runId} i={props.entry.i} />
+          </Show>
+        </div>
+      </Show>
       <ActionLines records={[props.entry]} preset={props.preset} startOpen={props.startOpen} />
     </div>
   );
@@ -562,8 +605,10 @@ function NoticeCallout(props: { lines: string[] }) {
  * Read defensively throughout, so a writer landing with fields this build does
  * not know about renders with its full record one click away, never as an error.
  */
-function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
+function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset; bare?: boolean | undefined }) {
   const n = createMemo(() => noticeView(props.entry));
+  // Bookkeeping opened from its line: its line was its head, so the record is what is left.
+  if (props.bare === true && n().bookkeeping) return <BareDetail entry={props.entry} />;
   return (
     <div class="entry harness" classList={{ notice: !n().bookkeeping }}>
       <div class="head">
@@ -602,6 +647,17 @@ function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPrese
   );
 }
 
+/** A record opened from its line: the record, under the line that already named it. */
+function BareDetail(props: { entry: FeedEntry }) {
+  return (
+    <div class="entry">
+      <div class="body">
+        <pre class="block">{detailOf(props.entry)}</pre>
+      </div>
+    </div>
+  );
+}
+
 /**
  * One state sample as one line, with the full record behind a toggle.
  *
@@ -616,6 +672,8 @@ function StateRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset
   const [open, setOpen] = createSignal<boolean | null>(null);
   createEffect(on(() => props.preset, () => setOpen(null), { defer: true }));
   const shown = (): boolean => open() ?? (props.startOpen === true || expandedBy(props.preset, "detail"));
+  // Opened from its line, the record is all there is left to show.
+  if (props.startOpen === true) return <BareDetail entry={props.entry} />;
   return (
     <div class="entry state">
       <div class="head">
@@ -662,6 +720,7 @@ function MarkRow(props: {
   const [open, setOpen] = createSignal<boolean | null>(null);
   createEffect(on(() => props.preset, () => setOpen(null), { defer: true }));
   const shown = (): boolean => open() ?? (props.startOpen === true || expandedBy(props.preset, "detail"));
+  if (props.startOpen === true) return <BareDetail entry={props.entry} />;
   return (
     <div class="entry mark" classList={{ bad: props.bad }}>
       <div class="head">
@@ -718,13 +777,13 @@ function FullRow(props: { g: FeedGroup; ctx: FeedCtx; opened?: boolean }) {
     case "turn":
       return <TurnRow g={g} runId={ctx.runId} reflecting={rf()} />;
     case "response":
-      return <ResponseRow g={g} runId={ctx.runId} preset={ctx.preset} reflecting={rf()} />;
+      return <ResponseRow g={g} runId={ctx.runId} preset={ctx.preset} reflecting={rf()} bare={props.opened} />;
     case "call":
-      return <CallCard g={g} runId={ctx.runId} preset={ctx.preset} reflecting={rf()} kind={kind()} />;
+      return <CallCard g={g} runId={ctx.runId} preset={ctx.preset} reflecting={rf()} kind={kind()} bare={props.opened} />;
     default:
       // The records with a shape worth drawing rather than dumping; everything else is still generic.
       if (g.entry.t === "state") return <StateRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} startOpen={props.opened} />;
-      if (isHarnessEntry(g.entry)) return <NoticeRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} />;
+      if (isHarnessEntry(g.entry)) return <NoticeRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} bare={props.opened} />;
       if (isActionsEntry(g.entry)) return <ActionsRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} startOpen={props.opened} />;
       if (g.entry.t === "milestone" || g.entry.t === "quest_complete") {
         return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} line={milestoneLine(g.entry)} bad={kind() === "death"} startOpen={props.opened} />;
@@ -734,7 +793,7 @@ function FullRow(props: { g: FeedGroup; ctx: FeedCtx; opened?: boolean }) {
         const thrown = (g.entry as { kind?: unknown }).kind === "error";
         return <MarkRow entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} line={p.text.length > 0 ? `${p.label}: ${p.text}` : p.label} title={p.title} bad={thrown} startOpen={props.opened} />;
       }
-      return <Entry entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} />;
+      return <Entry entry={g.entry} runId={ctx.runId} preset={ctx.preset} kind={kind()} bare={props.opened} />;
   }
 }
 

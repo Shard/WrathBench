@@ -104,7 +104,7 @@ describe("groupTurn", () => {
 
   test("each composite shape is asked where it actually keeps the turn", () => {
     expect(groupTurn({ kind: "turn", request: entry("request", 7), events: null } as FeedGroup)).toBe(7);
-    expect(groupTurn({ kind: "response", entry: entry("response", 8), latencyMs: null } as FeedGroup)).toBe(8);
+    expect(groupTurn({ kind: "response", entry: entry("response", 8), latencyMs: null, lead: null } as FeedGroup)).toBe(8);
     expect(
       groupTurn({
         kind: "call",
@@ -113,6 +113,9 @@ describe("groupTurn", () => {
         result: null,
         actions: [],
         moves: [],
+        deploys: [],
+        wake: null,
+        lead: null,
         durationMs: null,
       } as FeedGroup),
     ).toBe(9);
@@ -128,12 +131,15 @@ describe("groupTurn", () => {
         result: entry("tool_result", 11),
         actions: [],
         moves: [],
+        deploys: [],
+        wake: null,
+        lead: null,
         durationMs: null,
       } as FeedGroup),
     ).toBe(11);
     // Nothing carried a turn: undefined, which reflectingAt reads as no accent.
     expect(
-      groupTurn({ kind: "call", call: entry("tool_call"), snippet: null, result: null, actions: [], moves: [], durationMs: null } as FeedGroup),
+      groupTurn({ kind: "call", call: entry("tool_call"), snippet: null, result: null, actions: [], moves: [], deploys: [], wake: null, lead: null, durationMs: null } as FeedGroup),
     ).toBeUndefined();
   });
 });
