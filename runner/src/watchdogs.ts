@@ -15,9 +15,9 @@
  *                   Any tool call is acting, `yield` included: a model that
  *                   yields while its routine plays has acted. So is a rise
  *                   in (level, xp) since the previous sleep (operator,
- *                   2026-11-20): codex has no `yield`, so a reply is its only
- *                   sleep, and a model whose routine is gaining xp has not
- *                   given up. A quest turn-in is not read on its own; below
+ *                   2026-11-20): a driver without `yield` sleeps only by
+ *                   replying, and a model whose routine is still gaining has
+ *                   not given up. A quest turn-in is not read on its own; below
  *                   the level cap it pays xp, which is.
  *   no-xp           no increase in (level, xp) for noXpMs, measured from the
  *                   first observed progress value — a session that never forms
