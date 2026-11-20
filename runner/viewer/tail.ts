@@ -2351,10 +2351,11 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
  *
  * The trajectory on disk stays complete — this decides only what the run page
  * is handed. The claude-code driver forwards every CLI system message, and its
- * `thinking_tokens` envelopes are a running estimate the page has no reading
- * for: it renders them as raw JSON, hundreds of them on a long run, on a page
- * that is already heavy. Dropped from the served list on the operator's call,
- * 2026-09-01. The `init` envelope stays: it is the session and driver marker
+ * `thinking_tokens` envelopes are a running estimate, hundreds of them on a
+ * long run, that rendered as raw JSON rows on a page that is already heavy.
+ * Dropped from the served list on the operator's call, 2026-09-01; their sum
+ * rides on the next served reply instead (`TrajectoryTail.thinkingSince`),
+ * a figure on a card rather than a row. The `init` envelope stays: it is the session and driver marker
  * the cost tally, the resolved model and the claude mark all read, and it is
  * the one carrying `session_id` for every session a run opens.
  *
