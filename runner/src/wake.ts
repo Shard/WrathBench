@@ -93,7 +93,7 @@
  * from the trajectory alone.
  */
 
-import { renderRoutines, routineDetailKey, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
+import { renderRoutines, routineDetailKey, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type ProgramRepeat, type RepeatNewest, type RoutineRow } from "@wrathbench/mcp";
 import { corpseHostiles, durabilityLine, PLAYER_FLAGS_GHOST, renderNotices, wornReadings, type DurabilityLevel, type SnapshotLike } from "./context";
 import type { HarnessNotice } from "./sandbox/host";
 import { damageTaken, DEATH_WINDOW_MS, type DeathCause } from "./sandbox/snippet-delta";
@@ -578,27 +578,12 @@ export interface SignatureLine {
 }
 
 /**
- * A repeat of a signature as the stack drains it, with its newest occurrence
- * where the stack carries one (wrath-mcp's `ProgramRepeat.newest`: a refusal's
- * hint, an error's text and frames). Read as optional, so a stack that does
- * not carry it counts the repeat and leaves the line as it stood.
+ * `line` as a later occurrence of its signature says it (the stack's
+ * `ProgramRepeat.newest`): the same lead, the newest occurrence's words, and
+ * for an error its frames. A line from before `lead` was kept is left as it
+ * stood. Pure.
  */
-type RepeatWithNewest = ProgramFacts["repeats"][number] & { newest?: Newest };
-/** A repeat's newest occurrence: a refusal's hint, or an error's text and frames. */
-type Newest = { text: string; frames?: string[] };
-
-/** The newest occurrence a repeat carries, if any. */
-const newestOf = (r: ProgramFacts["repeats"][number]): Newest | undefined => {
-  const n = (r as RepeatWithNewest).newest;
-  return n !== undefined && typeof n.text === "string" ? n : undefined;
-};
-
-/**
- * `line` as a later occurrence of its signature says it: the same lead, the
- * newest occurrence's words, and for an error its frames. A line from before
- * `lead` was kept is left as it stood. Pure.
- */
-export function withNewest(line: SignatureLine, newest: { text: string; frames?: readonly string[] | undefined }): SignatureLine {
+export function withNewest(line: SignatureLine, newest: RepeatNewest): SignatureLine {
   if (line.lead === undefined) return line;
   if (line.kind === "error") return { ...line, text: `${line.lead} ${newest.text}`, frames: newest.frames ?? line.frames };
   return {
@@ -858,15 +843,14 @@ function namedReasons(reasons: readonly WakeReason[]): string {
 /** Two drains as one span: facts in order, repeats summed by signature, the console's tail with repeats folded (`foldConsole`), the routines as they stand now. */
 export function mergeFacts(a: ProgramFacts | null, b: ProgramFacts): ProgramFacts {
   if (a === null) return b;
-  const repeats = new Map<string, RepeatWithNewest>();
+  const repeats = new Map<string, ProgramRepeat>();
   for (const r of [...a.repeats, ...b.repeats]) {
     const prev = repeats.get(r.signature);
     if (prev === undefined) repeats.set(r.signature, { ...r });
     else {
       prev.count += r.count;
       // The newest occurrence is the later drain's.
-      const newest = newestOf(r);
-      if (newest !== undefined && r.ts >= prev.ts) prev.newest = newest;
+      if (r.newest !== undefined && r.ts >= prev.ts) prev.newest = r.newest;
       prev.ts = Math.max(prev.ts, r.ts);
     }
   }
@@ -1393,11 +1377,10 @@ export class ProgramWake {
     }
     const facts = mergeFacts(this.held, program.drainFacts());
     this.held = null;
-    // A repeat names its signature as its newest occurrence said it, where the stack carries that.
+    // A repeat names its signature as its newest occurrence said it.
     for (const r of facts.repeats) {
-      const newest = newestOf(r);
       const line = this.signatures.get(r.signature);
-      if (newest !== undefined && line !== undefined) this.noteSignature(r.signature, withNewest(line, newest), r.ts);
+      if (r.newest !== undefined && line !== undefined) this.noteSignature(r.signature, withNewest(line, r.newest), r.ts);
     }
     const reasons = this.waker.take();
     // Taken with the reasons, before any await: a death row landing during one waits, line and reason alike, for the next wake.
