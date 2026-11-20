@@ -13,7 +13,8 @@
  * them; they may be a JSON string rather than an object; and the viewer caps
  * a long string, leaving its marker at the end. A diff of a capped string
  * would draw the cap as an edit, so a capped edit is no edit view at all and
- * falls back to the JSON, whose raw link has the rest.
+ * falls back to the JSON, whose raw link has the rest; a capped write is
+ * still the file's first part, and is drawn as one.
  */
 
 export type ArgsView =
@@ -140,7 +141,8 @@ export function argsView(name: string | undefined, args: unknown, isClipped = fa
   }
   if (WRITE_TOOLS.has(name)) {
     const content = pick(o, CONTENT_KEYS);
-    if (content === undefined || isClipped || clipped(content)) return null;
+    // A capped file is still its first part, the cap's marker at the end and the raw link on the head.
+    if (content === undefined) return null;
     return { kind: "write", path: pick(o, PATH_KEYS), content };
   }
   const text = lineOfArgs(name, o);

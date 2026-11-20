@@ -32,7 +32,8 @@ describe("a write", () => {
   test("the file under its path, under the content's aliases", () => {
     expect(argsView("write_file", { path: "main.ts", content: "export {}" })).toEqual({ kind: "write", path: "main.ts", content: "export {}" });
     expect(argsView("write_scratchpad", { text: "# notes" })).toEqual({ kind: "write", path: undefined, content: "# notes" });
-    expect(argsView("write_file", { path: "main.ts", content: "x\n… 201 more characters" })).toBeNull();
+    // Capped, a file is still its first part, the marker saying how much more: unlike an edit, nothing reads wrong.
+    expect(argsView("write_file", { path: "main.ts", content: "x\n… 201 more characters" }, true)).toEqual({ kind: "write", path: "main.ts", content: "x\n… 201 more characters" });
   });
 });
 
