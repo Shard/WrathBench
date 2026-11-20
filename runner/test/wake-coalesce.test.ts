@@ -176,7 +176,8 @@ describe("fan-out: each character's death cause and condition", () => {
       "  Healpartyc: killed by Goblin Woodcarver, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
       "  Magepartyd: killed by Defias Miner, took 260 in the 10s before: Defias Miner 260 (melee ×3)",
     ]);
-    expect(asked.sort()).toEqual([...FIVE].sort());
+    // Each seat's latch is read as its death row lands (kept across a restart) and again at the wake.
+    expect(asked.sort()).toEqual([...FIVE, ...FIVE].sort());
     // Taken: the next wake, with no death, has no death lines and reads no latch.
     asked.length = 0;
     const next = await wake.sleep(fakeProgram(), { via: "yield", turn: 2, capMs: 20_000, floorMs: 3_000, stopped: () => false, kept: true, hud: true });

@@ -117,3 +117,56 @@ describe("a later report of a signature names its newest occurrence", () => {
     expect(block).not.toContain("b is undefined");
   });
 });
+
+const DEFIAS: DeathCause["damage"] = [{ name: "Defias Miner", total: 260, hits: [{ what: "melee", count: 3, total: 260 }] }];
+
+describe("a death wake counts the death it wakes for", () => {
+  test("a death in the awake turn before the sleep is counted by the wake it brings, and once", async () => {
+    const c = fakeClock();
+    let deaths = 0;
+    const wake = new ProgramWake({ trajectory: quiet, now: c.now, sleep: c.sleep, counts: () => ({ deaths, quests: 0 }) });
+    const p = fakeProgram();
+    const sleep = () => wake.sleep(p, { via: "yield", turn: 1, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true, hud: true });
+    expect((await sleep()).block).toContain("deaths 0");
+    // The model is awake (a snippet, a tool call) when the character dies; then it yields.
+    c.advance(5_000);
+    deaths++;
+    wake.onDeath(c.now());
+    const died = await sleep();
+    expect(died.fired).toBe("died");
+    expect(died.block).toContain("woke for: your character died");
+    expect(died.block).toContain("deaths 1");
+    // The next block counts from this one.
+    expect((await sleep()).block).toContain("deaths 0");
+  });
+
+  test("the last death's cause survives a sandbox restart between the death and its wake", async () => {
+    const c = fakeClock();
+    let deaths = 0;
+    const wake = new ProgramWake({ trajectory: quiet, now: c.now, sleep: c.sleep, counts: () => ({ deaths, quests: 0 }) });
+    const p = fakeProgram();
+    let latch: DeathCause | null = null;
+    wake.useDeathCause(async () => {
+      const d = latch;
+      latch = null;
+      return d;
+    });
+    c.schedule(20_000, () => {
+      latch = { ts: c.now(), killer: "Defias Miner", damage: DEFIAS };
+      deaths++;
+      wake.onDeath(c.now());
+    });
+    // The child restarts a second later, before the wake reads it: a new child, an empty latch.
+    c.schedule(21_000, () => {
+      latch = null;
+    });
+    const died = await wake.sleep(p, { via: "yield", turn: 1, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true, hud: true });
+    expect(died.block).toContain("last death: killed by Defias Miner, took 260 in the 10s before: Defias Miner 260 (melee ×3)");
+    // Taken: a later death wake with no cause of its own does not reuse it.
+    c.schedule(20_000, () => {
+      deaths++;
+      wake.onDeath(c.now());
+    });
+    expect((await wake.sleep(p, { via: "yield", turn: 2, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true, hud: true })).block).not.toContain("last death");
+  });
+});

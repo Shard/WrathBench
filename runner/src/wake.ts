@@ -48,7 +48,11 @@
  * occurrence's words, not its first's), moves that replaced one another,
  * `wake` calls, what changed for the character, and the routines' last
  * console lines. No advice and no judgement of stalls: "last action 3s ago"
- * and "no routine is running" are the two stall facts.
+ * and "no routine is running" are the two stall facts. Deaths and quests
+ * count from the previous block, so a death in the awake turn before a sleep
+ * is counted by the wake its reason brings; and a death's cause is taken
+ * from the child as its row lands, so a sandbox restart before the wake does
+ * not lose it.
  *
  * Two lines are on the failure path only (operator delegated, 2026-11-15),
  * so a character that never dies and keeps its gear sees neither. A wake that
@@ -867,6 +871,8 @@ export class ProgramWake {
   private readonly signatures = new Map<string, SignatureLine>();
   private readonly signatureTs = new Map<string, number>();
   private lastSample: WakeSample | null = null;
+  /** The session record's counts as the last wake block read them: what the next block's deaths and quests count from. */
+  private countsShown: WakeCounts | null = null;
   private connected: boolean | undefined;
   /** At fan-out, whether each character's stream was open at the last sample. */
   private readonly connectedOf = new Map<string, boolean>();
@@ -882,6 +888,10 @@ export class ProgramWake {
   private diedSince = new Map<string, number>();
   /** The child's latched cause of the last death (`SandboxHost.deathCause`), at fan-out of a character's seat, once the sandbox exists (`useDeathCause`). */
   private deathCause: ((character?: string) => Promise<DeathCause | null>) | undefined;
+  /** Causes taken from the latch as their death rows landed, by character ("" for a single one): kept across a sandbox restart (`keepCause`). */
+  private readonly causeKept = new Map<string, DeathCause>();
+  /** The latch read in flight per character, so the wake's own read waits for it. */
+  private readonly causeReads = new Map<string, Promise<void>>();
   /** At fan-out, every seat's worn items (`SandboxHost.wornDurabilityAll`), once the sandbox exists (`useWorn`). */
   private wornRead: (() => Promise<Record<string, SnapshotLike["inventory"]>>) | undefined;
   /** Each worn item's level as the last wake reported it, by character ("" for a single one) and `slot:item`: what a crossing is measured from. */
@@ -977,6 +987,48 @@ export class ProgramWake {
         ? { key: "died", ts, text: "your character died", inContext: true }
         : { key: "died", ts, text: `${character} died`, inContext: true, character },
     );
+    this.keepCause(character);
+  }
+
+  /**
+   * Take the child's latched cause as a death row lands and keep it here, so
+   * a sandbox restart between the death and its wake (the child and its
+   * latch gone) does not cost the wake its death line. Reads for one
+   * character queue behind each other; a read that finds nothing leaves the
+   * wake's own read to find it.
+   */
+  private keepCause(character?: string): void {
+    const read = this.deathCause;
+    if (read === undefined) return;
+    const key = character ?? "";
+    const next = (this.causeReads.get(key) ?? Promise.resolve()).then(async () => {
+      try {
+        const cause = await read(character);
+        if (cause !== null) this.causeKept.set(key, cause);
+      } catch {
+        // A latch that failed costs the kept cause only.
+      }
+    });
+    this.causeReads.set(key, next);
+  }
+
+  /**
+   * The newest cause of a death of `character` (a single character's with
+   * none): the child's latch now, else the one kept as the death row landed.
+   * Taken: a cause is one death line's.
+   */
+  private async takeCause(character?: string): Promise<DeathCause | null> {
+    const key = character ?? "";
+    await this.causeReads.get(key);
+    try {
+      const live = (await this.deathCause?.(character)) ?? null;
+      if (live !== null) this.causeKept.set(key, live);
+    } catch {
+      // A latch that failed leaves the kept cause.
+    }
+    const cause = this.causeKept.get(key) ?? null;
+    this.causeKept.delete(key);
+    return cause;
   }
 
   /** Every state sample: the stream closing wakes, and the last reading is what progress is measured from. */
@@ -1075,16 +1127,13 @@ export class ProgramWake {
    * The cause of the death this wake carries, as the child latched it, or
    * nothing: a latch from another death than the record's last (a child
    * restarted between) is not this one's cause. Taken only by a death wake,
-   * so a wake with none leaves it for the one the death row brings.
+   * so a wake with none leaves it for the one the death row brings. The
+   * cause kept as the death row landed stands in for a latch a sandbox
+   * restart emptied (`keepCause`).
    */
   private async deathLines(): Promise<string[]> {
     if (this.deathCause === undefined) return [];
-    let cause: DeathCause | null;
-    try {
-      cause = await this.deathCause();
-    } catch {
-      return [];
-    }
+    const cause = await this.takeCause();
     if (cause === null) return [];
     if (this.lastDeathTs !== undefined && Math.abs(cause.ts - this.lastDeathTs) > DEATH_MATCH_MS) return [];
     const line = deathLine(cause);
@@ -1103,12 +1152,8 @@ export class ProgramWake {
     if (died.length === 0) return [];
     const lines = await Promise.all(
       died.map(async ([character, ts]) => {
-        let cause: DeathCause | null = null;
-        try {
-          cause = (await this.deathCause?.(character)) ?? null;
-        } catch {
-          // A latch that failed costs the cause only.
-        }
+        // A latch that failed costs the cause only.
+        const cause = await this.takeCause(character);
         return fanoutDeathLine(character, cause !== null && Math.abs(cause.ts - ts) <= DEATH_MATCH_MS ? cause : null);
       }),
     );
@@ -1240,6 +1285,8 @@ export class ProgramWake {
     this.diedSince = new Map();
     this.n++;
     const after = this.reading();
+    // Deaths and quests count from the last block, not the sleep's start: a death in the awake turn before it is this wake's to count, as its reason is.
+    const counted = this.countsShown ?? before.counts;
     const now = this.now();
     const levels = [...(after.levels ?? [])].flatMap(([character, to]) => {
       const from = before.levels?.get(character);
@@ -1249,9 +1296,10 @@ export class ProgramWake {
       ...(before.level !== undefined && after.level !== undefined ? { level: { from: before.level, to: after.level } } : {}),
       ...(levels.length > 0 ? { levels } : {}),
       ...(before.level !== undefined && before.level === after.level && before.xp !== undefined && after.xp !== undefined ? { xp: Math.max(0, after.xp - before.xp) } : {}),
-      quests: Math.max(0, after.counts.quests - before.counts.quests),
-      deaths: Math.max(0, after.counts.deaths - before.counts.deaths),
+      quests: Math.max(0, after.counts.quests - counted.quests),
+      deaths: Math.max(0, after.counts.deaths - counted.deaths),
     };
+    this.countsShown = after.counts;
     const seats = this.lastSample?.seats;
     const worn = await this.wornNow();
     const crossings = this.wornCrossings(worn);
