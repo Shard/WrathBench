@@ -1916,7 +1916,7 @@ describe("jobs, pinned and pool: one unit of work over the account pool", () => 
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }], accounts: { pool: [] } }))).toThrow(/pool is empty/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", runsPerEpisode: { e45: 1 } } }, queue: [] }))).toThrow(/runsPerEpisode is not a 0.5 key/);
     expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/every entry states its tier/);
-    expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t9", model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/tier must be one of t0, t1, t2/);
+    expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t9", model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/tier must be one of t0, t1, t2, t3/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", idle: "sometimes", model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/idle must be one of/);
     // The roster is a catalog: steering cannot enter it at all, so
     // an objective is refused rather than making the entry a second kind of
@@ -2321,18 +2321,23 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(runnableRefs(job({ ref: "glm" }), roster)).toEqual(["glm"]);
   });
 
-  test("a declared t2 opens no Deadmines eval: only the projection's e360 witness does, and the refusal says so", () => {
-    const t2: Record<string, FleetRosterEntry> = { ...roster, big: { model: "vendor/big", tier: "t2", idle: "none" } };
+  test("a declared t3 opens no Deadmines eval: only the projection's e360 witness does, and the refusal says so", () => {
+    const t3: Record<string, FleetRosterEntry> = { ...roster, big: { model: "vendor/big", tier: "t3", idle: "none" } };
     const solo = job({ ref: "big", episode: "deadmines-solo" });
     // No projection: the declared tier is a floor for e360, never for a Deadmines id.
-    expect(runnableRefs(job({ ref: "big", episode: "e360" }), t2)).toEqual(["big"]);
-    expect(runnableRefs(solo, t2)).toEqual([]);
+    expect(runnableRefs(job({ ref: "big", episode: "e360" }), t3)).toEqual(["big"]);
+    expect(runnableRefs(solo, t3)).toEqual([]);
     // The projection's answer is what opens it.
     const states = modelStatesOf(rosterModels(roster));
-    expect(runnableRefs(solo, t2, eligibleFrom([{ ...states[0]!, name: "big", eligible: ["e90", "e360"] }]))).toEqual([]);
-    expect(runnableRefs(solo, t2, eligibleFrom([{ ...states[0]!, name: "big", eligible: ["e90", "e360", "deadmines-solo"] }]))).toEqual(["big"]);
-    const plan = planQueue({ queue: [solo], roster: t2, pool: ["RUNNER"], running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined, eligible: eligibleFrom([]) });
+    expect(runnableRefs(solo, t3, eligibleFrom([{ ...states[0]!, name: "big", eligible: ["e90", "e360"] }]))).toEqual([]);
+    expect(runnableRefs(solo, t3, eligibleFrom([{ ...states[0]!, name: "big", eligible: ["e90", "e360", "deadmines-solo"] }]))).toEqual(["big"]);
+    const plan = planQueue({ queue: [solo], roster: t3, pool: ["RUNNER"], running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined, eligible: eligibleFrom([]) });
     expect(plan.skipped.map((x) => x.reason)).toEqual(["big is not eligible for deadmines-solo (the Deadmines evals open on level 8 in a counted e360, on a tier that buys them)"]);
+    // A declared t2 buys none, and the refusal says it is a pin rather than naming a witness.
+    const pinned: Record<string, FleetRosterEntry> = { ...roster, big: { model: "vendor/big", tier: "t2", idle: "none" } };
+    expect(runnableRefs(job({ ref: "big", episode: "e360" }), pinned)).toEqual(["big"]);
+    const held = planQueue({ queue: [solo], roster: pinned, pool: ["RUNNER"], running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined, eligible: eligibleFrom([]) });
+    expect(held.skipped.map((x) => x.reason)).toEqual(["big is not eligible for deadmines-solo (declared t2: a manual tier, it does not climb to the Deadmines (t3))"]);
   });
 
   test("a probe-only driver's entry runs under a campaign's job and no other", () => {
@@ -2419,6 +2424,10 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(text).toContain("extras schedulable");
     // A pinned or probe entry is outside the policy and says so instead of a verdict.
     expect(formatModels(states, new Set(), NOW, new Map([["ox", "pinned to X by job ox-freeplay"]])).join("\n")).toMatch(/ox +free +t1>t2 +pinned .*no: pinned to X by job ox-freeplay/);
+    // The header names all four tiers, and a second climb reads as the whole move (operator, 2026-11-20).
+    expect(text).toContain("tiers e90/e360/deadmines-solo t0 1/0/0, t1 3/0/0, t2 3/1/0, t3 3/1/3");
+    const t3 = modelStatesOf(rosterModels(roster), [...runs, run("stealth/ox-alpha:free", "e360", 4, { bestLevel: 8 })]);
+    expect(formatModels(t3, new Set(), NOW).join("\n")).toMatch(/ox +free +t1>t3 +promoted/);
   });
 
   test("idle: unlimited — the box past its tier gets one continuous freeplay session at a time", () => {

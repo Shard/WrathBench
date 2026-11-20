@@ -9,7 +9,7 @@ this page is the definition an operator tags against. Who gets scheduled on
 which episode, including promotion, is the model's tier — the evidence
 budget, stated in METHODOLOGY and nowhere else. Note that **tier** is not a
 word for an episode: a tier is
-a rung of the evidence ladder (`t0`/`t1`/`t2`) — how many runs a model gets —
+a rung of the evidence ladder (`t0` to `t3`) — how many runs a model gets —
 and an episode is the ruleset a run happens under. This page is about episodes.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
@@ -93,8 +93,9 @@ The one change made in place is the no-XP watchdog's removal (operator,
   them on one axis would rank the schedule rather than the models.
 - **Promotion in.** Earned on `e90` per the tier rule: a `t1` model that reaches
   level 5 climbs to `t2`, and `t2` is the tier that buys an `e360`. **Out:** a
-  counted `e360` that reaches level 8 opens the Deadmines evals `t2` buys
-  (operator, 2026-11-15); a model that stalls its `e360` runs meets its target
+  counted `e360` that reaches level 8 climbs a `t1` on to `t3` (operator,
+  2026-11-20) and opens the Deadmines evals `t3` buys (operator, 2026-11-15);
+  a declared `t2` is a pin and stays; a model that stalls its `e360` runs meets its target
   and is simply not scheduled here again. Every tier's budget is the same whoever is paying — billing says
   where a run may execute, never how many.
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
@@ -145,11 +146,11 @@ other.
   any pause: not counted, retried fresh with fresh staging on a fresh world.
 - **Cooling.** A provider's refusal is one rung of the model's cooling ladder
   per attempt, however many members met it.
-- **Who runs it.** `t2` buys three `deadmines-solo` attempts per series, and
+- **Who runs it.** `t3` buys three `deadmines-solo` attempts per series, and
   three `deadmines` attempts where the roster entry also says `deadmines:
   true`, spent only once a counted `e360` of the model reached level 8
   (`policy.deadminesAtLevel`, operator 2026-11-15): no tier opens them
-  without it, a hand-placed `t2` included. The policy holds the five-agent id until `policy.rehearsed` names
+  without it, a hand-placed `t3` included. The policy holds the five-agent id until `policy.rehearsed` names
   `deadmines`, and a codex row on either id until it names `codex`: neither
   has run on the program loop yet. Both wait behind the scored-episode hold
   like every scored id. Run on the program loop, any harness that has one.

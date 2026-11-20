@@ -93,6 +93,7 @@ describe("the tier order", () => {
     // A config edit that lowers the declared tier must not read as un-climbing.
     expect(highestTierOf({ declaredTier: "t2", tier: "t1" })).toBe("t2");
     expect(highestTierOf({ declaredTier: "t0", tier: "t0" })).toBe("t0");
+    expect(highestTierOf({ declaredTier: "t1", tier: "t3" })).toBe("t3");
   });
 
   test("the cell shows one tier, and a held witness still wears its star", () => {

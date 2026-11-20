@@ -36,7 +36,7 @@ const CREDENTIALS = {
 
 const ROSTER = {
   son: { tier: "t1", model: "sonnet", driver: "claude-code" },
-  opus: { tier: "t2", model: "opus", driver: "claude-code" },
+  opus: { tier: "t3", model: "opus", driver: "claude-code" },
   glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
   fp: { tier: "t0", model: "stealth/ox-alpha:free", idle: "unlimited" },
   fp2: { tier: "t0", model: "z-ai/glm-5.3-flash:free", idle: "unlimited" },
@@ -274,16 +274,16 @@ const SCENARIOS: Record<string, () => Scenario> = {
   // ---- boots and the empty board
   "an empty board": () => ({ config: parseFleet({ _notes: ["n"], accounts: { pool: POOL }, roster: {}, queue: [] }, { env: {} }) }),
   "a boot with no credentials": () => ({ config: fleet({ credentials: {} }) }),
-  "a fresh boot: e90 for every t1/t2 model, credentials in order": () => ({ config: fleet() }),
+  "a fresh boot: e90 for every t1/t3 model, credentials in order": () => ({ config: fleet() }),
   "a fresh boot with the pool capped at two": () => ({ config: fleet({ accounts: { pool: POOL, max: 2 } }) }),
   "an account held by a run outside the tick's view": () => ({ config: fleet(), holders: { RUNNER: "hand-run-1" } }),
 
   // ---- the lanes
-  "e360: a t2 model past its e90s owes e360": () => ({
+  "e360: a t3 model past its e90s owes e360": () => ({
     config: fleet(),
     facts: [...counted({ model: "opus", driver: "claude-code" }, "e90", 3, 6)],
   }),
-  "Deadmines solo: a t2 model with an L8 e360 opens the solo id on an eval world": () => ({
+  "Deadmines solo: a t3 model with an L8 e360 opens the solo id on an eval world": () => ({
     config: fleet({ policy: { worlds: "evals" } }, { WRATHBENCH_EVAL_POOL_SIZE: "10" }),
     facts: [...counted({ model: "opus", driver: "claude-code" }, "e90", 3, 6), ...counted({ model: "opus", driver: "claude-code" }, "e360", 1, 8)],
     worlds: { max: 4 },

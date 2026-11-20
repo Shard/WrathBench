@@ -641,13 +641,13 @@ export function formatModels(
   const out: string[] = [
     `models: ${states.length} in roster (policy: tier budgets; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
       `${Object.keys(policy.maxSessions).length > 0 ? `; host sessions ${Object.entries(policy.maxSessions).map(([d, n]) => `${d} <= ${n}`).join(", ")}` : ""}` +
-      `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
+      `; tiers e90/e360/deadmines-solo ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}/${TIER_TABLE[t].runsPerEpisode["deadmines-solo"]}`).join(", ")}` +
       `; idle unlimited (idle watchdog only; no wall clock)`,
     `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"tier".padEnd(9)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
   /**
-   * The tier column. A climb is shown as the move it was (`t1>t2`); a held
+   * The tier column. A climb is shown as the move it was (`t1>t2`, `t1>t3`); a held
    * witness is shown as a held witness (`t0*`), because a trial model that has
    * earned promotion is exactly the row an operator is looking for when deciding
    * what to promote — and the old table could only say `promoted, 0/0`.

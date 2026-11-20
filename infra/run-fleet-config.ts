@@ -201,7 +201,7 @@ export interface FleetRosterEntry extends RosterSpec {
   /**
    * Opts the entry into the five-agent Deadmines episode (operator,
    * 2026-11-14): `true` or absent. Its tier buys it as it buys the one-agent
-   * one (`t2`, three attempts), and only here, because five agents need five
+   * one (`t3`, three attempts), and only here, because five agents need five
    * sessions on one credential at once, which is a lane fact, not a model's.
    * The policy still holds it until `policy.rehearsed` names `deadmines`.
    */

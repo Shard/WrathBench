@@ -11,7 +11,7 @@ import { DEFAULT_POLICY, isPartyEpisode, partyAttempts, projectModel, type Roste
 import { countedFact } from "./fixtures/counted-fact";
 
 const NOW = Date.UTC(2026, 10, 14, 12);
-const ENTRY: RosterModel = { name: "son", model: "sonnet", driver: "claude-code", tier: "t2", deadmines: true };
+const ENTRY: RosterModel = { name: "son", model: "sonnet", driver: "claude-code", tier: "t3", deadmines: true };
 const MEMBERS = ["tank", "healer", "mage", "rogue", "paladin"];
 
 function fact(over: Partial<RunFact>): RunFact {

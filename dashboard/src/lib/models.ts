@@ -26,7 +26,7 @@ import { canonicalModelId } from "../../../infra/model-catalogue";
  * column: it says only where a run may execute, which is the platform's
  * business, and the tier is what buys runs.
  *
- * On the word "tier": it means a rung of the EVIDENCE ladder (t0/t1/t2),
+ * On the word "tier": it means a rung of the EVIDENCE ladder (t0 to t3),
  * never an episode. The episode columns are named by their ids.
  */
 export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "freeplay", "extras", "note", "newest run"] as const;
@@ -40,7 +40,7 @@ export function columnClass(column: (typeof MODEL_COLUMNS)[number]): string {
 }
 
 /** The ladder's order, so "higher" is a comparison rather than a string sort. */
-const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2 };
+const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2, t3: 3 };
 
 /**
  * The highest tier this model has actually stood on.

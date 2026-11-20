@@ -346,7 +346,7 @@ export function planQueue(opts: {
         reason:
           gated.length === 0
             ? `ref ${job.ref} is not in roster`
-            : `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode)})`,
+            : `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode, undefined, opts.roster[job.ref]?.tier)})`,
       });
       continue;
     }
@@ -415,7 +415,7 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     if (job.attempt !== undefined) return true;
     // An unscored episode needs no promotion: no tier buys one, so there is no
     // level to have reached. Otherwise the entry's own DECLARED tier is the
-    // static floor — every tier buys e90, and a `t2` entry buys an e360 without
+    // static floor — every tier buys e90, and a `t2` or `t3` entry buys an e360 without
     // any run history, which is what the retired `tiers` force used to spell.
     // The projection is asked only for what a model has EARNED on top of that,
     // so a climb opens e360 for a `t1` entry. The Deadmines evals have no
@@ -3391,7 +3391,7 @@ export function planTick(snap: TickSnapshot): TickPlan {
     if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
       // A pinned job whose ref is not promoted into its tier: it waits,
       // with the reason said once, exactly like a gated queue job.
-      pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode)})` });
+      pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (${ineligibleWhy(job.episode, cfg.policy, cfg.roster[job.ref]?.tier)})` });
       out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
       continue;
     }

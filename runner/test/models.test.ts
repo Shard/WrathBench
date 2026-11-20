@@ -611,13 +611,20 @@ describe("paid and free", () => {
     expect(planNextJobs([met], ["R1"], new Set(), { policy })).toEqual({ jobs: [], held: [] });
   });
 
-  test("effectiveTier: t0 holds the ladder, t1 climbs once, t2 is the top rung", () => {
-    expect(effectiveTier("t0", true)).toBe("t0");
-    expect(effectiveTier("t1", false)).toBe("t1");
-    expect(effectiveTier("t1", true)).toBe("t2");
-    expect(effectiveTier("t2", true)).toBe("t2");
-    // A climb is one rung, never two: t2 is where the ladder ends today.
-    expect(TIER_TABLE[effectiveTier("t1", true)].promotesTo).toBeNull();
+  test("effectiveTier: t0 holds the ladder, t1 climbs a rung per witness, a declared t2 or t3 is a pin (operator, 2026-11-20)", () => {
+    const all = { promotion: true, deadmines: true };
+    expect(effectiveTier("t0", all)).toBe("t0");
+    expect(effectiveTier("t1", { promotion: false, deadmines: false })).toBe("t1");
+    expect(effectiveTier("t1", { promotion: true, deadmines: false })).toBe("t2");
+    expect(effectiveTier("t1", all)).toBe("t3");
+    // Rung by rung: the e360 witness alone does not skip the e90 one.
+    expect(effectiveTier("t1", { promotion: false, deadmines: true })).toBe("t1");
+    expect(effectiveTier("t2", all)).toBe("t2");
+    expect(effectiveTier("t3", all)).toBe("t3");
+    expect(TIER_TABLE[effectiveTier("t1", all)].promotesTo).toBeNull();
+    // t2 buys the e360 and no Deadmines; t3 buys both.
+    expect(TIER_TABLE.t2.runsPerEpisode).toEqual({ e90: 3, e360: 1, deadmines: 0, "deadmines-solo": 0 });
+    expect(TIER_TABLE.t3.runsPerEpisode).toEqual({ e90: 3, e360: 1, deadmines: 3, "deadmines-solo": 3 });
   });
 
   test("a refused scored launch leaves the projection as it was, so an open gate re-picks it every tick; a closed one holds it and says why", () => {
@@ -1461,6 +1468,9 @@ describe("promotion and the Deadmines witness", () => {
     const l5 = at([countedFact(entry, "e90", 5)]);
     expect(l5).toMatchObject({ tier: "t2", earnedPromotion: true, status: "promoted", eligible: ["e90", "e360"] });
     expect(l5.perEpisode.e360!.target).toBe(1);
+    // t2 buys no Deadmines: those are t3's (operator, 2026-11-20).
+    expect(l5.perEpisode["deadmines-solo"]!.target).toBe(0);
+    expect(l5.perEpisode.deadmines!.target).toBe(0);
   });
 
   test("level 7 in a counted e360 does not open the Deadmines evals; level 8 does", () => {
@@ -1469,7 +1479,8 @@ describe("promotion and the Deadmines witness", () => {
     expect(l7).toMatchObject({ tier: "t2", earnedDeadmines: false, eligible: ["e90", "e360"] });
     expect(l7.perEpisode["deadmines-solo"]!.target).toBe(0);
     const l8 = at([e90, countedFact(entry, "e360", 8, { i: 2 })]);
-    expect(l8).toMatchObject({ tier: "t2", earnedDeadmines: true, eligible: ["e90", "e360", "deadmines-solo"] });
+    // The e360 witness climbs a t1 the second rung (operator, 2026-11-20).
+    expect(l8).toMatchObject({ tier: "t3", earnedDeadmines: true, status: "promoted", eligible: ["e90", "e360", "deadmines-solo"] });
     expect(l8.perEpisode["deadmines-solo"]!.target).toBe(3);
     // The five-agent id still wants the entry's opt-in.
     expect(l8.perEpisode.deadmines!.target).toBe(0);
@@ -1496,14 +1507,30 @@ describe("promotion and the Deadmines witness", () => {
   test("no tier stands in for the e360 witness, and t0 keeps it without spending it", () => {
     const handPlaced = at([], "t2");
     expect(handPlaced).toMatchObject({ tier: "t2", earnedPromotion: false, earnedDeadmines: false, eligible: ["e90", "e360"] });
+    // A declared t3 buys the Deadmines evals but spends none before the witness.
+    const t3 = at([countedFact(entry, "e90", 6, { i: 1 })], "t3");
+    expect(t3).toMatchObject({ tier: "t3", earnedDeadmines: false, eligible: ["e90", "e360"] });
+    expect(t3.perEpisode["deadmines-solo"]!.target).toBe(0);
+    expect(at([countedFact(entry, "e90", 6, { i: 1 }), countedFact(entry, "e360", 8, { i: 2 })], "t3").eligible).toEqual(["e90", "e360", "deadmines-solo"]);
     const trial = at([countedFact(entry, "e90", 6, { i: 1 }), countedFact(entry, "e360", 8, { i: 2 })], "t0");
     expect(trial).toMatchObject({ tier: "t0", earnedPromotion: true, earnedDeadmines: true, eligible: ["e90"] });
+  });
+
+  test("a declared t2 is a pin: an L8 e360 climbs it nowhere and buys no Deadmines (operator, 2026-11-20)", () => {
+    const pinned = projectModel({ ...entry, tier: "t2", deadmines: true }, [countedFact(entry, "e90", 6, { i: 1 }), countedFact(entry, "e360", 8, { i: 2 })], policy, { now: Date.UTC(2026, 10, 15, 12) });
+    expect(pinned).toMatchObject({ declaredTier: "t2", tier: "t2", earnedPromotion: true, earnedDeadmines: true, eligible: ["e90", "e360"] });
+    expect(pinned.status).not.toBe("promoted");
+    expect(pinned.perEpisode["deadmines-solo"]!.target).toBe(0);
+    expect(pinned.perEpisode.deadmines!.target).toBe(0);
   });
 
   test("the verdict says what the Deadmines evals wait on, and stops once they are open", () => {
     const e90 = countedFact(entry, "e90", 5, { i: 1 });
     const waiting = at([e90, countedFact(entry, "e360", 7, { i: 2 })]);
-    expect(schedulability(waiting, new Set(), policy).why).toContain("not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360");
+    expect(schedulability(waiting, new Set(), policy).why).toContain("not yet on deadmines-solo: the Deadmines evals are t3's: a t1 climbs to t3 on level 8 in a counted e360");
+    // A declared t3 waits on the same witness; a declared t2 is a pin and waits on nothing.
+    expect(schedulability(at([e90, countedFact(entry, "e360", 7, { i: 2 })], "t3"), new Set(), policy).why).toContain("not yet on deadmines-solo: the Deadmines evals open on level 8 in a counted e360");
+    expect(schedulability(at([e90, countedFact(entry, "e360", 7, { i: 2 })], "t2"), new Set(), policy).why).not.toContain("deadmines");
     const open = at([e90, countedFact(entry, "e360", 8, { i: 2 })]);
     expect(schedulability(open, new Set(), policy).why).not.toContain("not yet on deadmines-solo");
     // A t1 model's tier buys none, so it has nothing to wait on there.
@@ -1514,6 +1541,14 @@ describe("promotion and the Deadmines witness", () => {
     expect(ineligibleWhy("e360")).toBe("its tier buys no e360 runs — earn it with a level-5 e90, or set a tier that includes it");
     expect(ineligibleWhy("deadmines-solo")).toBe("the Deadmines evals open on level 8 in a counted e360, on a tier that buys them");
     expect(ineligibleWhy("deadmines")).toContain("deadmines: true");
+    // Given the declared tier, it says which threshold climbs there, or that it is a pin.
+    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t3")).toBe("the Deadmines evals open on level 8 in a counted e360, on a tier that buys them");
+    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t1")).toBe("the Deadmines evals are t3's: a t1 climbs to t2 on level 5 in a counted e90, then to t3 on level 8 in a counted e360");
+    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t1", "t2")).toBe("the Deadmines evals are t3's: a t1 climbs to t3 on level 8 in a counted e360");
+    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t2")).toBe("declared t2: a manual tier, it does not climb to the Deadmines (t3)");
+    expect(ineligibleWhy("deadmines", DEFAULT_POLICY, "t0")).toBe("declared t0: a trial tier holds the ladder and buys no Deadmines (t3)");
+    expect(ineligibleWhy("e360", DEFAULT_POLICY, "t1")).toBe("its tier buys no e360 runs — earn it with a level-5 e90, or set a tier that includes it");
+    expect(ineligibleWhy("e360", DEFAULT_POLICY, "t0")).toBe("declared t0: a trial tier holds the ladder and buys no e360 (t2)");
   });
 });
 

@@ -166,6 +166,16 @@ describe("writes", () => {
     store.close();
   });
 
+  test("every tier the table names is a valid roster write, t3 included (operator, 2026-11-20)", () => {
+    const { store } = tempStore();
+    store.seed(fixtureConfig());
+    for (const tier of ["t0", "t1", "t2", "t3"]) {
+      store.patch("roster/son", { tier }, { actor: "test" });
+      expect(store.get("roster/son")).toMatchObject({ tier });
+    }
+    store.close();
+  });
+
   test("a ChatGPT model off codex is refused at write and at seed while a chatgpt credential is configured, and an older row never blocks an unrelated edit", () => {
     const chatgpt = { provider: "chatgpt", secretEnv: "CODEX_HOME", slots: 1, billing: "paid", enabled: false };
     const { store } = tempStore();

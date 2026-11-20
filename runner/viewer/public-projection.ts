@@ -1165,7 +1165,7 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
   });
 }
 
-const TIER_IDS: readonly TierView[] = ["t0", "t1", "t2"];
+const TIER_IDS: readonly TierView[] = ["t0", "t1", "t2", "t3"];
 
 /**
  * One run in a model's detail panel: the columns the panel prints. The version,

@@ -1844,7 +1844,8 @@ describe("projectModels", () => {
         tiers: {
           t0: { runsPerEpisode: { e90: 1, e360: 0 }, promotesTo: "t1", label: "one look" },
           t1: { runsPerEpisode: { e90: 3, e360: 1 }, promotesTo: "t2", label: "evidence" },
-          t2: { runsPerEpisode: { e90: 5, e360: 3 }, promotesTo: null, label: "full" },
+          t2: { runsPerEpisode: { e90: 5, e360: 3 }, promotesTo: "t3", label: "full" },
+          t3: { runsPerEpisode: { e90: 5, e360: 3 }, promotesTo: null, label: "fuller" },
         },
         maxSessions: { "claude-code": 3 },
         credentials: [{ id: "claude-max20", provider: "claude", billing: "paid", slots: 1, enabled: true }],
@@ -1929,6 +1930,7 @@ describe("projectModels", () => {
         ...tierKeys("t0"),
         ...tierKeys("t1"),
         ...tierKeys("t2"),
+        ...tierKeys("t3"),
         "policy.maxSessions",
         "policy.maxSessions.claude-code",
         "ladderMs",
