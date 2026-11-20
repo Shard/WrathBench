@@ -335,7 +335,13 @@ says when the character is dead or a ghost, and for how long, and repeats
 the HUD's durability line when worn gear is broken or low. At fan-out both
 are per character, each naming it: a death line for every character that
 died since the last wake, and the durability lines on every block, since the
-fan-out roll-up carries no gear (operator, 2026-11-18). On
+fan-out roll-up carries no gear (operator, 2026-11-18). A single
+character's ghost line, the HUD's and such a block's alike, ends with the
+hostile creatures in view within 20 yards of its corpse, by name and level,
+and says there are none only from within reclaim range, where the server has
+sent the ghost everything round its corpse: routines that reclaimed the
+moment they could died again, at the same spot, to the camp that had killed
+them (operator, 2026-11-20). On
 codex, whose conversation holds what it was sent, the turn's message carries
 the scratchpad only when the thread does not already hold it as it stands; the
 event window goes every time.

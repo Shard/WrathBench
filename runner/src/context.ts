@@ -213,6 +213,9 @@ export interface UnitLike {
   type?: unknown;
   level?: unknown;
   distance?: unknown;
+  /** World x/y, as its movement was served: what the ghost line measures from the corpse (`corpseHostiles`). */
+  x?: unknown;
+  y?: unknown;
   /** `true` only when health was observed and is 0. See the HUD caveat below. */
   dead?: unknown;
   /** A creature's rank as the SDK names it (`normal`, `elite`, `rareelite`, `worldboss`, `rare`); absent until its query answered. */
@@ -966,16 +969,83 @@ const RECLAIM_RADIUS = 39;
 const GHOST_AT_GRAVEYARD_YARDS = 20;
 
 /**
+ * How near the corpse a hostile is named on the ghost line, in yards: the
+ * SDK's own radius for the creatures it names on a successful reclaim
+ * (`RECLAIM_CROWD_YARDS`), not an aggro radius, which no packet carries.
+ */
+export const CORPSE_HOSTILE_YARDS = 20;
+
+/** How many distinct hostiles the corpse fragment names before it counts the rest. */
+const CORPSE_HOSTILE_NAMES = 4;
+
+/**
+ * "hostile within 20y of your corpse: Frostmane Shadowcaster L7 ×2, Rockjaw
+ * Raider L6", or undefined: the living creatures in view whose reaction is
+ * hostile (the client's red name, as the nearby line marks it) standing within
+ * `CORPSE_HOSTILE_YARDS` of the corpse, straight-line on the map, by name and
+ * level, most first. A ghost is sent the units within sight of its corpse
+ * while it is within sight of it (the core's corpse visibility for a ghost),
+ * so the list is only complete near the corpse: "no hostile in view within
+ * 20y of your corpse" is said only from inside reclaim range, and only when
+ * every living creature there has a reaction and a position served (unknown
+ * is never guessed); from further off an empty list says nothing. Nothing when the corpse is on
+ * another map or inside a dungeon asked about from outside it. Pure.
+ */
+export function corpseHostiles(snapshot: {
+  self?: { position?: { value?: unknown }; corpse?: { value?: unknown } } | null | undefined;
+  units?: readonly UnitLike[] | undefined;
+}): string | undefined {
+  const corpse = snapshot.self?.corpse?.value as { map?: unknown; x?: unknown; y?: unknown; instanceMap?: unknown } | undefined;
+  const pos = snapshot.self?.position?.value as { map?: unknown; x?: unknown; y?: unknown } | undefined;
+  if (corpse === undefined || corpse === null || typeof corpse.x !== "number" || typeof corpse.y !== "number") return undefined;
+  if (pos === undefined || pos === null || typeof pos.map !== "number" || pos.map !== corpse.map) return undefined;
+  if (typeof corpse.instanceMap === "number" && pos.map !== corpse.instanceMap) return undefined;
+  const cx = corpse.x;
+  const cy = corpse.y;
+  const counts = new Map<string, number>();
+  // A living creature that could be within reach of the corpse but whose
+  // reaction or position has not been served: "none" would be a guess.
+  let unknown = false;
+  for (const u of snapshot.units ?? []) {
+    if (u.type !== "unit" || u.dead === true) continue;
+    if (typeof u.x !== "number" || typeof u.y !== "number") {
+      unknown = true;
+      continue;
+    }
+    if (Math.hypot(u.x - cx, u.y - cy) > CORPSE_HOSTILE_YARDS) continue;
+    if (u.reaction !== "hostile") {
+      if (typeof u.reaction !== "string") unknown = true;
+      continue;
+    }
+    const name = u.name != null ? String(u.name) : "(unnamed)";
+    const label = typeof u.level === "number" ? `${name} L${u.level}` : name;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  if (counts.size === 0) {
+    const near =
+      !unknown && typeof pos.x === "number" && typeof pos.y === "number" && Math.hypot(pos.x - cx, pos.y - cy) <= RECLAIM_RADIUS;
+    return near ? `no hostile in view within ${CORPSE_HOSTILE_YARDS}y of your corpse` : undefined;
+  }
+  const named = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const shown = named.slice(0, CORPSE_HOSTILE_NAMES).map(([label, n]) => (n === 1 ? label : `${label} ×${n}`));
+  const rest = named.slice(CORPSE_HOSTILE_NAMES).reduce((sum, [, n]) => sum + n, 0);
+  return `hostile within ${CORPSE_HOSTILE_YARDS}y of your corpse: ${shown.join(", ")}${rest > 0 ? ` +${rest} more` : ""}`;
+}
+
+/**
  * One sentence for a released ghost: where it stands, where its corpse is, and
  * the two ways back with their prices — the facts a client shows on its map
  * and in its tooltips, no more. Distances are straight-line
  * and rounded; "after Ns" is the server's own reclaim delay. The healer's
- * price is a paraphrased rule, not client text.
+ * price is a paraphrased rule, not client text. It ends with the hostiles
+ * round the corpse (`corpseHostiles`; operator, 2026-11-20): routines that
+ * reclaimed the moment they could died again to the camp that had killed them.
  */
 function ghostLine(
   s: NonNullable<SnapshotLike["self"]>,
   pos: { map?: number; x?: number; y?: number; z?: number } | undefined,
   now: number,
+  units: readonly UnitLike[] | undefined,
 ): string {
   const xy = (p: { x?: unknown; y?: unknown } | undefined): string =>
     p !== undefined && typeof p.x === "number" && typeof p.y === "number"
@@ -1039,7 +1109,8 @@ function ghostLine(
   }
   const secs = typeof delay?.readyAt === "number" ? Math.max(0, Math.ceil((delay.readyAt - now) / 1000)) : undefined;
   const when = secs === undefined ? "after the reclaim delay" : secs === 0 ? "now" : `after ${secs}s`;
-  return `${where}; ${corpsePart}: reclaim within ${RECLAIM_RADIUS}y ${when} (no sickness), ${healer}`;
+  const hostiles = corpseHostiles({ self: s, units });
+  return `${where}; ${corpsePart}: reclaim within ${RECLAIM_RADIUS}y ${when} (no sickness), ${healer}${hostiles === undefined ? "" : `; ${hostiles}`}`;
 }
 
 /**
@@ -1362,7 +1433,7 @@ export function formatStateSummary(
   // distinguished from a false one for the negative to be honest at all.
   if (s.resting?.value === true) uiParts.push("resting");
   if (uiParts.length > 0) lines.push(`ui: ${uiParts.join(" | ")}`);
-  if (isGhost) lines.push(ghostLine(s, pos, o.now ?? Date.now()));
+  if (isGhost) lines.push(ghostLine(s, pos, o.now ?? Date.now(), snapshot.units));
 
   // stream
   const gaps = snapshot.gaps?.length ?? 0;

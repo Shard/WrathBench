@@ -3,6 +3,7 @@ import {
   CONTEXT_POLICY,
   auraLine,
   chatTail,
+  corpseHostiles,
   assembleContext,
   foldUiOpenWindows,
   formatEventLine,
@@ -559,6 +560,78 @@ describe("formatStateSummary", () => {
         "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)",
     );
     expect(text).not.toContain("reclaim within 39y");
+  });
+
+  // A ghost 25y from its corpse, with a camp round it; names invented.
+  const ghostAt = (units: Record<string, unknown>[], at = { map: 0, x: -5600, y: 400, z: 390 }) => ({
+    self: {
+      fields: { playerFlags: { value: 0x10 } },
+      position: { value: at },
+      corpse: { value: { map: 0, x: -5600, y: 425, z: 391, source: "corpse_query" } },
+      reclaimDelay: { value: { delayMs: 0, readyAt: 1_000_000 } },
+    },
+    units,
+  });
+  const camp: Record<string, unknown>[] = [
+    { guid: "1", name: "Ashen Hexer", type: "unit", level: 7, x: -5605, y: 430, reaction: "hostile" },
+    { guid: "2", name: "Ashen Hexer", type: "unit", level: 7, x: -5590, y: 420, reaction: "hostile" },
+    { guid: "3", name: "Ashen Brute", type: "unit", level: 8, x: -5612, y: 438, reaction: "hostile" },
+    // A Hexer of another level is its own entry.
+    { guid: "4", name: "Ashen Hexer", type: "unit", level: 6, x: -5600, y: 440, reaction: "hostile" },
+    // Dead, neutral, too far from the corpse, a player, and a position never served: none named.
+    { guid: "5", name: "Ashen Brute", type: "unit", level: 8, x: -5601, y: 426, reaction: "hostile", dead: true },
+    { guid: "6", name: "Snow Hare", type: "unit", level: 1, x: -5600, y: 424, reaction: "neutral" },
+    { guid: "7", name: "Ashen Lookout", type: "unit", level: 9, x: -5600, y: 446, reaction: "hostile" },
+    { guid: "8", name: "Rival", type: "player", level: 10, x: -5600, y: 425, reaction: "hostile" },
+    { guid: "9", name: "Ashen Shade", type: "unit", level: 7, reaction: "hostile" },
+  ];
+
+  test("a ghost's line names the hostiles within 20y of its corpse with their levels, most first", () => {
+    const text = formatStateSummary(ghostAt(camp), { sessionLive: true, now: 1_000_000 });
+    const ghost = text.split("\n").find((l) => l.startsWith("ghost"));
+    expect(ghost).toBe(
+      "ghost at (-5600,400); corpse 25y away at (-5600,425): reclaim within 39y now (no sickness), " +
+        "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11); " +
+        "hostile within 20y of your corpse: Ashen Hexer L7 ×2, Ashen Brute L8, Ashen Hexer L6",
+    );
+  });
+
+  test("past four names the rest are counted; a level not served yet prints the name alone", () => {
+    const many = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"].map((name, i) => ({
+      guid: `m${i}`,
+      name,
+      type: "unit",
+      ...(i === 0 ? {} : { level: 5 }),
+      x: -5600 + i,
+      y: 425,
+      reaction: "hostile",
+    }));
+    const extra = { guid: "m9", name: "Echo", type: "unit", level: 5, x: -5600, y: 430, reaction: "hostile" };
+    expect(corpseHostiles(ghostAt([...many, extra]))).toBe(
+      "hostile within 20y of your corpse: Echo L5 ×2, Alpha, Bravo L5, Charlie L5 +1 more",
+    );
+  });
+
+  test("no hostile is said only from inside reclaim range, where the ghost is sent all that is round its corpse", () => {
+    const quiet = [camp[5]!];
+    expect(corpseHostiles(ghostAt(quiet))).toBe("no hostile in view within 20y of your corpse");
+    // A creature at the corpse whose reaction is not served yet, or one whose position is not: never "none".
+    const uncoloured = { guid: "u1", name: "Ashen Hexer", type: "unit", level: 7, x: -5600, y: 426 };
+    expect(corpseHostiles(ghostAt([...quiet, uncoloured]))).toBeUndefined();
+    expect(corpseHostiles(ghostAt([...quiet, camp[8]!]))).toBeUndefined();
+    // An uncoloured one far from the corpse leaves "none" standing.
+    expect(corpseHostiles(ghostAt([...quiet, { ...uncoloured, y: 500 }]))).toBe("no hostile in view within 20y of your corpse");
+    // From 200y off the camp may simply not have been sent: nothing is said.
+    expect(corpseHostiles(ghostAt(quiet, { map: 0, x: -5600, y: 225, z: 390 }))).toBeUndefined();
+    // Hostiles seen from far off are still named.
+    expect(corpseHostiles(ghostAt(camp, { map: 0, x: -5600, y: 225, z: 390 }))).toContain("Ashen Hexer L7 ×2");
+    // A corpse on another map, or inside a dungeon asked about from outside it: nothing.
+    expect(corpseHostiles(ghostAt(camp, { map: 1, x: -5600, y: 400, z: 390 }))).toBeUndefined();
+    const inDungeon = ghostAt(camp);
+    (inDungeon.self.corpse.value as Record<string, unknown>)["instanceMap"] = 36;
+    expect(corpseHostiles(inDungeon)).toBeUndefined();
+    // No corpse observed yet: nothing.
+    expect(corpseHostiles({ self: { position: { value: { map: 0, x: 0, y: 0 } } }, units: camp })).toBeUndefined();
   });
 });
 

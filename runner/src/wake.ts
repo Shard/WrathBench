@@ -85,7 +85,7 @@
  */
 
 import { renderRoutines, routineDetailKey, routinesInView, type ActionHintNote, type MoveOwner, type ProgramFact, type ProgramFacts, type ProgramLogLine, type RoutineRow } from "@wrathbench/mcp";
-import { durabilityLine, PLAYER_FLAGS_GHOST, renderNotices, wornReadings, type DurabilityLevel, type SnapshotLike } from "./context";
+import { corpseHostiles, durabilityLine, PLAYER_FLAGS_GHOST, renderNotices, wornReadings, type DurabilityLevel, type SnapshotLike } from "./context";
 import type { HarnessNotice } from "./sandbox/host";
 import { damageTaken, DEATH_WINDOW_MS, type DeathCause } from "./sandbox/snippet-delta";
 
@@ -753,11 +753,16 @@ export interface WakeSample {
         health?: { value?: unknown };
         /** Read for `playerFlags`, the ghost bit. */
         fields?: Record<string, { value?: unknown } | undefined>;
+        /** A ghost's own position and its corpse's, for the hostiles round the corpse (`corpseHostiles`). */
+        position?: { value?: unknown };
+        corpse?: { value?: unknown };
       }
     | null
     | undefined;
   /** Worn and carried items, as the HUD's durability line reads them. */
   inventory?: SnapshotLike["inventory"];
+  /** The objects in view, as the HUD's ghost line reads them for the hostiles round the corpse. */
+  units?: SnapshotLike["units"];
   xp?: { value?: unknown } | null | undefined;
   observation?: { connected?: boolean } | undefined;
   /** A fan-out run's sample: each character's level, whether its stream is open, and whether it is dead or a ghost (the loop's digests). */
@@ -1315,7 +1320,8 @@ export function deathLine(cause: DeathCause): string | undefined {
 /**
  * The character's condition when something is wrong, in the HUD's own
  * reading, or nothing: "character: ghost, died 7m42s ago" (or dead) off the
- * player frame's health and the ghost bit, and the HUD's durability line
+ * player frame's health and the ghost bit, a ghost's ending with the
+ * hostiles round its corpse (`corpseHostiles`), and the HUD's durability line
  * when worn gear is broken or low (`durabilityLine`). Nothing at fan-out,
  * whose sample is the characters' digests: there it is
  * `fanoutConditionLines`. Pure.
@@ -1328,7 +1334,10 @@ export function conditionLines(sample: WakeSample | null, diedAt: number | undef
   const flags = self?.fields?.["playerFlags"]?.value;
   const ghost = typeof flags === "number" && (flags & PLAYER_FLAGS_GHOST) !== 0;
   const dead = health !== null && typeof health === "object" && health.current === 0;
-  if (ghost || dead) out.push(`character: ${ghost ? "ghost" : "dead"}${diedAt !== undefined ? `, died ${sleptWords(now - diedAt)} ago` : ""}`);
+  // A ghost's line ends as the HUD's ghost line does, with the hostiles round its corpse (operator, 2026-11-20).
+  const hostiles = ghost ? corpseHostiles(sample) : undefined;
+  if (ghost || dead)
+    out.push(`character: ${ghost ? "ghost" : "dead"}${diedAt !== undefined ? `, died ${sleptWords(now - diedAt)} ago` : ""}${hostiles === undefined ? "" : `; ${hostiles}`}`);
   const worn = durabilityLine(sample.inventory);
   if (worn !== undefined) out.push(worn);
   return out;
