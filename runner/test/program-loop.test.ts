@@ -1056,6 +1056,31 @@ describe("the failure path: the character's condition and a death's cause", () =
     expect(conditionLines({ ...GHOST_BROKEN, seats: [{ character: "Alfa", level: 4, connected: true }] }, now - 1_000, now)).toEqual([]);
   });
 
+  test("a ghost's condition line names the hostiles round its corpse, as the HUD's ghost line does", () => {
+    const now = 10_000_000;
+    const ghost: WakeSample = {
+      self: {
+        health: { value: { current: 1, max: 120 } },
+        fields: { playerFlags: { value: 0x10 } },
+        position: { value: { map: 0, x: 100, y: 100, z: 5 } },
+        corpse: { value: { map: 0, x: 100, y: 120, z: 5 } },
+      },
+      units: [
+        { guid: "1", name: "Ashen Hexer", type: "unit", level: 7, x: 104, y: 124, reaction: "hostile" },
+        { guid: "2", name: "Ashen Hexer", type: "unit", level: 7, x: 96, y: 118, reaction: "hostile" },
+      ],
+    };
+    expect(conditionLines(ghost, now - 41_000, now)).toEqual([
+      "character: ghost, died 41s ago; hostile within 20y of your corpse: Ashen Hexer L7 ×2",
+    ]);
+    // Inside reclaim range with nothing hostile round it, the line says so; a body not yet released says neither.
+    expect(conditionLines({ ...ghost, units: [] }, now - 41_000, now)).toEqual([
+      "character: ghost, died 41s ago; no hostile in view within 20y of your corpse",
+    ]);
+    const body: WakeSample = { ...ghost, self: { ...ghost.self, health: { value: { current: 0, max: 120 } }, fields: { playerFlags: { value: 0 } } } };
+    expect(conditionLines(body, now - 5_000, now)).toEqual(["character: dead, died 5s ago"]);
+  });
+
   test("a death's line names the last hitter and the window's damage in the snippet delta's words; none without a hit", () => {
     expect(deathLine({ ts: 1, killer: "Defias Miner", damage: DEFIAS })).toBe(DEATH_LINE);
     expect(deathLine({ ts: 1, damage: [] })).toBeUndefined();

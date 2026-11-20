@@ -197,7 +197,7 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
    * raw snapshot does not expose flat: our own auras by name (`aurasOf`),
    * `units()` (nearest-first, items/containers
    * dropped — with mob health/maxHealth deliberately stripped, since CONTRACTS.md
-   * forbids exact mob health and the HUD only needs name, distance, dead, roles,
+   * forbids exact mob health and the HUD only needs name, distance, position, dead, roles,
    * questgiver marker, target and reaction; a party member in view keeps its health and
    * ghost flag for the party line), the party with its party frames
    * (`group()`), `bag()`
@@ -217,6 +217,9 @@ export function benchmarkChildExtension({ client, summarize, forwardClientCache 
       type: u.type,
       level: u.level,
       distance: u.distance,
+      // Where it stands, for the ghost line's hostiles round the corpse (`corpseHostiles` in context.ts).
+      x: u.x,
+      y: u.y,
       dead: u.dead,
       // The elite dragon a client draws round the portrait, for the nearby line.
       rank: u.rank,
