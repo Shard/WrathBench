@@ -138,14 +138,17 @@ describe("the views", () => {
     expect(dungeonPoints([none]).omitted.map((o) => o.why)).toEqual(["no boss killed"]);
   });
 
-  test("cost × time plots only the attempts that killed the route's seven, with or without Cookie, and less of both is better", () => {
+  test("cost × time plots only the cleared attempts, with or without Cookie, and less of both is better", () => {
     const v = view("cost-time");
     const m = dungeonPoints([clear8, clear7, short, unpriced], v);
     expect(m.points.map((p) => [p.model, p.x, p.y])).toEqual([
       ["eight", 4.2, 7_000_000],
       ["seven", 9, 5_000_000],
     ]);
-    expect(m.omitted.map((o) => o.why)).toEqual(["3 of 7 bosses", "1 of 7 bosses"]);
+    expect(m.omitted.map((o) => o.why)).toEqual(["not cleared, 3 of 7 bosses", "not cleared, 1 of 7 bosses"]);
+    // Its set is the cleared set: an uncleared attempt is left off whatever its bosses.
+    const notCleared = row("skip", attempt({ bosses: all.slice(0, 6), lastBossMs: 3_000_000, costUsd: 1 }));
+    expect(dungeonPoints([clear8, clear7, notCleared], v).points.map((p) => p.model)).toEqual(["eight", "seven"]);
     // Neither beats the other on both: both stand.
     expect(standingKeys(m.points, v)).toEqual(new Set([boardRowKey(clear8), boardRowKey(clear7)]));
     const layout = ladderChartLayout(m.points, box, v.x, v.y, standingKeys(m.points, v));

@@ -153,12 +153,12 @@ with the tier's row of axis views in its own vocabulary on the same `?view=`
 (`DUNGEON_VIEWS` in `src/lib/dungeons.ts`). Time from launch (to the clear,
 or to the last boss) against bosses killed is the default; `cost-bosses` is
 the best attempt's cost against bosses killed, and `cost-time` its cost
-against its time for the attempts that killed all seven bosses on the route,
-with or without Cookie. The cost is the ladder's reading of a run's cost
-(`runner/viewer/run-cost.ts`), summed over an attempt's runs. Bosses are
-counted of the seven on the route to VanCleef; Cookie, off the route, is an
-optional extra with a column of its own that orders nothing (operator,
-2026-11-20). None of the tier's other controls is shown: a board
+against its time to clear for the cleared attempts. The cost is the
+ladder's reading of a run's cost (`runner/viewer/run-cost.ts`), summed over
+an attempt's runs. Bosses are counted of the seven on the route to VanCleef,
+and an attempt is cleared when it killed all seven and ended on VanCleef's
+kill; Cookie, off the route, is an optional extra with a column of its own
+that orders nothing (operator, 2026-11-20). None of the tier's other controls is shown: a board
 row is one attempt, not a mean over an entry's runs, so the filters and the
 Pareto toggle have nothing to narrow, and the chart already names its fronts.
 Both builds show it. The five-agent

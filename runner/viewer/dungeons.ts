@@ -13,9 +13,12 @@
  *   member runs on `deadmines`, grouped by party id. It counts as the
  *   scheduler counts it (`partyAttempt`, the campaigns' own rule), so the
  *   board's n is the scheduler's.
- * - **Cleared** is a counted attempt that ended on the kill of Edwin VanCleef
- *   (`kill-target`). An attempt that ended on the clock, or because a member
- *   went idle or reached its call ceiling, is counted and not cleared.
+ * - **Cleared** is a counted attempt that killed all seven bosses on the
+ *   route (`DEADMINES_REQUIRED`) and ended on the kill of Edwin VanCleef
+ *   (`kill-target`), operator 2026-11-20. One that killed VanCleef having
+ *   skipped a route boss is counted and not cleared, and ranks with the rest
+ *   by bosses and the time to its last; so is one that ended on the clock, or
+ *   because a member went idle or reached its call ceiling.
  * - **Time to clear** runs from launch (the earliest member's start) to the
  *   VanCleef kill as the server reported it, so a run's teardown is not in it.
  * - **Bosses** are the seven on the route to Edwin VanCleef, counted alike
@@ -47,7 +50,7 @@ import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
-export const DUNGEON_BOARD_VERSION = 3;
+export const DUNGEON_BOARD_VERSION = 4;
 
 /**
  * Every Deadmines boss by creature entry (docs/proposals/GROUP-PLAY.md §6):
@@ -181,7 +184,7 @@ export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
   const at = (ts: number | null): number | null => (ts === null || !Number.isFinite(launchedAt) ? null : Math.max(0, ts - launchedAt));
   const endKill = [...bossKills.values()].filter((b) => b.entry === DEADMINES_END_ENTRY).sort((a, b) => a.ts - b.ts)[0];
   const ended = runs.some((r) => r.terminationReason === "kill-target");
-  const cleared = verdict.counted && ended;
+  const cleared = verdict.counted && ended && bosses.length === DEADMINES_REQUIRED.length;
   // The kill as the server reported it; the member's end when no mark says so.
   const clearTs = endKill?.ts ?? (ended ? (runs.find((r) => r.terminationReason === "kill-target")?.endedAt ?? null) : null);
   const lastBoss = bossKills.size === 0 ? null : Math.max(...[...bossKills.values()].map((b) => b.ts));

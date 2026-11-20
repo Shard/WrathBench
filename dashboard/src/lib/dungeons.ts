@@ -149,8 +149,8 @@ export interface DungeonView {
   hint: string;
   x: DungeonAxis;
   y: DungeonAxis;
-  /** The fewest bosses an attempt must have killed to be plotted, when the view asks only about the furthest. */
-  minBosses?: number;
+  /** Plot only the cleared attempts, when the view asks only about a clear. */
+  clearedOnly?: true;
 }
 
 /**
@@ -160,9 +160,10 @@ export interface DungeonView {
  *
  * - **time × bosses**, the default: speed against progress.
  * - **cost × bosses**: what an attempt cost against how far it got.
- * - **cost × time**: among the attempts that killed all seven bosses on the
- *   route, with or without Cookie, what each cost against how long it took;
- *   both lower is better.
+ * - **cost × time**: among the cleared attempts (all seven bosses on the
+ *   route, with or without Cookie, and the run ended on VanCleef's kill: the
+ *   viewer's `cleared`), what each cost against its time to clear; both
+ *   lower is better.
  *
  * Cost is on x wherever it is drawn, as on the ladder: the layout's log axis
  * is x's alone (`ladderChartLayout`).
@@ -173,10 +174,10 @@ export const DUNGEON_VIEWS: readonly DungeonView[] = [
   {
     id: "cost-time",
     title: "cost × time",
-    hint: `${COST_AXIS.caption} against ${TIME_AXIS.caption}, for the attempts that killed all ${BOSS_NAMES.size} bosses on the route`,
+    hint: `${COST_AXIS.caption} against the time from launch to the clear, for the cleared attempts: all ${BOSS_NAMES.size} bosses on the route`,
     x: COST_AXIS,
     y: TIME_AXIS,
-    minBosses: 7,
+    clearedOnly: true,
   },
 ];
 
@@ -206,7 +207,7 @@ export interface DungeonPoint {
 
 export interface DungeonPointsModel {
   points: DungeonPoint[];
-  /** Rows with no point, and why: an attempt with no reading on an axis, or short of the view's bosses. */
+  /** Rows with no point, and why: an attempt with no reading on an axis, or not cleared on a view of clears. */
   omitted: { label: string; why: string }[];
 }
 
@@ -216,8 +217,8 @@ export interface DungeonPointsModel {
  * its time to clear, an uncleared one at the time of its last boss: speed
  * against progress, more bosses in less time top-left. The order is the
  * table's, which puts every cleared row first; the chart does not restate it.
- * A row whose best attempt has no reading on either axis, or killed fewer
- * bosses than the view asks for, is left off and named in the chart's note.
+ * A row whose best attempt has no reading on either axis, or did not clear on
+ * a view of clears, is left off and named in the chart's note.
  */
 export function dungeonPoints(rows: readonly DungeonRowView[], view: DungeonView = DEFAULT_DUNGEON_VIEW): DungeonPointsModel {
   const points: DungeonPoint[] = [];
@@ -226,8 +227,8 @@ export function dungeonPoints(rows: readonly DungeonRowView[], view: DungeonView
     const model = row.model ?? "(unnamed)";
     const label = characterSeriesLabel(model, row.effort);
     const a = row.best;
-    if (view.minBosses !== undefined && a.bosses.length < view.minBosses) {
-      omitted.push({ label, why: `${a.bosses.length} of ${BOSS_NAMES.size} bosses` });
+    if (view.clearedOnly === true && !a.cleared) {
+      omitted.push({ label, why: `not cleared, ${a.bosses.length} of ${BOSS_NAMES.size} bosses` });
       continue;
     }
     const x = view.x.read(a);

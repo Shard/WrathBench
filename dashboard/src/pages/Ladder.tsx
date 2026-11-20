@@ -669,7 +669,7 @@ export default function Ladder() {
 }
 
 const BOARD_NOTE =
-  "The fixed Deadmines episode from a staged level-20 party, one agent driving all five characters. A row is a model condition's best attempt, with how many of its counted attempts cleared. Cleared rows first, by time to clear from launch; the rest by bosses killed of the seven on the route to VanCleef, then time to the last. Cookie, off the route, is an optional extra. Deaths, wipes and Cookie are shown and never order a row.";
+  "The fixed Deadmines episode from a staged level-20 party, one agent driving all five characters. A row is a model condition's best attempt, with how many of its counted attempts cleared: killed all seven bosses on the route to VanCleef and ended on his kill. Cleared rows first, by time to clear from launch; the rest by bosses killed of the seven, then time to the last. Cookie, off the route, is an optional extra. Deaths, wipes and Cookie are shown and never order a row.";
 
 /**
  * One dungeon tab: the board's table for its id, as the viewer derived and
@@ -704,7 +704,7 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; 
             <tr>
               <th>model</th>
               <th>harness</th>
-              <th class="right" title="counted attempts that cleared, of the counted attempts">cleared</th>
+              <th class="right" title="counted attempts that cleared, of the counted attempts: all seven bosses on the route, ended on VanCleef's kill">cleared</th>
               <th class="right" title="the best attempt's time from launch to Edwin VanCleef's death">time</th>
               <th class="right" title="the best attempt's bosses killed, of the seven on the route to Edwin VanCleef">bosses</th>
               <th class="right" title={COOKIE_TITLE}>
