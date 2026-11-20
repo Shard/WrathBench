@@ -986,8 +986,9 @@ const CORPSE_HOSTILE_NAMES = 4;
  * level, most first. A ghost is sent the units within sight of its corpse
  * while it is within sight of it (the core's corpse visibility for a ghost),
  * so the list is only complete near the corpse: "no hostile in view within
- * 20y of your corpse" is said only from inside reclaim range, and from
- * further off an empty list says nothing. Nothing when the corpse is on
+ * 20y of your corpse" is said only from inside reclaim range, and only when
+ * every living creature there has a reaction and a position served (unknown
+ * is never guessed); from further off an empty list says nothing. Nothing when the corpse is on
  * another map or inside a dungeon asked about from outside it. Pure.
  */
 export function corpseHostiles(snapshot: {
@@ -1002,16 +1003,27 @@ export function corpseHostiles(snapshot: {
   const cx = corpse.x;
   const cy = corpse.y;
   const counts = new Map<string, number>();
+  // A living creature that could be within reach of the corpse but whose
+  // reaction or position has not been served: "none" would be a guess.
+  let unknown = false;
   for (const u of snapshot.units ?? []) {
-    if (u.type !== "unit" || u.reaction !== "hostile" || u.dead === true) continue;
-    if (typeof u.x !== "number" || typeof u.y !== "number" || Math.hypot(u.x - cx, u.y - cy) > CORPSE_HOSTILE_YARDS) continue;
+    if (u.type !== "unit" || u.dead === true) continue;
+    if (typeof u.x !== "number" || typeof u.y !== "number") {
+      unknown = true;
+      continue;
+    }
+    if (Math.hypot(u.x - cx, u.y - cy) > CORPSE_HOSTILE_YARDS) continue;
+    if (u.reaction !== "hostile") {
+      if (typeof u.reaction !== "string") unknown = true;
+      continue;
+    }
     const name = u.name != null ? String(u.name) : "(unnamed)";
     const label = typeof u.level === "number" ? `${name} L${u.level}` : name;
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
   if (counts.size === 0) {
     const near =
-      typeof pos.x === "number" && typeof pos.y === "number" && Math.hypot(pos.x - cx, pos.y - cy) <= RECLAIM_RADIUS;
+      !unknown && typeof pos.x === "number" && typeof pos.y === "number" && Math.hypot(pos.x - cx, pos.y - cy) <= RECLAIM_RADIUS;
     return near ? `no hostile in view within ${CORPSE_HOSTILE_YARDS}y of your corpse` : undefined;
   }
   const named = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));

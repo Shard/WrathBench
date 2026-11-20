@@ -1384,8 +1384,9 @@ line when worn gear is broken or low. A ghost's line, there and on the HUD,
 ends with `hostile within 20y of your corpse: <name> L<level> ×n, …` (at most
 four names, then `+N more`), or `no hostile in view within 20y of your
 corpse` from within the 39-yard reclaim range, where the core has sent a
-ghost everything within sight of its corpse; further off an empty list says
-nothing (`corpseHostiles`, operator, 2026-11-20). A turn's message and every fixed-loop
+ghost everything within sight of its corpse, and only when every living
+creature there has its reaction and position served; further off an empty
+list says nothing (`corpseHostiles`, operator, 2026-11-20). A turn's message and every fixed-loop
 request carry a fresh HUD, so their blocks leave the condition out. At
 fan-out each line names its character: a `deaths:` block with one line per
 character that died since the last wake, from its own seat's latch

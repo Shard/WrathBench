@@ -615,6 +615,12 @@ describe("formatStateSummary", () => {
   test("no hostile is said only from inside reclaim range, where the ghost is sent all that is round its corpse", () => {
     const quiet = [camp[5]!];
     expect(corpseHostiles(ghostAt(quiet))).toBe("no hostile in view within 20y of your corpse");
+    // A creature at the corpse whose reaction is not served yet, or one whose position is not: never "none".
+    const uncoloured = { guid: "u1", name: "Ashen Hexer", type: "unit", level: 7, x: -5600, y: 426 };
+    expect(corpseHostiles(ghostAt([...quiet, uncoloured]))).toBeUndefined();
+    expect(corpseHostiles(ghostAt([...quiet, camp[8]!]))).toBeUndefined();
+    // An uncoloured one far from the corpse leaves "none" standing.
+    expect(corpseHostiles(ghostAt([...quiet, { ...uncoloured, y: 500 }]))).toBe("no hostile in view within 20y of your corpse");
     // From 200y off the camp may simply not have been sent: nothing is said.
     expect(corpseHostiles(ghostAt(quiet, { map: 0, x: -5600, y: 225, z: 390 }))).toBeUndefined();
     // Hostiles seen from far off are still named.
