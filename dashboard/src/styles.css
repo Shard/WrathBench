@@ -39,6 +39,16 @@
   --member-3: #cc79a7;
   --member-4: #f0e442;
   --member-5: #009e73;
+  /* The feed's code (`lib/syntax.ts`) and diffs, on colours the page already
+     has, so both themes follow without a second palette. */
+  --syn-kw: var(--pi);
+  --syn-str: var(--ok);
+  --syn-num: var(--warn);
+  --syn-lit: var(--warn);
+  --syn-fn: var(--accent);
+  --syn-com: var(--dim);
+  --diff-add: var(--ok);
+  --diff-del: var(--err);
 
   /*
    * The type scale. Seven steps, in rem against the browser's own root size,
@@ -427,6 +437,8 @@ button.on { border-color: var(--accent); font-weight: 700; }
 .entry > .head { display: flex; gap: 10px; align-items: baseline; padding: 5px 10px;
                  border-bottom: 1px solid var(--line); font-size: var(--fs-sm); color: var(--dim); }
 .entry > .head .t { color: var(--fg); font-weight: 700; }
+/* On a phone a card's head figures wrap to a second line whole, rather than each squeezed into a column. */
+@media (max-width: 720px) { .entry > .head { flex-wrap: wrap; row-gap: 2px; } }
 .entry.bad, .map-bubble.yell { border-left: 3px solid var(--err); }
 /*
  * A turn spent reflecting rather than acting: the same experience purple the
@@ -447,6 +459,26 @@ button.on { border-color: var(--accent); font-weight: 700; }
 .entry .head .lat { color: var(--fg); }
 pre.block { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
 pre.block.fold { max-height: 4.5em; overflow: hidden; }
+/* A diff folds to more lines than a block: its first change is the point. */
+pre.block.fold.diff { max-height: 15em; }
+.syn-kw { color: var(--syn-kw); }
+.syn-str { color: var(--syn-str); }
+.syn-num { color: var(--syn-num); }
+.syn-lit { color: var(--syn-lit); }
+.syn-fn { color: var(--syn-fn); }
+.syn-com { color: var(--syn-com); font-style: italic; }
+/* An edit: removed lines over added ones, the changed words marked, a gutter sign each. */
+pre.block.diff > .dl { display: block; padding-left: 1.5ch; text-indent: -1.5ch; }
+pre.block.diff > .dl.del { background: color-mix(in srgb, var(--diff-del) 12%, transparent); }
+pre.block.diff > .dl.add { background: color-mix(in srgb, var(--diff-add) 12%, transparent); }
+pre.block.diff > .dl.gap { color: var(--dim); }
+pre.block.diff > .dl.del::before { content: "-"; color: var(--diff-del); }
+pre.block.diff > .dl.add::before { content: "+"; color: var(--diff-add); }
+pre.block.diff > .dl.ctx::before, pre.block.diff > .dl.gap::before { content: " "; }
+pre.block.diff > .dl.del .dw { background: color-mix(in srgb, var(--diff-del) 35%, transparent); border-radius: 2px; }
+pre.block.diff > .dl.add .dw { background: color-mix(in srgb, var(--diff-add) 35%, transparent); border-radius: 2px; }
+/* What a call is to (a file, a routine and its arguments): one line, cut with its whole on the hover. */
+.entry > .head .path { color: var(--fg); min-width: 0; flex-shrink: 100; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toggle { background: none; border: none; color: var(--accent); padding: 0; font-size: var(--fs-sm); }
 
 /* The whole-feed expand preset, in the feed's own heading. */

@@ -56,6 +56,9 @@
  * under it. A routine's moves, a move whose call is off the window, and every
  * move of a run recorded without the stamp stay rows.
  *
+ * A `watchdog` record whose `termination` follows with the same reason is
+ * not a row: the termination says the same thing (`foldedWatchdogs`).
+ *
  * Joined by time: a `deploy` a write set off and the `wake` a `yield` ended
  * on are drawn on that call's card, not as rows: the deploy says on the card
  * what the write's result already half says, and the wake's block is the
@@ -419,6 +422,34 @@ function indexJoins(entries: readonly FeedEntry[]): Joins {
   return out;
 }
 
+/** The records that end a search for a watchdog's termination: the run went on, so it was not this one's. */
+const WATCHDOG_STOP: ReadonlySet<string> = new Set(["request", "response", "tool_call", "snippet", "meta", "pause", "resume"]);
+
+/**
+ * Watchdog records whose termination follows with the same reason. The
+ * watchdog writes its verdict and the episode ends on it, so on an idle stop
+ * the two say the same reason and detail back to back; the termination says
+ * it once. Only ambient records (a wind-down, the last state sample) may sit
+ * between.
+ */
+function foldedWatchdogs(entries: readonly FeedEntry[]): Set<FeedEntry> {
+  const out = new Set<FeedEntry>();
+  for (let w = 0; w < entries.length; w++) {
+    const dog = entries[w]!;
+    if (dog.t !== "watchdog") continue;
+    const reason = (dog as unknown as Record<string, unknown>)["reason"];
+    for (let k = w + 1; k < entries.length && k - w <= LOOKAHEAD; k++) {
+      const e = entries[k]!;
+      if (e.t === "termination") {
+        if ((e as unknown as Record<string, unknown>)["reason"] === reason) out.add(dog);
+        break;
+      }
+      if (WATCHDOG_STOP.has(e.t) || e.t === "watchdog") break;
+    }
+  }
+  return out;
+}
+
 /* ---------------------------------------------------------- envelopes */
 
 /** A model time this short is calls following one another, not the model. */
@@ -556,7 +587,8 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
   const actionsByCall = indexActions(entries);
   const movesByCall = indexMoves(entries, actionsByCall);
   const joins = indexJoins(entries);
-  const hidden = (s: FeedEntry): boolean => joined(s, actionsByCall) || ownMove(s, movesByCall) || joins.claimed.has(s);
+  const dogs = foldedWatchdogs(entries);
+  const hidden = (s: FeedEntry): boolean => joined(s, actionsByCall) || ownMove(s, movesByCall) || joins.claimed.has(s) || dogs.has(s);
 
   const after = harness !== null && ENVELOPE_AFTER.has(harness);
   const timed = harness !== "codex";

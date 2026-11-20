@@ -228,7 +228,9 @@ describe("the feed's two tiers, drawn", () => {
     expect(texts(snippet!, ".head .tally-chip.hint")).toEqual(["1 hint"]);
     // `log_status` is the model's own words: never closed.
     expect(log!.querySelector(".fold-toggle")).toBeNull();
-    expect(texts(log!, "pre.block")).toEqual(['{"text":"noted"}', "logged"]);
+    // Its one short argument is on its head, not a JSON body.
+    expect(texts(log!, ".head .path")).toEqual(["noted"]);
+    expect(texts(log!, "pre.block")).toEqual(["logged"]);
 
     setPreset("minimal");
     expect(snippet!.querySelectorAll(".body")).toHaveLength(0);
@@ -289,6 +291,53 @@ describe("the feed's two tiers, drawn", () => {
     expect(walk!.querySelectorAll(".act-line")).toHaveLength(0);
     setPreset("all");
     expect(walk!.querySelectorAll(".act-line")).toHaveLength(2);
+    dispose();
+  });
+});
+
+describe("code and edits, drawn", () => {
+  test("an edit is a diff under its path, the changed words marked and the code highlighted", async () => {
+    const before = ["export async function grind() {", "  await sdk.moveTo({x:-5500,y:-470,z:400});", "  return 1;", "}"].join("\n");
+    const after = ["export async function grind() {", "  await sdk.moveTo({x:-5500,y:-280,z:353});", "  return 1;", "}"].join("\n");
+    const { host, dispose } = await mount(() => [
+      e("tool_call", 1, { turn: 1, name: "edit_file", args: { path: "main.ts", old_string: before, new_string: after }, dispatchTs: 1 }),
+      e("tool_result", 2, { turn: 1, name: "edit_file", isError: false, text: "edited main.ts (1 replacement)" }),
+    ]);
+    const card = host.children[0]!;
+    expect(texts(card, ".head .path")).toEqual(["main.ts"]);
+    expect(texts(card, "pre.diff > .dl.del")).toEqual(["await sdk.moveTo({x:-5500,y:-470,z:400});"]);
+    expect(texts(card, "pre.diff > .dl.add")).toEqual(["await sdk.moveTo({x:-5500,y:-280,z:353});"]);
+    expect(texts(card, "pre.diff > .dl.ctx")).toEqual(["export async function grind() {", "return 1;", "}"]);
+    expect(texts(card, ".dl.del .dw")).toEqual(["470", "400"]);
+    expect(texts(card, ".dl.add .dw")).toEqual(["280", "353"]);
+    expect(texts(card, ".dl .syn-kw")).toContain("await");
+    // No JSON of the args anywhere on the card.
+    expect(card.textContent).not.toContain("old_string");
+    dispose();
+  });
+
+  test("a write is its file, highlighted, under its path; a snippet's code is highlighted; a wait is one line", async () => {
+    const { host, dispose } = await mount(
+      () => [
+        e("tool_call", 1, { turn: 1, name: "write_file", args: { path: "lib/util.ts", content: "export const a = 1;\n// done" }, dispatchTs: 1 }),
+        e("tool_result", 2, { turn: 1, name: "write_file", isError: false, text: "created lib/util.ts" }),
+        e("tool_call", 3, { turn: 1, name: "run_snippet", args: {}, dispatchTs: 3 }),
+        e("snippet", 3, { turn: 1, code: "return state.xp.value" }),
+        e("snippet_result", 4, { turn: 1, name: "run_snippet", isError: false, text: 'ok (1ms)\n=> "{\\"xp\\":7066}"' }),
+        e("tool_call", 5, { turn: 1, name: "yield", args: { seconds: 60 }, dispatchTs: 5 }),
+        e("tool_result", 65_000, { turn: 1, name: "yield", isError: false, text: "[wake 1 · slept 1m00s]" }),
+      ],
+      () => "all",
+    );
+    const [write, snippet] = [...host.children];
+    expect(texts(write!, ".head .path")).toEqual(["lib/util.ts"]);
+    expect(texts(write!, "pre.block .syn-kw")).toEqual(["export", "const"]);
+    expect(texts(write!, "pre.block .syn-com")).toEqual(["// done"]);
+    expect(texts(snippet!, "pre.block .syn-kw")).toEqual(["return"]);
+    // The value it returned as a JSON string, laid out.
+    expect(texts(snippet!, "pre.block")[1]).toBe("ok (1ms) => { xp: 7066 }");
+    expect(host.textContent).toContain("1m");
+    expect(host.textContent).not.toContain('{"seconds":60}');
     dispose();
   });
 });

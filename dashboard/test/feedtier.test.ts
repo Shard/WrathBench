@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FeedEntry } from "../../runner/viewer/api-types";
 import { groupFeed, type FeedGroup } from "../src/lib/feedgroup";
-import { deployChips, leadChips, lineOf, milestoneLine, programErrorLine } from "../src/lib/feedline";
+import { deployChips, endLine, leadChips, lineOf, milestoneLine, programErrorLine } from "../src/lib/feedline";
 import {
   ACTIONS,
   KINDS,
@@ -380,6 +380,26 @@ describe("a row as one line", () => {
     expect(one([e("response", 1, { kind: "compaction", text: "", tools: [], usage: { prompt: 40_000, completion: 900 }, piCostUsd: 0.0123 })])).toMatchObject({ label: "compaction call", text: "40k in · 900 out · $0.012" });
     // A codex turn that wrote nothing still counted its tokens.
     expect(one([e("response", 1, { text: "", tools: [], usage: { prompt: 9_000, completion: 767 } })]).text).toBe("767 out");
+  });
+
+  test("the run's end as one line, its milliseconds a duration", () => {
+    expect(endLine(e("termination", 1, { reason: "idle", detail: "no tool call for 1248527ms: 5 wakes in a row answered without one" }))).toBe(
+      "idle — no tool call for 20m49s: 5 wakes in a row answered without one",
+    );
+    expect(endLine(e("watchdog", 1, { reason: "stall", detail: "no output for 4200ms" }))).toBe("stall — no output for 4.2s");
+    // A public watchdog: its reason alone.
+    expect(endLine(e("watchdog", 1, { reason: "idle" }))).toBe("idle");
+    expect(lineOf(groupFeed([e("termination", 1, { reason: "episode-limit", detail: "episode wall clock 21600211ms" })])[0]!)).toMatchObject({ kind: "end", label: "termination", text: "episode-limit — episode wall clock 6h00m" });
+  });
+
+  test("codex's own tool calls and file changes", () => {
+    const one = (entries: FeedEntry[]) => lineOf(groupFeed(entries)[0]!);
+    expect(one([e("codex_tool_call", 1, { name: "exec", status: "completed", input: "text(await tools.mcp__wrathbench__state_summary({}));\ntext(1);" })])).toMatchObject({ label: "exec", text: "text(await tools.mcp__wrathbench__state_summary({}));", failed: false });
+    expect(one([e("codex_tool_call", 1, { name: "exec", status: "failed", input: "x" })]).failed).toBe(true);
+    // A public window: the skeleton alone.
+    expect(one([e("codex_tool_call", 1)])).toMatchObject({ label: "codex tool", text: "" });
+    expect(one([e("codex_item", 1, { type: "file_change", body: JSON.stringify({ type: "file_change", changes: [{ path: "main.ts", kind: "update" }] }) })])).toMatchObject({ label: "file change", text: "update main.ts" });
+    expect(one([e("codex_item", 1, { type: "web_search", body: "{}" })]).label).toBe("codex_item");
   });
 });
 

@@ -510,3 +510,27 @@ describe("groupFeed: records a call set off, joined by time", () => {
     expect(kinds(gs)).toEqual(["deploy", "call"]);
   });
 });
+
+describe("groupFeed: the run's end", () => {
+  const detail = "no tool call for 1248527ms: 5 wakes in a row answered without one";
+
+  test("a watchdog whose termination follows with the same reason folds into it", () => {
+    const gs = groupFeed([
+      e("watchdog", 1_000, { reason: "idle", detail }),
+      e("wind-down", 1_001, { reason: "idle" }),
+      e("termination", 1_002, { reason: "idle", detail }),
+      // A later termination, a manual classification, is its own row.
+      e("termination", 9_000, { reason: "harness-error", detail: "manually classified" }),
+    ]);
+    expect(kinds(gs)).toEqual(["wind-down", "termination", "termination"]);
+  });
+
+  test("a public window's watchdog, its reason alone, folds the same way", () => {
+    expect(kinds(groupFeed([e("watchdog", 1_000, { reason: "idle" }), e("termination", 1_002, { reason: "idle", detail })]))).toEqual(["termination"]);
+  });
+
+  test("a watchdog the run went on past, or whose termination says another reason, stays a row", () => {
+    expect(kinds(groupFeed([e("watchdog", 1_000, { reason: "idle" }), e("request", 1_001, { turn: 2 }), e("termination", 1_002, { reason: "idle" })]))).toEqual(["watchdog", "turn", "termination"]);
+    expect(kinds(groupFeed([e("watchdog", 1_000, { reason: "no-xp" }), e("termination", 1_002, { reason: "idle" })]))).toEqual(["watchdog", "termination"]);
+  });
+});
