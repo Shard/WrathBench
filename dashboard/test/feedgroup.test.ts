@@ -339,11 +339,34 @@ describe("groupFeed: tool-call envelopes", () => {
     expect(cards(gs).every((c) => c.lead === null)).toBe(true);
   });
 
-  test("codex: a reply's latency is the CLI's item timing, so none is drawn", () => {
-    const gs = groupFeed([e("request", 0, { turn: 1 }), e("response", 9_000, { turn: 1, text: "Hunting." })], [], "codex");
+  test("codex: a reply in words keeps its latency; an envelope no card claimed draws none", () => {
+    const gs = groupFeed(
+      [e("request", 0, { turn: 1 }), e("response", 4_000, { turn: 1, text: "", tools: ["wrathbench.yield"] }), e("response", 9_000, { turn: 1, text: "Hunting." })],
+      [],
+      "codex",
+    );
+    expect(kinds(gs)).toEqual(["turn", "response", "response"]);
+    const [, envelope, reply] = gs as Extract<Groups[number], { kind: "response" }>[];
+    expect(envelope!.latencyMs).toBeNull();
+    expect(reply!.latencyMs).toBe(5_000);
+  });
+
+  test("claude-code: a claimed envelope is not where the next reply's latency starts", () => {
+    // The result, then the envelope stamped as the next message's first block lands, then that block's words.
+    const gs = groupFeed(
+      [
+        e("tool_call", 1_000, { turn: 1, call: 1, name: "yield", args: { seconds: 60 }, dispatchTs: 900 }),
+        e("tool_result", 1_000, { turn: 1, call: 1, name: "yield", isError: false, text: "[wake 1]" }),
+        e("response", 3_000, { turn: 1, text: "", tools: ["mcp__wrathbench__yield"] }),
+        e("response", 4_400, { turn: 1, text: "Selling greys." }),
+      ],
+      [],
+      "claude-code",
+    );
+    expect(kinds(gs)).toEqual(["call", "response"]);
     const r = gs[1]!;
     if (r.kind !== "response") throw new Error(r.kind);
-    expect(r.latencyMs).toBeNull();
+    expect(r.latencyMs).toBe(3_400);
   });
 
   test("pi: the envelope before its call moves onto the card with its thinking, tokens and stop reason", () => {

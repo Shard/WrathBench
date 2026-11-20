@@ -626,11 +626,11 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
 
     if (e.t === "response") {
       const r = e as ResponseEntry;
+      // A codex envelope is written when the CLI's next item lands: its gap is that item's, not the model's.
       const latencyMs =
-        timed && lastActivityTs !== null && e.ts > 0 && e.ts >= lastActivityTs
+        !(harness === "codex" && isEnvelope(r)) && lastActivityTs !== null && e.ts > 0 && e.ts >= lastActivityTs
           ? e.ts - lastActivityTs
           : null;
-      if (e.ts > 0) lastActivityTs = e.ts;
       i++;
       // The thinking that led to the model's next output, whichever record that turns out to be.
       if (typeof r.thinkingTokens === "number" && r.thinkingTokens > 0) thinking = (thinking ?? 0) + r.thinkingTokens;
@@ -645,16 +645,22 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
             }
           }
           if (hit !== -1) {
+            // Not a row, so not where the next reply's latency is measured from: a claude-code
+            // envelope is stamped as the next message starts, and the reply after it would read
+            // only the gap between two blocks of one message.
             recent.splice(hit, 1);
             continue;
           }
-        } else {
+        }
+        if (!after) {
+          if (e.ts > 0) lastActivityTs = e.ts;
           // Its card comes next; held in place, a row only if none does.
           pending = { slot: emit({ kind: "response", entry: r, latencyMs, lead: null }), entry: r, latencyMs };
           continue;
         }
       }
       // A reply in words, or an envelope no card claims (a call the CLI never ran, or one still running).
+      if (e.ts > 0) lastActivityTs = e.ts;
       const tokens = takeThinking();
       emit({ kind: "response", entry: r, latencyMs, lead: tokens === null ? null : { thinkMs: null, thinkingTokens: tokens, envelope: null } });
       if (!isEnvelope(r) && (r.text ?? "").trim().length > 0 && e.ts > 0) lastFedTs = e.ts;
