@@ -1425,7 +1425,7 @@ export function supervisorFromState(o: {
       ...(lead?.fanoutAccounts != null ? { fanout: true as const } : {}),
     };
     liveJobs.set(name, job);
-    if (holdsAssignment(job)) assigned.set(name, j.account);
+    if (holdsAssignment(j)) assigned.set(name, j.account);
     // One credential for every ref is where each was placed; a job split across several reads them off its runs.
     if (j.credentials?.length === 1) placedMemo.set(name, Object.fromEntries(refs.map((r) => [r, { id: j.credentials![0]!, env: "" }])));
   }
