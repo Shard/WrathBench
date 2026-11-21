@@ -78,7 +78,9 @@ checkout's `.env` and pass `--env-file .env` to every compose command there
 (`down`, `ps` and `logs` included), or export it in the shell. Prefer that to
 `-p`, which `bun wb --local` and `run-episode.sh` never pass; `bun wb` reads
 `.env` itself. An exported value also renames `compose.viewer.yml`'s project,
-so give that one `-p wrathbench-viewer` in such a shell. Two stacks still
+so give that one `-p wrathbench-viewer` in such a shell, and
+`infra/export-world-ids.sh` needs `WRATHBENCH_DB_CONTAINER=<project>-db-1`.
+Two stacks still
 cannot run at the same time: the loopback ports (3724, 8085, 8123) are fixed,
 and both builds tag the same `wrathbench/*` images, so the last `--build`
 wins for both.
