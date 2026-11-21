@@ -5,6 +5,7 @@
  *
  *   bun infra/dashboard-shots.ts [--out DIR] [--run DIR]… [--path P]… [--site private|public|both]
  *                                [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead]
+ *                                [--site-config FILE]   a JSON `site` block (name, theme, home, about)
  *   bun infra/dashboard-shots.ts --serve [...]     the same stack, no browser: print the URLs and wait
  *
  * What it stands up, all on loopback and ephemeral ports, all under DIR/.rig:

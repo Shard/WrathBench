@@ -55,7 +55,16 @@ describe("theme", () => {
   });
   test("each scheme its own rule; the light one under the stylesheet's own media query", () => {
     const css = themeCss({ dark: { accent: "#ff8800" }, light: { accent: "#aa5500" } });
-    expect(css).toBe("html:root { --accent: #ff8800; }\n@media (prefers-color-scheme: light) { html:root { --accent: #aa5500; } }");
+    expect(css).toBe(
+      "@media not all and (prefers-color-scheme: light) { html:root { --accent: #ff8800; } }\n@media (prefers-color-scheme: light) { html:root { --accent: #aa5500; } }",
+    );
+  });
+  test("a token set for one scheme reaches no reader of the other", () => {
+    const css = themeCss({ dark: { bg: "#101010" } });
+    // Every rule sits in a scheme's media block, and none is the light one.
+    expect(css).not.toMatch(/^html:root/m);
+    expect(css).not.toContain("@media (prefers-color-scheme: light)");
+    expect(themeCss({ light: { bg: "#fafafa" } })).not.toContain("not all and");
   });
   test("moving ground or ink derives dim, line and the grid as hex between them", () => {
     const css = themeCss({ dark: { bg: "#000000", fg: "#ffffff" } });

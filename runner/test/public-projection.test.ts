@@ -2174,6 +2174,8 @@ describe("projectInfo", () => {
     };
     const out = projectInfo({ ...base, site });
     expect(out.site).toEqual(site);
+    // The acceptance readback re-projects info.json: a second pass changes nothing.
+    expect(projectInfo(out)).toEqual(out);
     // Allowlisted: a smuggled key, token or non-colour never crosses, and a block left empty is absent.
     const smuggled = projectInfo(
       smuggle<ApiInfoResponse>({

@@ -112,7 +112,8 @@ export function themeCss(theme: SiteTheme | undefined): string {
   const dark = schemeDecls(theme.dark, "dark");
   const light = schemeDecls(theme.light, "light");
   const parts: string[] = [];
-  if (dark !== "") parts.push(`html:root { ${dark} }`);
+  // Each rule under its own scheme: `html:root` outranks the stylesheet's light block, so a dark rule outside one would paint light readers too.
+  if (dark !== "") parts.push(`@media not all and (prefers-color-scheme: light) { html:root { ${dark} } }`);
   if (light !== "") parts.push(`@media (prefers-color-scheme: light) { html:root { ${light} } }`);
   return parts.join("\n");
 }
