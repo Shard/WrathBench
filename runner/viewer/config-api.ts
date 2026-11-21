@@ -51,6 +51,7 @@ import {
   reconcileDrafts,
   type DraftRecord,
 } from "./drafts";
+import { json } from "./http";
 
 /** The prefix everything here hangs off. */
 export const CONFIG_API_PREFIX = "/api/config";
@@ -95,13 +96,6 @@ export interface ConfigResponse {
 export interface ConfigExportResponse {
   bytes: number;
   text: string;
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
 }
 
 export function actorOf(req: Request): { actor: string; note?: string } {
