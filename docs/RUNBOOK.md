@@ -1597,10 +1597,11 @@ whatever their own `enabled` says, and the pods that remain are told through
 `WRATHBENCH_GROUPS` (the groups that are on, comma-separated; rendered only
 when one is off). The viewer then has none of that group's pages or routes
 (runner: `/fleet`, `/models`, `/api/fleet`, `/api/models`; evals: `/ladder`,
-`/campaigns`, `/about`, `/api/ladder`, `/api/campaigns`, `/api/episodes`), no
+`/dungeons`, `/campaigns`, `/about`, `/episodes`, `/api/ladder`, `/api/dungeons`,
+`/api/campaigns`, `/api/episodes`), no
 link into them from the pages it keeps (a direct URL to one is the not-found
-page), and the publisher none of its objects (evals: the ladders, `campaigns.json`,
-`episodes.json` and the social card; runner: `models.json` and the fleet in
+page), and the publisher none of its objects (evals: the ladders, `dungeons.json`,
+`campaigns.json`, `episodes.json` and the social card; runner: `models.json` and the fleet in
 `live.json`). A viewer-only deployment reads the sessions its own agents
 produced. Groups are deployment config, so a change is a values commit and a
 rollout, not a store write. The world itself (worldserver, authserver,
@@ -3405,7 +3406,7 @@ The app is a separate deploy, and only ever a UI change, because data never
 moves through it:
 
 ```
-bun wb site ship               # or `bun ship`, the same script
+bun wb site ship
 ```
 
 `infra/deploy-dashboard.sh` needs three names from `.env`:
@@ -3414,7 +3415,9 @@ bun wb site ship               # or `bun ship`, the same script
 absolute `og:image` is built against) and `WRATHBENCH_CF_DEPLOY_TOKEN` (or a
 `bunx wrangler login` in its place). The first two are hard failures if
 unset: an empty snapshot base would quietly build the *private* bundle, which
-on the public hostname polls `/api` forever.
+on the public hostname polls `/api` forever. `WRATHBENCH_CF_ANALYTICS_TOKEN`
+is optional: the public hostname's Web Analytics token, built in as
+`VITE_CF_ANALYTICS_TOKEN`; unset, the site ships with no beacon.
 
 ### Verify
 

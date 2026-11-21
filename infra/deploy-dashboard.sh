@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Ship the dashboard to the public site.
 #
-#   bun ship                   tests, snapshot-mode build, wrangler deploy, restore the private build
-#   bun ship --publisher     … and restart the snapshot publisher (needed after runner/viewer changes)
-#   bun ship --tiles         … and upload changed minimap tiles first
-#   bun ship --skip-tests
+#   bun wb site ship               tests, snapshot-mode build, wrangler deploy, restore the private build
+#   bun wb site ship --publisher   … and restart the snapshot publisher (needed after runner/viewer changes)
+#   bun wb site ship --tiles       … and upload changed minimap tiles first
+#   bun wb site ship --skip-tests
 #
 # The site is the **Open** shape docs/PUBLIC-DASHBOARD.md describes: the app is
 # `wrathbench.shard.page`, served as static assets with no Worker in the read
@@ -108,12 +108,19 @@ repo_url=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_REPO_URL ?? "")')
 tiles_base=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_TILES_BASE ?? "")')
 [ -n "$tiles_base" ] && echo "deploy: tiles from $tiles_base" || echo "deploy: no WRATHBENCH_TILES_BASE — grid only"
 
+# WRATHBENCH_CF_ANALYTICS_TOKEN: the public hostname's Cloudflare Web Analytics
+# token, an account fact like the hostnames. Unset is not an error — the site
+# ships with no beacon (dashboard/src/main.tsx).
+cf_analytics_token=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_CF_ANALYTICS_TOKEN ?? "")')
+[ -n "$cf_analytics_token" ] && echo "deploy: web analytics on" || echo "deploy: no WRATHBENCH_CF_ANALYTICS_TOKEN — no analytics beacon"
+
 echo "deploy: snapshot-mode build ($snapshot_base)"
 VITE_WRATHBENCH_SNAPSHOT_BASE="$snapshot_base" \
   VITE_WRATHBENCH_TILES_BASE="$tiles_base" \
   VITE_WRATHBENCH_PUBLIC_ORIGIN="$origin" \
   VITE_WRATHBENCH_OG_STAMP="$og_stamp" \
   VITE_WRATHBENCH_REPO_URL="$repo_url" \
+  VITE_CF_ANALYTICS_TOKEN="$cf_analytics_token" \
   bun run --cwd dashboard build >/dev/null
 
 # The deploy credential. Either of two, and the script says which it used:
