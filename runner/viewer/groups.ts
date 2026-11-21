@@ -84,7 +84,7 @@ export function adminFromEnv(env: Record<string, string | undefined>): boolean {
  * `/api/results` stays the viewer's: it is the runs index and the run,
  * character and party pages' listing, not the ladder (which is
  * `/api/ladder`). With evals off it defaults to every episode and serves no
- * ladder condition (`withoutEvalFields` in `api.ts`).
+ * ladder condition (`withoutEvalFields` in `api-evals.ts`).
  */
 export function groupOfApiPath(path: string): Group | null {
   switch (path) {

@@ -510,7 +510,7 @@ same samples, so nothing about what is recorded changed.
 as half-open `[fromTurn, toTurn)` ranges off its `reflect_window` records, with
 `toTurn` null when the window ran to the end of the run. Half-open because both
 records are written at the top of a turn, before the model answers it, so the
-close names the first turn spent acting again — `tail.ts` owns the reasoning.
+close names the first turn spent acting again — `run-marks.ts` owns the reasoning.
 It is served whole rather than derived by the reader, because the `open` that
 starts a window routinely sits above whatever slice of entries the run page has
 loaded. Turn indices carry nothing of the world, so they survive the public
@@ -816,7 +816,7 @@ What the viewer keeps between requests is either short or final:
 
 - **Corpus-wide store reads** (`runRows`, `totalsRows`, the latest readings,
   the liveness listing, the facts) and the fleet roster are shared for three
-  seconds (`sharedStore` in `api.ts`): every route and tab inside the window
+  seconds (`sharedStore` in `api-fleet.ts`): every route and tab inside the window
   gets the one read in flight. A write through the config API drops the
   roster at once. The listing build behind results, ladders and characters
   keeps its own fifteen-second window.
@@ -865,8 +865,11 @@ Everything under `/api` is read-only with one exception: the config API and
 the admin routes below, which are the only write surface the viewer has and are
 mounted only with the admin switch on, never in public mode. Everywhere else no route accepts a body, every database is opened
 readonly, and the runs directory is only ever listed and read. The routes and
-their response shapes are `api.ts` and `api-types.ts`; anything that is not a
-route is the built SPA, or the not-built notice when there is none.
+their response shapes are `api.ts`, the route modules it mounts by group
+(`api-fleet.ts` the runner's, `api-evals.ts` the evals', `api-run.ts` a run's
+own, over the tail cache `api-tails.ts` and the shared `api-context.ts`), and
+`api-types.ts`; anything that is not a route is the built SPA, or the
+not-built notice when there is none.
 
 ### The inspector's API
 

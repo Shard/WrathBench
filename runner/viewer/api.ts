@@ -2,8 +2,10 @@
  * The viewer's read-only HTTP surface, as a handler you can call directly.
  *
  * Split out of `serve.ts` so the routes can be tested without binding a port,
- * and so the boundary is one file an auditor can read end to end. Two rules
- * hold everywhere below:
+ * and so the boundary is one handler an auditor can read end to end: this
+ * file and the route modules it mounts (`api-fleet.ts`, `api-evals.ts`,
+ * `api-run.ts`, over `api-tails.ts` and `api-context.ts`). Two rules hold
+ * everywhere below:
  *
  * - **Nothing writes.** Databases open readonly, the runs directory is only
  *   ever listed and read, and there is no route that accepts a body.

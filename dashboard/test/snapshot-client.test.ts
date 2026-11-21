@@ -13,7 +13,7 @@
  *   asserted on an injected clock rather than a real one.
  * - **Parity.** `/api/results`' query moves client-side, so the filter is
  *   re-run here against a transcription of the server's own rules
- *   (`runner/viewer/api.ts`' `resultsResponse`) rather than against my reading
+ *   (`runner/viewer/api-evals.ts`' `resultsResponse`) rather than against my reading
  *   of them — including the two bookkeeping counts, which are the half a
  *   silently-wrong filter would not show.
  *
@@ -455,7 +455,7 @@ describe("the memo", () => {
 /* --- results parity --------------------------------------------------- */
 
 /**
- * `runner/viewer/api.ts`' `resultsResponse`, transcribed.
+ * `runner/viewer/api-evals.ts`' `resultsResponse`, transcribed.
  *
  * The oracle is deliberately a second copy of the server's rules rather than a
  * call into `projectResults`: the point of the assertion is that two
