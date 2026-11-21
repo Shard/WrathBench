@@ -48,6 +48,7 @@ import { WORLDS_SECRET_ENV } from "./episode-launcher";
 import { worldsOf, type WorldsSetting } from "./run-fleet-credentials";
 import { readCameraTemplate, startWorldCamera } from "./camera-pods";
 import type { FleetWorldView } from "../runner/viewer/api-types";
+import { dbPassword } from "./db-env";
 
 // ------------------------------------------------------------------ names
 
@@ -409,7 +410,7 @@ export async function mysqlWorldDb(env: Record<string, string | undefined> = pro
     hostname: env["WRATHBENCH_DB_HOST"] ?? "db",
     port: Number(env["WRATHBENCH_DB_PORT"] ?? "3306"),
     username: env["WRATHBENCH_DB_USER"] ?? "root",
-    password: env["WRATHBENCH_DB_PASSWORD"] ?? env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench",
+    password: dbPassword(env),
     database: "acore_auth",
     // As bootstrap.ts: the connection never leaves the cluster network.
     allowPublicKeyRetrieval: true,

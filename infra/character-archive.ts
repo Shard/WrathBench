@@ -46,6 +46,7 @@ import {
   type GameSide,
 } from "../runner/src/character-archive";
 import { harnessVersion } from "../runner/src/version";
+import { dbPassword } from "./db-env.ts";
 import { SoapError, soapFromEnv, type SoapClient } from "./fixtures/soap.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -161,10 +162,6 @@ export class SoapGameSide implements GameSide {
       throw e;
     }
   }
-}
-
-function dbPassword(env: Record<string, string | undefined>): string {
-  return env["WRATHBENCH_DB_PASSWORD"] ?? env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
 }
 
 function connect(env: Record<string, string | undefined>, database: string): SQL {

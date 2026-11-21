@@ -21,6 +21,7 @@
 import { SQL } from "bun";
 import { randomBytes } from "node:crypto";
 import { calculateVerifier } from "./bootstrap/bootstrap.ts";
+import { dbPassword } from "./db-env.ts";
 
 /** Expansion 2 = Wrath of the Lich King. */
 const EXPANSION = 2;
@@ -80,10 +81,6 @@ async function readPassword(spec: GmAccountSpec, argv: readonly string[]): Promi
  * sets WRATHBENCH_DB_ROOT_PASSWORD (infra/README), and the compose default is
  * the literal.
  */
-function dbPassword(): string {
-  return process.env["WRATHBENCH_DB_PASSWORD"] ?? process.env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
-}
-
 async function connect(): Promise<SQL> {
   const sql = new SQL({
     adapter: "mysql",
