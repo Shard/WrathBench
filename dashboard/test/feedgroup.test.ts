@@ -316,6 +316,9 @@ describe("groupFeed: a store session's calls", () => {
   test("with no model side no card has a think time; the same entries on a run with one do", () => {
     expect(cards(groupFeed(storeStretch(), [], null, false)).map((c) => c.lead)).toEqual([null, null, null]);
     expect(cards(groupFeed(storeStretch(), [], null)).some((c) => c.lead?.thinkMs != null)).toBe(true);
+    // The run's detail can land after its entries: a derivation that timed the cards is not recycled once it is known.
+    const entries = storeStretch();
+    expect(cards(groupFeed(entries, groupFeed(entries, [], null), null, false)).map((c) => c.lead)).toEqual([null, null, null]);
   });
 });
 
