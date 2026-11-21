@@ -37,7 +37,7 @@ import { isArchiveDir } from "./archive-dir";
 import { bareSessionDir, isBareSessionDir, isBareSessionId, sessionStoreOf } from "../src/session-store";
 import { harnessOfRun, parseComparability } from "../src/comparability";
 import { runCredentialOf } from "../src/credential-slots";
-import { platformOf as sharedPlatformOf } from "../src/platform";
+import { platformOf } from "../src/platform";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -117,17 +117,6 @@ interface MetaShape {
     continuedFrom?: string;
     world?: string;
   };
-}
-
-/**
- * Name the platform a run's model came from, for a run that did not record
- * one. The rule lives in `runner/src/platform.ts` — the same one the writer
- * stamps into the `platform` column — so a historical run and
- * a stamped one are labelled alike, and a LAN box reads `local` here exactly
- * where `billingOf` calls it free.
- */
-export function platformOf(apiBase: string | null, driver: string | null): string | null {
-  return sharedPlatformOf(apiBase, driver);
 }
 
 /**
@@ -513,7 +502,8 @@ function applyRunRow(row: RunRow, r: Record<string, unknown>): void {
 /** What every row is finished with, however it was read. */
 function finishRow(row: RunRow, now: number): RunRow {
   row.harness = harnessOfRun({ comparability: row.comparability, driver: row.driver });
-  // The stamped column wins; a run that predates it is derived the same way.
+  // The stamped column wins; a run that predates it is derived by the rule the
+  // writer stamps with (`runner/src/platform.ts`), so the two are labelled alike.
   if (row.platform === null) row.platform = platformOf(row.apiBase, row.driver);
   row.live =
     row.terminationReason === null && row.mtime !== null && now - row.mtime < LIVE_WINDOW_MS;

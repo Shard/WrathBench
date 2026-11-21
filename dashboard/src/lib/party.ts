@@ -35,9 +35,6 @@ export const BOSS_ENTRIES: ReadonlySet<number> = new Set([644, 643, 642, 1763, 6
  */
 export const END_REASONS: ReadonlySet<string> = new Set(["level-target", "kill-target"]);
 
-/** The instance the party is launched to clear. */
-export const PARTY_INSTANCE_MAP = 36;
-
 /** A party's colours: one per member slot, as `--member-<n>` tokens and `member-<n>` classes. */
 export const MEMBER_SLOTS = 5;
 

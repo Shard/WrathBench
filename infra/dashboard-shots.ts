@@ -5,6 +5,8 @@
  *
  *   bun infra/dashboard-shots.ts [--out DIR] [--run DIR]… [--path P]… [--site private|public|both]
  *                                [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead]
+ *                                [--site-config FILE]   a JSON `site` block (name, theme, home, about)
+ *                                [--sessions STORE]     a bare wrath-mcp session store beside the runs
  *   bun infra/dashboard-shots.ts --serve [...]     the same stack, no browser: print the URLs and wait
  *
  * What it stands up, all on loopback and ephemeral ports, all under DIR/.rig:
@@ -79,6 +81,12 @@ export interface RigOptions {
    * series, so both sides of the selector have something to show.
    */
   preview?: string;
+  /**
+   * The rig's config store `site` block (`runner/src/site-settings.ts`): a
+   * name, theme, home or about to see the dashboard dressed as someone
+   * else's deployment. A preview series, when both are given, is merged in.
+   */
+  site?: Record<string, unknown>;
   log?: (line: string) => void;
 }
 
@@ -243,11 +251,12 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
       config.close();
     }
   }
-  if (opts.preview !== undefined) {
+  if (opts.preview !== undefined || opts.site !== undefined) {
+    const site = { ...opts.site, ...(opts.preview !== undefined ? { previewSeries: opts.preview } : {}) };
     const config = new ConfigStore(configDbPath);
     try {
-      if (config.isEmpty()) config.seed({ roster: {}, queue: [], site: { previewSeries: opts.preview } }, { actor: "shots", note: "the rig's preview" });
-      else config.put("site", { previewSeries: opts.preview }, { actor: "shots", note: "the rig's preview" });
+      if (config.isEmpty()) config.seed({ roster: {}, queue: [], site }, { actor: "shots", note: "the rig's site block" });
+      else config.put("site", site, { actor: "shots", note: "the rig's site block" });
     } finally {
       config.close();
     }
@@ -457,12 +466,14 @@ interface Cli {
   groups?: Groups;
   seed: boolean;
   admin: boolean;
+  /** `--site-config FILE`: a JSON `site` block for the rig's config store. */
+  siteConfig?: string;
   sessions?: string;
 }
 
 export const USAGE = `usage: bun infra/dashboard-shots.ts [--out DIR] [--run DIR]... [--path P]... [--site private|public|both]
                                    [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead] [--serve]
-                                   [--groups runner,evals,viewer] [--seed] [--no-admin] [--sessions STORE]`;
+                                   [--groups runner,evals,viewer] [--seed] [--no-admin] [--site-config FILE] [--sessions STORE]`;
 
 export function parseCli(argv: readonly string[], now = new Date()): Cli | { error: string } {
   const c: Cli = {
@@ -485,7 +496,7 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
     else if (a === "--serve") c.serve = true;
     else if (a === "--seed") c.seed = true;
     else if (a === "--no-admin") c.admin = false;
-    else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle", "--groups", "--sessions"].includes(a)) {
+    else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle", "--groups", "--site-config", "--sessions"].includes(a)) {
       const v = val();
       if (v === undefined) return { error: `${a} needs a value` };
       if (a === "--groups") {
@@ -496,6 +507,7 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
         }
         if (!c.groups.viewer) return { error: "--groups: the rig is the viewer group's, so it must be on" };
       } else if (a === "--out") c.out = v;
+      else if (a === "--site-config") c.siteConfig = v;
       else if (a === "--sessions") c.sessions = v;
       else if (a === "--run") c.runs.push(v);
       else if (a === "--path") {
@@ -539,6 +551,7 @@ async function main(argv: readonly string[]): Promise<number> {
     ...(c.groups !== undefined ? { groups: c.groups } : {}),
     seed: c.seed,
     admin: c.admin,
+    ...(c.siteConfig !== undefined ? { site: JSON.parse(readFileSync(c.siteConfig, "utf8")) as Record<string, unknown> } : {}),
     ...(c.sessions !== undefined ? { sessions: c.sessions } : {}),
     log: (l) => console.log(l),
   });

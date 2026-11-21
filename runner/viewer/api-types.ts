@@ -15,6 +15,8 @@
 import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow, ResumeHoldCode } from "../src/credential-health";
 export type { CredentialFix, CredentialHealth, CredentialWindow, HealthState, ResumeHoldCode } from "../src/credential-health";
 import type { Harness } from "../src/drivers";
+import type { SiteTheme } from "../src/site-settings";
+export type { SiteTheme, ThemeToken } from "../src/site-settings";
 import type { RunCondition } from "./condition";
 export type { ChartGroup, RunCondition } from "./condition";
 import type { ItemSample, NearbyWindow, SessionPosition, SessionTrack, SessionTrackPoint } from "@wrathbench/inspector/wire";
@@ -1876,6 +1878,13 @@ export interface ApiInfoResponse extends SnapshotEnvelope {
    */
   previewSeries?: string;
   /**
+   * What the deployment calls and paints itself: the store's `site` block's
+   * `name`, `theme`, `home` and `about` (`runner/src/site-settings.ts`), the
+   * about page rendered to sanitized HTML (`site-info.ts`). Present only when
+   * one of them is set, so a deployment without them serves the body it did.
+   */
+  site?: ApiSiteInfo;
+  /**
    * Which of the deployment's groups are on (`groups.ts`), present only when
    * one is off: absent is every group, which is how a body from an older
    * viewer, and today's deployment, read. The public projection keeps it, so
@@ -1889,6 +1898,17 @@ export interface ApiInfoResponse extends SnapshotEnvelope {
    */
   admin?: true;
   now: number;
+}
+
+/** `/api/info`'s `site`: each field only when the store sets it. */
+export interface ApiSiteInfo {
+  name?: string;
+  /** Per scheme, `#rrggbb` by token; a token a scheme lacks keeps the stylesheet's. */
+  theme?: SiteTheme;
+  /** `"off"` or an in-site path; absent is the intro. */
+  home?: string;
+  /** The about page's markdown as sanitized HTML: no raw HTML, no image, links only to http(s), mailto, `/` and `#`. */
+  aboutHtml?: string;
 }
 
 /**

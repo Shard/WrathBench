@@ -36,7 +36,7 @@ const LOGO_DIR = join(ROOT, "dashboard/src/assets/model-logos");
  * family id → the asset as a data URI, exactly the form `logoHrefOf` builds.
  *
  * An empty directory is legitimate — a checkout that has not run
- * `bun run model-logos` has no assets — and every mark is then a plain disc,
+ * `bun wb data logos` has no assets — and every mark is then a plain disc,
  * the same fallback the live chart takes for a family it does not know. The
  * assets are tracked in git, so the publisher's image carries them.
  */
@@ -52,9 +52,10 @@ export function logoHrefs(dir: string = LOGO_DIR): Map<string, string> {
 }
 
 /** The card's SVG for these runs, with the logos resolved off disk. */
-export function ogSvgWithLogos(runs: readonly ResultRun[], hrefs: Map<string, string> = logoHrefs(), preview: string | null = null): string {
+export function ogSvgWithLogos(runs: readonly ResultRun[], hrefs: Map<string, string> = logoHrefs(), preview: string | null = null, name: string | null = null): string {
   return ogSvgOf(runs, {
     preview,
+    ...(name !== null ? { name } : {}),
     logoHref: (model) => {
       const family = familyOf(model);
       return family === null ? null : (hrefs.get(family.id) ?? null);
@@ -114,10 +115,10 @@ export interface OgPng {
  * Throws when no font resolved rather than returning a textless card: a card
  * that is wrong in a way nobody can see is worse than a ship that stops.
  */
-export function renderOgPng(runs: readonly ResultRun[], opts: { width?: number; hrefs?: Map<string, string>; preview?: string | null } = {}): OgPng {
+export function renderOgPng(runs: readonly ResultRun[], opts: { width?: number; hrefs?: Map<string, string>; preview?: string | null; name?: string | null } = {}): OgPng {
   if (!fontsDraw()) throw new Error(NO_FONTS);
   const width = Math.round(opts.width ?? OG_W);
-  const svg = ogSvgWithLogos(runs, opts.hrefs ?? logoHrefs(), opts.preview ?? null);
+  const svg = ogSvgWithLogos(runs, opts.hrefs ?? logoHrefs(), opts.preview ?? null, opts.name ?? null);
   const png = new Resvg(svg, { fitTo: { mode: "width", value: width }, font: FONT_OPTIONS }).render().asPng();
   return { png, stamp: new Bun.CryptoHasher("sha256").update(png).digest("hex").slice(0, 8), runs: runs.length };
 }

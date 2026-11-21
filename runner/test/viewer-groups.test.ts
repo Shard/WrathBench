@@ -80,6 +80,10 @@ describe("WRATHBENCH_GROUPS", () => {
     for (const p of ["/fleet", "/models", "/ladder", "/campaigns/x/1", "/about", "/config"]) expect(pageMounted(p, viewerOnly, false)).toBe(false);
     expect(pageMounted("/config", ALL_GROUPS, true)).toBe(true);
     expect(pageMounted("/config", ALL_GROUPS, false)).toBe(false);
+    // A deployment's own about page (`site.about`) is mounted whatever evals says; nothing else moves.
+    expect(pageMounted("/about", viewerOnly, false, { about: true })).toBe(true);
+    expect(pageMounted("/ladder", viewerOnly, false, { about: true })).toBe(false);
+    expect(pageMounted("/about", viewerOnly, false, {})).toBe(false);
   });
 });
 

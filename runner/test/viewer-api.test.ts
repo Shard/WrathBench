@@ -708,6 +708,26 @@ describe("routes", () => {
     store.close();
   });
 
+  test("/api/info carries the site's name, theme, home and about only while one is set, the about rendered and sanitized", async () => {
+    const runs = fixture();
+    const db = join(runs, "site-keys-config.sqlite");
+    const store = new ConfigStore(db);
+    store.seed({ roster: {}, queue: [] }, { actor: "fixture" });
+    const info = async (): Promise<Record<string, unknown>> =>
+      (await (await createApi({ runsDir: runs, tilesDir: join(runs, "..", "minimap"), moduleUrl: "http://127.0.0.1:1", configDbPath: db })(new Request("http://x/api/info"))).json()) as Record<string, unknown>;
+    expect("site" in (await info())).toBe(false);
+    store.put("site", { name: "Lab", theme: { accent: "#ff8800" }, home: "off", about: "# Lab\n\n<script>x</script> [a](javascript:1)" }, { actor: "fixture" });
+    expect((await info()).site).toEqual({
+      name: "Lab",
+      theme: { dark: { accent: "#ff8800" }, light: { accent: "#ff8800" } },
+      home: "off",
+      aboutHtml: "<h1>Lab</h1>\n<p>&lt;script&gt;x&lt;/script&gt; a</p>\n",
+    });
+    store.put("site", undefined, { actor: "fixture" });
+    expect("site" in (await info())).toBe(false);
+    store.close();
+  });
+
   test("the series census counts per series and orders numerically", () => {
     expect(
       harnessSeriesCensus([

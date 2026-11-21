@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { platformOf, readRun } from "../viewer/runs";
+import { platformOf } from "../src/platform";
+import { readRun } from "../viewer/runs";
 import { playtimeMs, segmentsFrom } from "../viewer/sessions";
 import {
   TrajectoryTail,

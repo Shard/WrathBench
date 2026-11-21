@@ -62,6 +62,8 @@ import type {
   ItemSample,
   AgentPosition,
   ApiInfoResponse,
+  ApiSiteInfo,
+  ThemeToken,
   AreaFacts,
   ArmSummary,
   CampaignView,
@@ -147,6 +149,7 @@ import type {
 } from "./api-types";
 import { EPISODE_IDS, hasBoard, isTaskEpisode } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
+import { THEME_TOKENS } from "../src/site-settings";
 import { redactGameProse, redactProseText } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
 import { REDACTED } from "@wrathbench/mcp/redact";
@@ -821,6 +824,34 @@ function projectResultRun(r: ResultRun, conditionIds: ReadonlyMap<string, string
 
 /* ----------------------------------------------------------- responses --- */
 
+const THEME_HEX = /^#[0-9a-f]{6}$/;
+
+/** One scheme's theme, token by token: only the four tokens, only as `#rrggbb`. */
+function projectThemeScheme(s: unknown): Partial<Record<ThemeToken, string>> | undefined {
+  if (typeof s !== "object" || s === null) return undefined;
+  const out: Partial<Record<ThemeToken, string>> = {};
+  for (const token of THEME_TOKENS) {
+    const c = (s as Record<string, unknown>)[token];
+    if (typeof c === "string" && THEME_HEX.test(c)) out[token] = c;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+/** `/api/info`'s `site`, field by field; absent when nothing in it survives. */
+function projectSiteField(s: ApiSiteInfo): { site?: ApiSiteInfo } {
+  const dark = projectThemeScheme(s.theme?.dark);
+  const light = projectThemeScheme(s.theme?.light);
+  const out: ApiSiteInfo = {
+    ...(typeof s.name === "string" ? { name: s.name } : {}),
+    ...(dark !== undefined || light !== undefined
+      ? { theme: { ...(dark !== undefined ? { dark } : {}), ...(light !== undefined ? { light } : {}) } }
+      : {}),
+    ...(typeof s.home === "string" ? { home: s.home } : {}),
+    ...(typeof s.aboutHtml === "string" ? { aboutHtml: s.aboutHtml } : {}),
+  };
+  return Object.keys(out).length === 0 ? {} : { site: out };
+}
+
 export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
   return scrubPathsValue<ApiInfoResponse>({
     service: "wrathbench-viewer",
@@ -839,6 +870,8 @@ export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
       : {}),
     // Which series the public selector offers as a preview rather than as latest.
     ...(typeof i.previewSeries === "string" ? { previewSeries: i.previewSeries } : {}),
+    // The deployment's name, theme, home and about: public by design, key by key.
+    ...(i.site !== undefined ? projectSiteField(i.site) : {}),
     // What the deployment is made of, so the public build draws its pages and
     // no others. Absent when every group is on; `admin` is never carried.
     ...(i.groups !== undefined ? { groups: { runner: i.groups.runner, evals: i.groups.evals, viewer: i.groups.viewer } } : {}),

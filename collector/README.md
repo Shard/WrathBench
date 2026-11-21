@@ -12,7 +12,7 @@ files and says so.
 
 The store is **derived and disposable**. The files under `data/runs/` are the
 evidence record and the only write path; nothing here ever writes to them.
-Drop the ClickHouse database, delete `data/collector.sqlite`, run `--replay`,
+Drop the ClickHouse database, delete `data/collector/collector.sqlite`, run `--replay`,
 and everything comes back.
 
 It holds no copy of a run's module session token. `meta.json` keeps the token,
@@ -106,7 +106,8 @@ counts one. The rows fit the existing tables; no schema changed. A run
 directory with the same id wins, and a record whose character never entered
 the world is not read.
 
-Those live in `data/collector.sqlite`, which is the only thing this service
+Those live in `data/collector/collector.sqlite` (`WRATHBENCH_COLLECTOR_DB`, as
+both the chart and compose set it), which is the only thing this service
 owns on disk and is as disposable as the store itself.
 
 Not tailed, on purpose:

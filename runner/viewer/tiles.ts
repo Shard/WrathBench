@@ -19,15 +19,11 @@
  * re-bake shows before the next transcode. The content type is the served
  * bytes' own.
  *
- * Two older spellings still answer, for the builds and served trees from
- * before them, which a tab open across a release still holds:
- *
- * - a native asked for as `<row>_<col>.png`, which every client asks for
- *   while its map's index does not say `native: "webp"` (`tileindex.ts`), is
- *   the indexed PNG an older transcode left in the served tree, or the master;
- * - a pyramid tile asked for as `.png` is the master.
- *
- * Nothing here creates or expects them. A missing tile — or a missing
+ * One older spelling still answers: a native asked for as `<row>_<col>.png`,
+ * which every client asks for while its map's index does not say
+ * `native: "webp"` (`tileindex.ts`), is the indexed PNG an older transcode left in the served tree, or the
+ * master. A pyramid tile is asked for as `.webp` only. Nothing here creates
+ * or expects the `.png` spelling. A missing tile — or a missing
  * extraction entirely — is a normal state: the client draws a labelled grid
  * square instead, so the map works on a machine that has never run the
  * extraction. That is why there is no startup check for the directory.
@@ -73,7 +69,7 @@ export const TILE_PUBLIC_CACHE_CONTROL = "private, max-age=3600";
 export const TILE_PUBLIC_ROBOTS = "noindex";
 
 const TILE_PATH = /^\/tiles\/(\d+)\/(\d+)_(\d+)\.(png|webp)$/;
-const LOD_PATH = /^\/tiles\/(\d+)\/([a-z]+)\/(\d+)\/(\d+)_(\d+)\.(png|webp)$/;
+const LOD_PATH = /^\/tiles\/(\d+)\/([a-z]+)\/(\d+)\/(\d+)_(\d+)\.webp$/;
 const INDEX_PATH = /^\/tiles\/(\d+)\/index\.json$/;
 
 export interface TileRef {
@@ -82,8 +78,6 @@ export interface TileRef {
   col: number;
   /** The pyramid level, absent for a native tile. */
   lod?: { layer: LodLayer; z: number };
-  /** A pyramid tile asked for under its master's `.png` name rather than the served `.webp`. */
-  legacy?: true;
   /** A native tile asked for as `.webp` rather than the `.png` every build before the WebP natives asks for. */
   webp?: true;
 }
@@ -118,7 +112,7 @@ export function parseTilePath(path: string): TileRef | null {
   if (!Number.isSafeInteger(z) || z < 1 || z > LOD_MAX) return null;
   const n = lodGrid(z);
   if (row < 0 || row >= n || col < 0 || col >= n) return null;
-  return { map, row, col, lod: { layer, z }, ...(m[6] === "png" ? { legacy: true as const } : {}) };
+  return { map, row, col, lod: { layer, z } };
 }
 
 /** A reference's master file, relative to the tile root — the one spelling the bake writes. */
@@ -148,7 +142,7 @@ export function servedPath(ref: TileRef): string {
  * which is why the tile publisher keys only canonical ones.
  */
 export function tileRefPath(ref: TileRef): string {
-  return `/tiles/${ref.legacy === true ? masterPath(ref) : servedPath(ref)}`;
+  return `/tiles/${servedPath(ref)}`;
 }
 
 /** The media type of a tile or index file, by its extension. */
@@ -180,11 +174,9 @@ export function resolveTile(root: string, path: string): { file: string; ref: Ti
   const masterAt = mtime(master);
   if (masterAt === null) return null;
   let file = master;
-  if (ref.legacy !== true) {
-    const served = join(root, SERVED_DIR, servedPath(ref));
-    const servedAt = mtime(served);
-    if (servedAt !== null && servedAt >= masterAt) file = served;
-  }
+  const served = join(root, SERVED_DIR, servedPath(ref));
+  const servedAt = mtime(served);
+  if (servedAt !== null && servedAt >= masterAt) file = served;
   return { file, ref, contentType: tileContentType(file) };
 }
 

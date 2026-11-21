@@ -138,6 +138,8 @@ export interface OgOptions {
   logoHref?: (model: string) => string | null;
   /** The wordmark, on by default. */
   wordmark?: boolean;
+  /** The wordmark's text: the site's name (`site.name` on `info.json`), "WrathBench" when unset. */
+  name?: string;
   /** The "↖ better" reading cue in the plot's top-left, on by default (try it, drop it if it does not read). */
   cue?: boolean;
   /** The top-right block naming the two axes and the tier, on by default. */
@@ -289,10 +291,11 @@ export function ogSvgOf(runs: readonly ResultRun[], opts: OgOptions = {}): strin
    */
   const reserved: Rect[] = [];
   if (opts.wordmark !== false) {
+    const name = opts.name ?? "WrathBench";
     body.push(
-      `<text x="${M.left}" y="80" font-family="${OG_FONT}" font-size="${WORDMARK_SIZE}" font-weight="700" fill="${FG}">WrathBench</text>`,
+      `<text x="${M.left}" y="80" font-family="${OG_FONT}" font-size="${WORDMARK_SIZE}" font-weight="700" fill="${FG}">${esc(name)}</text>`,
     );
-    reserved.push(textRect(M.left, 80, "WrathBench", WORDMARK_SIZE, "start"));
+    reserved.push(textRect(M.left, 80, name, WORDMARK_SIZE, "start"));
   }
   if (opts.identity !== false) {
     /*

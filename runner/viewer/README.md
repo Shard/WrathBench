@@ -18,7 +18,7 @@ read or change one.
 On Kubernetes the viewer is the `wrathbench-viewer` Deployment behind the
 cluster's own Ingress; its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
-rather than a restart. `bun run viewer:restart`
+rather than a restart. `bun wb server restart-viewer`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
 `/api/info` on `$WRATHBENCH_VIEWER_URL` — it kicks a wedged process, it does not
 deploy anything.
@@ -73,6 +73,13 @@ is created empty, and every page serves its labelled empty state.
   episode and serves no ladder condition. `/api/info` names the groups when one is off, the public
   projection keeps them, and the dashboard drops those pages. A viewer told the
   viewer group is off refuses to start.
+- The config store's `site` block (docs/RUNBOOK.md, "Config reference") is
+  read on each `/api/info`: `name`, `theme`, `home` and `about` ride under
+  `site`, only when one is set, so a deployment without them serves the body
+  it did. `about` is markdown rendered here (`site-info.ts`) with raw HTML
+  shown as text, images dropped to their alt text and links kept only to
+  http(s), mailto, `/…` and `#…`; the public projection copies the four
+  field by field.
 - `WRATHBENCH_ADMIN=1` is the admin switch: it mounts the config API and
   `/api/admin` ("Endpoints"), the only routes that write or say anything about
   credentials. Unset, this process has no write route at all. Refused together
@@ -514,14 +521,10 @@ under `data/minimap/web/`: the natives as indexed PNG at the same names, the
 pyramids as `<z>/<row>_<col>.webp`, and a per-map `index.json`.
 
 `/tiles/` serves every shape from there under the same path, integers only
-(and the layer from a fixed list). Two fallbacks keep it working without a
-current transcode:
-
-- A served file that is missing, or older than its master, is answered from
-  the master and typed as what it is. A machine that never ran the transcode
-  still draws every tile.
-- A pyramid tile asked for under its old `.png` name, by a build from before
-  the WebP tree, gets its master.
+(and the layer from a fixed list). A served file that is missing, or older
+than its master, is answered from the master and typed as what it is, so a
+machine that never ran the transcode still draws every tile. A pyramid tile is
+asked for as `.webp` only; its master's `.png` name is not a route.
 
 The index is withheld (404) when it is older than any of its map's master
 directories, so the page asks for every cell rather than trust a stale list.

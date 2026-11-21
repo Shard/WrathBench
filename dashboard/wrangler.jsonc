@@ -32,7 +32,7 @@
 // Build before deploying — wrangler uploads `dist` as it finds it, and
 // `infra/deploy-dashboard.sh` is the supported way to do both:
 //
-//   bun ship
+//   bun wb site ship
 //
 // The deploying shell needs a credential on the account that owns the zone:
 // either WRATHBENCH_CF_DEPLOY_TOKEN in `.env` (the script passes it to wrangler

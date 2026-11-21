@@ -121,7 +121,7 @@ Some inputs the fingerprint cannot see:
 - code: the projection, the redaction and scrub lists, the codec and
   `model-cost`;
 - the model catalogue's prices (`infra/model-catalogue.json`), read once at
-  start and rewritten in part by `sync-prices`;
+  start and rewritten in part by `bun wb data prices`;
 - a store row the listing row does not reflect;
 - lineage as the viewer's own listing sees it.
 
@@ -1455,7 +1455,9 @@ JSON from `nether.wowhead.com`. Those are
 the only third-party origins the application asks for, alongside the
 Cloudflare Web Analytics script (`static.cloudflareinsights.com`) — cookieless,
 and appended at startup by `dashboard/src/main.tsx` on the public build only,
-so the same bundle served by the private viewer reports nothing. The tooltip script is injected at runtime by
+so the same bundle served by the private viewer reports nothing, and only when
+the build carries a token (`VITE_CF_ANALYTICS_TOKEN`, which the deploy feeds
+from `WRATHBENCH_CF_ANALYTICS_TOKEN` in `.env`). The tooltip script is injected at runtime by
 `@wrathbench/inspector/views/wowhead` rather than sitting in `index.html`, so a page
 with no items asks for nothing. The reason for the
 arrangement is the red line in `docs/DATA-AND-LEGAL.md`: we extract and serve

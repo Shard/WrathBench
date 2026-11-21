@@ -55,6 +55,7 @@ import { publishViewFromEnv } from "../../infra/publish-settings";
 import type { AdminCodexLoginView, AdminCredentialView, AdminPublishView, AdminResponse, FleetResponse } from "./api-types";
 import { actorOf } from "./config-api";
 import type { Groups } from "./groups";
+import { json } from "./http";
 
 export const ADMIN_API_PREFIX = "/api/admin";
 
@@ -69,13 +70,6 @@ export interface AdminApiOptions {
   runsDir: string;
   env?: Record<string, string | undefined>;
   now?: () => number;
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
 }
 
 /** The credentials the store holds, or none when it holds none or does not read. */

@@ -10,7 +10,8 @@
  * route stays, reached from the status popout in `components/StatusBadge.tsx`.
  */
 import type { ApiInfoResponse } from "@viewer/api-types";
-import { ALL_GROUPS, pageMounted, type Groups } from "@viewer/groups";
+import { ALL_GROUPS, pageMounted, type Groups, type PageSite } from "@viewer/groups";
+import { pageSiteOf } from "./site";
 
 export interface NavItem {
   href: string;
@@ -66,9 +67,9 @@ export function groupsOf(info: Pick<ApiInfoResponse, "groups"> | undefined): Gro
  * has settled, so a link into an off group never flashes on; the caller draws
  * the text without the link instead.
  */
-export function linkable(info: Pick<ApiInfoResponse, "groups"> | undefined, href: string): boolean {
+export function linkable(info: Pick<ApiInfoResponse, "groups" | "site"> | undefined, href: string): boolean {
   if (info === undefined) return false;
-  return pageMounted(href.replace(/[?#].*$/, ""), groupsOf(info), false);
+  return pageMounted(href.replace(/[?#].*$/, ""), groupsOf(info), false, pageSiteOf(info));
 }
 
 /**
@@ -79,9 +80,9 @@ export function linkable(info: Pick<ApiInfoResponse, "groups"> | undefined, href
  * cannot disagree. Config sits before `about`, which stays last: the meta page
  * closes the pages about runs, and config is a page about the fleet.
  */
-export function navItems(o: { admin: boolean; groups?: Groups }): readonly NavItem[] {
+export function navItems(o: { admin: boolean; groups?: Groups; site?: PageSite }): readonly NavItem[] {
   const groups = o.groups ?? ALL_GROUPS;
-  const shown = NAV.filter((n) => pageMounted(n.href, groups, false));
+  const shown = NAV.filter((n) => pageMounted(n.href, groups, false, o.site));
   if (!o.admin) return shown.length === NAV.length ? NAV : shown;
   const i = shown.findIndex((n) => n.href === "/about");
   const at = i < 0 ? shown.length : i;

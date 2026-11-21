@@ -45,7 +45,6 @@ import {
   campaignHash,
   campaignRef,
   issuesOf,
-  parseCampaignRef,
   publishedCampaignSchema,
   type CampaignArm,
   type CampaignCell,
@@ -500,11 +499,6 @@ export function parseCampaignBlocks(
 /** Whether the operator declared this version of the campaign finished (`concluded`): it owes nothing. */
 export function isConcluded(c: Pick<Campaign, "concluded">, version: number): boolean {
   return c.concluded.includes(version);
-}
-
-/** Look a published definition up by `id@version`. */
-export function publishedOf(definitions: readonly PublishedCampaign[], ref: string): PublishedCampaign | undefined {
-  return parseCampaignRef(ref) === null ? undefined : definitions.find((d) => d.ref === ref);
 }
 
 /**

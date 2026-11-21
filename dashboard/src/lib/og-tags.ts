@@ -46,7 +46,7 @@ export interface OgTagOptions {
    * It is the data hostname: the publisher writes the picture to the R2 bucket
    * beside the snapshot it rendered it from (`v1/og.png`), and the bucket is a
    * different host from the app. Absent, the tags fall back to the app origin's
-   * own `/og.png`, the static asset `bun ship` still writes — which is the
+   * own `/og.png`, the static asset `bun wb site ship` still writes — which is the
    * private build and the tests, not the public site: `deploy-dashboard.sh`
    * hard-fails on an empty `WRATHBENCH_SNAPSHOT_BASE`, so a public build always
    * has one and `dashboard/public/og.png` ships unreferenced behind it.

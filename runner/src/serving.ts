@@ -122,11 +122,6 @@ export function parseServingLabels(raw: unknown, where: string): ServingLabels {
   return out;
 }
 
-/** "Q4_K_M · LM Studio" — how a row names its build beside the model. */
-export function servingLabel(s: Pick<ServingSpec, "quant" | "runtime">): string {
-  return `${s.quant} · ${s.runtime}`;
-}
-
 /** Why a local entry or launch is refused for stating no build. */
 export const LOCAL_WITHOUT_SERVING =
   "a local model states what it serves: serving { weights, quant, runtime } (operator, 2026-11-14) — an unstated local build would share a row with the hosted model of the same id";

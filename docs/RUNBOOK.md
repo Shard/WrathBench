@@ -537,7 +537,8 @@ policy      Only where runs execute. `maxSessions { <driver>: n }` — how many 
             holds those picks, saying why. Anything else is refused.
             `maxConcurrent`, `paid` and `subscriptions` are refused by name: their work is the
             credentials' ("Credentials").
-site        { previewSeries? } or absent: what the dashboard shows, never what the fleet does.
+site        { previewSeries?, name?, theme?, home?, about? } or absent: what the dashboard shows,
+            never what the fleet does.
             `previewSeries` — a series (`"1.0"`) the site's series selector offers as
             `preview (1.0)` rather than as latest: while it is set, `latest` (the default on the
             ladder, the home ladder, the runs page and the social card) is the newest series OTHER
@@ -552,6 +553,24 @@ site        { previewSeries? } or absent: what the dashboard shows, never what t
             config; the store refuses it at write instead (any other key, or a value that is not
             `major.minor`). Validated by `runner/src/site-settings.ts`, which a release must carry
             before the key can be written: older code refuses `site` as not a config key.
+            The other four make a deployment its own with no code change, and are public by
+            design (`/api/info`, `info.json`). Each is unset by `null` or by leaving it out.
+            `name` — 1 to 40 characters, no control characters: the wordmark, the tab title and
+            the social card's wordmark. The static `index.html` title and crawler tags stay
+            "WrathBench" (build-time).
+            `theme` — any of `accent`, `bg`, `fg`, `panel`, each `"#rrggbb"` for both schemes or
+            `{ "dark": "#rrggbb", "light": "#rrggbb" }`. Setting `bg` or `fg` also moves the
+            dim text, rules and map grid, which are mixed from the two.
+            `home` — `"intro"` (the default), `"off"` (`/` opens the runs list) or a path in the
+            site such as `"/runs"` or `"/ladder?episode=e90"`.
+            `about` — markdown, at most 20000 characters, in place of the about page's text; the
+            legal section stays beneath it and the Blizzard attribution footer is never
+            configurable. Rendered by the viewer with raw HTML shown as text, images as their
+            alt text, and links only to http(s), mailto, `/…` or `#…`. Set, the about page is
+            there even with the evals group off.
+            These four are refused by any code older than the release that carries them, and
+            their presence makes that code refuse every config write and drop the whole block
+            (`previewSeries` included) on read, so none is written before that release is out.
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
             publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
             `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
@@ -1597,10 +1616,11 @@ whatever their own `enabled` says, and the pods that remain are told through
 `WRATHBENCH_GROUPS` (the groups that are on, comma-separated; rendered only
 when one is off). The viewer then has none of that group's pages or routes
 (runner: `/fleet`, `/models`, `/api/fleet`, `/api/models`; evals: `/ladder`,
-`/campaigns`, `/about`, `/api/ladder`, `/api/campaigns`, `/api/episodes`), no
+`/dungeons`, `/campaigns`, `/about`, `/episodes`, `/api/ladder`, `/api/dungeons`,
+`/api/campaigns`, `/api/episodes`), no
 link into them from the pages it keeps (a direct URL to one is the not-found
-page), and the publisher none of its objects (evals: the ladders, `campaigns.json`,
-`episodes.json` and the social card; runner: `models.json` and the fleet in
+page), and the publisher none of its objects (evals: the ladders, `dungeons.json`,
+`campaigns.json`, `episodes.json` and the social card; runner: `models.json` and the fleet in
 `live.json`). A viewer-only deployment reads the sessions its own agents
 produced. Groups are deployment config, so a change is a values commit and a
 rollout, not a store write. The world itself (worldserver, authserver,
@@ -3405,7 +3425,7 @@ The app is a separate deploy, and only ever a UI change, because data never
 moves through it:
 
 ```
-bun wb site ship               # or `bun ship`, the same script
+bun wb site ship
 ```
 
 `infra/deploy-dashboard.sh` needs three names from `.env`:
@@ -3414,7 +3434,9 @@ bun wb site ship               # or `bun ship`, the same script
 absolute `og:image` is built against) and `WRATHBENCH_CF_DEPLOY_TOKEN` (or a
 `bunx wrangler login` in its place). The first two are hard failures if
 unset: an empty snapshot base would quietly build the *private* bundle, which
-on the public hostname polls `/api` forever.
+on the public hostname polls `/api` forever. `WRATHBENCH_CF_ANALYTICS_TOKEN`
+is optional: the public hostname's Web Analytics token, built in as
+`VITE_CF_ANALYTICS_TOKEN`; unset, the site ships with no beacon.
 
 ### Verify
 

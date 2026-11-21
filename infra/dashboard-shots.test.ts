@@ -84,5 +84,9 @@ describe("the CLI", () => {
     expect("error" in parseCli(["--path", "runs"])).toBe(true);
     expect("error" in parseCli(["--viewport", "big"])).toBe(true);
     expect("error" in parseCli(["--nope"])).toBe(true);
+    const s = parseCli(["--site-config", "site.json"]);
+    if ("error" in s) throw new Error(s.error);
+    expect(s.siteConfig).toBe("site.json");
+    expect("error" in parseCli(["--site-config"])).toBe(true);
   });
 });
