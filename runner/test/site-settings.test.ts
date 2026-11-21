@@ -102,8 +102,7 @@ describe("the about page's markdown", () => {
     const dropped = ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "JaVa&#115;cript:1", "&#106;avascript:1", "vbscript:x", "data:text/html,x", "//evil.example", "file:///etc/passwd", "runs", "%6Aavascript:x"];
     for (const href of dropped) {
       const out = html(`[x](${href})`);
-      expect(out).toContain("<a>x</a>");
-      expect(out).not.toContain("href");
+      expect(out).toBe("<p>x</p>\n");
     }
     // A leading space or tab is no way around it.
     expect(html("[x](< javascript:x>)")).not.toContain("href");
@@ -123,6 +122,6 @@ describe("/api/info's site field", () => {
     expect(siteInfoField({})).toEqual({});
     expect(siteInfoField({ previewSeries: "1.0" })).toEqual({});
     expect(siteInfoField({ name: "Lab" })).toEqual({ site: { name: "Lab" } });
-    expect(siteInfoField({ home: "off", about: "[x](javascript:1)" })).toEqual({ site: { home: "off", aboutHtml: "<p><a>x</a></p>\n" } });
+    expect(siteInfoField({ home: "off", about: "[x](javascript:1)" })).toEqual({ site: { home: "off", aboutHtml: "<p>x</p>\n" } });
   });
 });

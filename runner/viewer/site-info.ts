@@ -12,8 +12,8 @@
  *   host the markdown names, which the public site makes to no one.
  * - Links only to `https:`, `http:`, `mailto:`, a path in the site (`/…`,
  *   never `//…`) or a fragment, judged on the attribute exactly as rendered;
- *   any other target (`javascript:`, `data:`, an entity-spelled scheme) loses
- *   its `href` and is a plain word.
+ *   any other target (`javascript:`, `data:`, an entity-spelled scheme) is
+ *   its text alone, not a link.
  *
  * The name, theme and home travel as the store validated them.
  */
@@ -29,7 +29,10 @@ export function renderAboutHtml(markdown: string): string {
   return Bun.markdown
     .html(markdown, MARKDOWN)
     .replace(/<img\b[^>]*>/g, (tag) => /\balt="([^"]*)"/.exec(tag)?.[1] ?? "")
-    .replace(/<a href="([^"]*)"/g, (whole, href: string) => (SAFE_HREF.test(href) ? whole : "<a"));
+    // A link cannot hold a link, so the first close after an opening tag is its own.
+    .replace(/<a href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g, (whole, href: string, text: string) => (SAFE_HREF.test(href) ? whole : text))
+    // And any href the pass above did not see: text cannot spell one, since a quote in it is `&quot;`.
+    .replace(/ href="([^"]*)"/g, (whole, href: string) => (SAFE_HREF.test(href) ? whole : ""));
 }
 
 /** The last rendering, by its source: every open tab polls `/api/info`, and the text changes on an edit. */

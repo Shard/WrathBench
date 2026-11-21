@@ -721,7 +721,7 @@ describe("routes", () => {
       name: "Lab",
       theme: { dark: { accent: "#ff8800" }, light: { accent: "#ff8800" } },
       home: "off",
-      aboutHtml: "<h1>Lab</h1>\n<p>&lt;script&gt;x&lt;/script&gt; <a>a</a></p>\n",
+      aboutHtml: "<h1>Lab</h1>\n<p>&lt;script&gt;x&lt;/script&gt; a</p>\n",
     });
     store.put("site", undefined, { actor: "fixture" });
     expect("site" in (await info())).toBe(false);
