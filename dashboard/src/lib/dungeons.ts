@@ -35,11 +35,6 @@ export function cookieText(a: Pick<DungeonAttemptView, "cookie">): string {
   return a.cookie === true ? "yes" : "—";
 }
 
-/** Each id's heading on the board. */
-export function boardTitle(episode: EpisodeIdView): string {
-  return episode === "deadmines-solo" ? "1 agent × 5" : episode === "deadmines" ? "5 agents" : episode;
-}
-
 /** The id's own tooltip: what the arm is, in a line. */
 export function boardHint(episode: EpisodeIdView): string {
   return episode === "deadmines-solo"

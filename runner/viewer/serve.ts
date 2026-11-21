@@ -20,7 +20,8 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { createApi, json } from "./api";
+import { createApi } from "./api";
+import { json } from "./http";
 import { clickhouseConfigFromEnv } from "./clickhouse";
 import { allowedHostsFromEnv } from "./host-guard";
 import { adminFromEnv, groupsEnvValue, groupsFromEnv, type Groups } from "./groups";

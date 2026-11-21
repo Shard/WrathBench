@@ -9,16 +9,6 @@
 import type { Groups } from "@viewer/groups";
 import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, CredentialFix, CredentialHealth, HealthState } from "@viewer/api-types";
 
-/** A credential row as the store holds it (`runner/src/credential-slots.ts`). */
-export interface CredentialDoc {
-  provider?: unknown;
-  secretEnv?: unknown;
-  slots?: unknown;
-  budget?: unknown;
-  billing?: unknown;
-  enabled?: unknown;
-}
-
 /** A budget's kind on the form; `none` writes no budget, which is the provider's default. */
 export type BudgetKind = "none" | "usage" | "spend" | "runs";
 

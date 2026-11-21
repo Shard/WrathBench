@@ -22,14 +22,9 @@
     "dashboard:dev": "bun run --cwd dashboard dev",
     "dashboard:build": "bun run --cwd dashboard build",
     "viewer": "bun runner/viewer/serve.ts",
-    "sync-prices": "bun infra/sync-prices.ts",
-    "model-logos": "bun infra/fetch-model-logos.ts",
     "boundary": "bun infra/stack-boundary.ts",
-    "deploy:worldserver": "./infra/k8s-deploy.sh",
     "publisher:restart": "kubectl -n wrathbench rollout restart deployment/wrathbench-publisher",
-    "viewer:restart": "./infra/viewer-restart.sh",
-    "tiles:publish": "bun infra/publish-tiles.ts --upload",
-    "ship": "./infra/deploy-dashboard.sh"
+    "ship": "bun infra/wb.ts site ship"
   },
   "dependencies": {
     "@wrathbench/inspector": "workspace:*",

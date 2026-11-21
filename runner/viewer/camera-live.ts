@@ -139,11 +139,6 @@ export function readFrame(file: string): Uint8Array | null {
   }
 }
 
-/** Where a private handle serves the newest frame, and its `{seq, t}`. */
-export function latestFrameRoute(runId: string, kind: "jpg" | "json"): string {
-  return `/api/run/${encodeURIComponent(runId)}/camera/latest${kind === "jpg" ? ".jpg" : ""}`;
-}
-
 const NO_STORE = "no-store";
 
 /**

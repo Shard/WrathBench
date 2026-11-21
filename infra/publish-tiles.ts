@@ -108,7 +108,7 @@ const LEVEL_FILE = /^\d+_\d+\.webp$/;
 /** Whether a request path is the one canonical spelling of a served tile or index. */
 function isServedKey(path: string): boolean {
   const ref = parseTilePath(path);
-  if (ref !== null) return ref.legacy !== true && tileRefPath(ref) === path;
+  if (ref !== null) return tileRefPath(ref) === path;
   const map = parseTileIndexPath(path);
   return map !== null && path === `/${TILE_PREFIX}${map}/${TILE_INDEX_NAME}`;
 }

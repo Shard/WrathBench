@@ -251,7 +251,7 @@ bun infra/publish-tiles.ts --dry-run    # transcodes locally, then counts; uploa
 bun infra/publish-tiles.ts --upload
 ```
 
-`bun ship --tiles` runs the same upload as part of a deploy. The skip-unchanged
+`bun wb site ship --tiles` runs the same upload as part of a deploy. The skip-unchanged
 manifest (`tiles/manifest.json`) lives in the bucket, so a re-run with nothing
 re-extracted PUTs nothing; a re-extraction (and the `bake --force` that has to
 follow it) reuses keys, so a re-upload wants a purge of the `/tiles/` prefix to
@@ -311,7 +311,7 @@ WRATHBENCH_CF_DEPLOY_TOKEN=…        # or leave unset and `bunx wrangler login`
 Then:
 
 ```
-bun ship
+bun wb site ship
 ```
 
 which runs the dashboard tests, renders the social card against

@@ -23,6 +23,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { json } from "./http";
 import { harnessSeries } from "../src/comparability";
 import type { SiteSettings } from "../src/site-settings";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
@@ -312,13 +313,6 @@ function worldserverIdentity(moduleUrl: string): () => Promise<ApiInfoResponse["
     }
     return inflight;
   };
-}
-
-export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
 }
 
 /** The one shared scoreability verdict (`badEvidenceReason`), applied to a projected result row. */

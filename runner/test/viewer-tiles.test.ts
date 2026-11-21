@@ -57,9 +57,9 @@ function handleFor(
 }
 
 /** A native tile and a pyramid level: every rule below holds for both. */
-const TILES = ["/tiles/0/43_31.png", "/tiles/0/minimap/3/5_3.png"];
+const TILES = ["/tiles/0/43_31.png", "/tiles/0/minimap/3/5_3.webp"];
 
-const ART = "/tiles/0/art/3/5_3.png";
+const ART = "/tiles/0/art/3/5_3.webp";
 
 const get = async (
   handle: (req: Request) => Promise<Response>,
@@ -103,9 +103,11 @@ describe("tiles in public mode", () => {
       "/tiles/0/44_31.png",
       "/tiles/0/minimap/",
       "/tiles/0/minimap/3/",
-      "/tiles/0/minimap/0/43_31.png",
-      "/tiles/0/minimap/3/8_0.png",
-      "/tiles/0/minimap/3/5_4.png",
+      "/tiles/0/minimap/0/43_31.webp",
+      "/tiles/0/minimap/3/8_0.webp",
+      "/tiles/0/minimap/3/5_4.webp",
+      // A pyramid tile under its master's .png name is not a route.
+      "/tiles/0/minimap/3/5_3.png",
     ]) {
       const res = await get(handle, path);
       expect(res.status).toBe(404);
@@ -260,13 +262,6 @@ describe("the served tree", () => {
     mkdirSync(web, { recursive: true });
     writeFileSync(join(web, "43_31.webp"), WEBP);
     const res = await get(handleFor({ publicMode: false }, dirs), "/tiles/0/43_31.png");
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("image/png");
-    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
-  });
-
-  test("an older build's .png pyramid path is still the master", async () => {
-    const res = await get(handleFor({ publicMode: false }, served()), "/tiles/0/minimap/3/5_3.png");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);

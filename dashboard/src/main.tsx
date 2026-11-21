@@ -14,13 +14,16 @@ import { enableWowhead } from "@wrathbench/inspector/views/wowhead";
 /**
  * Cloudflare Web Analytics, public site only. The beacon is cookieless and the
  * token is per-hostname, so it is injected here rather than in index.html: the
- * same dist is served by the private viewer, which should report nothing.
+ * same dist is served by the private viewer, which should report nothing. The
+ * token is the deployment's, fed at build time as `VITE_CF_ANALYTICS_TOKEN`
+ * (`infra/deploy-dashboard.sh`); a build without one sends no beacon.
  */
-if (SNAPSHOT_MODE) {
+const CF_ANALYTICS_TOKEN = String(import.meta.env["VITE_CF_ANALYTICS_TOKEN"] ?? "").trim();
+if (SNAPSHOT_MODE && CF_ANALYTICS_TOKEN !== "") {
   const beacon = document.createElement("script");
   beacon.type = "module";
   beacon.src = "https://static.cloudflareinsights.com/beacon.min.js";
-  beacon.dataset["cfBeacon"] = JSON.stringify({ token: "75492948b1e04489a2808cec401da6cb" });
+  beacon.dataset["cfBeacon"] = JSON.stringify({ token: CF_ANALYTICS_TOKEN });
   document.head.append(beacon);
 }
 

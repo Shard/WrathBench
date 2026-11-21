@@ -44,6 +44,7 @@ import {
   type Scenario,
   type ScenarioName,
 } from "./scenarios";
+import { dbPassword } from "../db-env";
 
 // ------------------------------------------------------------------ constants
 
@@ -433,10 +434,6 @@ const log = (msg: string) => console.log(`[fixtures] ${msg}`);
  * the literal. Without the last step every invocation from a container that
  * predates the env block would throw instead of connecting.
  */
-function dbPassword(env: Record<string, string | undefined>): string {
-  return env["WRATHBENCH_DB_PASSWORD"] ?? env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
-}
-
 /**
  * The connection's options from the environment. Pure. The characters
  * schema is the connection's default database, and every characters-table

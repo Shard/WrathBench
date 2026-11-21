@@ -81,6 +81,7 @@ import { SQL } from "bun";
 import { createHash, randomBytes } from "node:crypto";
 import { evalPoolAccountNames, evalPoolSizeOf, poolAccountNames, poolSizeOf } from "../../runner/src/account-pool";
 import { isTenantAccountName, tenantAccountNames, tenantPoolSizeOf } from "../tenant-accounts";
+import { dbPassword } from "../db-env.ts";
 
 // --------------------------------------------------------------------- SRP6
 
@@ -147,10 +148,6 @@ function env(name: string, fallback?: string): string {
  * the literal. Without the last step every invocation from a container that
  * predates the env block would throw instead of connecting.
  */
-function dbPassword(): string {
-  return process.env["WRATHBENCH_DB_PASSWORD"] ?? process.env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
-}
-
 const cfg = {
   host: env("WRATHBENCH_DB_HOST", "db"),
   port: Number(env("WRATHBENCH_DB_PORT", "3306")),

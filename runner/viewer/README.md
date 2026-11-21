@@ -18,7 +18,7 @@ read or change one.
 On Kubernetes the viewer is the `wrathbench-viewer` Deployment behind the
 cluster's own Ingress; its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
-rather than a restart. `bun run viewer:restart`
+rather than a restart. `bun wb server restart-viewer`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
 `/api/info` on `$WRATHBENCH_VIEWER_URL` — it kicks a wedged process, it does not
 deploy anything.
@@ -503,14 +503,10 @@ under `data/minimap/web/`: the natives as indexed PNG at the same names, the
 pyramids as `<z>/<row>_<col>.webp`, and a per-map `index.json`.
 
 `/tiles/` serves every shape from there under the same path, integers only
-(and the layer from a fixed list). Two fallbacks keep it working without a
-current transcode:
-
-- A served file that is missing, or older than its master, is answered from
-  the master and typed as what it is. A machine that never ran the transcode
-  still draws every tile.
-- A pyramid tile asked for under its old `.png` name, by a build from before
-  the WebP tree, gets its master.
+(and the layer from a fixed list). A served file that is missing, or older
+than its master, is answered from the master and typed as what it is, so a
+machine that never ran the transcode still draws every tile. A pyramid tile is
+asked for as `.webp` only; its master's `.png` name is not a route.
 
 The index is withheld (404) when it is older than any of its map's master
 directories, so the page asks for every cell rather than trust a stale list.

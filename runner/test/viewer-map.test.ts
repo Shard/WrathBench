@@ -6,7 +6,7 @@ import { STALL_PAUSE } from "../src/lapse";
 import { openTestSession, recordDrain, traceOfReading, writeReadings } from "./fixtures/v1-session";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
-import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
+import { positionsFromStore, readLatestStatus, readPositions } from "../viewer/positions";
 import { projectPositions } from "../viewer/public-projection";
 import { trackFrom } from "../viewer/results";
 import { readStates } from "../viewer/runs";
@@ -203,10 +203,9 @@ describe("pyramid tile paths", () => {
     expect(tileRefPath(parseTilePath("/tiles/0/43_31.png")!)).toBe("/tiles/0/43_31.png");
   });
 
-  test("a pyramid tile under its master's .png name still parses, as the master, for builds from before the WebP tree", () => {
-    const ref = parseTilePath("/tiles/0/minimap/3/5_3.png");
-    expect(ref).toEqual({ map: 0, row: 5, col: 3, lod: { layer: "minimap", z: 3 }, legacy: true });
-    expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodTileName("minimap", 3, 5, 3)}`);
+  test("a pyramid tile under its master's .png name is not a tile path: the served name is the only one", () => {
+    expect(parseTilePath("/tiles/0/minimap/3/5_3.png")).toBeNull();
+    expect(parseTilePath("/tiles/0/art/3/5_3.png")).toBeNull();
   });
 
   test("a native parses as .webp, the spelling its index names, and as the .png every older build asks for", () => {
@@ -220,26 +219,26 @@ describe("pyramid tile paths", () => {
 
   test("a level outside 1..LOD_MAX, a layer not on the list, or a cell outside the level's grid is rejected", () => {
     for (const p of [
-      "/tiles/0/minimap/0/43_31.png", // level 0 exists only as the native path
-      "/tiles/0/minimap/7/0_0.png",
-      "/tiles/0/minimap/1/32_0.png", // level 1 is 32×32
-      "/tiles/0/minimap/6/0_1.png", // level 6 is one tile
-      "/tiles/0/terrain/1/0_0.png", // not a layer
-      "/tiles/0/art/0/43_31.png", // the art has no level 0
-      "/tiles/0/art/7/0_0.png",
-      "/tiles/0/art/1/32_0.png",
-      "/tiles/0/Art/1/0_0.png",
-      "/tiles/0/Minimap/1/0_0.png",
-      "/tiles/0/minimap/-1/0_0.png",
-      "/tiles/0/minimap/1.5/0_0.png",
-      "/tiles/0/minimap/1/0_0.png/x",
+      "/tiles/0/minimap/0/43_31.webp", // level 0 exists only as the native path
+      "/tiles/0/minimap/7/0_0.webp",
+      "/tiles/0/minimap/1/32_0.webp", // level 1 is 32×32
+      "/tiles/0/minimap/6/0_1.webp", // level 6 is one tile
+      "/tiles/0/terrain/1/0_0.webp", // not a layer
+      "/tiles/0/art/0/43_31.webp", // the art has no level 0
+      "/tiles/0/art/7/0_0.webp",
+      "/tiles/0/art/1/32_0.webp",
+      "/tiles/0/Art/1/0_0.webp",
+      "/tiles/0/Minimap/1/0_0.webp",
+      "/tiles/0/minimap/-1/0_0.webp",
+      "/tiles/0/minimap/1.5/0_0.webp",
+      "/tiles/0/minimap/1/0_0.webp/x",
       "/tiles/0/minimap/1/0_0.jpg",
-      "/tiles/0/minimap/../1/0_0.png",
-      "/tiles/0/minimap/1/../0_0.png",
-      "/tiles/0/minimap%2f1/0_0.png",
+      "/tiles/0/minimap/../1/0_0.webp",
+      "/tiles/0/minimap/1/../0_0.webp",
+      "/tiles/0/minimap%2f1/0_0.webp",
       "/tiles/0/minimap/1",
-      "/tiles/minimap/1/0_0.png",
-      "/tiles/a/minimap/1/0_0.png",
+      "/tiles/minimap/1/0_0.webp",
+      "/tiles/a/minimap/1/0_0.webp",
     ])
       expect(parseTilePath(p)).toBeNull();
   });
@@ -249,10 +248,12 @@ describe("pyramid tile paths", () => {
     mkdirSync(join(root, "0", "minimap", "2"), { recursive: true });
     writeFileSync(join(root, "0", lodTileName("minimap", 2, 10, 7)), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
     writeFileSync(join(root, "0", "minimap", "secret.txt"), "not a tile");
-    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_7.png")).toBe(join(root, "0", "minimap", "2", "10_7.png"));
+    // No served tree: the master answers the served name.
+    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_7.webp")).toBe(join(root, "0", "minimap", "2", "10_7.png"));
     // A leading zero names the same file: the path is rebuilt from the integer.
-    expect(resolveTilePath(root, "/tiles/0/minimap/02/10_7.png")).toBe(join(root, "0", "minimap", "2", "10_7.png"));
-    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_8.png")).toBeNull();
+    expect(resolveTilePath(root, "/tiles/0/minimap/02/10_7.webp")).toBe(join(root, "0", "minimap", "2", "10_7.png"));
+    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_8.webp")).toBeNull();
+    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_7.png")).toBeNull();
     expect(resolveTilePath(root, "/tiles/0/minimap/secret.txt")).toBeNull();
     // The same name at level 0 is a different file, and not this one.
     expect(resolveTilePath(root, "/tiles/0/10_7.png")).toBeNull();
@@ -404,7 +405,7 @@ describe("the character's last status", () => {
   });
 });
 
-describe("readReflecting", () => {
+describe("reflecting", () => {
   const NOW = 1_700_000_000_000;
 
   test("a standing reflecting_since is an open window; NULL and no column are not", async () => {
@@ -414,12 +415,9 @@ describe("readReflecting", () => {
       // A run recorded before the column existed was never reflecting.
       { id: "older", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]] },
     ]);
-    expect(readReflecting(runsDir, "open")).toBe(true);
-    expect(readReflecting(runsDir, "shut")).toBe(false);
-    expect(readReflecting(runsDir, "older")).toBe(false);
-    expect(readReflecting(runsDir, "no-such-run")).toBe(false);
     const byId = new Map((await readPositions(runsDir, NOW)).map((p) => [p.runId, p]));
     expect(byId.get("open")?.reflecting).toBe(true);
+    expect(byId.get("shut")?.reflecting).toBe(false);
     expect(byId.get("older")?.reflecting).toBe(false);
   });
 });
@@ -588,14 +586,12 @@ describe("readPositions", () => {
   test("a schema with no position columns is skipped, not an error", async () => {
     const runsDir = fixture([{ id: "old-1", noPositionColumns: true, states: [[NOW, 4, 900]] }]);
     expect(await readPositions(runsDir, NOW)).toEqual([]);
-    expect(await readLatestPosition(runsDir, "old-1")).toBeNull();
   });
 
   test("a run with no database at all is skipped", async () => {
     const runsDir = tempDir("wrathbench-map-empty-");
     mkdirSync(join(runsDir, "bare"));
     expect(await readPositions(runsDir, NOW)).toEqual([]);
-    expect(await readLatestPosition(runsDir, "bare")).toBeNull();
   });
 
   test("newest position first", async () => {
