@@ -38,7 +38,7 @@ import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
-import { LIVE_WINDOW_MS, campaignFieldsOf, itemSamplesOf } from "./runs";
+import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } from "./runs";
 import { runCredentialOf } from "../src/credential-slots";
 import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";
 import { sessionStoreOf } from "../src/session-store";
@@ -549,7 +549,8 @@ export function runRowOf(r: RunTableRow, latest: LatestState | LatestReading | u
   // The world it played on: the column when the collector wrote one, else the launch config.
   const world = (typeof r.world_id === "string" && r.world_id !== "" ? r.world_id : undefined) ?? (typeof config["world"] === "string" && config["world"] !== "" ? config["world"] : undefined);
   if (world !== undefined) row.world = world;
-  return row;
+  // A store session's close is its record's, decided against this `now` (`closeBareSession`).
+  return closeBareSession(row, now);
 }
 
 export function totalsOf(r: TotalsTableRow | undefined | null): RunTotals | null {

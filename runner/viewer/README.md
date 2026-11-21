@@ -41,7 +41,10 @@ is created empty, and every page serves its labelled empty state.
   (`mcp-` and 16 hex, `runner/src/session-store.ts`) and never under its
   directory's name, the token's fingerprint. A run directory of the same
   name wins, and a record whose character never entered the world is not
-  listed. Refused with `WRATHBENCH_VIEWER_PUBLIC=1`, and a public handle
+  listed. A session reads as `ended` at the close its `session.json` records,
+  and as `abandoned` at its last heartbeat once `live.json` has been quiet for
+  the live window (`closeBareSession` in `runs.ts`), so its run page stops at
+  that end like any finished run's. Refused with `WRATHBENCH_VIEWER_PUBLIC=1`, and a public handle
   withholds every such session. `infra/README.md`, "Viewer only", runs the
   viewer this way and nothing else.
 - `WRATHBENCH_MINIMAP_DIR` overrides the tile root (default `data/minimap`).

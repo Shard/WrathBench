@@ -507,6 +507,36 @@ function finishRow(row: RunRow, now: number): RunRow {
   if (row.platform === null) row.platform = platformOf(row.apiBase, row.driver);
   row.live =
     row.terminationReason === null && row.mtime !== null && now - row.mtime < LIVE_WINDOW_MS;
+  return closeBareSession(row, now);
+}
+
+/** A store session's verdict when its record closed it (`session.json`'s `ended`). */
+export const BARE_ENDED = "ended";
+/** ...and when its writer stopped without closing it: `live.json`'s heartbeat went quiet. */
+export const BARE_ABANDONED = "abandoned";
+
+/**
+ * A bare session's end, as the record states it (`runner/src/session-store.ts`).
+ * A run says it ended by a termination reason, which a session never writes,
+ * and every reader of a row (the listing's status, the run page's timeline,
+ * its LIVE toggle and its polling, the live map) takes a missing one as a run
+ * still going. So a session closed in its `session.json` reads as `ended` at
+ * that close, and one whose writer died without closing it, its `live.json`
+ * quiet for the listing's live window (wrath-mcp/docs/SESSION-FORMAT.md, "a
+ * session whose ended is null and whose heartbeat is old was abandoned"),
+ * reads as `abandoned` at its last heartbeat. Decided on each read, against
+ * `now`, because a stored row never learns that its writer stopped; a writer
+ * that resumes the session moves the heartbeat and it reads as live again.
+ * Any other row is returned as it was.
+ */
+export function closeBareSession<T extends Pick<RunRow, "runId" | "terminationReason" | "endedAt" | "startedAt" | "mtime" | "live">>(row: T, now: number): T {
+  if (!isBareSessionId(row.runId) || row.terminationReason !== null) return row;
+  if (row.endedAt !== null) row.terminationReason = BARE_ENDED;
+  else if (row.mtime === null || now - row.mtime >= LIVE_WINDOW_MS) {
+    row.terminationReason = BARE_ABANDONED;
+    row.endedAt = row.mtime ?? row.startedAt;
+  }
+  if (row.terminationReason !== null) row.live = false;
   return row;
 }
 

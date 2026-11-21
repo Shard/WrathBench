@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { SessionWriter, type SessionCharacter } from "@wrathbench/mcp/record";
 import { createApi, INSPECTOR_BASE } from "../viewer/api";
 import type { ApiInfoResponse, ResultsResponse, RunsResponse } from "../viewer/api-types";
-import { runDir } from "../viewer/runs";
+import { BARE_ABANDONED, BARE_ENDED, closeBareSession, runDir } from "../viewer/runs";
 import { runsSource } from "../viewer/runs-source";
 import { OPERATOR } from "@wrathbench/inspector";
 import {
@@ -388,5 +388,51 @@ describe("a damaged session", () => {
     } finally {
       chmodSync(join(locked, "trace"), 0o755);
     }
+  });
+});
+
+describe("a session's end", () => {
+  type Detail = { run: { runId: string; live: boolean; terminationReason: string | null; endedAt: number | null; startedAt: number | null } };
+
+  /** The listing's row and the run page's, off one handle over `store`. */
+  async function readBoth(store: string, fp: string): Promise<{ listed: RunsResponse["runs"][number]; detail: Detail["run"] }> {
+    const runs = tempDir("wb-runs-");
+    const handle = createApi({ runsDir: runs, tilesDir: join(runs, "tiles"), moduleUrl: "http://127.0.0.1:1", groups: { runner: false, evals: false, viewer: true }, sessionStore: store });
+    const listed = ((await (await handle(new Request("http://127.0.0.1/api/runs"))).json()) as RunsResponse).runs.find((r) => r.runId === bareSessionId(fp))!;
+    const detail = ((await (await handle(new Request(`http://127.0.0.1/api/run/${bareSessionId(fp)}`))).json()) as Detail).run;
+    return { listed, detail };
+  }
+
+  test("a session its record closed reads as ended at that close, on the listing and the run page", async () => {
+    const store = tempDir("wb-store-");
+    const at = Date.now() - 10 * 60_000;
+    await writeBareSession(store, FP_A, { at });
+    const { listed, detail } = await readBoth(store, FP_A);
+    for (const r of [listed, detail]) {
+      // The run page's LIVE toggle, freshness mark, polling and timeline end all read `terminationReason` (RunDetail.tsx `live`).
+      expect([r.live, r.terminationReason, r.endedAt]).toEqual([false, BARE_ENDED, at + 120_000]);
+    }
+  });
+
+  test("a session whose writer went quiet without closing it reads as abandoned at its last heartbeat", async () => {
+    const store = tempDir("wb-store-");
+    const at = Date.now() - 30 * 60_000;
+    const dir = await writeBareSession(store, FP_A, { at, open: true });
+    const quiet = new Date(Date.now() - 20 * 60_000);
+    utimesSync(join(dir, "live.json"), quiet, quiet);
+    const { listed, detail } = await readBoth(store, FP_A);
+    for (const r of [listed, detail]) expect([r.live, r.terminationReason, r.endedAt]).toEqual([false, BARE_ABANDONED, quiet.getTime()]);
+  });
+
+  test("a session being written reads as live and unended", async () => {
+    const store = tempDir("wb-store-");
+    await writeBareSession(store, FP_A, { at: Date.now() - 60_000, open: true });
+    const { listed, detail } = await readBoth(store, FP_A);
+    for (const r of [listed, detail]) expect([r.live, r.terminationReason, r.endedAt]).toEqual([true, null, null]);
+  });
+
+  test("a run is never closed by the rule, only a store session's id is", () => {
+    const row = { runId: "run-20261121-120000", terminationReason: null, endedAt: 5, startedAt: 1, mtime: null, live: false };
+    expect(closeBareSession({ ...row }, Date.now())).toEqual(row);
   });
 });
