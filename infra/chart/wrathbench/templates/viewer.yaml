@@ -207,9 +207,12 @@ spec:
               containerPort: 8090
           # The kubelet sends Host: <pod IP>:8090, which the Host allowlist
           # always answers (an IP, not a name a rebinding page could use).
+          {{- /* /api/ready reads nothing, so a hung or unreachable game module
+                 never takes the viewer out of its Service; /api/info asks the
+                 module's /health and can wait two seconds on it. */}}
           readinessProbe:
             httpGet:
-              path: /api/info
+              path: /api/ready
               port: 8090
             initialDelaySeconds: 5
             periodSeconds: 10

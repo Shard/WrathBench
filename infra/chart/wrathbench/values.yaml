@@ -757,11 +757,9 @@ viewer:
   # Empty is the in-chart worldserver with `game` on and none with it off,
   # when the viewer answers `worldserver: null` and works otherwise. Set it
   # only with `game` off, to another deployment's module (http://host:8086);
-  # with `game` on the chart refuses it. The readiness probe reads /api/info
-  # with the kubelet's one-second timeout and the viewer waits up to two
-  # seconds for /health, so a module that drops packets rather than refusing
-  # them keeps the viewer unready: name one it can reach, or none. With
-  # `networkPolicy` on, the viewer's egress admits the in-chart module only,
+  # with `game` on the chart refuses it. A module that cannot be reached
+  # costs /api/info up to two seconds and never the viewer's readiness, which
+  # reads /api/ready. With `networkPolicy` on, the viewer's egress admits the in-chart module only,
   # so another deployment's is reached only through `networkPolicy.internet`.
   moduleUrl: ""
   # The env Secret's key holding that module's port secret, sent on /health.

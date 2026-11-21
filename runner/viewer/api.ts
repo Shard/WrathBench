@@ -2488,6 +2488,15 @@ export function createApi(opts: ApiOptions): ApiHandle {
     }
 
     /*
+     * Readiness: this process is up and serving. It reads nothing — no module,
+     * no store, no runs directory — so a hung or unreachable worldserver, or a
+     * slow store, never takes the viewer out of its Service (the chart's
+     * probes; `/api/info` asks the module's /health and can wait two seconds
+     * on it). In no group and on every handle, public mode included.
+     */
+    if (path === "/api/ready") return json({ ready: true });
+
+    /*
      * The config API: read and edit the fleet config. Behind the admin switch
      * (`groups.ts`), which a public handle never has, so without it the routes
      * are not served at all — a 404, not the 403 `withheld()` gives, because a

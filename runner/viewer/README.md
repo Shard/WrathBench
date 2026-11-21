@@ -21,7 +21,10 @@ owns the tag, so it comes back on its own and new viewer code needs a new tag
 rather than a restart. `bun wb server restart-viewer`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
 `/api/info` on `$WRATHBENCH_VIEWER_URL` — it kicks a wedged process, it does not
-deploy anything.
+deploy anything. Its readiness probe reads `/api/ready`, which answers on
+every handle and reads nothing, so a hung or unreachable game module never
+takes the viewer out of its Service (`/api/info` waits up to two seconds on the
+module's `/health`).
 
 Anywhere else — the single-machine compose stack, a bare clone, or development
 on the pages — it is one process you start and stop yourself:
