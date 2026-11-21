@@ -334,7 +334,7 @@ export interface TokenTotals {
    * when nobody counted, and `snapshot` for a claude-code run whose completion
    * figure rests on the API's opening usage snapshots because the turns that
    * produced it never emitted a `claude_result` — reported, and known to
-   * under-read badly. See `tokenTotals` in `tail.ts`.
+   * under-read badly. See `tokenTotals` in `run-totals.ts`.
    */
   source: "reported" | "estimated" | "snapshot";
   /**
@@ -354,7 +354,7 @@ export interface TokenTotals {
   /**
    * The run's model turns: its requests, except on claude-code, whose request
    * is a context handed to the CLI and whose model turns are the CLI's own
-   * count, `num_turns` on its results (`claudeModelTurns` in `tail.ts`).
+   * count, `num_turns` on its results (`claudeModelTurns` in `run-totals.ts`).
    */
   turns: number;
 }
@@ -369,7 +369,7 @@ export interface TokenTotals {
  * thing under the two drivers: the fixed loop writes a `request` and a
  * `response` per turn, while the claude-code driver hands the CLI one request
  * and logs thousands of responses under it. See `tokensPerSecond` in
- * `runner/viewer/tail.ts` for how a span is opened and closed.
+ * `runner/src/run-totals.ts` for how a span is opened and closed.
  *
  * Two figures because a live run's speed now is a different question from the
  * average it has managed so far: `recent` is the last `TPS_RECENT_REPLIES`
@@ -395,7 +395,7 @@ export interface TpsFacts {
  * session's responses used after its last result (or in a session that never
  * got one). Read off the responses' usage, so the input side is the finished
  * count and the output side the API's opening snapshot — under-read
- * (`tokenTotals`). See `ClaudeCostTally` in `tail.ts`.
+ * (`tokenTotals`). See `ClaudeCostTally` in `run-totals.ts`.
  */
 export interface UnreportedUsage {
   turns: number;
@@ -466,7 +466,7 @@ export interface AreaFacts {
   /**
    * Whether the run has at least two *consecutive* observed areas both
    * outside `startArea`'s tutorial region (see `tutorialRegionOf` in
-   * `runner/viewer/tail.ts`) — a sustained exit, not "any area seen that
+   * `runner/src/run-totals.ts`) — a sustained exit, not "any area seen that
    * differs": a lone milestone outside the region does not count, nor does
    * wandering between a newbie zone's own subzones. The pair may occur
    * anywhere in the run; a later return home does not erase it. Null when no

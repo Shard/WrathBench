@@ -625,7 +625,7 @@ export function bestLevelOf(dir: string, runId: string): number | null {
 /**
  * One `events` row as the trajectory's `milestone` record carried the same
  * transition (`MilestoneLine` in trajectory.ts), so the derivations that read
- * those (`viewer/tail.ts`) read both. Ids stay as the stack wrote them; the
+ * those (`run-totals.ts`) read both. Ids stay as the stack wrote them; the
  * zone and area become `{ id }` and a flight's area `{ areaId }`, the record's
  * spellings. `observedTs` is the row's own instant, which on a v1 row is the
  * event's. Null for a row that is not a milestone (`key`, `quest`).

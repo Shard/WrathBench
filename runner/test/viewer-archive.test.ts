@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { listRuns } from "../src/run-list";
 import { ARCHIVE_DIR } from "../src/archive-dir";
-import { scanRunTotals } from "../viewer/tail";
+import { scanRunTotals } from "../src/run-totals";
 import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds, runActivityAge } from "../src/archive";
 import { FANOUT_CHARACTERS, FANOUT_RUN, writeFanoutRun } from "./fixtures/fanout";
 import { readRunFacts } from "../src/models";

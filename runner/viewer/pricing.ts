@@ -607,7 +607,7 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
  * Dollars for a run's tokens at one price row.
  *
  * Cache reads and cache writes are a *subset* of the prompt on both usage
- * shapes the viewer normalises (see `reportedUsage` in `tail.ts`), so the
+ * shapes the viewer normalises (see `reportedUsage` in `runner/src/run-totals.ts`), so the
  * full-price input is what is left of the prompt once both come out of it.
  */
 export function costOf(tokens: TokenTotals, price: PriceRow): CostBreakdown {
@@ -679,7 +679,7 @@ export function unpricedNote(run: PriceableRun): string {
  * Two shapes, one meaning: a per-response `usage.cost` (OpenRouter's, in
  * credits, which are dollars; OpenCode's pay-as-you-go endpoint reports the
  * same field) and the Claude Agent SDK's per-session `total_cost_usd`.
- * `tail.ts` sums whichever the run carries; this only has to say what the
+ * `runner/src/run-totals.ts` sums whichever the run carries; this only has to say what the
  * number is, and whose.
  *
  * One exception to "verbatim": a claude-code run whose CLI never reported a

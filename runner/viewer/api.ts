@@ -145,7 +145,8 @@ import {
   tileValidators,
 } from "./tiles";
 import { playtimeMs, recordSegments, segmentsFrom } from "../src/sessions";
-import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
+import { TrajectoryTail } from "./tail";
+import { RunTotalsScanner, type RunTotals } from "../src/run-totals";
 
 /**
  * How often the live tail rescans, and the biggest entries window a client may

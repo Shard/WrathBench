@@ -19,7 +19,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionReader, type EventRow } from "@wrathbench/mcp/record";
-import { scanRunTotals } from "../viewer/tail";
+import { scanRunTotals } from "../src/run-totals";
 import { SandboxHost } from "../src/sandbox/host";
 import { openSessionRecord } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";

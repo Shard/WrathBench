@@ -8,6 +8,12 @@ import { readRun } from "../src/run-list";
 import { playtimeMs, segmentsFrom } from "../src/sessions";
 import {
   TrajectoryTail,
+  reflectMarkOf,
+  reflectionWindowsFrom,
+  summarize,
+  travelMarksOf,
+} from "../viewer/tail";
+import {
   claudeModelTurns,
   areaFactsFrom,
   areaInstantsFrom,
@@ -15,8 +21,6 @@ import {
   deathFactsFrom,
   estimateTokens,
   levelUpFactsFrom,
-  reflectMarkOf,
-  reflectionWindowsFrom,
   taxiFactsFrom,
   spellFactsFrom,
   talentFactsFrom,
@@ -24,11 +28,9 @@ import {
   RunTotalsScanner,
   scanRunTotals,
   splitLines,
-  summarize,
   tokenTotals,
   tokensPerSecond,
-  travelMarksOf,
-} from "../viewer/tail";
+} from "../src/run-totals";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

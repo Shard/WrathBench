@@ -1178,7 +1178,7 @@ interface DayTally {
  *
  * Reading is `readSync` over a fixed buffer rather than the whole-file string
  * `readFileSync` built: the same discipline `RunTotalsScanner` follows in
- * `runner/viewer/tail.ts`, but not the same code — that one reads
+ * `runner/src/run-totals.ts`, but not the same code — that one reads
  * asynchronously through `Bun.file`, and this path is sync all the way up
  * through the fleet supervisor. Splitting happens on bytes, which is safe
  * because 0x0A cannot occur inside a UTF-8 multi-byte sequence. The bytes are

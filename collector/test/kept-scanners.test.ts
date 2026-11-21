@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRunFact } from "../../runner/src/models";
 import { Trajectory } from "../../runner/src/trajectory";
-import { RunTotalsScanner } from "../../runner/viewer/tail";
+import { RunTotalsScanner } from "../../runner/src/run-totals";
 import { Collector } from "../src/collector";
 import { readConfig } from "../src/config";
 import { SCANNER_QUIET_MS } from "../src/ingest";

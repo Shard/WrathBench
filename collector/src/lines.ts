@@ -110,7 +110,7 @@ export function usageOf(rec: Record<string, unknown>): UsageRow {
     // The adapters normalise every provider's write/creation field to
     // `cache_write_tokens` before the turn is logged, but older trajectories
     // carry the Anthropic spelling raw. Both are read, the normalised one
-    // first — the same order `runner/viewer/tail.ts` uses.
+    // first — the same order `runner/src/run-totals.ts` uses.
     cache_write_tokens: int(u["cache_write_tokens"]) ?? int(u["cache_creation_input_tokens"]),
     reasoning_tokens: int(details?.["reasoning_tokens"]) ?? int(u["reasoning_tokens"]),
     total_tokens: int(u["total_tokens"]),

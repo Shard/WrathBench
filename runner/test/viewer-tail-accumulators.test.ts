@@ -14,7 +14,8 @@ import { describe, expect, test } from "bun:test";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SEGMENT_MARKS, segmentsFrom } from "../src/sessions";
-import { TrajectoryTail, reportedCostUsd, responseCostCoverage, tokenTotals, tokensPerSecond } from "../viewer/tail";
+import { TrajectoryTail, responseCostCoverage } from "../viewer/tail";
+import { reportedCostUsd, tokenTotals, tokensPerSecond } from "../src/run-totals";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

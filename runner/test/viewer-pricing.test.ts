@@ -22,7 +22,8 @@ import { breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPric
 const OPENCODE_GO_BASE = CATALOGUE.providers["opencode-go"]!.apiBase!;
 import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
-import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, tokenTotals, TrajectoryTail } from "../viewer/tail";
+import { responseCostCoverage, summarize, TrajectoryTail } from "../viewer/tail";
+import { reportedCostUsd, scanRunTotals, tokenTotals } from "../src/run-totals";
 import type { TokenTotals } from "../viewer/api-types";
 import { tempDirs } from "./fixtures/temp-dirs";
 

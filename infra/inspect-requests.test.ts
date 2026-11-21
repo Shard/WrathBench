@@ -21,7 +21,7 @@ import { readRunRow } from "../runner/src/run-reader";
 import { Trajectory } from "../runner/src/trajectory";
 import { OPENROUTER_PRICES } from "./model-catalogue";
 import { priceFor } from "../runner/viewer/pricing";
-import { scanRunTotals } from "../runner/viewer/tail";
+import { scanRunTotals } from "../runner/src/run-totals";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
 import { recordDrain, traceOfReading, type TraceReading, writeReadings } from "../runner/test/fixtures/v1-session";
 import { codexDelta, DRIVER_USAGE, type InspectStore, main, requestPrice, stallSpans, type WindowFigures } from "./inspect-run";
@@ -561,7 +561,7 @@ describe("claude-code", () => {
 });
 
 describe("claude-code's model turns, here and in the viewer", () => {
-  test("a run's requests are the viewer's turns (runner/viewer/tail.ts `claudeModelTurns`), which this file copies", async () => {
+  test("a run's requests are the viewer's turns (runner/src/run-totals.ts `claudeModelTurns`), which this file copies", async () => {
     for (const id of [CLAUDE, SNAPSHOTS, CLAUDE_TURNS]) {
       const viewer = (await scanRunTotals(join(RUNS, id, "trajectory.jsonl"))).tokens.turns;
       expect([id, (await readout(id)).windows[0]!.requests]).toEqual([id, viewer]);

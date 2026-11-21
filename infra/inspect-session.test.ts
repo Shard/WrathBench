@@ -18,7 +18,7 @@ import { readRunRow } from "../runner/src/run-reader";
 import { writeLegacy05Run } from "../runner/test/fixtures/legacy05-writer";
 import { CATALOGUE } from "./model-catalogue";
 import { costOf, breakdownTotal, priceFor } from "../runner/viewer/pricing";
-import { reportedCostUsd, scanRunTotals } from "../runner/viewer/tail";
+import { reportedCostUsd, scanRunTotals } from "../runner/src/run-totals";
 import { FANOUT_SEP, type InspectStore, main, SESSIONS_DIR, usageSql } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { tempDirs } from "./temp-dirs";
@@ -247,7 +247,7 @@ async function inspect(argv: string[], store?: InspectStore): Promise<{ code: nu
 const line = (out: string[], label: string): string => out.find((l) => l.startsWith(label)) ?? "";
 
 describe("what it shares with the runner and the collector", () => {
-  test("a claude-code run's model turns are the viewer's (runner/viewer/tail.ts `claudeModelTurns`), which this copies", async () => {
+  test("a claude-code run's model turns are the viewer's (runner/src/run-totals.ts `claudeModelTurns`), which this copies", async () => {
     for (const id of [CLI, FAN]) {
       const viewer = (await scanRunTotals(join(RUNS, id, "trajectory.jsonl"))).tokens.turns;
       const activity = line((await inspect(["run", id, "--width", "1000"])).out, "activity");

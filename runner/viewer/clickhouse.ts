@@ -37,7 +37,7 @@ import { characterLabel, className, raceName } from "../src/characters";
 import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
-import type { RunTotals } from "./tail";
+import type { RunTotals } from "../src/run-totals";
 import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } from "../src/run-list";
 import { runCredentialOf } from "../src/credential-slots";
 import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";

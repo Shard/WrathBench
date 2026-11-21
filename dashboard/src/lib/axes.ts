@@ -75,7 +75,7 @@ export type Metrics = Readonly<Record<MetricKey, number | null>>;
  *
  * Tokens count only when the provider counted them: `TokenTotals.source`
  * `estimated` is characters ÷ 4 and `snapshot` is a claude-code figure the
- * viewer itself documents as badly under-read (`tail.ts`), and an axis that
+ * viewer itself documents as badly under-read (`runner/src/run-totals.ts`), and an axis that
  * averaged a guess with a count would put a point nowhere any run was — the
  * same rule `runCostReading` applies by refusing a price over estimated
  * tokens. Turns are `modelResponses`, the count of response records in the
