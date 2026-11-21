@@ -8,7 +8,7 @@
 
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "../src/run-totals";
-import type { HarnessView, RunListRow, RunRow } from "./api-types";
+import type { HarnessView, ResultRun, RunListRow, RunRow } from "./api-types";
 import type { RunStore } from "./clickhouse";
 import type { Groups } from "./groups";
 import type { readFleetRoster } from "./models";
@@ -32,4 +32,8 @@ export interface ApiContext {
   runRowOne: (runId: string, now?: number) => Promise<RunRow>;
   runTotals: (runId: string) => Promise<RunTotals | null>;
   listRowOf: (raw: RunRow, totals: RunTotals | null) => RunListRow;
+  /** The listing this handle serves: a public handle's leaves out what it withholds. */
+  resultRuns: () => Promise<ResultRun[]>;
+  /** Every run, withheld or not: what the scripted reference line is read from. */
+  allResultRuns: () => Promise<ResultRun[]>;
 }
