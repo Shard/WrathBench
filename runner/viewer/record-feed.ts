@@ -11,6 +11,11 @@
  * always drawn, with the turn in flight joined by timestamp (decision 9 of
  * wrath-mcp#29). `TrajectoryTail` merges them into its entries by time.
  *
+ * A session read from a wrath-mcp store (`runner/src/session-store.ts`) has
+ * no trajectory, so nothing else holds its tool calls: there the record's
+ * `call` and `result` rows are the feed's calls too (`pairStoreCalls`,
+ * `storeCallRecordsOf`), drawn as the cards a CLI driver's are.
+ *
  * Each line is kept as a locator (stream, segment, byte range), never as
  * text, so a long run's feed costs no more memory than its trajectory's; the
  * raw view reads the segment again. Read-only.
@@ -33,6 +38,23 @@ export interface RecordLoc {
 export interface RecordLine {
   loc: RecordLoc;
   row: EventRow | CallRow;
+  /** A store session's `result` row: its `call` row and where that is (`pairStoreCalls`); absent when the record holds none. */
+  call?: HeldCall;
+}
+
+type CallRowOf<K extends CallRow["kind"]> = Extract<CallRow, { kind: K }>;
+
+/** A `call` row and where it is (its own line, or a segment's `key` that restates it), and its place among the session's calls, from 1. */
+export interface HeldCall {
+  row: CallRowOf<"call">;
+  loc: RecordLoc;
+  n: number;
+}
+
+/** What `pairStoreCalls` keeps between reads: the calls without a result yet, by id, and how many calls it has read. */
+export interface StoreCalls {
+  held: Map<number, HeldCall>;
+  count: number;
 }
 
 const decoder = new TextDecoder();
@@ -110,7 +132,8 @@ export function readRecordRow(sessionDir: string, loc: RecordLoc): EventRow | Ca
 /**
  * A session record row as the trajectory record the feed draws, or null for a
  * row the feed does not show: a `key`, and a tool call or its result, which
- * the trajectory already holds as the model saw them.
+ * the trajectory already holds as the model saw them (a store session's are
+ * `storeCallRecordsOf`'s).
  *
  * - `events` rows: a milestone (`milestoneOfEvent`), or a `quest` as the
  *   `quest_complete` record.
@@ -162,4 +185,82 @@ export function feedRecordOf(row: EventRow | CallRow, turn: number | null, strea
     default:
       return null;
   }
+}
+
+/**
+ * A store session's `call` and `result` rows paired: each `call` row is held,
+ * by id and numbered in the order read, until its `result` is read, which
+ * then carries it (`RecordLine.call`). So the feed draws a call where it
+ * returned, as a CLI driver's trajectory has it: the call, its code and its
+ * result written together after the call ran, with its start in
+ * `dispatchTs`. Calls that overlap pair by id, never by position. A `key`
+ * restates the calls still in flight, and one whose `call` row was not read
+ * is held from it. Every other row passes through. A call still running is
+ * held and not yet in the feed; one whose process died has no result and
+ * never is.
+ */
+export function pairStoreCalls(lines: readonly RecordLine[], calls: StoreCalls): RecordLine[] {
+  const out: RecordLine[] = [];
+  const hold = (row: CallRowOf<"call">, loc: RecordLoc): void => {
+    if (!calls.held.has(row.id)) calls.held.set(row.id, { row, loc, n: ++calls.count });
+  };
+  for (const line of lines) {
+    if (line.loc.stream !== "calls") {
+      out.push(line);
+      continue;
+    }
+    const row = line.row as CallRow;
+    if (row.kind === "call") hold(row, line.loc);
+    else if (row.kind === "key") {
+      for (const c of Array.isArray(row.open) ? row.open : []) hold(c, line.loc);
+    } else if (row.kind === "result") {
+      const call = calls.held.get(row.id);
+      calls.held.delete(row.id);
+      out.push(call !== undefined ? { ...line, call } : line);
+    } else out.push(line);
+  }
+  return out;
+}
+
+/** A held call's row read again from its locator: the `call` row there, or the one a `key` there restates. */
+export function readHeldCall(sessionDir: string, loc: RecordLoc, id: number): CallRowOf<"call"> | null {
+  const row = readRecordRow(sessionDir, loc) as CallRow | null;
+  if (row === null) return null;
+  if (row.kind === "call") return row.id === id ? row : null;
+  if (row.kind === "key") return (Array.isArray(row.open) ? row.open : []).find((c) => c.id === id) ?? null;
+  return null;
+}
+
+/**
+ * A store session's call and its result as the trajectory records a CLI
+ * driver writes for one (`runner/src/adapter-claude.ts`): a `tool_call` with
+ * the tool, its args and the call's id as `dispatchTs`; for `run_snippet` a
+ * `snippet` with the code; then a `snippet_result` or `tool_result` with the
+ * text and `isError`. All are stamped when the call returned and carry its
+ * number among the session's calls as `call`, as a CLI driver's carry its
+ * index. Written side by side, they are one card however the calls overlapped
+ * (`groupFeed`, `dashboard/src/lib/feedgroup.ts`). A result whose call the
+ * record does not hold is drawn alone, without a name or a number.
+ */
+export function storeCallRecordsOf(held: { row: CallRowOf<"call">; n: number } | null, result: CallRowOf<"result">): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const ts = result.ts;
+  const call = held?.row ?? null;
+  const n = held !== null ? { call: held.n } : {};
+  const snippet = call?.tool === "run_snippet";
+  if (call !== null) {
+    out.push({ t: "tool_call", ts, ...n, name: call.tool, args: call.args, dispatchTs: call.id });
+    const code = snippet ? (call.args as { code?: unknown } | null)?.code : undefined;
+    // A call whose args carry no code keeps them on its card instead.
+    if (typeof code === "string") out.push({ t: "snippet", ts, ...n, code });
+  }
+  out.push({
+    t: snippet ? "snippet_result" : "tool_result",
+    ts,
+    ...n,
+    ...(call !== null ? { name: call.tool } : {}),
+    isError: result.error === true,
+    text: typeof result.text === "string" ? result.text : "",
+  });
+  return out;
 }

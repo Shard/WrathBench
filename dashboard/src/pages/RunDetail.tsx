@@ -758,8 +758,13 @@ export default function RunDetail() {
     {},
     { equals: (x, y) => x.loop === y.loop && x.harness === y.harness },
   );
+  /** Whether the run has a model side; a store session's calls are its record's, with no model to time. */
+  const modelSide = createMemo(() => {
+    const run = detail()?.run;
+    return run === undefined || hasModelSide(run);
+  });
   // The harness says where a call's envelope sits and whether a gap before a call is the model's.
-  const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev, surface().harness ?? null), []);
+  const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev, surface().harness ?? null, modelSide()), []);
   /** The window's `move` verdicts, for the action lines of the moves they end. */
   const verdicts = createMemo(() => moveVerdicts(entries()), undefined, { equals: sameVerdicts });
 

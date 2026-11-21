@@ -47,7 +47,10 @@ is created empty, and every page serves its labelled empty state.
   listed. A session reads as `ended` at the close its `session.json` records,
   and as `abandoned` at its last heartbeat once `live.json` has been quiet for
   the live window (`closeBareSession` in `runs.ts`), so its run page stops at
-  that end like any finished run's. Refused with `WRATHBENCH_VIEWER_PUBLIC=1`, and a public handle
+  that end like any finished run's. With no trajectory, its feed's tool-call
+  cards are its record's `call` and `result` rows, each drawn where it
+  returned (`pairStoreCalls` in `record-feed.ts`); a call still running is
+  not in the feed until it returns. Refused with `WRATHBENCH_VIEWER_PUBLIC=1`, and a public handle
   withholds every such session. `infra/README.md`, "Viewer only", runs the
   viewer this way and nothing else.
 - `WRATHBENCH_MINIMAP_DIR` overrides the tile root (default `data/minimap`).
