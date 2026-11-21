@@ -20,7 +20,8 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@viewer/*": ["../runner/viewer/*"]
+      "@viewer/*": ["../runner/viewer/*"],
+      "@runner/*": ["../runner/src/*"]
     }
   },
   "include": ["src", "test", "vite.config.ts"]

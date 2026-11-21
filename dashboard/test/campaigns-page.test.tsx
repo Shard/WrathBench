@@ -29,8 +29,13 @@ async function loadEntry(): Promise<Entry> {
     root: dashboardRoot,
     configFile: false,
     // Restated because `configFile: false` drops it: `lib/campaigns.ts`
-    // imports the race and class names from `runner/viewer` at runtime.
-    resolve: { alias: { "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)) } },
+    // imports the race and class names from `runner/src` at runtime.
+    resolve: {
+      alias: {
+        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
+      },
+    },
     plugins: [solid({ dev: false, ssr: false })],
     optimizeDeps: { noDiscovery: true },
     server: { middlewareMode: true },

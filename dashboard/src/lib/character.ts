@@ -24,7 +24,7 @@
  */
 
 import type { ActiveSegment, CharacterStatePoint, CharacterView } from "@viewer/api-types";
-import { sessionClock } from "../../../runner/src/sessions";
+import { sessionClock } from "@runner/sessions";
 import { statusOf } from "./runs";
 
 /**

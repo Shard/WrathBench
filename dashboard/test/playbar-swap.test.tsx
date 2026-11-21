@@ -44,7 +44,12 @@ async function loadEntry(): Promise<Entry> {
     // The app's own resolve config is not loaded with `configFile: false`, so
     // the `@viewer/*` alias is restated: `lib/mapview.ts` imports the world→tile
     // transform from `runner/viewer` at runtime.
-    resolve: { alias: { "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)) } },
+    resolve: {
+      alias: {
+        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
+      },
+    },
     plugins: [solid({ dev: false, ssr: false })],
     optimizeDeps: { noDiscovery: true },
     server: { middlewareMode: true },

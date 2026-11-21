@@ -7,11 +7,11 @@
   // The smoke scripts import the SDK and the MCP stack by package name, through
   // the root links to both workspaces (package.json `dependencies`);
   // `render-og.ts` reaches into the dashboard's pure chart modules, which reach
-  // on into the viewer's wire types under the alias the dashboard's own config
+  // on into the viewer's wire types (and the runner's shared modules) under the aliases the dashboard's own config
   // defines. Same mapping, so the two programs see one set of types.
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "paths": { "@viewer/*": ["../runner/viewer/*"] }
+    "paths": { "@viewer/*": ["../runner/viewer/*"], "@runner/*": ["../runner/src/*"] }
   },
   "include": ["."]
 }

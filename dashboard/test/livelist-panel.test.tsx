@@ -26,7 +26,12 @@ async function loadLiveList(): Promise<LiveListModule> {
   const server = await createServer({
     root: dashboardRoot,
     configFile: false,
-    resolve: { alias: { "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)) } },
+    resolve: {
+      alias: {
+        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
+      },
+    },
     plugins: [solid({ dev: false, ssr: false })],
     optimizeDeps: { noDiscovery: true },
     server: { middlewareMode: true },

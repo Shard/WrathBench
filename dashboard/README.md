@@ -593,7 +593,9 @@ which `src/main.tsx` imports after `src/styles.css`; the shell they sit in
 (tokens, cards, tables, badges, buttons) is `src/styles.css`'s.
 
 What both sides need is imported from the viewer rather than copied, under
-the `@viewer/*` alias, and the session-side codecs from the inspector in the
+the `@viewer/*` alias (and from `runner/src` under `@runner/*`, for the race
+and class names and a run's sessions, which the runner's core reads too), and
+the session-side codecs from the inspector in the
 stack (`@wrathbench/inspector/codec/*`). The viewer imports the same files, so a drift between
 what it serves and what this expects is a compile error rather than a runtime
 surprise, and nothing server-side may follow them into the browser bundle.

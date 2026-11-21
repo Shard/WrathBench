@@ -17,10 +17,10 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * rather than duplicated: the API wire types, the world→tile transform (with
  * the names of the maps that have tiles), the freeplay lineage walk, the
  * character aggregation over it, the public projection's allowlist, the
- * public bucket's keys and the tile index. The race and class names and a
- * run's sessions are the runner's (`runner/src/characters.ts` and
- * `runner/src/sessions.ts`, by relative path), since the runner's core reads
- * them too and never imports the viewer. All are import-free by construction
+ * public bucket's keys and the tile index. `@runner/*` reaches into
+ * `runner/src` for the race and class names and a run's sessions
+ * (`characters.ts`, `sessions.ts`), which live there because the runner's core
+ * reads them too and never imports the viewer. All are import-free by construction
  * (the wire types take their run row and totals from the runner's type-only
  * `run-types.ts`, one type from the import-free driver registry and the
  * session-side ones from the inspector's, and the tile index its grid from
@@ -76,7 +76,10 @@ function catalogueSubset(): Plugin {
 export default defineConfig({
   plugins: [solid(), ogMeta(), catalogueSubset()],
   resolve: {
-    alias: { "@viewer": resolve(import.meta.dirname, "../runner/viewer") },
+    alias: {
+      "@viewer": resolve(import.meta.dirname, "../runner/viewer"),
+      "@runner": resolve(import.meta.dirname, "../runner/src"),
+    },
     // One Solid: the inspector's views (`@wrathbench/inspector/views`) take it
     // from wherever their package resolves it, and a second copy would render
     // and never update.

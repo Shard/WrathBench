@@ -23,7 +23,7 @@
  * play can leave samples far apart.
  *
  * This module imports nothing but wire types, because the dashboard bundles it
- * (by relative path) and nothing server-side may follow it into the browser
+ * (`@runner/sessions`) and nothing server-side may follow it into the browser
  * bundle. A session's shape is declared in `run-types.ts` with the run row,
  * and re-exported by the viewer's `api-types.ts` with every other wire shape,
  * since `/api/run/<id>` and the character's attempts serve it.
