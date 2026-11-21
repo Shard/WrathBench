@@ -8,7 +8,9 @@
 
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "../src/run-totals";
-import type { HarnessView, ResultRun, RunListRow, RunRow } from "./api-types";
+import type { closedWindowsMemo } from "@wrathbench/inspector";
+import type { HarnessView, ResultRun, RunListRow, RunRow, StateItemsRow, StatePoint } from "./api-types";
+import type { TailCache } from "./api-tails";
 import type { RunStore } from "./clickhouse";
 import type { Groups } from "./groups";
 import type { readFleetRoster } from "./models";
@@ -36,4 +38,18 @@ export interface ApiContext {
   resultRuns: () => Promise<ResultRun[]>;
   /** Every run, withheld or not: what the scripted reference line is read from. */
   allResultRuns: () => Promise<ResultRun[]>;
+  /** Project-then-strike, as `pub` does, for a body served by hand. */
+  struckFor: (projected: unknown, runIds: readonly string[]) => unknown;
+  /** Strike the named runs' session tokens out of a public text. */
+  publicText: (text: string, runIds: readonly string[]) => string;
+  /** The handle's run tails and settled track cores (`api-tails.ts`). */
+  tails: TailCache;
+  runRowAndLead: (runId: string, now?: number) => Promise<{ run: RunRow; lead: string | null }>;
+  statesOfRun: (runId: string) => Promise<StatePoint[]>;
+  stateItemsOfRun: (runId: string) => Promise<StateItemsRow[]>;
+  /** Whether a public handle answers this run as if it did not exist. */
+  withheldRun: (runId: string) => Promise<boolean>;
+  /** Each run's closed trace windows, memoised (`closedWindowsMemo`). */
+  closedWindows: ReturnType<typeof closedWindowsMemo>;
+  traceSegs: (runId: string, now: number) => ReturnType<ReturnType<typeof closedWindowsMemo>>;
 }
