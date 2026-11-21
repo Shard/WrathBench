@@ -37,7 +37,8 @@ import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { useFeeds } from "../lib/feeds";
 import { effortLabel, fmtDuration, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
-import { filterBySeries, pageSeries } from "../lib/harness";
+import { filterBySeries, listingSeries } from "../lib/harness";
+import { groupsOf } from "../lib/nav";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import {
   COLUMN_TITLES,
@@ -89,7 +90,8 @@ export default function Runs() {
   const feeds = useFeeds();
   /* Each unchanged run stays the object it was, so a poll redraws only the rows that moved (`keepRowIdentity`). */
   const served = createMemo<ResultRun[]>((prev) => keepRowIdentity(prev, body()?.runs ?? []), []);
-  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served(), feeds.seriesPreview());
+  const series = (): string | null =>
+    listingSeries(groupsOf(feeds.info.latest).evals, feeds.seriesChoice(), feeds.seriesAvailable(), served(), feeds.seriesPreview());
   const inSeries = createMemo((): ResultRun[] => filterBySeries(served(), series()));
   // A party's members together wherever the sort put the first of them (`groupParties`).
   const rows = createMemo(() => groupParties(sortRuns(filterRuns(inSeries(), filter()), sort())));

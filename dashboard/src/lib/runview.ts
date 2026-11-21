@@ -17,6 +17,7 @@
 
 import { untrack } from "solid-js";
 import type { ActiveSegment, ComparabilityView, StatePoint } from "@viewer/api-types";
+import type { Groups } from "@viewer/groups";
 import { activeMsUntil, sessionClock } from "@viewer/sessions";
 import { fmtTokens, stamp } from "./format";
 
@@ -115,6 +116,17 @@ export function xpChartModel(
  */
 export function hasModelSide(run: { source?: "store" }): boolean {
   return run.source !== "store";
+}
+
+/**
+ * Whether the run page draws the comparability tuple and the game-server line
+ * under it. Both are the evals group's (`@viewer/groups`): the server build is
+ * one of the tuple's stamps, and the line is how a run that predates the stamp
+ * says so. A session read from a wrath-mcp store has neither a tuple nor a
+ * harness, and a deployment with evals off compares nothing.
+ */
+export function showsComparability(run: { source?: "store" }, groups: Pick<Groups, "evals">): boolean {
+  return hasModelSide(run) && groups.evals;
 }
 
 /**
