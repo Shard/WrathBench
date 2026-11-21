@@ -768,7 +768,7 @@ On the cluster the code is baked into the images, so the first question is
 | --- | --- |
 | the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
-| any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
+| any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The release's pin rolls the viewer with the other Deployments; `bun wb server restart-viewer` only kicks a wedged one. |
 | anything the supervisor reads only at start: its own code, its env, a credential's secret | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 `fleet-update.sh` does not build or pin an image: new code reaches the fleet
