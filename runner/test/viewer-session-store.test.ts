@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { SessionWriter, type SessionCharacter } from "@wrathbench/mcp/record";
 import { createApi, INSPECTOR_BASE } from "../viewer/api";
 import type { ApiInfoResponse, ResultsResponse, RunsResponse } from "../viewer/api-types";
-import { BARE_ABANDONED, BARE_ENDED, closeBareSession, runDir } from "../viewer/runs";
+import { BARE_ABANDONED, BARE_ENDED, closeBareSession, runDir } from "../src/run-list";
 import { runsSource } from "../viewer/runs-source";
 import { OPERATOR } from "@wrathbench/inspector";
 import {
@@ -24,7 +24,7 @@ import {
   listBareSessions,
   sessionStoreOf,
 } from "../src/session-store";
-import { isValidRunId } from "../viewer/runs";
+import { isValidRunId } from "../src/run-list";
 import { FANOUT_SEP, parseFanoutSessionId, readRunRow } from "../src/run-reader";
 import { isNotAModelRun } from "../src/drivers";
 import { harnessOfRun } from "../src/comparability";

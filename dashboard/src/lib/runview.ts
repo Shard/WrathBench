@@ -18,7 +18,7 @@
 import { untrack } from "solid-js";
 import type { ActiveSegment, ComparabilityView, StatePoint } from "@viewer/api-types";
 import type { Groups } from "@viewer/groups";
-import { activeMsUntil, sessionClock } from "@viewer/sessions";
+import { activeMsUntil, sessionClock } from "@runner/sessions";
 import { fmtTokens, stamp } from "./format";
 
 /**

@@ -52,7 +52,7 @@ import { compactJson } from "@wrathbench/mcp/jsonsafe";
 import { scratchpadSizeLabel } from "@wrathbench/mcp/scratchpad";
 import { FILE_MAX_CHARS, type EventSummary, type MoveIntentNote } from "@wrathbench/mcp";
 import type { HarnessNotice } from "./sandbox/host";
-import { CLASS_NAMES, RACE_NAMES } from "../viewer/characters";
+import { CLASS_NAMES, RACE_NAMES } from "./characters";
 
 export const CONTEXT_POLICY = {
   /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE; bystanders' spell lines and creature emotes are left out too, `spellLogShown`, `emoteShown`). */

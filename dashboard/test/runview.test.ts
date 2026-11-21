@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../../runner/viewer/api-types";
 import { createMemo, createRoot, createSignal } from "solid-js";
-import { playtimeMs, recordSegments } from "../../runner/viewer/sessions";
+import { playtimeMs, recordSegments } from "../../runner/src/sessions";
 import { atBottom, chartClock, chartWindowMs, hasModelSide, runChartInput, showsComparability, xpChartModel } from "../src/lib/runview";
 
 function s(ts: number, level: number | null, xp: number | null): StatePoint {

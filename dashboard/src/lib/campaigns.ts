@@ -15,7 +15,7 @@
  * so control and treatment sit side by side and the reader compares them.
  */
 
-import { characterLabel } from "@viewer/characters";
+import { characterLabel } from "@runner/characters";
 import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewer/api-types";
 import { effortLabel, fmtDuration, fmtEstimate, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
 import { partyHref } from "./party";

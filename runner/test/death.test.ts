@@ -24,7 +24,7 @@ import { SessionReader, type EventRow } from "@wrathbench/mcp/record";
 import { SandboxHost } from "../src/sandbox/host";
 import { openSessionRecord } from "../src/session-record";
 import { Scratchpad } from "@wrathbench/mcp";
-import { scanRunTotals } from "../viewer/tail";
+import { scanRunTotals } from "../src/run-totals";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

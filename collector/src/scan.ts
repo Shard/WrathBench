@@ -10,8 +10,8 @@
 
 import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { ARCHIVE_DIR } from "../../runner/viewer/archive-dir";
-import { isValidRunId } from "../../runner/viewer/runs";
+import { ARCHIVE_DIR } from "../../runner/src/archive-dir";
+import { isValidRunId } from "../../runner/src/run-list";
 import { holdsOnlyLaunchFiles } from "../../runner/src/launch-files";
 import { fanoutCharacters, SESSIONS_DIR } from "../../runner/src/run-reader";
 import { listBareSessions } from "../../runner/src/session-store";
@@ -79,7 +79,7 @@ function signature(dir: string): string {
  * The non-archived directory wins, because this store is the viewer's read
  * model and the viewer serves the top-level copy: `runDir` returns null for
  * anything under `archive/` and `listRuns` filters it by name
- * (`runner/viewer/runs.ts`). Nothing reads the store for what the archive is
+ * (`runner/src/run-list.ts`). Nothing reads the store for what the archive is
  * kept for — attempt numbering and the defer ladder reach the filesystem
  * directly through `readRunFacts({ includeArchived })`. The skipped directory
  * is reported to `onDuplicate` so the collision is visible rather than silent;

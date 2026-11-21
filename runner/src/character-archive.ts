@@ -106,7 +106,7 @@ import { basename, dirname, join } from "node:path";
 import { finished } from "node:stream/promises";
 import { createGunzip, createGzip, type Gzip } from "node:zlib";
 import { z } from "zod";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 import { DEFAULT_DRIVER } from "./drivers";
 import { liveOwnerOf, readRunFact } from "./models";
 import { formatLike } from "./move-credential";
@@ -121,7 +121,7 @@ export const MANIFEST_MEMBER = "manifest.json";
 export const PDUMP_MEMBER = "character.pdump";
 export const RUN_PREFIX = "run/";
 
-/** A run id, as every reader of the runs directory accepts one (`models.ts`, `viewer/runs.ts`). */
+/** A run id, as every reader of the runs directory accepts one (`models.ts`, `run-list.ts`). */
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 const CHUNK = 1 << 20;
 /** Characters of the previous window rescanned with each new one, so a secret split across two chunks is still seen. */

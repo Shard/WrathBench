@@ -1,5 +1,6 @@
 /**
- * A run's sessions: the one definition the viewer and the dashboard share.
+ * A run's sessions: the one definition the runner's run totals, the viewer
+ * and the dashboard share.
  *
  * A **session** is one stretch of a run during which the harness was actually
  * driving — an active segment. It opens at the run's first `meta` and at each
@@ -7,7 +8,8 @@
  * sessions: a scored run usually one; a run a rate limit paused and the fleet
  * resumed two; a freeplay run the operator paused and resumed in place days
  * later two as well, under one run id. A durable freeplay character is a chain
- * of runs (`lineage.ts`), so its sessions are every attempt's, in order.
+ * of runs (`runner/viewer/lineage.ts`), so its sessions are every attempt's,
+ * in order.
  *
  * Everything that measures a run in time reads these. Playtime is their sum;
  * a level mark's `playtimeMs` is the active time before it (`activeMsUntil`);
@@ -20,13 +22,14 @@
  * the samples: a resume can follow a pause by a minute, and a slow stretch of
  * play can leave samples far apart.
  *
- * This module imports nothing but wire types, because the dashboard reaches it
- * over the `@viewer/*` alias and nothing server-side may follow it into the
- * browser bundle. A session's shape is declared in `api-types.ts` with every
- * other wire shape, since `/api/run/<id>` and the character's attempts serve it.
+ * This module imports nothing but wire types, because the dashboard bundles it
+ * (`@runner/sessions`) and nothing server-side may follow it into the browser
+ * bundle. A session's shape is declared in `run-types.ts` with the run row,
+ * and re-exported by the viewer's `api-types.ts` with every other wire shape,
+ * since `/api/run/<id>` and the character's attempts serve it.
  */
 
-import type { ActiveSegment } from "./api-types";
+import type { ActiveSegment } from "./run-types";
 
 export type { ActiveSegment };
 

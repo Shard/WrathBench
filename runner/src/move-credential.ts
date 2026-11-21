@@ -45,7 +45,7 @@ import { credentialCandidates, isCredentialId } from "./credential-slots";
 import { DEFAULT_DRIVER, driverEntry } from "./drivers";
 import { liveOwnerOf, matchesRoster, readRunFact } from "./models";
 import type { CredentialMove } from "./trajectory";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 
 /** A move refused before anything was written. */
 export class CredentialMoveRefused extends Error {

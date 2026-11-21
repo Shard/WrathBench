@@ -23,7 +23,7 @@ import { tailLines } from "../src/tailer";
 import { EPISODIC_ENTRY_KIND, parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
 import { EpisodicLog } from "../../runner/src/episodic";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
-import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
+import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/src/run-totals";
 import { readRunFact } from "../../runner/src/models";
 import { writeLegacy05Run } from "../../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../../runner/src/run-reader";

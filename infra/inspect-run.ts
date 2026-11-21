@@ -77,7 +77,7 @@ export const HEARTBEAT_DEAD_MS = 120_000;
 export const MIN_TOKEN_LENGTH = 32;
 /** wrath-mcp/mcp/src/redact.ts. */
 export const REDACTED = "[redacted]";
-/** runner/viewer/archive-dir.ts. */
+/** runner/src/archive-dir.ts. */
 export const ARCHIVE_DIR = "archive";
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
@@ -1964,7 +1964,7 @@ function scanActivity(path: string, window: Window, token: string | null, cost?:
 /**
  * What a run's records say it cost: the usage its `response` records report,
  * summed, and the provider's own charge. That charge is in two shapes, read
- * as runner/viewer/tail.ts `reportedCostUsd` reads them: OpenRouter's per
+ * as runner/src/run-totals.ts `reportedCostUsd` reads them: OpenRouter's per
  * response (`usage.cost`, summed), and the Claude Code CLI's per session
  * (`claude_result.costUsd`, cumulative, so a session's is its largest). No
  * price table is read for this line: the list-price figure is the viewer's
@@ -2032,7 +2032,7 @@ function newClaude(): ClaudeTally {
 
 /**
  * The run's model turns: each covering result's, and one for every message no
- * result covers, in flight or not. runner/viewer/tail.ts `claudeModelTurns`,
+ * result covers, in flight or not. runner/src/run-totals.ts `claudeModelTurns`,
  * copied because this file imports nothing, and pinned to it by
  * infra/inspect-session.test.ts.
  */
@@ -2141,7 +2141,7 @@ function noteClaude(k: ClaudeTally, t: string, p: Record<string, unknown> | null
   } else if (t === "claude_result") {
     k.results++;
     const f = resultFigures(p);
-    // A result that reports no output speaks for nothing (runner/viewer/tail.ts `claudeTurns`): its turn is closed, unreported.
+    // A result that reports no output speaks for nothing (runner/src/run-totals.ts `claudeTurns`): its turn is closed, unreported.
     if (f.output === null || f.output <= 0) {
       closeClaudeTurn(k, true);
       return;
@@ -4496,7 +4496,7 @@ function usageFigures(u: Record<string, unknown>, shape: UsageShape): Omit<Model
 
 /**
  * The record-by-record read behind `requests`. On claude-code its run-column
- * request count is the viewer's model turns (runner/viewer/tail.ts
+ * request count is the viewer's model turns (runner/src/run-totals.ts
  * `claudeModelTurns`), copied here because this file imports nothing and
  * pinned to it by infra/inspect-requests.test.ts.
  */
@@ -4572,7 +4572,7 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
       case "claude_result": {
         const p = r.parse();
         const out = intOf(obj(p?.["usageRaw"])["output_tokens"]) ?? intOf(obj(p?.["usage"])["completion_tokens"]);
-        // A result that reports no output speaks for nothing (runner/viewer/tail.ts `claudeTurns`): its turn is closed, unreported.
+        // A result that reports no output speaks for nothing (runner/src/run-totals.ts `claudeTurns`): its turn is closed, unreported.
         if (out === null || out <= 0) closeSegment();
         else {
           // The turn's output and its model turns, spread evenly over its messages: each stands for its share of the CLI's count.

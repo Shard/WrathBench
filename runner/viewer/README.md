@@ -46,7 +46,7 @@ is created empty, and every page serves its labelled empty state.
   name wins, and a record whose character never entered the world is not
   listed. A session reads as `ended` at the close its `session.json` records,
   and as `abandoned` at its last heartbeat once `live.json` has been quiet for
-  the live window (`closeBareSession` in `runs.ts`), so its run page stops at
+  the live window (`closeBareSession` in `runner/src/run-list.ts`), so its run page stops at
   that end like any finished run's. With no trajectory, its feed's tool-call
   cards are its record's `call` and `result` rows, each drawn where it
   returned (`pairStoreCalls` in `record-feed.ts`); a call still running is
@@ -119,6 +119,12 @@ There is no fallback UI: with no build on disk every page route
 answers with a plain-text notice naming the build command, and `/api` keeps
 serving throughout. The dashboard's own rules are in `dashboard/README.md`;
 what follows is what the server decides before the UI sees it.
+
+The viewer imports from `runner/src/`, and nothing there or in the collector
+imports from here (`infra/viewer-boundary.test.ts`), so what both read lives
+on the runner's side: the run listing (`runner/src/run-list.ts`), a
+trajectory's totals (`runner/src/run-totals.ts`) and their types
+(`runner/src/run-types.ts`, re-exported by `api-types.ts`).
 
 ## Loopback only
 
@@ -202,8 +208,8 @@ table and the run page cannot disagree. Note that this is not the
 `episode-limit` watchdog's clock, which is per-process uptime since the current
 resume and so never sees paused time.
 
-Those segments are the run's **sessions** (`sessions.ts`, the one definition the
-viewer and the dashboard share over `@viewer/*`). A run is one session or more:
+Those segments are the run's **sessions** (`runner/src/sessions.ts`, the one definition the
+run totals, the viewer and the dashboard share). A run is one session or more:
 a paused freeplay run is resumed in place by the fleet, however much later, so
 one run id can hold two sessions days apart. `/api/run/<id>` serves them as
 `sessions`, the results rows and a character's attempts carry them too, and
@@ -454,7 +460,8 @@ cache reads as `cached_tokens` and says nothing at all about writes, and
 estimates instead** — characters ÷ 4, flagged as estimated — and newer runs
 carry provider-reported counts automatically; the viewer decides per run by
 whether it finds any usage in the file. A turn's reported prompt size replaces
-the estimate for that turn, so the two never double-count.
+the estimate for that turn, so the two never double-count. The accounting is
+`runner/src/run-totals.ts`, which the collector runs too.
 
 The one exception is the claude-code harness (driver id `claude-code`, formerly
 `claude-subscription`). Its

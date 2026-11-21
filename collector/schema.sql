@@ -266,12 +266,12 @@ ORDER BY (run_id, line_no);
 -- and death timelines, the level ladder, tokens per second over reply spans.
 -- Reimplementing those in SQL would mean two implementations that can
 -- disagree about a published number, so the collector runs the *same*
--- TypeScript the viewer ran (`runner/viewer/tail.ts`, `runner/src/models.ts`)
+-- TypeScript the viewer ran (`runner/src/run-totals.ts`, `runner/src/models.ts`)
 -- as it tails and stores the answer. Same code, same bytes, by construction.
 CREATE TABLE IF NOT EXISTS wrathbench.run_totals
 (
   run_id      String,
-  -- `RunTotals` from runner/viewer/tail.ts, as JSON.
+  -- `RunTotals` from runner/src/run-totals.ts, as JSON.
   totals_json String CODEC(ZSTD(3)),
   -- `RunFact` from runner/src/models.ts, as JSON. Null-ish (empty string) on a
   -- run with no usable meta.json, which is what `readRunFact` returns there.

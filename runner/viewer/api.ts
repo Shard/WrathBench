@@ -110,7 +110,8 @@ import { attachSessionStore, isBareSessionId } from "../src/session-store";
 import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
 import { latestFrameResponse } from "./camera-live";
 import { CLIP_CONTENT_TYPE, CLIP_MEDIA_ROUTE, clipMedia, clipsView, fileResponse, hadCamera, pickHighlight, type ClipMediaKind } from "./camera";
-import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
+import { readMoves, readScratchpad, readStateItems, readStates } from "./runs";
+import { isValidRunId, LIVE_WINDOW_MS, readRun, runDir } from "../src/run-list";
 import {
   factOf,
   moveViewsOf,
@@ -123,7 +124,7 @@ import {
   type RunListingRow,
   type RunStore,
 } from "./clickhouse";
-import { isArchiveDir } from "./archive-dir";
+import { isArchiveDir } from "../src/archive-dir";
 import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import { createAdminApi } from "./admin-api";
@@ -143,8 +144,9 @@ import {
   tileNotModified,
   tileValidators,
 } from "./tiles";
-import { playtimeMs, recordSegments, segmentsFrom } from "./sessions";
-import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
+import { playtimeMs, recordSegments, segmentsFrom } from "../src/sessions";
+import { TrajectoryTail } from "./tail";
+import { RunTotalsScanner, type RunTotals } from "../src/run-totals";
 
 /**
  * How often the live tail rescans, and the biggest entries window a client may
@@ -479,7 +481,7 @@ export function harnessSeriesCensus(rows: readonly { harnessVersion: string | nu
 /**
  * How stale a run's files may be and still be read as holding its account.
  *
- * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runs.ts`'s
+ * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runner/src/run-list.ts`'s
  * `LIVE_WINDOW_MS` (120s): the job's run has to be resolved the same way the
  * account guard and `--status` resolve it, or the dashboard would disagree with
  * the supervisor about which run a job holds near the boundary. The constant

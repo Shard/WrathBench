@@ -24,7 +24,7 @@ import type { Harness, RunConfig } from "./config";
 import { harnessDriver } from "./drivers";
 import { EPISODES, type EpisodeId } from "./episodes";
 import { VALID_STARTS } from "./starts";
-import { CLASS_NAMES, RACE_NAMES } from "../viewer/characters";
+import { CLASS_NAMES, RACE_NAMES } from "./characters";
 
 /**
  * The opening of every prompt is two kinds of sentence, and they are kept

@@ -72,7 +72,7 @@ import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
 import { parseRouting, routingSchema, type RoutingSpec } from "./routing";
 import { canonicalModelId } from "../../infra/model-catalogue";
 import { entryModelIds, type ProviderOption } from "./provider-options";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
 import { RunFactCache } from "./run-fact-cache";
 import { servingSchema, type ServingSpec } from "./serving";
@@ -481,7 +481,7 @@ export const LADDER_MS: readonly number[] = [
   6 * 60 * 60_000,
 ];
 
-/** The trajectory record the loop appends for a model turn (viewer/archive-dir.ts). */
+/** The trajectory record the loop appends for a model turn (archive-dir.ts). */
 export const MODEL_RESPONSE_RECORD = "response";
 /** The trajectory record a pause writes (`Trajectory.setPause`). */
 export const PAUSE_RECORD = "pause";
@@ -1178,7 +1178,7 @@ interface DayTally {
  *
  * Reading is `readSync` over a fixed buffer rather than the whole-file string
  * `readFileSync` built: the same discipline `RunTotalsScanner` follows in
- * `runner/viewer/tail.ts`, but not the same code — that one reads
+ * `runner/src/run-totals.ts`, but not the same code — that one reads
  * asynchronously through `Bun.file`, and this path is sync all the way up
  * through the fleet supervisor. Splitting happens on bytes, which is safe
  * because 0x0A cannot occur inside a UTF-8 multi-byte sequence. The bytes are

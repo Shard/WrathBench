@@ -18,7 +18,7 @@ import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "@wrathbench/mcp";
 import { mkdirSync } from "node:fs";
 import { Trajectory } from "../src/trajectory";
-import { readRun } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

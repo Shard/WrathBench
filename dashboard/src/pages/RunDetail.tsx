@@ -78,7 +78,7 @@ import { Timeline } from "../components/Timeline";
 import { createTimeline } from "../lib/timelinestore";
 import { createScrollGuard, createUrlSync, feedPlan, parseT, rowAt, rowInView, withT, type FeedWindow, type Span } from "../lib/timeline";
 import { runMarks, startLevelOf } from "@viewer/timeline-marks";
-import { activeMsUntil } from "@viewer/sessions";
+import { activeMsUntil } from "@runner/sessions";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtDuration, fmtItems, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { useFeeds } from "../lib/feeds";

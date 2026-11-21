@@ -585,7 +585,7 @@ describe("claude-code driver", () => {
     expect(withUsage).toHaveLength(1);
     expect(withUsage[0]).toBe(responses[1]!);
     expect((withUsage[0]!["usage"] as { completion_tokens?: number }).completion_tokens).toBe(7);
-    // Summing usage across response entries (what viewer/tail.ts does) equals a
+    // Summing usage across response entries (what src/run-totals.ts does) equals a
     // single API call's tokens: not doubled, and not the partial first count.
     const sum = responses.reduce((acc, r) => {
       const u = r["usage"] as { total_tokens?: number } | undefined;

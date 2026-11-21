@@ -1293,7 +1293,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    * The CLI emits one `assistant` envelope per content block, so a text+tool_use
    * reply arrives as several envelopes sharing one message.id. Attaching usage
    * to every response entry double-counts a single API call for any consumer
-   * that sums the entries (viewer/tail.ts does), so exactly one entry per id
+   * that sums the entries (run-totals.ts does), so exactly one entry per id
    * carries it — and it has to be the last envelope's, because the usage grows
    * as the message streams.
    *

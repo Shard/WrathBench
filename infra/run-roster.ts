@@ -55,7 +55,7 @@ import { bestLevelOf, readRunRow as readRecordedRunRow } from "../runner/src/run
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
-import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
+import { ARCHIVE_DIR } from "../runner/src/archive-dir";
 import { DEFAULT_DRIVER, entryOf, isRosterDriver, ROSTER_DRIVERS, type RosterDriver } from "../runner/src/drivers";
 import { compactWindowDriverRefusal, driverHasCompactWindow, isTokenEnvName, parseEntryCompactWindow, stampedCompactWindow, watchdogOverrideSchema, type TerminationReason, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";

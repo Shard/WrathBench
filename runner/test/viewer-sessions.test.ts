@@ -1,5 +1,5 @@
 /**
- * A run's sessions (`runner/viewer/sessions.ts`) and the quest count across a
+ * A run's sessions (`runner/src/sessions.ts`) and the quest count across a
  * run's restarts (`questsAcrossRestarts`).
  *
  * The case that motivated both is a freeplay run the operator paused and the
@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../viewer/api-types";
 import { questsAcrossRestarts, questTally } from "../viewer/results";
-import { activeMsUntil, playtimeMs, segmentsFrom, sessionClock } from "../viewer/sessions";
+import { activeMsUntil, playtimeMs, segmentsFrom, sessionClock } from "../src/sessions";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

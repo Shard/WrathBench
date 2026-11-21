@@ -8,7 +8,8 @@ than walk a live run's files. It runs as a container beside the fleet,
 in both the compose quickstart and the Helm chart, and nothing else in the
 system depends on it: the runner does not know it exists, a viewer with no
 ClickHouse builds the same rows in memory, and inspect with none reads the
-files and says so.
+files and says so. It imports the runner's readers (`runner/src/`) and never
+the viewer's (`infra/viewer-boundary.test.ts`).
 
 The store is **derived and disposable**. The files under `data/runs/` are the
 evidence record and the only write path; nothing here ever writes to them.
@@ -187,10 +188,10 @@ timestamp — are SQL over `turns`. The rest are ordering-sensitive state
 machines: active segments and playtime, the zone and death timelines, tokens
 per second over reply spans. Reimplementing those in SQL would mean two
 implementations that can disagree about a published number, so the collector
-runs *the viewer's own code* (`runner/viewer/tail.ts`, `runner/src/models.ts`)
+runs *the viewer's own code* (`runner/src/run-totals.ts`, `runner/src/models.ts`)
 as it tails and stores the answer. Same code, same bytes, by construction.
 A change to that code that gives the same bytes a different answer raises
-`RUN_TOTALS_DERIVATION` in `tail.ts`, which is part of the totals signature,
+`RUN_TOTALS_DERIVATION` in `run-totals.ts`, which is part of the totals signature,
 so every run is re-derived once on the next pass.
 
 **The token columns of `turns` are each line's `usage` as written.** One

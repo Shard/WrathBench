@@ -49,8 +49,8 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync , rmSync } from "node:fs";
 import { join } from "node:path";
-import { listRuns, runDir } from "../viewer/runs";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { listRuns, runDir } from "./run-list";
+import { ARCHIVE_DIR } from "./archive-dir";
 import { countModelResponses } from "./models";
 import { fanoutCharacters, fanoutSessionDir, readRunRow, SESSIONS_DIR } from "./run-reader";
 import { removeSessionRing } from "./session-record";

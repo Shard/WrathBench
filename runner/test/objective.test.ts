@@ -25,7 +25,7 @@ import { Scratchpad } from "@wrathbench/mcp";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
 import { configFromArgs } from "../src/run";
-import { readRun } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { requestsOf } from "./fixtures/requests";

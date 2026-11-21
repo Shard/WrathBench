@@ -15,7 +15,7 @@ import { loadRunConfig, newSessionToken } from "../src/config";
 import { ConfigRejected, ConfigStore } from "../src/config-store";
 import { CredentialMoveRefused, CredentialPinFailed, formatLike, moveCredential, type MoveCredentialOptions } from "../src/move-credential";
 import { HEARTBEAT_FILE, readMeta, Trajectory, type RunMeta } from "../src/trajectory";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "../src/archive-dir";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

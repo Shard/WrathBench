@@ -16,12 +16,15 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * `@viewer/*` reaches into `runner/viewer` for the modules that are shared
  * rather than duplicated: the API wire types, the world→tile transform (with
  * the names of the maps that have tiles), the freeplay lineage walk, the
- * character aggregation over it, a run's sessions, the public projection's
- * allowlist, the public bucket's keys, the race and class names and the tile
- * index. All are import-free by construction (the wire types take one type
- * from the import-free driver registry and the session-side ones from the
- * inspector's, and the tile index its grid from the world→tile transform), so
- * nothing server-side follows them in. The trace and nearby codecs are the
+ * character aggregation over it, the public projection's allowlist, the
+ * public bucket's keys and the tile index. `@runner/*` reaches into
+ * `runner/src` for the race and class names and a run's sessions
+ * (`characters.ts`, `sessions.ts`), which live there because the runner's core
+ * reads them too and never imports the viewer. All are import-free by construction
+ * (the wire types take their run row and totals from the runner's type-only
+ * `run-types.ts`, one type from the import-free driver registry and the
+ * session-side ones from the inspector's, and the tile index its grid from
+ * the world→tile transform), so nothing server-side follows them in. The trace and nearby codecs are the
  * inspector's, imported by package name (`@wrathbench/inspector/codec/*`).
  */
 const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.1:8090";
@@ -73,7 +76,10 @@ function catalogueSubset(): Plugin {
 export default defineConfig({
   plugins: [solid(), ogMeta(), catalogueSubset()],
   resolve: {
-    alias: { "@viewer": resolve(import.meta.dirname, "../runner/viewer") },
+    alias: {
+      "@viewer": resolve(import.meta.dirname, "../runner/viewer"),
+      "@runner": resolve(import.meta.dirname, "../runner/src"),
+    },
     // One Solid: the inspector's views (`@wrathbench/inspector/views`) take it
     // from wherever their package resolves it, and a second copy would render
     // and never update.

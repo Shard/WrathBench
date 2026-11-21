@@ -39,7 +39,7 @@ import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import { buildLaunchContext, encodeLaunchContext, hygieneAccountsOf, LAUNCH_CONTEXT_ENV } from "../runner/src/launch-context";
 import { fanoutAccountsOf } from "../runner/src/party";
 import { runWorldOf, SHARED_WORLD } from "../runner/src/session-record";
-import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
+import { ARCHIVE_DIR } from "../runner/src/archive-dir";
 import { DRIVER_POD_VOLUMES, entryOf, HOME_CREDENTIAL_ENVS, RUN_POD_STAMP_ENV, type RosterDriver } from "../runner/src/drivers";
 import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher, LaunchSecretReader } from "./episode-launcher";
 import { EPISODE_TERM_GRACE_MS, episodeSecretEnv, refusedEpisode } from "./episode-launcher";

@@ -1145,7 +1145,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
    * The turn's usage arrives once, on `turn.completed`, after every item. So
    * the newest `response` entry of a turn is held back until the turn closes
    * and carries that usage — counted exactly once per turn, which is what a
-   * consumer summing `response` usage (viewer/tail.ts) needs. A turn with no
+   * consumer summing `response` usage (run-totals.ts) needs. A turn with no
    * response at all still gets one entry, content null, so its tokens count.
    *
    * What it carries is the turn's DELTA, with the thread total the CLI

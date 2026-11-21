@@ -38,7 +38,7 @@ import { loadRunConfig, newSessionToken } from "../src/config";
 import { readRunFact } from "../src/models";
 import { HEARTBEAT_FILE, readMeta, Trajectory } from "../src/trajectory";
 import { tarEnd, tarHeader, tarPadding, TarReader } from "../src/ustar";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "../src/archive-dir";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

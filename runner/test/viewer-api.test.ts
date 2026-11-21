@@ -18,7 +18,7 @@ import { configFromArgs } from "../src/run";
 import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi, entriesWindowAt, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { type RunStore, localRunStore } from "../viewer/clickhouse";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
-import { readRun } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { defsBlock, definition, seedPublished } from "./fixtures/campaigns";
 import type { CampaignsResponse } from "../viewer/api-types";

@@ -53,7 +53,7 @@ import { Database } from "bun:sqlite";
 import { SessionReader, type CallRow, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { openRunDb } from "../../runner/src/rundb";
 import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, milestoneOfEvent, readRunRow, SESSIONS_DIR, sessionDirOfRun, sessionSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
-import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
+import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/src/run-totals";
 import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { isBareSessionDir } from "../../runner/src/session-store";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";

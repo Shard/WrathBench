@@ -34,7 +34,7 @@ import { latestReading, noteTurnLine, readStateSamples, TurnIndex } from "../src
 import { TraceFold } from "../src/trace-samples";
 import { statePointOf, type StatePointRow } from "../viewer/clickhouse";
 import { levelMarks, mapsOf, questsAcrossRestarts, xpAtLevel, xpEarned } from "../viewer/results";
-import { scanRunTotals } from "../viewer/tail";
+import { scanRunTotals } from "../src/run-totals";
 import { materialiseV1p1, V1P1_RUN, V1P1_SRC, v1p1StateRows } from "./fixtures/v1p1";
 import { tempDirs } from "./fixtures/temp-dirs";
 
