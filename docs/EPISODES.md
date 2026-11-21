@@ -139,8 +139,10 @@ other.
   nor level/xp progress over twenty minutes; no-XP off. Tool-call guard 8000, deadmines@5's: one
   counter for the one agent, one per member for five.
 - **Ends.** `kill-target` on Edwin VanCleef (entry 639), credited to any of
-  the party's characters: cleared, counted. `episode-limit`: counted, not
-  cleared. A member's `idle` or `tool-call-limit`: counted, not cleared, and
+  the party's characters: counted, and cleared when the attempt also killed
+  all seven bosses on the route (`DEADMINES_REQUIRED`,
+  `runner/viewer/dungeons.ts`; docs/METHODOLOGY.md, "The Deadmines evals, and
+  rung 6"). `episode-limit`: counted, not cleared. A member's `idle` or `tool-call-limit`: counted, not cleared, and
   on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
   `manual`, a fleet stop or offline gap, `harness-error`, `adapter-error` and
   any pause: not counted, retried fresh with fresh staging on a fresh world.
@@ -149,7 +151,8 @@ other.
 - **Who runs it.** `t3` buys three `deadmines-solo` attempts per series, and
   three `deadmines` attempts where the roster entry also says `deadmines:
   true`, spent only once a counted `e360` of the model reached level 8
-  (`policy.deadminesAtLevel`, operator 2026-11-15): no tier opens them
+  (`deadminesAtLevel`, a constant of the scheduling policy, operator
+  2026-11-15): no tier opens them
   without it, a hand-placed `t3` included. The policy holds the five-agent id until `policy.rehearsed` names
   `deadmines`, and a codex row on either id until it names `codex`: neither
   has run on the program loop yet. Both wait behind the scored-episode hold

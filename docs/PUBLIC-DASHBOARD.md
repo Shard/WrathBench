@@ -68,7 +68,8 @@ the public snapshot can never drift from what the private viewer computes.
 On each pass it applies a public projection (below), diffs against what it
 last uploaded, and PUTs changed artifacts to R2 with `Bun.S3Client` (a Bun
 built-in; no rclone, no wrangler in the data path). Cadence: one pass every
-five minutes (`WRATHBENCH_PUBLISH_INTERVAL_MS`), aggregate and per-run
+five minutes (`WRATHBENCH_PUBLISH_INTERVAL_MS`, which the chart and compose
+set; the script alone defaults to one minute), aggregate and per-run
 artifacts only when their inputs change.
 Runs as one long-lived loop (a k8s Deployment or a compose service beside the
 fleet) rather than a CronJob, because change detection wants the same
@@ -173,7 +174,8 @@ its own, is `dashboard/README.md`'s.
 ```
 
 Everything except the three mutable files is immutable and addressed by its own
-content version. The manifest is the index: `artifacts` maps an aggregate name
+content version; the social card (`v1/og.png`) and the hostname's `robots.txt`
+are mutable too, but written apart from the snapshot (below). The manifest is the index: `artifacts` maps an aggregate name
 to its bucket key, the way a run row's `snapshot` pointers do, so a reader
 follows keys and never reconstructs one. `gen` rides along as the manifest's
 own identity — the hash of the name/version pairs — and addresses nothing; it
@@ -787,20 +789,15 @@ proxy cannot see (hover content, popovers, branches no fixture reaches). What a
 pass leaves out, and who reads what is left:
 
 - **`runs.json` is the fleet table's figures and the pointers.** Each row is
-  `FleetRunFacts` — level, xp, tokens, speed, the provider's cost figure,
-  playtime, the episode budget and the served model — plus `snapshot`, which
-  the snapshot client follows. The fleet table itself reads the same shape off
+  `FleetRunFacts` — level, xp, tokens, speed, the provider's cost figure
+  (with the list-price estimate where the provider reported none), playtime,
+  the episode budget and the served model — plus `snapshot`, which the
+  snapshot client follows. The fleet table itself reads the same shape off
   `live.json` (`fleet.runFacts`, for the runs it rows, and `fleet.runCount`),
   so it no longer fetches this file; `fleetRows` is typed against
   `FleetRunFacts`, so the compiler says it reads nothing else. Every other listing field is on
   `results.json` or the run's own `detail.json`, where the page that shows it
   reads it. This was two megabytes that move on every pass with a live run.
-  The page draws that window as the private one does, in two tiers
-  (`dashboard/README.md`, "The run page"): decisions as cards, the actions
-  between them folded to a line of counts, every fold opening on what the
-  window already holds. A `move` entry carries the `callTs` and `routine` an
-  action log does, which is how a call's own moves stay on its card; both are
-  a timestamp and a flag already published on `actions`.
 - **A run's `detail.json` states are the chart's three fields** (`ts`,
   `level`, `xp`, typed as `ChartSample`), and its cost is `actual` and
   `expected`, not a third copy of `expected` beside them. The row drops
@@ -817,13 +814,20 @@ pass leaves out, and who reads what is left:
   call index). The copy is dropped only where that pairing holds in the window
   as published, with equal text, which is also what keeps the projection a
   fixed point of itself. About a sixth of an entries window was this copy.
+  The page draws that window as the private one does, in two tiers
+  (`dashboard/README.md`, "The run page"): decisions as cards, the actions
+  between them folded to a line of counts, every fold opening on what the
+  window already holds. A `move` entry carries the `callTs` and `routine` an
+  action log does, which is how a call's own moves stay on its card; both are
+  a timestamp and a flag already published on `actions`.
 - **Cost figures carry no per-component `breakdown`** anywhere. A result row's
   figures carry what the ladder, the runs table and the character page read
   (the actual figure's note for a tooltip, `basis`, `usd`, `asIfMetered`, the
-  backfill mark; the estimate's `basis`, `usd`, `asIfMetered`); the price row
-  and its date are on a single run's page. A model's run list carries `actual`
-  only, which is the column it prints. A dungeon board row's best attempt
-  carries one number, `costUsd`: its runs' costs as the ladder reads each
+  backfill mark; the estimate's `basis`, `usd`, `asIfMetered` and `asOf`,
+  whose month a listing names); the price row and the estimate's note are on a
+  single run's page. A model's run list carries `actual` and the same listed
+  estimate, which its column prints where there is no actual. A dungeon board
+  row's best attempt carries one number, `costUsd`: its runs' costs as the ladder reads each
   (`runner/viewer/run-cost.ts`), summed, and null when any run has none.
 - **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
   `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
@@ -941,16 +945,18 @@ The bubbles read the trace's `chat` events (above) and nothing else.
 ## What the ladder shows
 
 A row is one model under one condition (operator, 2026-11-14): the series,
-episode, harness, effort, wiki, compaction window, loop and `yield`, and never
-the prompt hash, which every in-series prompt patch moves, nor the requested
+episode, harness, effort, wiki, compaction window, loop and `yield`, and what
+is being tested (its subject kind, a local build's serving, an external
+agent's declared name and version), and never the prompt hash, which every in-series prompt patch moves, nor the requested
 routing: a model's runs on any provider are one row (operator, 2026-11-16).
 The key is `conditionKey` in `runner/viewer/condition.ts`, read off the stamped
 tuple, with an absent field read as its default, so a run stamped before a
 field existed is the snippet loop with nothing to state. A table row, a
 scatter point, a mean line and the shared highlight are all keyed on that
 entry, so no two conditions ever pool. The public row carries the condition's
-loop, `yield`, whether the run's routing was pinned, and its wiki, with the id
-renumbered per artifact (`c1`, `c2`, …). Every condition is its own row
+loop, `yield`, whether the run's routing was pinned, its wiki, its subject
+kind, a local build's serving (weights, quantisation, runtime) and an external
+agent's name and version, with the id renumbered per artifact (`c1`, `c2`, …). Every condition is its own row
 (operator, 2026-11-16): nothing picks one condition of a model over another,
 and a `?conditions=all` link from when a filter did opens the default view.
 
@@ -1287,7 +1293,7 @@ re-renders every pass — the live chart cannot be either.
   Bun's S3 writer cannot send `Cache-Control` (see `infra/publish-dashboard.ts`),
   so that rule is the whole of it. **It is a required step, not a refinement:**
   `v1/og.png` matches none of the existing rules (30s on the mutable JSON
-  paths, long on `v1/snap/*` and `v1/run/*`), so it falls to the zone default
+  paths, a year on `v1/snap/*` and `v1/run/*`, a day on `tiles/`), so it falls to the zone default
   for a PNG with no origin header, which is `max-age=86400` — measured against
   a `tiles/` object on the same hostname. Until a rule names it, the card at
   the edge is up to a day old rather than up to a pass old.

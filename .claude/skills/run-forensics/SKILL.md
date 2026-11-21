@@ -1,6 +1,6 @@
 ---
 name: run-forensics
-description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp (per character on a fan-out run), what it cost, what each request cost and how often it woke (a probe readout), snippets and errors, tool calls by name, a v1 run's events and calls, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
+description: Answer any question about a WrathBench run, live or past, with `bun wb inspect` — is it live, paused or ownerless, its level and xp (per character on a fan-out run), what it cost, what each request cost and how often it woke (a probe readout), snippets and errors, tool calls by name, a v1 run's events and calls, the scratchpad over time or at a moment, whether it is stuck, the module audit log, what the publisher last did, the worlds per eval. Use whenever a task needs run data, and always before writing a script that reads a run's session record, trajectory.jsonl, meta.json, a 0.5 run.sqlite, audit files or the publisher's state.
 ---
 
 # Run forensics
@@ -37,6 +37,7 @@ bun wb inspect audit <run-id> --op WB_MOVE_RESULT --status target_off_mesh --las
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
 bun wb inspect audit --smoke edge-drop --op move_edge_drop --since 1h   # a smoke's own sessions, by the name `bun wb smoke` takes
 bun wb inspect publisher [<run-id>]                   # last flip, versions per run, the secret scan, last passes
+bun wb inspect worlds [--all]                         # the worlds per eval: state, runs, realm, boots, teardown, the boot hold, orphan schemas
 ```
 
 `--since`, `--until` and `--at` take `90s`, `30m`, `2h`, `1d`, epoch ms or an
@@ -126,7 +127,8 @@ files on either source) and starts from the newest reading before it.
 read ClickHouse, the store the collector tails runs into, and say so on a
 `source` line. `session` reads the session record's files, which the store
 does not hold whole. `audit` and `publisher` read the module's audit files
-and the publisher's state where they live.
+and the publisher's state where they live, and `worlds` the world records under
+`data/worlds` and the database.
 
 - `ClickHouse through <time>, current with the file` or `…, 8s behind the
   file`: normal; a live run trails by a few seconds. Past two minutes the
@@ -168,8 +170,9 @@ prints `per-turn  none for N of M snippet write(s)` when any went unsized.
 ## When the checkout is ahead of the deployed image
 
 `live`, `run`, `trajectory`, `tools`, `pad`, `stuck`, `session`, `requests` and
-`messages` run the runner pod's copy of `infra/inspect-run.ts`; `audit` and
-`publisher` run this checkout's code. If `bun wb` says the file is not in the
+`messages` run the runner pod's copy of `infra/inspect-run.ts`, and `worlds`
+its copy of `infra/inspect-worlds.ts`; `audit` and `publisher` run this
+checkout's code. If `bun wb` says the file is not in the
 runner pod, or the pod's copy answers `unknown command` or refuses a flag, run
 this checkout's copy in the pod from stdin, the command and its flags after
 the `-`:

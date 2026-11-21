@@ -787,7 +787,7 @@ On the cluster the code is baked into the images, so the first question is
 | --- | --- |
 | the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
-| any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The viewer picks up a new image with `bun wb server restart-viewer`. |
+| any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The release's pin rolls the viewer with the other Deployments; `bun wb server restart-viewer` only kicks a wedged one. |
 | anything the supervisor reads only at start: its own code, its env, a credential's secret | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 `fleet-update.sh` does not build or pin an image: new code reaches the fleet
@@ -1340,8 +1340,8 @@ the pin, which is another window, or fix forward.
 
 The accounts for hand runs:
 
-- `PROBE`, the default of most smokes (`jump-knockback` and `stack-wave3`
-  default to SMOKE4, the party smokes to PARTY1–PARTY5). It is free while no
+- `PROBE`, the default of most smokes (`jump-knockback`, `stack-wave3` and
+  `module-limits` default to SMOKE4, the party smokes to PARTY1–PARTY5). It is free while no
   enabled job or campaign pins it and no run, such as the scripted reference
   run, holds it. `bun wb fleet status` lists each account with what is on it.
 - `SMOKE2`–`SMOKE4`, which the suite uses and some smokes use beside PROBE
@@ -1454,7 +1454,7 @@ transition, and the Fleet page's banner is the phase plus the script's own
 - **draining** — the fleet Deployment is scaled to 0. Every live run pauses
   ("Stop it"), and the supervisor writes its final state and exits. The script
   then waits, up to 300s each, for that state file to say no job is alive, for
-  the fleet pod to be gone and for every run pod to be gone. A pod that outlives the
+  the fleet pod to be gone, and for every run pod and world pod to be gone. A pod that outlives the
   wait, or a pod listing that fails, fails the window closed with the pod
   named.
 - **waiting** — the worldserver rollout, then `/health` answering ready with
@@ -1712,7 +1712,8 @@ rename.
 
 The `queue` normally holds only the pinned jobs: the supervisor fills free
 pool accounts from the roster by policy — each model's tier budget
-(`t0` to `t3`, "Config reference"), `e90` for everyone, `e360` once earned,
+(`t0` to `t3`, "Config reference"), `e90` for everyone, `e360` once earned
+or on a declared `t2`/`t3`,
 the Deadmines evals once a counted `e360` reaches `deadminesAtLevel` on a tier
 that buys them,
 models with no counted run yet first, then shorter episode first, fewest
@@ -1781,7 +1782,9 @@ sweep. With the pause switch set the dry-run leads with the switch, and the
 plan is what launches once it is cleared.
 
 The status words: `new` has no counted run yet; `active` is working toward
-its `e90` target; `promoted` may also be scheduled on `e360`; `cooling` is on
+its declared tier's targets (a declared `t2` or `t3` is a pin and includes
+`e360`); `promoted` has climbed from `t1`, to `e360` or on to the Deadmines
+evals; `cooling` is on
 the defer ladder (`1m … 6h`) after consecutive zero-response,
 `adapter-error` or provider-refused (`attempt-failed`) attempts; `retired` failed once more at the 6h ceiling and
 will not be scheduled until cleared; `pinned` is outside the policy (a pinned
@@ -1917,8 +1920,9 @@ without the reason, because the reason can name a key, a credential or a host.
 `run-episode.sh` writes the run's `campaign.json` from the published
 definition and launches `run.ts` with `--campaign-file`; the runner refuses
 `--episode probing` without one, and with one it refuses `--objective`,
-`--race`/`--class`, `--wiki-coords`/`--wiki`, `--max-tool-calls` and the
-watchdog flags. `--arm` may be left out when the definition has one arm; an
+`--race`/`--class`/`--choose-start`, `--wiki-coords`/`--wiki`,
+`--max-tool-calls`, the watchdog flags and the fan-out grant
+(`--max-characters`, `--accounts`), which is the arm's `agents`. `--arm` may be left out when the definition has one arm; an
 arm that pins an image or a command cannot be hand-launched.
 
 ```
@@ -1987,7 +1991,7 @@ too, so arms compare on one execution path.
 **What the chart provides** (`templates/run-pods.yaml`): the fleet's
 ServiceAccount and a Role over pods in the release namespace only; the pod
 template, rendered from the same helpers as the fleet pod and mounted into it;
-and the launcher's settings. Two values matter at deploy time:
+and the launcher's settings. Three values matter at deploy time:
 
 - `runPods.allowedImages` — the image *repositories* an arm may name, matched
   on the part before the tag or digest, exactly or as a path prefix. Empty
@@ -2320,7 +2324,10 @@ bun runner/src/run.ts --driver <driver> --model <id> [--objective "<text>"] [--c
   `recent_events` and `state_summary`, plus `login_character`,
   `logout_character` and `list_characters`, in the stack's plain default
   wording; the fixed loop's turn context carries the stack's roll-up and no
-  event window. The system prompt is the single-character one.
+  event window. On the program loop the routine tools take a `character` too,
+  and the roll-up, the merged feed and `list_characters` take the runner's
+  frozen copy of that wording (`runner/src/fanout-wording.ts`;
+  docs/ARCHITECTURE.md). The system prompt is the single-character one.
 
 `runner/test/fixtures/stub-fanout-demo.json` is a scripted five-character
 session for the stub driver (`--driver stub --stub <that file> --wiki false`,
@@ -3342,7 +3349,8 @@ variables, and they must stay in agreement:
 | `WRATHBENCH_PUBLISH_HISTORY` | unset | `0` publishes only the current view (`publisher.history: false`) |
 
 The `S3_*` names are `Bun.S3Client`'s own, which is why they are not
-spelled `WRATHBENCH_*`; `infra/publish-settings.ts` reads all of these.
+spelled `WRATHBENCH_*`. `infra/publish-settings.ts` reads the target, delay
+and history settings, and `infra/publish-dashboard.ts` the rest.
 
 ### Where it publishes, and how
 
@@ -3444,8 +3452,8 @@ is optional: the public hostname's Web Analytics token, built in as
 because it is the one misconfiguration that bills. Two readings belong to the
 steady state:
 
-- The staleness banner reads a plausible age: a minute or two, never hours and
-  never negative. It reads only the last push, so hours means the publisher
+- The staleness banner reads a plausible age: a few minutes (up to about six
+  at the five-minute cadence), never hours and never negative. It reads only the last push, so hours means the publisher
   stopped, not that a cache is cold.
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop

@@ -63,7 +63,9 @@ that 404s is worse than none. `infra/deploy-dashboard.sh` passes it through from
 empty origin is (no origin means a broken card, no repo URL just means no link),
 so turning the link on is one env line and a redeploy (`src/lib/repo.ts`). The
 value is validated as an http(s) URL, so a stray setting cannot put an
-arbitrary scheme in an anchor.
+arbitrary scheme in an anchor. `VITE_CF_ANALYTICS_TOKEN` is the public
+hostname's Web Analytics token, passed through the same way from
+`WRATHBENCH_CF_ANALYTICS_TOKEN`; unset, the build adds no beacon.
 
 Set, `src/api/client.ts` hands the pages `createSnapshotClient` instead of
 `createClient`; unset, nothing about the private build changes. The snapshot

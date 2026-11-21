@@ -122,7 +122,7 @@ request is a billed read against the bucket.
 1. **Mutable** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path is
    in {"/v1/manifest.json", "/v1/live.json", "/v1/nearby.json"}` → eligible
    for cache, **Edge TTL 30s**, **Browser TTL 30s**. Worst-case staleness is
-   the push cadence plus this, about 90–120s. `nearby.json` holds the units
+   the push cadence plus this, about six minutes at the five-minute cadence. `nearby.json` holds the units
    around each live run, out of `live.json` since the operator's decision of
    2026-10-24 (docs/PUBLIC-DASHBOARD.md, "The units around a live run"). It is
    live only, so it belongs here and nowhere else: rule 2's year would keep

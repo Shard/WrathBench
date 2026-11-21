@@ -2,7 +2,8 @@
 
 The agent loop. The runner sits between a model and the game: it hands the
 model a fixed set of tools (a TypeScript snippet sandbox with the SDK loaded,
-a scratchpad, the event and state views, the reference search), supervises
+on the program loop a file workspace and its routines, a scratchpad, the event
+and state views, the reference search), supervises
 the episode with watchdogs, and records the model's side of what happened as
 a trajectory under `data/runs/<run-id>/`, beside the session record the stack
 writes there.
@@ -14,8 +15,8 @@ the MCP server, the tool dispatcher and the five core tools are
 its own sessions did, knows nothing of episodes, scores or model trajectories,
 and is its own repository (`wrath-mcp/README.md`; `docs/ARCHITECTURE.md`, "The
 stack and the benchmark"). The runner plugs in
-through the stack's hooks: its four tools (`search_reference`, `reflect`,
-`log_status`, `read_log`) and its rendering of the core tools' answers
+through the stack's hooks: its tools (`search_reference`, `reflect`,
+`log_status`, `read_log`, and on the program loop `yield`) and its rendering of the core tools' answers
 (`src/tools.ts`), its child extension (`src/sandbox/child-extension.ts`: the
 spell marks, the snippet delta, the turn's event window and the HUD's snapshot
 fields), the drains for them (`src/sandbox/host.ts`, a `SandboxHost`
@@ -71,8 +72,9 @@ bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-fanout-demo
 bun runner/src/run.ts --driver reference --episode e90 --account PROBE
 
 # bound a run: --max-turns caps driver turns, --max-tool-calls caps tool calls
-# for the whole episode (default 500; the meaningful bound for an external
-# scaffold that owns its own tool loop). `0` disables the ceiling outright.
+# for the whole episode (the episode's own, `src/episodes.ts`, else 500; the
+# meaningful bound for an external scaffold that owns its own tool loop). `0`
+# disables the ceiling outright.
 bun runner/src/run.ts --driver claude-code --model opus --max-tool-calls 200
 
 # the same shape on the OpenAI Codex CLI (a ChatGPT subscription; home $CODEX_HOME)
@@ -190,8 +192,8 @@ header of `src/adapter.ts`.
 
 A driver is how the runner reaches a model, and nothing more: everything that
 decides what a result means stays with the runner, so that adding a driver
-adds a transport, not a second benchmark. This is what `openai`, `claude-code`
-and `codex` already do, and what another driver would have to.
+adds a transport, not a second benchmark. This is what `openai`, `claude-code`,
+`codex` and `pi` already do, and what another driver would have to.
 
 **The runner owns these, identically for every driver.**
 
@@ -228,7 +230,7 @@ and `codex` already do, and what another driver would have to.
 - How a run dimension maps onto the scaffold. **A level the driver cannot
   express is refused by name, never mapped to a neighbour**: the tuple would
   otherwise carry a level the run never had. codex refuses `none` and
-  `minimal`; a dimension a driver has no setting for at all is refused at
+  `minimal`, pi refuses `ultra`; a dimension a driver has no setting for at all is refused at
   config time, as `compactWindow` is off the fixed loop and the stub
   (`loadRunConfig`). A stated value the scaffold would silently cap to its own
   limit is refused too, at the first turn that reports the limit; a driver's
@@ -339,6 +341,10 @@ of the three outside the registry and the adapters.
     from a CLI alias.
   - `compactWindow`, `usage` (how the trajectory carries usage), `rollouts`
     (session files the fleet sweeps), and `podVolumes`.
+  - `programLoop`: whether a scaffold runs the program loop; `snippetDelta`:
+    whether `run_snippet` results end with the delta; `runPod`: whether its
+    every episode runs in a pod of its own on the cluster; `handRun`: a
+    probe-only driver that may run with no episode at all.
   A new field is earned the way an SDK helper is: by a branch the driver
   would otherwise need, not in advance.
 - **The adapter** (`src/driver-adapters.ts`, `DriverAdapter`): `prepare`,
@@ -356,12 +362,13 @@ of the three outside the registry and the adapters.
   the others (`CLAUDE_CODE_SYSTEM_PROMPT`, `CODEX_SYSTEM_PROMPT`,
   `PI_SYSTEM_PROMPT`), and a test pins it against them.
 - **Tests and fixtures.** A scaffold gets a fake CLI under `test/fixtures/`
-  (`fake-claude.ts`, `fake-codex.ts` are the pattern): a script that speaks
+  (`fake-claude.ts`, `fake-codex.ts`, `fake-pi.ts` are the pattern): a script that speaks
   the CLI's stream format and calls the MCP tools, so the driver test runs a
   whole episode with no model and no network. Add the entry's facts to
   `test/drivers.test.ts`.
 - **The image pin.** A CLI is installed at a pinned version in
-  `infra/docker/runner.Dockerfile` (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`),
+  `infra/docker/runner.Dockerfile` (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`,
+  `PI_VERSION`),
   and its section in this README names the version its behaviour was verified
   against. A pin bump is a deliberate change.
 - **The docs.** This README gets the driver's own section: how it drives, what
@@ -456,7 +463,8 @@ uses; there is no second sandbox and no second session.
 One long-lived `claude -p --input-format stream-json --output-format
 stream-json` process for the whole episode. Each driver turn writes the
 harness's context message (the same `assembleContext` output the fixed loop
-sends) to its stdin and reads stream-json until the `result` line that closes
+sends; on the program loop the thread context, "The program loop" below) to
+its stdin and reads stream-json until the `result` line that closes
 the turn; in between, the CLI runs its own tool loop against our MCP server.
 Per-turn `--continue` is not needed.
 
@@ -486,12 +494,13 @@ actually returns to the runner:
 
 - **Every tool dispatch** re-checks the watchdogs and the tool-call ceiling,
   before and after the call (a single snippet can burn minutes).
-- **`--max-tool-calls` / `maxToolCallsPerEpisode`** (default 500) caps tool
+- **`--max-tool-calls` / `maxToolCallsPerEpisode`** (default: the episode's
+  own, e90 3000, e360 12000, the Deadmines episodes 8000, else 500) caps tool
   calls for the whole episode and terminates as `tool-call-limit`. It is a
   runaway guard, not a task budget. The fixed loop ignores it; its bound is
   `maxTurns`. **`--max-tool-calls 0` disables the ceiling**, and nothing else
-  does: leaving the flag off means the 500, on a launch and on a `--resume`
-  alike. Argv cannot carry a null, so `0` is the transport spelling and the
+  does: leaving the flag off means the episode's ceiling, else the 500, on a
+  launch and on a `--resume` alike. Argv cannot carry a null, so `0` is the transport spelling and the
   runner normalises it to `null` on read — the config, `meta.json`, the
   comparability tuple and the API only ever hold `null` or a positive number.
   A run with the ceiling off is still bounded by its watchdogs, the
@@ -1166,7 +1175,7 @@ history holds each result's `isError` for the line and never sends it. The
 many results it folded, and the prompt's context sentence says older tool
 results are folded.
 
-The CLI drivers (claude-code, codex) keep and compact their own conversation;
+The CLI drivers (claude-code, codex, pi) keep and compact their own conversation;
 neither the trim nor the fold applies to them, and their prompt sentence
 describes their own regime instead.
 
@@ -1290,7 +1299,7 @@ streaming the file, and checks each against `requestHash`; a mismatch is
 reported with its line, segment and turn and exits non-zero, because it is a
 harness bug or an edited record. Records that carry their whole message array
 — every fixed-loop request written before the slim shape, and every
-claude-code and codex request, whose context the CLI owns and which keep
+claude-code, codex and pi request, whose context the CLI owns and which keep
 `messages: [user]` as before — are counted, not rebuilt. A file can hold both:
 a run that started before the slim shape and resumed after it has full records
 then slim ones, and every reader takes either (`runner/viewer/tail.ts` reads a
@@ -1608,7 +1617,8 @@ until the resume re-leases the token, which rotates it.
 
 ## Watchdogs
 
-Named termination reasons, thresholds in one place (`src/config.ts`): `idle`
+Named termination reasons, thresholds in `src/config.ts`, with each episode's
+own in `src/episodes.ts`: `idle`
 (no model output, or on the program loop wakes answered with neither a tool
 call nor level/xp progress for the same window), `no-xp` (no level/XP progress once progress was first
 observed; off by default and on every episode, so only a run or a campaign
@@ -1627,8 +1637,9 @@ the freeplay threshold (`subscription-budget`), as on the CLI subscriptions
 (docs/RUNBOOK.md, "Credentials").
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks
-them once per turn, which is once per tool batch. The claude-code and codex
-drivers check them at every tool dispatch and on a 5s timer, because one of
+them once per turn, which is once per tool batch, and throughout a
+program-loop sleep. The CLI drivers (claude-code, codex, pi) check them at
+every tool dispatch and on a 5s timer, because one of
 their turns can run for tens of minutes (see Drivers above).
 
 ### Winding a claude-code episode down, rather than killing it
@@ -1652,7 +1663,8 @@ opportunity.
 
 ## Tests
 
-`bun test runner` — needs one `bun install` at the repo root first: that links
+`bun run test runner/` from the repo root (CLAUDE.md, "How to work") — needs
+one `bun install --frozen-lockfile` at the root first: that links
 the wiki workspace package, and without it anything importing
 `@wrathbench/wiki/bundle` (searchmemo, wiki, tools) fails with a bare
 module-resolution error that reads like a missing dump but is not. The

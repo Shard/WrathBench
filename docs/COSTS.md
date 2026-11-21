@@ -109,7 +109,7 @@ the operator's figure in GitHub issue #66.
   no `claude_result` at all is not backfilled: it has no reported figure to add
   to, and its expected cost already prices every token.
 - Estimates and provider-reported actuals are different species and are never
-  presented as each other (the deploy-window design draws the line; the viewer falls back to
+  presented as each other (docs/METHODOLOGY.md, "Known limitations"; the viewer falls back to
   an estimate only where there is no actual, and labels it). The listings do the
   same (operator's decision, 2026-11-18): the runs table, a model's run list and
   the fleet table show the list-price estimate where a run has no actual, marked

@@ -5,8 +5,13 @@ in, and built. Phases 1–2 (the module taps and their SDK surface) are in PR
 #247, 3–4 (the runner's party records and launch, the fleet's party mode) in
 #250, 5–6 (staging and the party smokes) in #249, and 7 (`deadmines@1`) in
 #253. Party frames, not a phase here, followed in #305, and `deadmines@4`
-added the kill end (#317). The scored episode §10 defers is proposed in issue
-#416 and is not decided. The decisions it rests on are the operator's; the
+added the kill end (#317). The scored episode §10 defers has since been
+decided: `deadmines-solo` and `deadmines` (docs/EPISODES.md), which is where
+the episode now lives. Where the build went another way than this design
+(the one-agent `deadmines-solo`, the eval pool and a world per attempt, the
+`staging.accounts` chart key, the record kinds moving into the stack's session
+record), docs/EPISODES.md and docs/RUNBOOK.md ("Party staging", "Worlds") are
+the current word. The decisions it rests on are the operator's; the
 rest is the smallest shape of each change that the code admits, with the file
 it lands in, and the smoke that proves it.
 
@@ -587,9 +592,10 @@ Mark's calls on 2026-10-21:
 
 ## 6. Records
 
-Three milestone kinds, additive like every other (`MilestoneLine` in
-`runner/src/trajectory.ts`), produced in `runner/src/loop.ts` from packets
-the server sends, never from a map-id read off a state sample:
+Three record kinds, now in the session record's `events` stream
+(`wrath-mcp/docs/SESSION-FORMAT.md`), produced by the stack's recorder
+(`wrath-mcp/mcp/src/record/party-watch.ts`) from packets the server sends,
+never from a map-id read off a state sample:
 
 - **`group`** — from `SMSG_GROUP_LIST` as `state.group()` folds it: `{ kind:
   "group", event: "joined" | "changed" | "left", groupGuid, leaderGuid,
@@ -631,10 +637,10 @@ decided; here it is one more server statement that the clear happened.
 victim guid, VanCleef and 628 per member, deaths per member (existing
 records), wall clock from the first `instance entered` to the VanCleef kill,
 and the five termination reasons. A wipe is derivable as five deaths with no
-`resurrect` between them. **What a later scored episode would read** is the
-same signals through a derivation the operator settles then (cleared or not,
-time to clear, deaths, wipes); nothing is scored now, and the recording
-above is designed so that nothing needs re-running when it is. Milestone
+`resurrect` between them. The scored episodes now read the same signals
+through the dungeon board's derivation (`runner/viewer/dungeons.ts`;
+docs/METHODOLOGY.md, "The Deadmines evals, and rung 6"), and the recording
+above needed no re-run for it. Milestone
 rung 6 (`dashboard/src/lib/ladder.ts`, `RUNGS` n 6) is no longer this: since
 2026-11-15 it is a 5-man dungeon done with a group of agents in freeplay, any
 dungeon, so it wants every dungeon's final boss and not only VanCleef, and it
@@ -715,8 +721,7 @@ what the party is, not how to play it: what to pull, who to heal first and
 when to drink are strategy, which the prompt never teaches
 (`docs/METHODOLOGY.md`, "A fact about the world is in the prompt's remit; a
 strategy hint is not"). Naming VanCleef is the objective, which a probe may
-carry; it is also why the lane is unscored until the operator decides
-otherwise.
+carry; the scored ids render it as a directive instead (docs/EPISODES.md).
 
 **The HUD** needs no new line: `state.group()` is already summarised when
 present, and the chat tail already carries party and whisper lines with
@@ -801,8 +806,8 @@ else waits on it.
 
 Only what the decisions above do not answer.
 
-1. **Promotion.** When the mechanics settle, the scored form is a new episode
-   id with its own comparability tuple fields (`party`, the loadout's
-   identity, the staging scenario), not a widening of `probing`; the
-   derivation that makes it a score is the decision this design defers, as
-   instructed.
+1. **Promotion.** Settled: two scored ids, `deadmines-solo` and `deadmines`,
+   keyed by `agents`, `characters` and `task` (whose `staging` hashes the
+   scenario and the loadouts; `runner/src/comparability.ts`), with the
+   derivation in docs/METHODOLOGY.md, "The Deadmines evals, and rung 6"
+   (docs/EPISODES.md).

@@ -46,9 +46,9 @@ today that is coordinate text, and the failure modes at scale are known:
 multi-zone routing, flight masters, boats/zeppelins, elevators, trams,
 instance portals, hour-long stuck detection.
 
-The contract question to settle before building anything: CONTRACTS.md says
-the agent observes what a real client could observe — and a real client
-renders a minimap from map data the client itself ships. A walkability/POI
+The contract question to settle before building anything: wrath-mcp's
+`docs/CONTRACTS.md` says the agent observes what a real client could
+observe — and a real client renders a minimap from map data the client itself ships. A walkability/POI
 observation derived from the same client extracts is therefore arguably
 contract-clean; anything derived from server-omniscient state is not. Record
 the decision when a run makes navigation the obstacle; until then the travel

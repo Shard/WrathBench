@@ -275,8 +275,8 @@ such hop in it. Read it as "is this run
 moving", never as a model's generation speed.
 
 
-The `state` table gains signals over time and an old run directory never gains
-them retroactively, so the viewer asks each database what columns it has before
+On a 0.5 run the `state` table gains signals over time and an old run directory
+never gains them retroactively, so the viewer asks each database what columns it has before
 selecting: `money` and `quests_completed` come back null where the schema
 predates them. Zero is a real reading — a broke character has 0 copper — so only
 a missing value is null, never a recorded zero. A run counts as **live** when it has no
@@ -284,10 +284,9 @@ termination reason *and* its `trajectory.jsonl` was appended to within the last
 two minutes — "no termination reason" alone is not enough, because a killed
 process never writes one.
 
-Getting a token total per run means reading every trajectory, so the server
-memoises each run's totals on the file's size and mtime: a finished run is read
-once per process, a live one only as it grows, and the scan keeps a few numbers
-rather than a summary per entry.
+Token totals are the collector's: it scans each trajectory incrementally into
+`run_totals` (ClickHouse, or the in-memory store without one), keeping a few
+numbers rather than a summary per entry, and the viewer reads rows.
 
 ## A freeplay character is aggregated at read time
 
@@ -336,8 +335,8 @@ disagree about which attempts belong to one character. The chain served is the
 **forward** one — the deepest under the root — because a reader on attempt 11
 wants to see 12. The gate is narrow: the block runs only for a run that is
 freeplay or names a `continuedFrom`, so a scored run's page pays nothing for it,
-and behind the gate it is the same memoised `runTotals` the listing uses, so an
-ended attempt is read once per process.
+and behind the gate it reads the same results listing the ladder does
+(`resultRuns`, held for fifteen seconds).
 
 `characterViewOf` itself is **universal**: every run
 the set holds gets a view, and a scored run's is a chain of one attempt. Null is
@@ -494,9 +493,10 @@ Each position also carries what the character last *said* it was doing and
 whether it is thinking rather than acting. `status` is the newest entry in the
 run's `episodic.jsonl` — the model's text under the harness's own turn/level/zone
 stamp — read as a file, because that log has no sqlite half and the viewer must
-not create the directory a writer would. `reflecting` is `run.reflecting_since`
-being non-null: the trajectory keeps the window's transitions, the column keeps
-the current answer, and a process boundary clears it, since a resumed run starts
+not create the directory a writer would. `reflecting` is the run's `reflectingSince`
+being set (`meta.json` on a v1 run, the `run.reflecting_since` column on a 0.5
+run): the trajectory keeps the window's transitions, the stamp keeps the
+current answer, and a process boundary clears it, since a resumed run starts
 with a fresh gate. Both publish: the entry is the model's own words under a
 zone *name*, and names and model-authored text are published
 (docs/DATA-AND-LEGAL.md, "Trajectory logs").
