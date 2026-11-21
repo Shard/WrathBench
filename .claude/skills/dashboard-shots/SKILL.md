@@ -11,7 +11,13 @@ bun wb dashboard shots --out <dir> --site public --viewport 390x844 --scheme lig
 bun wb dashboard shots --out <dir> --path /runs --path /models
 bun wb dashboard shots --out <dir> --run <run-dir> [--run <run-dir>]
 bun wb dashboard shots --serve                             # the stack only: URLs until Ctrl-C
+bun wb dashboard shots --out <dir> --seed --site private --path /config/providers   # an admin page over a seeded store
 ```
+
+The private viewer has the admin switch on (`--no-admin` drops it, as the
+chart's default viewer does), `--seed` gives its config store
+`infra/fleet.example.json`, and `--groups` sets the deployment's groups on
+both sites.
 
 About a minute. Put `--out` in your scratchpad, then look at the PNGs with
 Read. It writes `private-<state>.png` and `public-<state>.png` for each named
