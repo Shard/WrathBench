@@ -36,7 +36,7 @@ const LOGO_DIR = join(ROOT, "dashboard/src/assets/model-logos");
  * family id → the asset as a data URI, exactly the form `logoHrefOf` builds.
  *
  * An empty directory is legitimate — a checkout that has not run
- * `bun run model-logos` has no assets — and every mark is then a plain disc,
+ * `bun wb data logos` has no assets — and every mark is then a plain disc,
  * the same fallback the live chart takes for a family it does not know. The
  * assets are tracked in git, so the publisher's image carries them.
  */

@@ -423,7 +423,7 @@ const RUN_INPUT_FILES = [
  * **Not watched**, and bounded instead by a full render every
  * `FULL_RENDER_MS`. Code is the main one: the projection, the redaction and
  * path-scrub lists, the codec, `model-cost`. So is the OpenRouter price table,
- * read once at start, which `sync-prices` rewrites. A new process brings in
+ * read once at start, which `bun wb data prices` rewrites. A new process brings in
  * both, and it starts with nothing remembered. Beyond those: a store row the
  * listing row does not reflect (a re-ingest that changes a run's state series
  * but not its totals), and lineage as the viewer's own fifteen-second listing
