@@ -18,7 +18,7 @@ import { Batcher } from "./batch";
 import type { CollectorConfig } from "./config";
 import { Ingester } from "./ingest";
 import { OffsetStore } from "./offsets";
-import { listRunDirs } from "./scan";
+import { listBareSessionDirs, listRunDirs, type RunDirEntry } from "./scan";
 import { SinkAborted, type Sink } from "./sink";
 
 export interface PassStats {
@@ -92,13 +92,24 @@ export class Collector {
       totals: 0,
     };
     const listed = new Set<string>();
-    for (const entry of listRunDirs(this.deps.cfg.runsDir, (runId, skipped, kept) => {
+    const log = this.deps.log ?? ((m: string) => console.log(m));
+    const entries: RunDirEntry[] = listRunDirs(this.deps.cfg.runsDir, (runId, skipped, kept) => {
       if (this.reportedDuplicates.has(runId)) return;
       this.reportedDuplicates.add(runId);
-      (this.deps.log ?? ((m: string) => console.log(m)))(
-        `collector: ${runId} exists twice; ingesting ${kept}, skipping ${skipped}`,
+      log(`collector: ${runId} exists twice; ingesting ${kept}, skipping ${skipped}`);
+    });
+    // A standalone wrath-mcp's sessions, each under its viewer id; a run directory of the same name wins.
+    const store = this.deps.cfg.sessionStore;
+    if (store !== null) {
+      entries.push(
+        ...listBareSessionDirs(store, new Set(entries.map((e) => e.runId)), (runId) => {
+          if (this.reportedDuplicates.has(runId)) return;
+          this.reportedDuplicates.add(runId);
+          log(`collector: ${runId} is both a run and a stored session; ingesting the run`);
+        }),
       );
-    })) {
+    }
+    for (const entry of entries) {
       stats.seen++;
       listed.add(entry.runId);
       const before = this.lastSeen.get(entry.runId);

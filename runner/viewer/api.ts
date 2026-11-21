@@ -104,6 +104,7 @@ import { strikableSessionToken, strikeSessionTokens } from "../src/session-token
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
 import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
 import { fanoutSession, fanoutSessions, isFanoutRun, isWithheldFanoutRun, runSession, runsSource } from "./runs-source";
+import { attachSessionStore, isBareSessionId } from "../src/session-store";
 import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
 import { latestFrameResponse } from "./camera-live";
 import { CLIP_CONTENT_TYPE, CLIP_MEDIA_ROUTE, clipMedia, clipsView, fileResponse, hadCamera, pickHighlight, type ClipMediaKind } from "./camera";
@@ -277,6 +278,13 @@ export interface ApiOptions {
    * write route at all; a public handle never has one, whatever this says.
    */
   admin?: boolean;
+  /**
+   * A bare session store read beside the runs (`WRATHBENCH_SESSION_STORE`,
+   * `runner/src/session-store.ts`): a standalone wrath-mcp's sessions, listed
+   * and opened as runs under their viewer ids. Absent is none. A public
+   * handle withholds every one of them.
+   */
+  sessionStore?: string | null;
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -835,6 +843,8 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
 
 export function createApi(opts: ApiOptions): ApiHandle {
   const { runsDir, tilesDir } = opts;
+  // Before the store below, whose first pass lists the store's sessions with the runs.
+  if (opts.sessionStore !== undefined) attachSessionStore(runsDir, opts.sessionStore);
   /*
    * The derived store. Every route that once opened all 1,148 run directories
    * reads rows from here instead (docs/ARCHITECTURE.md, "The derived store").
@@ -1065,10 +1075,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * Deadmines id's runs are published with its table (operator delegated,
    * 2026-11-15). Read off the run's directory, from meta.json's launch
    * config, so a run is withheld from its first pass rather than published
-   * and withdrawn.
+   * and withdrawn. A bare session (`session-store.ts`) is withheld whole: no
+   * launch says what drove it, and publishing one is not this handle's call.
    */
   function withheldRow(r: Pick<RunRow, "runId" | "driver" | "shakeout">): boolean {
-    return isWithheldRow(r) || isWithheldFanoutRun(runsDir, r.runId);
+    return isWithheldRow(r) || isBareSessionId(r.runId) || isWithheldFanoutRun(runsDir, r.runId);
   }
 
   /** The ids a public handle withholds (`ApiHandle.unpublishedRuns`). */
@@ -1369,11 +1380,12 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * every tier from one call, and a filtered page has to be able to say how
    * many rows the filter dropped. An unknown value is a 400 rather than a
    * silent fallback to the default, which would show the wrong data under the
-   * right heading.
+   * right heading. With the evals group off there are no tiers to default
+   * to, and an absent filter is `all`.
    */
   function episodeFilter(url: URL): EpisodeIdView | "all" | null {
     const raw = url.searchParams.get("episode");
-    if (raw === null) return "e90";
+    if (raw === null) return groups.evals ? "e90" : "all";
     if (raw === "all") return "all";
     return (EPISODE_IDS as readonly string[]).includes(raw) ? (raw as EpisodeIdView) : null;
   }
@@ -1445,7 +1457,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
               r.episodeSource === "stamped" &&
               (includeOverrides || !r.episodeOverride),
           );
-    const runs = tiered;
+    // With evals off the rows are a listing, not a comparison: no ladder condition rides on them.
+    const runs = groups.evals ? tiered : tiered.map(withoutEvalFields);
     const body: ResultsResponse = {
       runs,
       episode,
@@ -2592,6 +2605,19 @@ export function createApi(opts: ApiOptions): ApiHandle {
     },
     { release, cachedRuns, unpublishedRuns },
   );
+}
+
+/**
+ * A results row as a deployment without the evals group serves it
+ * (`groups.ts`): without the comparison condition the ladder groups rows by,
+ * which only the evals group reads (`ResultRun.condition`, `ResultRun.wiki`,
+ * both optional, absent is "not answered"). The run's own stamps stay: its
+ * episode and why it cannot be scored are what it recorded, and a null
+ * `unscored` would read as "scored", which nothing here has decided.
+ */
+export function withoutEvalFields(r: ResultRun): ResultRun {
+  const { condition: _condition, wiki: _wiki, ...rest } = r;
+  return rest;
 }
 
 /** Whether a run row is one a public handle withholds: its driver, or its stamp, says it is not a model's. */

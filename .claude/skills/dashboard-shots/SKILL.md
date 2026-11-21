@@ -10,6 +10,7 @@ bun wb dashboard shots --out <dir>                         # both sites, every n
 bun wb dashboard shots --out <dir> --site public --viewport 390x844 --scheme light
 bun wb dashboard shots --out <dir> --path /runs --path /models
 bun wb dashboard shots --out <dir> --run <run-dir> [--run <run-dir>]
+bun wb dashboard shots --out <dir> --groups viewer --sessions <store>   # a bare session store beside the runs
 bun wb dashboard shots --serve                             # the stack only: URLs until Ctrl-C
 ```
 

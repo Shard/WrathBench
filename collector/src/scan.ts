@@ -14,6 +14,7 @@ import { ARCHIVE_DIR } from "../../runner/viewer/archive-dir";
 import { isValidRunId } from "../../runner/viewer/runs";
 import { holdsOnlyLaunchFiles } from "../../runner/src/launch-files";
 import { fanoutCharacters, SESSIONS_DIR } from "../../runner/src/run-reader";
+import { listBareSessions } from "../../runner/src/session-store";
 
 export interface RunDirEntry {
   runId: string;
@@ -124,6 +125,39 @@ export function listRunDirs(
     }
     seen.add(name);
     out.push({ runId: name, dir, archived: true, sig: `archive|${signature(dir)}` });
+  }
+  return out;
+}
+
+/**
+ * The bare sessions of a session store (`runner/src/session-store.ts`), each
+ * as a run under its viewer id: a standalone wrath-mcp's record, with no run
+ * around it. Its signature is what its writer rewrites on every tick
+ * (`live.json`) and when it opens or closes (`session.json`). A session whose
+ * id a run directory already has (`taken`) is skipped and reported to
+ * `onShadowed`, as `listRunDirs` reports an id it found twice.
+ */
+export function listBareSessionDirs(
+  storeDir: string,
+  taken: ReadonlySet<string>,
+  onShadowed?: (runId: string, skippedDir: string) => void,
+): RunDirEntry[] {
+  const out: RunDirEntry[] = [];
+  for (const s of listBareSessions(storeDir)) {
+    if (taken.has(s.id)) {
+      onShadowed?.(s.id, s.dir);
+      continue;
+    }
+    let sig = "bare|";
+    for (const name of ["session.json", "live.json"]) {
+      try {
+        const st = statSync(join(s.dir, name));
+        sig += `${name}:${st.size}:${st.mtimeMs}|`;
+      } catch {
+        sig += `${name}:-|`;
+      }
+    }
+    out.push({ runId: s.id, dir: s.dir, archived: false, sig });
   }
   return out;
 }

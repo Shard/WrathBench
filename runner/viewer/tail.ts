@@ -42,6 +42,7 @@ import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { isV1RunDir, milestoneOfEvent, sessionDirOfRun, TurnIndex } from "../src/run-reader";
+import { isBareSessionDir } from "../src/session-store";
 import { feedRecordOf, readRecordRow, RecordFollower, type RecordLine, type RecordLoc } from "./record-feed";
 import { CodexUsageCorrector } from "../src/codex-usage";
 import { CONTEXT_POLICY } from "../src/context";
@@ -2519,7 +2520,9 @@ export class TrajectoryTail {
     try {
       size = statSync(this.path).size;
     } catch {
-      return [];
+      // A bare session (`runner/src/session-store.ts`) has no trajectory at all: its feed is its record's alone.
+      if (!isBareSessionDir(dirname(this.path))) return [];
+      size = 0;
     }
     if (size < this.size) {
       this.entries.length = 0;

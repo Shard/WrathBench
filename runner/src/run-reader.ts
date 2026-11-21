@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { SessionReader, type EventRow, type StreamCursor, type TraceRow } from "@wrathbench/mcp/record";
 import { platformOf } from "./platform";
 import { openRunDb, RUN_DB_FILE } from "./rundb";
+import { isBareSessionDir } from "./session-store";
 import { TraceSampler, TurnIndex, type StateSample } from "./trace-samples";
 
 export { RUN_TURNS, TurnIndex, type StateSample } from "./trace-samples";
@@ -76,9 +77,13 @@ export function parseFanoutSessionId(id: string): { runId: string; character: st
   return isFanoutCharacterName(character) ? { runId: id.slice(0, at), character } : null;
 }
 
-/** Whether a run directory holds a single-character v1 session record. A fan-out run is not one. */
+/**
+ * Whether a run directory holds a single-character v1 session record. A
+ * fan-out run is not one. A bare session (`session-store.ts`), a session
+ * record with no run around it, reads as one whose record is itself.
+ */
 export function isV1RunDir(dir: string): boolean {
-  return existsSync(join(dir, SESSION_DIR, "session.json"));
+  return existsSync(join(dir, SESSION_DIR, "session.json")) || isBareSessionDir(dir);
 }
 
 /**
@@ -123,9 +128,9 @@ export function fanoutSessionDir(dir: string, character: string): string | null 
   return isFanoutCharacterName(character) ? join(dir, SESSIONS_DIR, character) : null;
 }
 
-/** A run's session directory. */
+/** A run's session directory: a bare session's is its own. */
 export function sessionDirOfRun(dir: string): string {
-  return join(dir, SESSION_DIR);
+  return isBareSessionDir(dir) ? dir : join(dir, SESSION_DIR);
 }
 
 // --------------------------------------------------------------- the run row
@@ -202,6 +207,45 @@ export function runRowOfMeta(runId: string, meta: Record<string, unknown>): RunR
   };
 }
 
+/**
+ * A bare session's row (`session-store.ts`), off its `session.json`: when it
+ * started and ended, and the character, its race and class carried in the
+ * config the way a launch's are, so a listing reads them alike. Everything a
+ * launch would have said (the model, the driver, the harness) is unknown and
+ * stays null. The record's `id`, the token's fingerprint, is never copied.
+ */
+export function runRowOfBareSession(runId: string, session: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (session === null) return null;
+  const ch = (typeof session["character"] === "object" && session["character"] !== null ? session["character"] : {}) as Record<string, unknown>;
+  const config: Record<string, unknown> = {};
+  if (str(ch["name"]) !== null) config["character"] = ch["name"];
+  if (num(ch["race"]) !== null) config["race"] = ch["race"];
+  if (num(ch["class"]) !== null) config["class"] = ch["class"];
+  if (str(session["world"]) !== null) config["world"] = session["world"];
+  const row: RunRowRecord = {
+    run_id: runId,
+    harness_version: null,
+    started_at: num(session["started"]),
+    ended_at: num(session["ended"]),
+    driver: null,
+    shakeout: null,
+    model: null,
+    objective: null,
+    character: str(ch["name"]),
+    platform: null,
+    resolved_model: null,
+    resolved_cli_version: null,
+    resolved_provider: null,
+    continued_from: null,
+    termination_reason: null,
+    termination_detail: null,
+    pause_reason: null,
+    reflecting_since: null,
+    config_json: Object.keys(config).length > 0 ? JSON.stringify(config) : null,
+  };
+  return row as unknown as Record<string, unknown>;
+}
+
 /** A run directory's run.sqlite `run` row, or null when it has no such file or row. */
 function sqliteRunRow(dir: string, runId: string): Record<string, unknown> | null {
   const path = join(dir, RUN_DB_FILE);
@@ -229,6 +273,7 @@ function sqliteRunRow(dir: string, runId: string): Record<string, unknown> | nul
  * Null when neither says anything about the run.
  */
 export function readRunRow(dir: string, runId: string): Record<string, unknown> | null {
+  if (isBareSessionDir(dir)) return runRowOfBareSession(runId, readJson(join(dir, "session.json")));
   const meta = readJson(join(dir, "meta.json"));
   const hasDb = existsSync(join(dir, RUN_DB_FILE));
   // A fan-out run's launch names a character, and no one character is the run (the header).

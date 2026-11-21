@@ -41,6 +41,7 @@ import type { RunTotals } from "./tail";
 import { LIVE_WINDOW_MS, campaignFieldsOf, itemSamplesOf } from "./runs";
 import { runCredentialOf } from "../src/credential-slots";
 import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";
+import { sessionStoreOf } from "../src/session-store";
 
 // ------------------------------------------------------------- the row shapes
 
@@ -692,7 +693,7 @@ export function localRunStore(runsDir: string): RunStore {
         import("../../collector/src/offsets"),
       ]);
       collector = new Collector({
-        cfg: readConfig({ runsDir, stateDb: ":memory:" }),
+        cfg: readConfig({ runsDir, stateDb: ":memory:", sessionStore: sessionStoreOf(runsDir) }),
         sink,
         offsets: new OffsetStore(":memory:"),
         log: () => {},

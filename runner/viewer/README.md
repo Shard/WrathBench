@@ -35,6 +35,15 @@ is created empty, and every page serves its labelled empty state.
 
 - `WRATHBENCH_VIEWER_PORT` overrides the port (default 8090).
 - `WRATHBENCH_RUNS_DIR` overrides the runs directory (default `data/runs`).
+- `WRATHBENCH_SESSION_STORE`, an absolute directory, is a session store a
+  standalone wrath-mcp records into (`--record-dir`): its sessions list and
+  open as runs beside the runs directory's, each under an id of its own
+  (`mcp-` and 16 hex, `runner/src/session-store.ts`) and never under its
+  directory's name, the token's fingerprint. A run directory of the same
+  name wins, and a record whose character never entered the world is not
+  listed. Refused with `WRATHBENCH_VIEWER_PUBLIC=1`, and a public handle
+  withholds every such session. `infra/README.md`, "Viewer only", runs the
+  viewer this way and nothing else.
 - `WRATHBENCH_MINIMAP_DIR` overrides the tile root (default `data/minimap`).
 - `WRATHBENCH_DASHBOARD_DIR` overrides where the built SPA is looked for
   (default `dashboard/dist`).
@@ -58,8 +67,10 @@ is created empty, and every page serves its labelled empty state.
 - `WRATHBENCH_GROUPS` lists the deployment's groups that are on
   (`groups.ts`: `runner`, `evals`, `viewer`, comma-separated); unset is all
   three. An off group's routes answer the 404 any unknown path gets: runner's
-  `/api/fleet` and `/api/models`, evals' `/api/ladder`, `/api/campaigns`,
-  `/api/episodes` and `/api/dungeons`. `/api/info` names the groups when one is off, the public
+  `/api/fleet`, `/api/models` and `/api/tools`, evals' `/api/ladder`,
+  `/api/campaigns`, `/api/episodes` and `/api/dungeons`. `/api/results` is the
+  viewer's (the runs page reads it); with evals off it defaults to every
+  episode and serves no ladder condition. `/api/info` names the groups when one is off, the public
   projection keeps them, and the dashboard drops those pages. A viewer told the
   viewer group is off refuses to start.
 - `WRATHBENCH_ADMIN=1` is the admin switch: it mounts the config API and

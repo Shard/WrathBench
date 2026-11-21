@@ -691,7 +691,7 @@ export function createRenderer(
     // The runner group's two: the scheduler's verdict per model, and the fleet.
     const models = groups.runner ? projectModels(await get<ModelsResponse>("/api/models")) : null;
     const campaigns = groups.evals ? projectCampaigns(await get<CampaignsResponse>("/api/campaigns")) : null;
-    const tools = projectTools(await get<ToolsResponse>("/api/tools"));
+    const tools = groups.runner ? projectTools(await get<ToolsResponse>("/api/tools")) : null;
     const fleet = groups.runner ? projectFleet(withoutRuns(await get<FleetResponse>("/api/fleet"), withheld)) : null;
     const allPositions = await get<PositionsResponse>("/api/positions");
     const positions = projectPositions({ ...allPositions, positions: allPositions.positions.filter((p) => publishable.has(p.runId)) });
@@ -972,7 +972,7 @@ export function createRenderer(
       ...(dungeons === null ? [] : [["dungeons.json", dungeons] as [string, object]]),
       ...(models === null ? [] : [["models.json", models] as [string, object]]),
       ...(campaigns === null ? [] : [["campaigns.json", campaigns] as [string, object]]),
-      ["tools.json", tools],
+      ...(tools === null ? [] : [["tools.json", tools] as [string, object]]),
       // Only when a published run has a clip, so a tree without a camera
       // publishes the set it always did.
       ...(highlight.highlight === null ? [] : [["highlight.json", highlight] as [string, object]]),

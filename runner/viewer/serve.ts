@@ -19,8 +19,9 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { createApi, json } from "./api";
+import { SESSION_STORE_ENV, sessionStoreFromEnv } from "../src/session-store";
 import { clickhouseConfigFromEnv } from "./clickhouse";
 import { allowedHostsFromEnv } from "./host-guard";
 import { adminFromEnv, groupsEnvValue, groupsFromEnv, type Groups } from "./groups";
@@ -77,6 +78,24 @@ if (admin && process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1") {
   console.error(
     "refusing to start: WRATHBENCH_ADMIN=1 with WRATHBENCH_VIEWER_PUBLIC=1. The admin interface is private only; a public handle never mounts it.",
   );
+  process.exit(1);
+}
+
+/*
+ * A bare session store read beside the runs (`runner/src/session-store.ts`):
+ * the directory a standalone wrath-mcp records into (`--record-dir`). Its
+ * sessions list and open as runs. Absolute, so the same value means the same
+ * directory to the viewer and to a collector beside it. Never with public
+ * mode: no launch says what drove such a session, and a public handle would
+ * withhold every one anyway.
+ */
+const sessionStore = sessionStoreFromEnv(process.env);
+if (sessionStore !== null && !isAbsolute(sessionStore)) {
+  console.error(`refusing to start: ${SESSION_STORE_ENV}=${sessionStore} is not an absolute path.`);
+  process.exit(1);
+}
+if (sessionStore !== null && process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1") {
+  console.error(`refusing to start: ${SESSION_STORE_ENV} with WRATHBENCH_VIEWER_PUBLIC=1. A stored session is never published.`);
   process.exit(1);
 }
 
@@ -138,6 +157,7 @@ const handle = createApi({
   allowedHosts,
   groups,
   admin,
+  sessionStore,
 });
 
 const server = Bun.serve({
@@ -151,7 +171,7 @@ const server = Bun.serve({
 });
 
 console.log(
-  `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir}, store: ${clickhouse === null ? "local (no CLICKHOUSE_URL)" : clickhouse.url})` +
+  `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir}${sessionStore === null ? "" : `, sessions: ${sessionStore}`}, store:${clickhouse === null ? "local (no CLICKHOUSE_URL)" : clickhouse.url})` +
     `  (hosts: localhost, any IP${allowedHosts.map((h) => `, ${h}`).join("")})` +
     `  (groups: ${groupsEnvValue(groups)}${admin ? "; admin on" : ""})` +
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
