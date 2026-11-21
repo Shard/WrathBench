@@ -3425,8 +3425,8 @@ is optional: the public hostname's Web Analytics token, built in as
 because it is the one misconfiguration that bills. Two readings belong to the
 steady state:
 
-- The staleness banner reads a plausible age: a minute or two, never hours and
-  never negative. It reads only the last push, so hours means the publisher
+- The staleness banner reads a plausible age: a few minutes (up to about six
+  at the five-minute cadence), never hours and never negative. It reads only the last push, so hours means the publisher
   stopped, not that a cache is cold.
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop
