@@ -1,0 +1,77 @@
+# WrathBench as a pure viewer, beside a wrath-mcp and an AzerothCore someone
+# else runs: the Kubernetes form of infra/compose.viewer.yml (infra/README.md,
+# "Viewer only"). Layer it over the chart's defaults and set the placeholders:
+#
+#   helm template wrathbench infra/chart/wrathbench \
+#     -f infra/chart/wrathbench/values-viewer-only.yaml
+#
+# What renders: the viewer's Deployment, Service and Ingress, and the chart's
+# own data volume (the config store, with the `site` block that names and
+# themes the deployment; minimap tiles if you add them; an empty runs
+# directory). No game, runner, fleet, ClickHouse, collector or publisher, and
+# no reference to an env Secret (a pull Secret only if one is named below).
+# Comments on each key are in values.yaml.
+
+image:
+  # REQUIRED: where the images are, and the immutable tag they were built at.
+  registry: registry.example.com/wrathbench
+  tag: "harness-1.0-N-g0000000"
+  names:
+    # The slim viewer image (infra/docker/viewer.Dockerfile), built with
+    # `infra/build-images.sh --only viewer`. Empty uses the runner image.
+    viewer: wrathbench-viewer
+
+# The cluster's pull Secret for that registry, if it is private.
+imagePullSecrets: []
+
+# The viewer group alone: run pages, the runs listing and the map.
+groups:
+  runner:
+    enabled: false
+  evals:
+    enabled: false
+  viewer:
+    enabled: true
+
+game:
+  enabled: false
+
+# The listing is built in memory from the session store (and the empty runs
+# directory); the publisher would publish this deployment's own runs, of
+# which it has none.
+clickhouse:
+  enabled: false
+publisher:
+  enabled: false
+
+# Off: this viewer then has no write route at all, and the `site` block
+# (docs/RUNBOOK.md) is set in the pod itself:
+#   kubectl exec deploy/wrathbench-viewer -- \
+#     bun runner/src/config-store.ts set site '{"name":"…"}'
+# On serves the config pages to anyone who can reach the Ingress, which is
+# unauthenticated by design.
+admin:
+  enabled: false
+
+viewer:
+  # Another deployment's module, for the worldserver build on /api/info, with
+  # its port secret's key in the env Secret (`envSecretName`). Both empty: the
+  # build reads as unknown and nothing else changes.
+  moduleUrl: ""
+  moduleSecretKey: ""
+  # The uid that ran wrath-mcp: its session directories are mode 0700.
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  # The recorder's `--record-dir`: an existing PVC in this namespace (or set
+  # hostPath instead, with nodeSelector pinning the pod to that node). An RWO
+  # claim mounts only on the node that already holds it.
+  sessionStore:
+    claimName: wrath-mcp-sessions
+    subPath: ""
+    hostPath: ""
+  ingress:
+    enabled: true
+    host: viewer.example.com
+    className: traefik

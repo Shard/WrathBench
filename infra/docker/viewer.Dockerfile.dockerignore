@@ -28,5 +28,10 @@ wrath-mcp/.git
 **/.wrangler
 infra/fleet.json
 dashboard/public/og.png
+# The private reference program's place (docs/RUNBOOK.md, "The scripted
+# reference run"): a build that also makes the runner image lays it in the
+# context, and a viewer never carries it.
+runner/src/reference
+runner/test/reference
 **/*.log
 **/.DS_Store

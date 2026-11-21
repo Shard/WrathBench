@@ -19,7 +19,8 @@ when all of them run on one kernel over a local filesystem. A block class
 shared-filesystem class, or pods on two nodes, is not, and is not supported
 for `data`.
 
-`db` is the MySQL datadir and nothing else.
+`db` is the MySQL datadir and nothing else, and only with the game on
+(values.yaml `game`).
 
 `codex-home` is the `codex` driver's credential: a logged-in Codex home
 directory that the CLI writes its token refresh back into. It is a volume
@@ -43,6 +44,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.storage.data.size }}
+{{- if include "wrathbench.on.game" $ }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -59,6 +61,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.storage.db.size }}
+{{- end }}
 {{- if include "wrathbench.on.codex" $ }}
 ---
 apiVersion: v1

@@ -1,3 +1,18 @@
+{{- /*
+The game off (values.yaml `game`) leaves nothing for the pods that drive or
+film the in-chart world to reach: refused, not rendered half-wired.
+*/}}
+{{- if not (include "wrathbench.on.game" $) }}
+{{- if or (include "wrathbench.on.fleet" $) (include "wrathbench.on.runner" $) }}
+{{- fail "game.enabled=false: the fleet and runner pods drive the in-chart game (its database and worldserver:8086). Turn groups.runner.enabled off for a viewer-only deployment, or the game on." }}
+{{- end }}
+{{- range $k := list "staging" "hosted" "camera" }}
+{{- if (index $.Values $k).enabled }}
+{{- fail (printf "game.enabled=false: %s.enabled needs the in-chart worldserver. Turn it off, or the game on." $k) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if include "wrathbench.on.game" $ }}
 {{/*
 The realm, with mod-wrathbench compiled in.
 
@@ -88,4 +103,5 @@ spec:
         - name: temp
           emptyDir:
             sizeLimit: {{ .Values.worldserver.tempSizeLimit }}
+{{- end }}
 

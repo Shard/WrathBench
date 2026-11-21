@@ -543,6 +543,38 @@ describe("build-images.sh and the private reference program", () => {
   });
 });
 
+describe("build-images.sh and the slim viewer image", () => {
+  test("a default build makes the same four images and no viewer", () => {
+    const { tree, sha } = makeRepo();
+    const r = run(tree, []);
+    expect(r.code).toBe(0);
+    expect(builds(r)).toHaveLength(4);
+    expect(builds(r).some((b) => b.includes("viewer.Dockerfile") || b.includes("wrathbench-viewer"))).toBe(false);
+    expect(builds(r).find((b) => b.includes("runner.Dockerfile"))).toContain(`-t harbor.local/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`);
+  });
+
+  test("--only viewer builds it alone, at the same tag, guarded, with no private checkout", () => {
+    const { tree, sha } = makeRepo();
+    const r = run(tree, ["--only", "viewer"], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
+    expect(r.code).toBe(0);
+    expect(builds(r)).toHaveLength(1);
+    const ref = `harbor.local/wrathbench/wrathbench-viewer:${sha.slice(0, 7)}`;
+    const [ctx] = r.contexts;
+    expect(builds(r)[0]).toContain(`-t ${ref} -f ${ctx!.dir}/infra/docker/viewer.Dockerfile ${ctx!.dir}`);
+    expect(r.calls).toContain(`docker create ${ref} true`);
+    expect(ctx!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
+    expect(ctx!.entries.some((e) => e.startsWith("deps/azerothcore/"))).toBe(false);
+  });
+
+  test("named beside the runner, both are built", () => {
+    const { tree } = makeRepo();
+    const r = run(tree, ["--only", "runner", "--only", "wrathbench-viewer"]);
+    expect(r.code).toBe(0);
+    expect(builds(r)).toHaveLength(2);
+    expect(builds(r)[1]).toContain("viewer.Dockerfile");
+  });
+});
+
 describe("build-images.sh dirty trees and named commits", () => {
   test("a dirty tree is refused before anything is exported or built", () => {
     const { tree } = makeRepo();

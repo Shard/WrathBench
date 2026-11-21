@@ -1,3 +1,4 @@
+{{- if include "wrathbench.on.game" $ }}
 {{/*
 The two one-shots compose runs as `depends_on` gates, as Helm hooks.
 
@@ -189,3 +190,4 @@ spec:
               value: {{ include "wrathbench.tenantPoolSize" . | quote }}
             {{- end }}
           resources: {{ toYaml .Values.jobs.bootstrap.resources | nindent 12 }}
+{{- end }}

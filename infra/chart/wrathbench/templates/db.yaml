@@ -1,3 +1,4 @@
+{{- if include "wrathbench.on.game" $ }}
 {{/*
 MySQL 8.4 — the version AzerothCore's own docker-compose.yml pins at our
 commit. Recreate, not RollingUpdate: one RWO volume, one writer, ever.
@@ -104,3 +105,4 @@ spec:
         - name: db
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-db
+{{- end }}

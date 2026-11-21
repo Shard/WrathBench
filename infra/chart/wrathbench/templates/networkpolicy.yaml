@@ -241,8 +241,10 @@ spec:
     {{- if include "wrathbench.on.clickhouse" $ }}
     {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
     {{- end }}
+    {{- if include "wrathbench.on.game" $ }}
     # /health, for the worldserver build /api/info names.
     {{- include "wrathbench.np.module" . | nindent 4 }}
+    {{- end }}
     # The OpenRouter catalogue a /config draft fetch reads.
     {{- include "wrathbench.np.internet" . | nindent 4 }}
 {{- end }}
@@ -263,8 +265,10 @@ spec:
     {{- if include "wrathbench.on.clickhouse" $ }}
     {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
     {{- end }}
+    {{- if include "wrathbench.on.game" $ }}
     # The viewer's handler, rendered in-process, asks /health too.
     {{- include "wrathbench.np.module" . | nindent 4 }}
+    {{- end }}
     # The bucket (S3_ENDPOINT, https).
     {{- include "wrathbench.np.internet" . | nindent 4 }}
 {{- end }}
@@ -286,7 +290,7 @@ spec:
 {{- end }}
 {{- /* On whenever templates/log-retention.yaml renders the CronJob. */}}
 {{- $r := .Values.worldserver.logRetention | default dict }}
-{{- if gt (int ($r.days | default 0)) 0 }}
+{{- if and (include "wrathbench.on.game" $) (gt (int ($r.days | default 0)) 0) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
