@@ -59,8 +59,6 @@ export type LoadoutId = (typeof LOADOUT_IDS)[number];
 /** The party definition's role words (runner/src/party.ts PARTY_ROLES). */
 export type PartyRoleWord = "tank" | "healer" | "damage";
 
-export const isLoadoutId = (s: string): s is LoadoutId => (LOADOUT_IDS as readonly string[]).includes(s);
-
 /** The party's level, and the talent points it has: one a level from 10. */
 export const PARTY_LEVEL = 20;
 export const PARTY_TALENT_POINTS = PARTY_LEVEL - 9;

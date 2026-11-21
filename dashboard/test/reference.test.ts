@@ -10,7 +10,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ResultRun } from "../../runner/viewer/api-types";
 import {
-  HUMAN_SPEEDRUN_BAND,
   HUMAN_SPEEDRUN_BANDS,
   ceilingLabel,
   empiricalCeiling,
@@ -20,6 +19,9 @@ import {
   scriptedReferenceScale,
   speedrunBand,
 } from "../src/lib/reference";
+
+/** The ninety-minute band: e90 is the tier most of the site is about. */
+const E90_BAND = speedrunBand("e90")!;
 
 function run(runId: string, maxLevel: number | null): ResultRun {
   return { runId, maxLevel } as unknown as ResultRun;
@@ -65,12 +67,11 @@ describe("the empirical e90 ceiling", () => {
 
 describe("the human speedrun band", () => {
   test("the e90 band is a band, not a point, and is stated at the e90 budget", () => {
-    expect(HUMAN_SPEEDRUN_BAND.high).toBeGreaterThan(HUMAN_SPEEDRUN_BAND.low);
+    expect(E90_BAND.high).toBeGreaterThan(E90_BAND.low);
     // The Wrath 1–10 entry reaches 10 at 1:31, so at minute 90 the runner is topping level 9.
-    expect(HUMAN_SPEEDRUN_BAND.low).toBe(9);
-    expect(HUMAN_SPEEDRUN_BAND.high).toBe(10);
-    expect(HUMAN_SPEEDRUN_BAND.minutes).toBe(90);
-    expect(HUMAN_SPEEDRUN_BAND).toBe(speedrunBand("e90")!);
+    expect(E90_BAND.low).toBe(9);
+    expect(E90_BAND.high).toBe(10);
+    expect(E90_BAND.minutes).toBe(90);
   });
 
   test("the e360 band is interpolated from the 1–20 entry, and says so", () => {
@@ -90,8 +91,8 @@ describe("the human speedrun band", () => {
   });
 
   test("each label says how thin the sourcing is, without claiming it is unsourced", () => {
-    expect(HUMAN_SPEEDRUN_BAND.label).toContain("one Wrath entry");
-    expect(HUMAN_SPEEDRUN_BAND.label).toContain("bracketed by Classic Era and Cataclysm Classic");
+    expect(E90_BAND.label).toContain("one Wrath entry");
+    expect(E90_BAND.label).toContain("bracketed by Classic Era and Cataclysm Classic");
     expect(speedrunBand("e360")!.label).toContain("one Wrath 1–20 entry");
     // The old label claimed no sourcing at all; there is now a confirmed Wrath-rate figure.
     for (const band of Object.values(HUMAN_SPEEDRUN_BANDS)) {
@@ -101,7 +102,7 @@ describe("the human speedrun band", () => {
   });
 
   test("the Wrath entry leads the e90 sources and carries the operator's confirmation", () => {
-    const first = HUMAN_SPEEDRUN_BAND.sources[0]!;
+    const first = E90_BAND.sources[0]!;
     expect(first.what).toContain("Wrath");
     expect(first.note).toContain("Orc Hunter");
     expect(first.note).toContain("1:31");
@@ -163,7 +164,7 @@ describe("what the page draws", () => {
   test("the scale stretches past the furthest thing drawn, so no mark sits on the edge", () => {
     const scale = referenceScale({ episode: "e90", series: "0.5", ceiling, reached: 7 })!;
     expect(scale.min).toBe(1);
-    expect(scale.max).toBeGreaterThan(HUMAN_SPEEDRUN_BAND.high);
+    expect(scale.max).toBeGreaterThan(E90_BAND.high);
     const far = referenceScale({ episode: "e360", series: "0.5", ceiling: empiricalCeiling([run("a", 22)]), reached: 22 })!;
     expect(far.max).toBeGreaterThan(22);
   });

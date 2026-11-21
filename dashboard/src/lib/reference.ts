@@ -220,9 +220,6 @@ export function speedrunBand(episode: string): SpeedrunBand | null {
   return HUMAN_SPEEDRUN_BANDS[episode] ?? null;
 }
 
-/** The ninety-minute band, kept named because e90 is the tier most of the site is about. */
-export const HUMAN_SPEEDRUN_BAND: SpeedrunBand = HUMAN_SPEEDRUN_BANDS.e90!;
-
 /* ------------------------------------------------------------------ drawing */
 
 /* ------------------------------------------------------ scripted reference */

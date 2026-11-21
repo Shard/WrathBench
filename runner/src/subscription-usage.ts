@@ -72,8 +72,6 @@ export interface SubscriptionUsage {
   windows: UsageWindow[];
 }
 
-/** Both thresholds' default (operator, 2026-10-16). */
-export const DEFAULT_SUB_MAX_PCT = 80;
 /** A window at this is spent: the quota-reset hold, whatever the thresholds say. */
 export const EXHAUSTED_PCT = 100;
 /** The farthest reset a pause waits for (operator, 2026-10-16: capped at seven days). */

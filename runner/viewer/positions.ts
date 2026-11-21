@@ -81,21 +81,6 @@ export interface PositionGauges {
   nextLevelXp: number | null;
 }
 
-/**
- * The newest state sample that actually carried a position.
- *
- * Not simply the newest row: a sample may record level and xp with no
- * coordinates, and taking it would make a live agent blink off the map even
- * though a position landed seconds earlier.
- */
-export async function readLatestPosition(
-  runsDir: string,
-  runId: string,
-): Promise<({ map: number; x: number; y: number; ts: number } & PositionGauges) | null> {
-  if (isV1RunDir(join(runsDir, runId))) return (await readRunDb(runsDir, runId)).pos;
-  return withRunDb(runsDir, runId, null, (db) => latestPositionIn(db, runId));
-}
-
 type LatestPosition = { map: number; x: number; y: number; ts: number } & PositionGauges;
 
 /**
@@ -242,12 +227,6 @@ function latestStatusIn(text: string, cut: boolean): CharacterStatus | null {
  * asked for before it is selected, because an old run directory never gains a
  * column it did not record — and a run that predates it was never reflecting.
  */
-export function readReflecting(runsDir: string, runId: string): boolean {
-  const dir = join(runsDir, runId);
-  if (isV1RunDir(dir)) return typeof readRunRow(dir, runId)?.["reflecting_since"] === "number";
-  return withRunDb(runsDir, runId, false, (db) => reflectingIn(db, runId));
-}
-
 function reflectingIn(db: Database, runId: string): boolean {
   const cols = db.query(`PRAGMA table_info(run)`).all() as { name?: unknown }[];
   if (!cols.some((c) => String(c.name) === "reflecting_since")) return false;

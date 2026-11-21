@@ -18,7 +18,7 @@
 import deadminesJson from "../episodes/deadmines.json";
 import deadminesSoloJson from "../episodes/deadmines-solo.json";
 import { campaignDefinitionSchema, campaignHash, isOneAgentArm, type CampaignDefinition } from "./campaign-def";
-import { EPISODES, TASK_EPISODE_IDS, type TaskEpisodeId } from "./episodes";
+import { EPISODES, type TaskEpisodeId } from "./episodes";
 
 function parse(id: TaskEpisodeId, raw: unknown): CampaignDefinition {
   const def = campaignDefinitionSchema.parse(raw);
@@ -66,6 +66,3 @@ export function taskDefinitionProblem(id: TaskEpisodeId): string | null {
   if (def.resume) return `${id}: a scored episode never resumes`;
   return null;
 }
-
-/** Every task episode id, for the tests and the readers that list them. */
-export const TASK_EPISODES: readonly TaskEpisodeId[] = TASK_EPISODE_IDS;

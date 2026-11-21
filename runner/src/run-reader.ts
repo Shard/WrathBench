@@ -36,7 +36,7 @@
 
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { SessionReader, type EventRow, type StreamCursor, type TraceRow } from "@wrathbench/mcp/record";
+import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { platformOf } from "./platform";
 import { openRunDb, RUN_DB_FILE } from "./rundb";
 import { TraceSampler, TurnIndex, type StateSample } from "./trace-samples";
@@ -431,11 +431,6 @@ export function sessionSamplesOf(sessionDir: string, dir: string): StateSample[]
   return kept.samples;
 }
 
-/** Fold a run's trace rows into samples from scratch: for a caller that holds the rows already. */
-export function samplesOfRows(rows: readonly TraceRow[], turnAt: (ts: number) => number | null = () => null): StateSample[] {
-  return new TraceSampler(turnAt).push(rows);
-}
-
 /** A 0.5 run's `state` rows, oldest first, as stored; empty when it has none. */
 function sqliteStateRows(dir: string, runId: string): Record<string, unknown>[] {
   const path = join(dir, RUN_DB_FILE);
@@ -624,24 +619,6 @@ export function milestoneOfEvent(row: EventRow, turn: number | null): Record<str
       return { ...base, ...rest };
     }
   }
-}
-
-/** Every milestone a v1 run's `events` stream recorded, as records, each with the turn in flight; oldest first. */
-export function eventMilestonesOf(dir: string): Record<string, unknown>[] {
-  const reader = new SessionReader(sessionDirOfRun(dir));
-  const turns = turnIndexOf(dir);
-  const out: Record<string, unknown>[] = [];
-  let rows: EventRow[];
-  try {
-    rows = reader.rows("events");
-  } catch {
-    return [];
-  }
-  for (const row of rows) {
-    const m = milestoneOfEvent(row, turns.at(row.ts));
-    if (m !== null) out.push(m);
-  }
-  return out.sort((a, b) => (a["ts"] as number) - (b["ts"] as number));
 }
 
 /**

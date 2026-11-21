@@ -226,11 +226,6 @@ export function proposedKey(model: string): string {
   return `${PROPOSED_PREFIX}${model}`;
 }
 
-/** Whether a row key is a draft's. */
-export function isProposedKey(key: string): boolean {
-  return key.startsWith(PROPOSED_PREFIX) && key.length > PROPOSED_PREFIX.length;
-}
-
 /** The SQL that keeps draft rows out of a config read. The prefix holds no GLOB metacharacter. */
 const DRAFT_ROWS = `key GLOB '${PROPOSED_PREFIX}*'`;
 

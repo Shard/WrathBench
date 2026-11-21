@@ -6,7 +6,7 @@ import { STALL_PAUSE } from "../src/lapse";
 import { openTestSession, recordDrain, traceOfReading, writeReadings } from "./fixtures/v1-session";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
-import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
+import { positionsFromStore, readLatestStatus, readPositions } from "../viewer/positions";
 import { projectPositions } from "../viewer/public-projection";
 import { trackFrom } from "../viewer/results";
 import { readStates } from "../viewer/runs";
@@ -404,7 +404,7 @@ describe("the character's last status", () => {
   });
 });
 
-describe("readReflecting", () => {
+describe("reflecting", () => {
   const NOW = 1_700_000_000_000;
 
   test("a standing reflecting_since is an open window; NULL and no column are not", async () => {
@@ -414,12 +414,9 @@ describe("readReflecting", () => {
       // A run recorded before the column existed was never reflecting.
       { id: "older", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]] },
     ]);
-    expect(readReflecting(runsDir, "open")).toBe(true);
-    expect(readReflecting(runsDir, "shut")).toBe(false);
-    expect(readReflecting(runsDir, "older")).toBe(false);
-    expect(readReflecting(runsDir, "no-such-run")).toBe(false);
     const byId = new Map((await readPositions(runsDir, NOW)).map((p) => [p.runId, p]));
     expect(byId.get("open")?.reflecting).toBe(true);
+    expect(byId.get("shut")?.reflecting).toBe(false);
     expect(byId.get("older")?.reflecting).toBe(false);
   });
 });
@@ -588,14 +585,12 @@ describe("readPositions", () => {
   test("a schema with no position columns is skipped, not an error", async () => {
     const runsDir = fixture([{ id: "old-1", noPositionColumns: true, states: [[NOW, 4, 900]] }]);
     expect(await readPositions(runsDir, NOW)).toEqual([]);
-    expect(await readLatestPosition(runsDir, "old-1")).toBeNull();
   });
 
   test("a run with no database at all is skipped", async () => {
     const runsDir = tempDir("wrathbench-map-empty-");
     mkdirSync(join(runsDir, "bare"));
     expect(await readPositions(runsDir, NOW)).toEqual([]);
-    expect(await readLatestPosition(runsDir, "bare")).toBeNull();
   });
 
   test("newest position first", async () => {
