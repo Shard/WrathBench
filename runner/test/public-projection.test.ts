@@ -2155,6 +2155,36 @@ describe("projectInfo", () => {
     // A smuggled non-string never crosses.
     expect("previewSeries" in projectInfo(smuggle<ApiInfoResponse>({ ...base, previewSeries: { series: "1.0" } as unknown as string }))).toBe(false);
   });
+
+  test("carries the site's name, theme, home and about key by key, and nothing when none is set", () => {
+    const base: ApiInfoResponse = {
+      service: "wrathbench-viewer",
+      publicMode: false,
+      dashboard: true,
+      dashboardBuild: null,
+      worldserver: null,
+      now: 5000,
+    };
+    expect("site" in projectInfo(base)).toBe(false);
+    const site = {
+      name: "My Lab",
+      theme: { dark: { accent: "#ff8800", bg: "#101010" }, light: { fg: "#111111" } },
+      home: "/runs",
+      aboutHtml: '<h1>Mine</h1>\n<p><a href="/runs">runs</a></p>\n',
+    };
+    const out = projectInfo({ ...base, site });
+    expect(out.site).toEqual(site);
+    // Allowlisted: a smuggled key, token or non-colour never crosses, and a block left empty is absent.
+    const smuggled = projectInfo(
+      smuggle<ApiInfoResponse>({
+        ...base,
+        site: { name: "Lab", secret: "x", theme: { dark: { accent: "#ff8800", err: "#000000", bg: "url(x)" }, mid: { bg: "#000000" } } } as unknown as ApiInfoResponse["site"],
+      }),
+    );
+    expect(smuggled.site).toEqual({ name: "Lab", theme: { dark: { accent: "#ff8800" } } });
+    expect("site" in projectInfo(smuggle<ApiInfoResponse>({ ...base, site: { secret: "x", theme: { dark: { bg: "red" } } } as unknown as ApiInfoResponse["site"] }))).toBe(false);
+    assertClean(JSON.stringify(out));
+  });
 });
 
 /* ------------------------------------------------------------- entries --- */

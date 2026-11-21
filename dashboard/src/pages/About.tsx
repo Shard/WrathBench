@@ -49,7 +49,27 @@ function mins(m: number | null): string {
   return m % 60 === 0 && m >= 60 ? `${m / 60}h` : `${m}m`;
 }
 
+/**
+ * The deployment's own about page when its `site.about` is set (rendered and
+ * sanitized by the viewer, `runner/viewer/site-info.ts`), the built-in one
+ * otherwise. The legal section is on both and is never the deployment's to
+ * replace.
+ */
 export default function About() {
+  const feeds = useFeeds();
+  return (
+    <Show when={feeds.info.latest?.site?.aboutHtml} fallback={<BuiltInAbout />}>
+      {(html) => (
+        <div class="page prose">
+          <div innerHTML={html()} />
+          <Legal />
+        </div>
+      )}
+    </Show>
+  );
+}
+
+function BuiltInAbout() {
   const tiers = poll(() => api.episodes(), POLL_MS);
   const table = (): EpisodesResponse["episodes"] => tiers.latest?.episodes ?? [];
   /*
@@ -259,6 +279,18 @@ export default function About() {
         </Show>
       </Show>
 
+      <Legal />
+      <h2 class="section">cite</h2>
+      {/* The `url` line only once the repo link is turned on; see lib/repo.ts. */}
+      <pre class="cite">{bibtex(REPO_URL)}</pre>
+    </div>
+  );
+}
+
+/** Fixed: the attribution and licences the site carries whoever deploys it. */
+function Legal() {
+  return (
+    <>
       <h2 class="section">legal</h2>
       <p>
         WrathBench is a fan-made research project and is not affiliated with or endorsed by Blizzard
@@ -270,9 +302,6 @@ export default function About() {
         WrathBench's own code and documentation are MIT-licensed; the agent stack it plays
         through, <span class="mono">wrath-mcp</span>, states its own licence in its repository.
       </p>
-      <h2 class="section">cite</h2>
-      {/* The `url` line only once the repo link is turned on; see lib/repo.ts. */}
-      <pre class="cite">{bibtex(REPO_URL)}</pre>
-    </div>
+    </>
   );
 }

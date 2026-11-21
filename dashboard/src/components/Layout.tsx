@@ -9,8 +9,8 @@
  * them here beside the badge and the build notice.
  */
 
-import { A, useLocation, useSearchParams } from "@solidjs/router";
-import { For, Show, createSignal, onCleanup, type ParentProps } from "solid-js";
+import { A, Navigate, useLocation, useSearchParams } from "@solidjs/router";
+import { For, Show, createEffect, createSignal, onCleanup, type ParentProps } from "solid-js";
 import { SNAPSHOT_MODE, snapshotSource } from "../api/client";
 import { snapshotBanner, type SnapshotBanner, type SnapshotSource } from "../api/snapshot-client";
 import { useClock } from "../lib/clock";
@@ -19,6 +19,7 @@ import { groupOfPage, isAdminPage, pageMounted, type Groups } from "@viewer/grou
 import NotFound from "../pages/NotFound";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { REPO_URL, repoLabel } from "../lib/repo";
+import { applySite, homeTarget, pageSiteOf, siteName } from "../lib/site";
 import { SeriesSelect } from "./SeriesSelect";
 import { StatusBadge } from "./StatusBadge";
 
@@ -66,8 +67,18 @@ export function Layout(props: ParentProps) {
    */
   const groups = (): Groups => groupsOf(feeds.info.latest);
   const settled = (): boolean => feeds.info.latest !== undefined || feeds.info.error !== undefined;
-  const mounted = (): boolean => pageMounted(location.pathname, groups(), which() === "ADMIN");
-  const gated = (): boolean => groupOfPage(location.pathname) !== null || isAdminPage(location.pathname);
+  const mounted = (): boolean => pageMounted(location.pathname, groups(), which() === "ADMIN", pageSiteOf(feeds.info.latest));
+  /*
+   * `/` waits for `/api/info` too: the deployment's `site.home` may send it
+   * elsewhere (`lib/site.ts`), and the intro must not flash on the way there.
+   */
+  const gated = (): boolean => groupOfPage(location.pathname) !== null || isAdminPage(location.pathname) || location.pathname === "/";
+  const home = (): string | null => (location.pathname === "/" ? homeTarget(feeds.info.latest, location.search) : null);
+  // The deployment's name and colours, from the live `/api/info` once it has answered.
+  createEffect(() => {
+    const info = feeds.info.latest;
+    if (info !== undefined) applySite(info.site);
+  });
   /* Required of every published artifact; see docs/DATA-AND-LEGAL.md. Null on
      the private build, which publishes nothing and so attributes nothing. */
   const attribution = () => {
@@ -84,7 +95,7 @@ export function Layout(props: ParentProps) {
           this". A div with the same rule, so nothing about it moved.
         */}
         <div class="wordmark">
-          <A href="/">WrathBench</A>
+          <A href="/">{siteName(feeds.info.latest)}</A>
           {/*
             Which of the two sites this is, set as a superscript on the wordmark
             the way an exponent sits on a number: the
@@ -111,7 +122,7 @@ export function Layout(props: ParentProps) {
             in public mode, and `=== false` rather than `!publicMode` keeps the
             link from flashing on before the first `/api/info` settles.
           */}
-          <For each={navItems({ admin: which() === "ADMIN", groups: groups() })}>
+          <For each={navItems({ admin: which() === "ADMIN", groups: groups(), site: pageSiteOf(feeds.info.latest) })}>
             {(n) => (
               <A href={n.href} activeClass="on">
                 {n.label}
@@ -188,7 +199,9 @@ export function Layout(props: ParentProps) {
       <main class={flush() ? "flush" : ""}>
         <Show when={!gated() || settled()}>
           <Show when={mounted()} fallback={<NotFound />}>
-            {props.children}
+            <Show when={home()} fallback={props.children}>
+              {(to) => <Navigate href={to()} />}
+            </Show>
           </Show>
         </Show>
         <Show when={!flush()}>{attribution()}</Show>
