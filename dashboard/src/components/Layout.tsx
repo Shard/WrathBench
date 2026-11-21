@@ -176,9 +176,10 @@ export function Layout(props: ParentProps) {
           * the whole view rather than of any page, and a per-page copy of it
           * was four controls that could disagree. Not on the map: it shows
           * every live character whatever its harness, so the control would
-          * filter nothing there.
+          * filter nothing there. The series is the comparability group, the
+          * evals group's, and absent with it (`listingSeries`).
           */}
-        <Show when={!flush()}>
+        <Show when={!flush() && groups().evals}>
           <SeriesSelect />
         </Show>
         {/* The fleet's state: the runner group's, and absent with it. */}

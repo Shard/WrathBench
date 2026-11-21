@@ -89,7 +89,7 @@ import { FeedList, MoveVerdicts, RunStart } from "../components/FeedRows";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import { ENTRIES_WINDOW } from "@viewer/public-keys";
 import { modelsHref } from "../lib/models";
-import { linkable } from "../lib/nav";
+import { groupsOf, linkable } from "../lib/nav";
 import { poll } from "../lib/poll";
 import {
   EXPAND_LABELS,
@@ -98,7 +98,7 @@ import {
   writeExpandPref,
   type ExpandPreset,
 } from "../lib/feedview";
-import { atBottom, chartClock, chartWindowMs, contextHint, hasModelSide, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
+import { atBottom, chartClock, chartWindowMs, contextHint, hasModelSide, runChartInput, showsComparability, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
@@ -1307,8 +1307,11 @@ export default function RunDetail() {
                     {(f) => <FanoutCharacters client={inspector!} runId={params.id} sessions={f()} live={run().live} now={now()} />}
                   </Show>
 
-                  <h2 class="section">comparability</h2>
-                  <Tuple run={run()} />
+                  {/* The tuple, and the game server under it, are the evals group's (`showsComparability`). */}
+                  <Show when={showsComparability(run(), groupsOf(feeds.info.latest))}>
+                    <h2 class="section">comparability</h2>
+                    <Tuple run={run()} />
+                  </Show>
 
                   <Show when={run().terminationReason !== null}>
                     <div class="banner bad">
@@ -1327,7 +1330,9 @@ export default function RunDetail() {
                     </div>
                   </Show>
 
-                  <ServerFooter info={info()} run={run()} />
+                  <Show when={showsComparability(run(), groupsOf(feeds.info.latest))}>
+                    <ServerFooter info={info()} run={run()} />
+                  </Show>
                 </aside>
               </div>
               <Timeline
