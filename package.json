@@ -23,7 +23,8 @@
     "dashboard:build": "bun run --cwd dashboard build",
     "viewer": "bun runner/viewer/serve.ts",
     "boundary": "bun infra/stack-boundary.ts",
-    "publisher:restart": "kubectl -n wrathbench rollout restart deployment/wrathbench-publisher"
+    "publisher:restart": "kubectl -n wrathbench rollout restart deployment/wrathbench-publisher",
+    "ship": "bun infra/wb.ts site ship"
   },
   "dependencies": {
     "@wrathbench/inspector": "workspace:*",
