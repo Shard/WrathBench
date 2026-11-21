@@ -43,7 +43,7 @@ import { dirname } from "node:path";
 import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
 import { isV1RunDir, milestoneOfEvent, sessionDirOfRun, TurnIndex } from "../src/run-reader";
 import { isBareSessionDir } from "../src/session-store";
-import { feedRecordOf, readRecordRow, RecordFollower, type RecordLine, type RecordLoc } from "./record-feed";
+import { feedRecordOf, pairStoreCalls, readHeldCall, readRecordRow, RecordFollower, storeCallRecordsOf, type RecordLine, type RecordLoc, type StoreCalls } from "./record-feed";
 import { CodexUsageCorrector } from "../src/codex-usage";
 import { CONTEXT_POLICY } from "../src/context";
 import { driverEntry } from "../src/drivers";
@@ -2448,6 +2448,12 @@ export class TrajectoryTail {
   private readonly pendingRecord: RecordLine[] = [];
   /** Where each entry that came from the session record is, by entry index, for `raw`. */
   private readonly recordLocs = new Map<number, RecordLoc>();
+  /** Whether this is a session read from a wrath-mcp store, whose tool calls are its record's (`pairStoreCalls`); latched once seen. */
+  private store = false;
+  /** A store session's calls read without their result yet, and how many it has read. */
+  private storeCalls: StoreCalls = { held: new Map(), count: 0 };
+  /** Where each entry drawn from a store session's call is, by entry index, for `raw`: its result, its call, and which of the call's records it is. */
+  private readonly storeCallLocs = new Map<number, { result: RecordLoc; call: { loc: RecordLoc; id: number; n: number } | null; part: number }>();
   /**
    * The last timestamp the FILE carries, served or not: the run page closes a
    * finished run's last segment on it, and `scanRunTotals` reads it off every
@@ -2560,11 +2566,15 @@ export class TrajectoryTail {
       this.follower = null;
       this.pendingRecord.length = 0;
       this.recordLocs.clear();
+      this.storeCalls = { held: new Map(), count: 0 };
+      this.storeCallLocs.clear();
       this.gen++;
     }
     // A v1 run's game side is its session record's, merged in by time (`record-feed.ts`).
     if (!this.v1 && isV1RunDir(dirname(this.path))) this.v1 = true;
     if (this.v1 && this.follower === null) this.follower = new RecordFollower(sessionDirOfRun(dirname(this.path)));
+    // A store session has no trajectory, so its record's calls are its feed's (`pairStoreCalls`).
+    if (!this.store && isBareSessionDir(dirname(this.path))) this.store = true;
     this.followRecord();
     if (size === this.size && this.pendingRecord.length === 0) return [];
 
@@ -2613,7 +2623,8 @@ export class TrajectoryTail {
    */
   private followRecord(): void {
     if (this.follower === null) return;
-    const lines = this.follower.read();
+    const read = this.follower.read();
+    const lines = this.store ? pairStoreCalls(read, this.storeCalls) : read;
     if (lines.length === 0) return;
     this.pendingRecord.push(...lines);
     this.pendingRecord.sort((a, b) => a.row.ts - b.row.ts);
@@ -2625,6 +2636,15 @@ export class TrajectoryTail {
     while (n < this.pendingRecord.length && this.pendingRecord[n]!.row.ts <= ts) n++;
     if (n === 0) return;
     for (const line of this.pendingRecord.splice(0, n)) {
+      if (this.store && line.loc.stream === "calls" && line.row.kind === "result") {
+        // A store session's call and its result: the call's records, drawn where it returned.
+        const call = line.call !== undefined ? { loc: line.call.loc, id: line.call.row.id, n: line.call.n } : null;
+        for (const [part, rec] of storeCallRecordsOf(line.call ?? null, line.row).entries()) {
+          this.storeCallLocs.set(this.entries.length, { result: line.loc, call, part });
+          this.take(rec, JSON.stringify(rec), -1, -1, added);
+        }
+        continue;
+      }
       const rec = feedRecordOf(line.row, this.turns.at(line.row.ts), line.loc.stream);
       if (rec === null) continue;
       this.recordLocs.set(this.entries.length, line.loc);
@@ -2867,6 +2887,17 @@ export class TrajectoryTail {
   async raw(i: number): Promise<string | null> {
     const e = this.entries[i];
     if (e === undefined) return null;
+    const stored = this.storeCallLocs.get(i);
+    if (stored !== undefined) {
+      // A store session's call: its result and its call read again, and served as the record the feed drew.
+      const dir = sessionDirOfRun(dirname(this.path));
+      const result = readRecordRow(dir, stored.result);
+      if (result === null || result.kind !== "result") return null;
+      const call = stored.call !== null ? readHeldCall(dir, stored.call.loc, stored.call.id) : null;
+      if (stored.call !== null && call === null) return null;
+      const rec = storeCallRecordsOf(call !== null ? { row: call, n: stored.call!.n } : null, result)[stored.part];
+      return rec === undefined ? null : redactRawLine(JSON.stringify(rec));
+    }
     const loc = this.recordLocs.get(i);
     if (loc !== undefined) {
       // A session record row: read again, and served as the record the feed drew.

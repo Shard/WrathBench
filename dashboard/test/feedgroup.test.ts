@@ -279,6 +279,49 @@ type Card = Extract<Groups[number], { kind: "call" }>;
 const kinds = (gs: Groups): string[] => gs.map((g) => (g.kind === "plain" ? g.entry.t : g.kind));
 const cards = (gs: Groups): Card[] => gs.filter((g): g is Card => g.kind === "call");
 
+describe("groupFeed: a store session's calls", () => {
+  /**
+   * As the viewer serves a session read from a wrath-mcp store
+   * (`runner/viewer/record-feed.ts`): each call's records side by side where
+   * it returned, its start in `dispatchTs`, the action log before it. Here the
+   * snippet dispatched at 1_000 was still running when the other call
+   * (1_100 to 1_200) returned, and errs at 4_000.
+   */
+  function storeStretch(): FeedEntry[] {
+    return [
+      e("tool_call", 500, { call: 1, name: "state_summary", args: {}, dispatchTs: 400 }),
+      e("tool_result", 500, { name: "state_summary", isError: false, text: "{}" }),
+      e("tool_call", 1_200, { call: 3, name: "recent_events", args: { limit: 5 }, dispatchTs: 1_100 }),
+      e("tool_result", 1_200, { name: "recent_events", isError: false, text: "[]" }),
+      e("actions", 3_000, { callTs: 1_000, actions: [{ ts: 2_900, action: "attack_start", status: 200 }] }),
+      e("actions", 3_000, { callTs: 400, routine: true, actions: [{ ts: 2_950, action: "questgiver_status_query", status: 200 }] }),
+      e("milestone", 3_500, { kind: "level", from: 1, to: 2 }),
+      e("tool_call", 4_000, { call: 2, name: "run_snippet", args: { code: "await sdk.killTarget(g)" }, dispatchTs: 1_000 }),
+      e("snippet", 4_000, { code: "await sdk.killTarget(g)" }),
+      e("snippet_result", 4_000, { name: "run_snippet", isError: true, text: "error (3000ms)\nTypeError: no target" }),
+    ];
+  }
+
+  test("each call is one card with its code, result, duration and action log; a routine's flush and the game's rows stay rows", () => {
+    const gs = groupFeed(storeStretch(), [], null, false);
+    expect(kinds(gs)).toEqual(["call", "call", "actions", "milestone", "call"]);
+    const [summary, events, kill] = cards(gs);
+    expect([summary!.result?.text, events!.result?.text]).toEqual(["{}", "[]"]);
+    expect(kill!.snippet?.code).toBe("await sdk.killTarget(g)");
+    expect(kill!.result).toMatchObject({ isError: true, text: "error (3000ms)\nTypeError: no target" });
+    expect(cards(gs).map((c) => c.durationMs)).toEqual([100, 100, 3_000]);
+    expect(kill!.actions.map((a) => a.ts)).toEqual([3_000]);
+  });
+
+  test("with no model side no card has a think time; the same entries on a run with one do", () => {
+    expect(cards(groupFeed(storeStretch(), [], null, false)).map((c) => c.lead)).toEqual([null, null, null]);
+    expect(cards(groupFeed(storeStretch(), [], null)).some((c) => c.lead?.thinkMs != null)).toBe(true);
+    // The run's detail can land after its entries: a derivation that timed the cards is not recycled once it is known.
+    const entries = storeStretch();
+    expect(cards(groupFeed(entries, groupFeed(entries, [], null), null, false)).map((c) => c.lead)).toEqual([null, null, null]);
+  });
+});
+
 describe("groupFeed: tool-call envelopes", () => {
   /**
    * claude-code: the PREVIOUS call's envelope, flushed as this message starts

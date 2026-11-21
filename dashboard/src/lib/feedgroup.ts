@@ -570,9 +570,12 @@ function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
  *
  * `harness` is the run's (`wrathbench`, `claude-code`, `codex`, `pi`), which
  * says where a call's envelope sits and whether a gap before a call is the
- * model's ("Envelopes", the module comment).
+ * model's ("Envelopes", the module comment). `modelSide` false is a run with
+ * no record of its model (`hasModelSide`, `lib/runview.ts`): a session read
+ * from a wrath-mcp store, whose calls are its record's. A gap before one of
+ * its calls is nobody's to name, so no card has a think time.
  */
-export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGroup[] = [], harness: string | null = null): FeedGroup[] {
+export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGroup[] = [], harness: string | null = null, modelSide = true): FeedGroup[] {
   const recycled = new Map<number, FeedGroup>();
   for (const g of prev) recycled.set(anchorOf(g), g);
 
@@ -591,7 +594,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
   const hidden = (s: FeedEntry): boolean => joined(s, actionsByCall) || ownMove(s, movesByCall) || joins.claimed.has(s) || dogs.has(s);
 
   const after = harness !== null && ENVELOPE_AFTER.has(harness);
-  const timed = harness !== "codex";
+  const timed = modelSide && harness !== "codex";
 
   /** ts of the last entry that fed or was the model, for response latency. */
   let lastActivityTs: number | null = null;
