@@ -16,7 +16,7 @@
  */
 
 import { untrack } from "solid-js";
-import type { ActiveSegment, StatePoint } from "@viewer/api-types";
+import type { ActiveSegment, ComparabilityView, StatePoint } from "@viewer/api-types";
 import { activeMsUntil, sessionClock } from "@viewer/sessions";
 import { fmtTokens, stamp } from "./format";
 
@@ -115,6 +115,22 @@ export function xpChartModel(
  */
 export function hasModelSide(run: { source?: "store" }): boolean {
   return run.source !== "store";
+}
+
+/**
+ * How far the run page's XP chart window may run, on its session clock: the
+ * episode budget where the run has one, else nothing and the window closes at
+ * the last sample (`xpChartModel`). A store session has no budget; once it has
+ * ended its window is its record's span, the served playtime, which is the
+ * span its timeline draws. While it is live the window follows the clock as
+ * any run's does.
+ */
+export function chartWindowMs(
+  run: { source?: "store"; live: boolean; comparability: { budget: Pick<ComparabilityView["budget"], "episodeMs"> } | null },
+  playtime: number | null,
+): number | null {
+  if (!hasModelSide(run)) return run.live ? null : playtime;
+  return run.comparability?.budget.episodeMs ?? null;
 }
 
 /** What `XpChart` is drawn from: the samples, their window, and the seams. */

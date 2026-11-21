@@ -98,7 +98,7 @@ import {
   writeExpandPref,
   type ExpandPreset,
 } from "../lib/feedview";
-import { atBottom, chartClock, contextHint, hasModelSide, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
+import { atBottom, chartClock, chartWindowMs, contextHint, hasModelSide, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
@@ -1211,7 +1211,7 @@ export default function RunDetail() {
                             states={chart().states}
                             startedAt={chart().startedAt}
                             endedAt={chart().endedAt}
-                            episodeMs={run().comparability?.budget.episodeMs ?? null}
+                            episodeMs={chartWindowMs(run(), playtime())}
                             now={chart().now}
                             seams={chart().seams}
                             cursor={chartCursor()}
@@ -1223,7 +1223,7 @@ export default function RunDetail() {
                           states={chart().states}
                           startedAt={chart().startedAt}
                           endedAt={chart().endedAt}
-                          episodeMs={run().comparability?.budget.episodeMs ?? null}
+                          episodeMs={chartWindowMs(run(), playtime())}
                           now={chart().now}
                           seams={chart().seams}
                           cursor={chartCursor()}
