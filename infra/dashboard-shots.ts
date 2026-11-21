@@ -6,6 +6,7 @@
  *   bun infra/dashboard-shots.ts [--out DIR] [--run DIR]… [--path P]… [--site private|public|both]
  *                                [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead]
  *                                [--site-config FILE]   a JSON `site` block (name, theme, home, about)
+ *                                [--sessions STORE]     a bare wrath-mcp session store beside the runs
  *   bun infra/dashboard-shots.ts --serve [...]     the same stack, no browser: print the URLs and wait
  *
  * What it stands up, all on loopback and ephemeral ports, all under DIR/.rig:
@@ -63,6 +64,8 @@ export interface RigOptions {
   out: string;
   /** Run directories to copy in instead of the fixture. */
   runs?: readonly string[];
+  /** A bare session store the private viewer reads beside the runs (`WRATHBENCH_SESSION_STORE`); read in place, never copied or written. */
+  sessions?: string;
   wowhead?: "stub" | "real";
   /** The deployment's groups (`runner/viewer/groups.ts`); every group when absent. */
   groups?: Groups;
@@ -270,6 +273,7 @@ export async function startRig(opts: RigOptions): Promise<Rig> {
     allowedHosts: [],
     groups,
     admin: opts.admin !== false,
+    ...(opts.sessions !== undefined ? { sessionStore: resolve(opts.sessions) } : {}),
   });
   const publicApi = createApi({ runsDir, tilesDir: join(work, "no-tiles"), publicMode: true, moduleUrl: "http://127.0.0.1:1", store: localRunStore(runsDir), configDbPath, groups });
   const renderer = createRenderer({ runsDir, api: publicApi, configDbPath, groups });
@@ -464,11 +468,12 @@ interface Cli {
   admin: boolean;
   /** `--site-config FILE`: a JSON `site` block for the rig's config store. */
   siteConfig?: string;
+  sessions?: string;
 }
 
 export const USAGE = `usage: bun infra/dashboard-shots.ts [--out DIR] [--run DIR]... [--path P]... [--site private|public|both]
                                    [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead] [--serve]
-                                   [--groups runner,evals,viewer] [--seed] [--no-admin] [--site-config FILE]`;
+                                   [--groups runner,evals,viewer] [--seed] [--no-admin] [--site-config FILE] [--sessions STORE]`;
 
 export function parseCli(argv: readonly string[], now = new Date()): Cli | { error: string } {
   const c: Cli = {
@@ -491,7 +496,7 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
     else if (a === "--serve") c.serve = true;
     else if (a === "--seed") c.seed = true;
     else if (a === "--no-admin") c.admin = false;
-    else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle", "--groups", "--site-config"].includes(a)) {
+    else if (["--out", "--run", "--path", "--site", "--viewport", "--scheme", "--settle", "--groups", "--site-config", "--sessions"].includes(a)) {
       const v = val();
       if (v === undefined) return { error: `${a} needs a value` };
       if (a === "--groups") {
@@ -503,6 +508,7 @@ export function parseCli(argv: readonly string[], now = new Date()): Cli | { err
         if (!c.groups.viewer) return { error: "--groups: the rig is the viewer group's, so it must be on" };
       } else if (a === "--out") c.out = v;
       else if (a === "--site-config") c.siteConfig = v;
+      else if (a === "--sessions") c.sessions = v;
       else if (a === "--run") c.runs.push(v);
       else if (a === "--path") {
         if (!v.startsWith("/")) return { error: "--path is a path on the site, starting with /" };
@@ -546,6 +552,7 @@ async function main(argv: readonly string[]): Promise<number> {
     seed: c.seed,
     admin: c.admin,
     ...(c.siteConfig !== undefined ? { site: JSON.parse(readFileSync(c.siteConfig, "utf8")) as Record<string, unknown> } : {}),
+    ...(c.sessions !== undefined ? { sessions: c.sessions } : {}),
     log: (l) => console.log(l),
   });
   console.log(`private ${rig.privateUrl} · public ${rig.publicUrl} · bucket ${rig.bucketUrl}`);

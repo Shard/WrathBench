@@ -7,6 +7,8 @@
  * want to version separately from the deployment that sets it.
  */
 
+import { sessionStoreFromEnv } from "../../runner/src/session-store";
+
 export interface CollectorConfig {
   /** Base URL of ClickHouse's HTTP interface, no trailing slash. */
   url: string;
@@ -17,6 +19,11 @@ export interface CollectorConfig {
   /** The runs tree: `<data>/runs`. The collector only ever reads it. */
   dataDir: string;
   runsDir: string;
+  /**
+   * A bare session store read beside the runs (`runner/src/session-store.ts`),
+   * the directory a standalone wrath-mcp records into; null when there is none.
+   */
+  sessionStore: string | null;
   /** The collector's own sqlite: per-file offsets, so a restart resumes. */
   stateDb: string;
   /** How long between polls of the runs tree. */
@@ -61,6 +68,7 @@ export function readConfig(overrides: Partial<CollectorConfig> = {}): CollectorC
     database: overrides.database ?? env("CLICKHOUSE_DATABASE", "wrathbench"),
     dataDir,
     runsDir: overrides.runsDir ?? env("WRATHBENCH_RUNS_DIR", `${dataDir}/runs`),
+    sessionStore: overrides.sessionStore !== undefined ? overrides.sessionStore : sessionStoreFromEnv(),
     stateDb: overrides.stateDb ?? env("WRATHBENCH_COLLECTOR_DB", `${dataDir}/collector.sqlite`),
     pollMs: overrides.pollMs ?? envInt("WRATHBENCH_COLLECTOR_POLL_MS", DEFAULT_POLL_MS),
     batchRows: overrides.batchRows ?? envInt("WRATHBENCH_COLLECTOR_BATCH_ROWS", DEFAULT_BATCH_ROWS),

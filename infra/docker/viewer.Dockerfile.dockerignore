@@ -1,0 +1,32 @@
+# Ignore list for the VIEWER image only (viewer.Dockerfile). BuildKit prefers
+# <dockerfile-path>.dockerignore over the root .dockerignore, which exists for
+# the server image and excludes the TypeScript workspaces this image is made of.
+#
+# Same red line as everywhere else (docs/DATA-AND-LEGAL.md): nothing under
+# data/ enters an image, and neither does an env file.
+.git
+data
+node_modules
+deps
+docs
+infra/chart
+dashboard/dist
+dashboard/dist-public
+wrath-mcp/module
+wrath-mcp/.git
+.env
+
+# Everything .gitignore keeps out of git stays out of the image: these lines
+# are for a `docker build` from a working checkout. Dockerignore patterns are
+# anchored at the context root where .gitignore's match at any depth, hence
+# the `**/`.
+**/data
+**/node_modules
+**/.env
+**/.env.*
+**/.claude
+**/.wrangler
+infra/fleet.json
+dashboard/public/og.png
+**/*.log
+**/.DS_Store

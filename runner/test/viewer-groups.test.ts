@@ -70,10 +70,11 @@ describe("WRATHBENCH_GROUPS", () => {
   test("routes and pages belong to the groups the issue names", () => {
     expect(groupOfApiPath("/api/fleet")).toBe("runner");
     expect(groupOfApiPath("/api/models")).toBe("runner");
+    expect(groupOfApiPath("/api/tools")).toBe("runner");
     expect(groupOfApiPath("/api/ladder")).toBe("evals");
     expect(groupOfApiPath("/api/campaigns")).toBe("evals");
     expect(groupOfApiPath("/api/episodes")).toBe("evals");
-    for (const p of ["/api/runs", "/api/results", "/api/positions", "/api/info", "/api/tools", "/api/run/x"]) expect(groupOfApiPath(p)).toBeNull();
+    for (const p of ["/api/runs", "/api/results", "/api/positions", "/api/info", "/api/run/x"]) expect(groupOfApiPath(p)).toBeNull();
     const viewerOnly: Groups = { runner: false, evals: false, viewer: true };
     for (const p of ["/", "/map", "/runs", "/run/x", "/character/x", "/party/x"]) expect(pageMounted(p, viewerOnly, false)).toBe(true);
     for (const p of ["/fleet", "/models", "/ladder", "/campaigns/x/1", "/about", "/config"]) expect(pageMounted(p, viewerOnly, false)).toBe(false);
@@ -89,12 +90,12 @@ describe("WRATHBENCH_GROUPS", () => {
 describe("the viewer's routes", () => {
   test("an off group's routes are the 404 any unknown path gets; the viewer's own stay", async () => {
     const h = handle({ runner: false, evals: false, viewer: true });
-    for (const p of ["/api/fleet", "/api/models", "/api/ladder?episode=e90", "/api/campaigns", "/api/episodes"]) {
+    for (const p of ["/api/fleet", "/api/models", "/api/tools", "/api/ladder?episode=e90", "/api/campaigns", "/api/episodes"]) {
       const res = await get(h, p);
       expect([p, res.status]).toEqual([p, 404]);
       expect(await res.json()).toEqual({ error: "no such path" });
     }
-    for (const p of ["/api/runs", "/api/results?episode=all", "/api/positions", "/api/tools"]) expect([p, (await get(h, p)).status]).toEqual([p, 200]);
+    for (const p of ["/api/runs", "/api/results?episode=all", "/api/results", "/api/positions"]) expect([p, (await get(h, p)).status]).toEqual([p, 200]);
   });
 
   test("/api/info names the groups only when one is off, and the public projection keeps them", async () => {
@@ -132,7 +133,7 @@ describe("the public snapshot", () => {
     expect(evalsOff.live["fleet"]).toBeDefined();
 
     const viewerOnly = await render({ runner: false, evals: false, viewer: true });
-    expect(viewerOnly.paths).toEqual(["info.json", "results.json", "runs.json", "tools.json"]);
+    expect(viewerOnly.paths).toEqual(["info.json", "results.json", "runs.json"]);
     expect("fleet" in viewerOnly.live).toBe(false);
     expect(Object.keys(viewerOnly.live)).toEqual(["generatedAt", "attribution", "positions", "nearbyKey"]);
   });

@@ -29,6 +29,13 @@
  * new key. The run's own id keeps its run row, totals and trajectory, as for
  * any run, and no state, milestone or move row.
  *
+ * A bare session (`runner/src/session-store.ts`), a standalone wrath-mcp's
+ * record in the store read beside the runs, is read as a v1 run whose session
+ * directory is itself, under its viewer id: its `states`, `milestones` and
+ * `moves` as a v1 run's, its run row off `session.json`, its liveness off
+ * `live.json`. It has no trajectory, so no turns, events or totals, and with
+ * no totals it has no `RunFact`: the scheduler never counts it.
+ *
  * Nothing here decides anything about a run. It reads what the runner wrote
  * and hands it to the sink; the runner is untouched by design and
  * every judgement — what is live, what counts, what a level means — stays
@@ -48,6 +55,7 @@ import { openRunDb } from "../../runner/src/rundb";
 import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, milestoneOfEvent, readRunRow, SESSIONS_DIR, sessionDirOfRun, sessionSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
+import { isBareSessionDir } from "../../runner/src/session-store";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
 import type { Batcher } from "./batch";
 import type { OffsetStore } from "./offsets";
@@ -563,8 +571,16 @@ export class Ingester {
     // An UPDATE of the run row on a live run lands in the WAL, not the file.
     const walSig = sigOf(`${dbPath}-wal`);
     const jsonlSig = sigOf(jsonlPath);
-    if (metaSig === null && dbSig === null) return false;
-    const sig = `${metaSig?.sig ?? "-"}|${dbSig?.sig ?? "-"}${walSig !== null ? `+${walSig.sig}` : ""}|${jsonlSig?.sig ?? "-"}|${archived ? 1 : 0}`;
+    /*
+     * A bare session (`runner/src/session-store.ts`) has neither file: its
+     * row is its `session.json`'s (`readRunRow`), and its liveness rides its
+     * writer's heartbeat, `live.json`, where a run's rides its trajectory.
+     */
+    const bare = isBareSessionDir(dir);
+    const sessionSig = bare ? sigOf(join(dir, "session.json")) : null;
+    const heartbeat = bare ? sigOf(join(dir, "live.json")) : jsonlSig;
+    if (metaSig === null && dbSig === null && sessionSig === null) return false;
+    const sig = `${metaSig?.sig ?? "-"}|${dbSig?.sig ?? "-"}${walSig !== null ? `+${walSig.sig}` : ""}|${jsonlSig?.sig ?? "-"}|${archived ? 1 : 0}${bare ? `|${sessionSig?.sig ?? "-"}|${heartbeat?.sig ?? "-"}` : ""}`;
     if (this.deps.offsets.signature(runId, "run") === sig) return false;
 
     let meta: Record<string, unknown> = {};
@@ -614,7 +630,7 @@ export class Ingester {
       comparability_json: meta["comparability"] === undefined ? "" : JSON.stringify(meta["comparability"]),
       meta_json: strikeSessionToken(metaText, token),
       trajectory_bytes: jsonlSig?.size ?? 0,
-      trajectory_mtime: jsonlSig?.mtime ?? 0,
+      trajectory_mtime: heartbeat?.mtime ?? 0,
       ingested_at: this.deps.now(),
     });
     await this.deps.batcher.flushAll();

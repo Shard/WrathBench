@@ -43,6 +43,7 @@ Configuration is environment only:
 | `CLICKHOUSE_DATABASE` | `wrathbench` | must match `schema.sql` |
 | `WRATHBENCH_DATA` | `data` | the data directory |
 | `WRATHBENCH_RUNS_DIR` | `<data>/runs` | the tree to watch |
+| `WRATHBENCH_SESSION_STORE` | unset | a standalone wrath-mcp's session store, read beside the runs |
 | `WRATHBENCH_COLLECTOR_DB` | `<data>/collector.sqlite` | per-file offsets |
 | `WRATHBENCH_COLLECTOR_POLL_MS` | `5000` | how often to re-stat the tree |
 | `WRATHBENCH_COLLECTOR_BATCH_ROWS` | `2000` | flush a table's batch at this many rows |
@@ -92,6 +93,18 @@ run id, so `splitByChar('~', run_id)` gives the run and the character. The
 run's own id keeps its `runs` and `run_totals` rows and its trajectory's
 lines, and no state, milestone or move row. A single-character run's rows are
 the bytes they were.
+
+A bare session, one a standalone wrath-mcp recorded into the store
+`WRATHBENCH_SESSION_STORE` names (`runner/src/session-store.ts`), has no run
+around it. It is read as a v1 run's record is, under its viewer id (`mcp-` and
+16 hex, never the directory's name, which is the token's fingerprint): its
+row from `session.json` (start, end, character; model and driver empty), its
+liveness from `live.json`'s mtime in `trajectory_mtime`, and its states,
+milestones and moves from its streams. It has no trajectory, so no turns,
+events or `run_totals`, and with no totals no `RunFact`: the scheduler never
+counts one. The rows fit the existing tables; no schema changed. A run
+directory with the same id wins, and a record whose character never entered
+the world is not read.
 
 Those live in `data/collector/collector.sqlite` (`WRATHBENCH_COLLECTOR_DB`, as
 both the chart and compose set it), which is the only thing this service

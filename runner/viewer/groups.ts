@@ -75,18 +75,22 @@ export function adminFromEnv(env: Record<string, string | undefined>): boolean {
  * The group an API path belongs to, or null for the viewer's own routes, which
  * are there whenever a viewer is.
  *
- * - runner: the supervisor's state (`/api/fleet`) and its scheduling verdict
- *   per roster entry (`/api/models`).
+ * - runner: the supervisor's state (`/api/fleet`), its scheduling verdict
+ *   per roster entry (`/api/models`), and the tools the runner's harness
+ *   gives a model (`/api/tools`).
  * - evals: the ladder, the dungeon board, the campaigns, and the episodes and
  *   tiers the about page reads (`/api/episodes`).
  *
- * `/api/results` stays the viewer's: it is the runs index and the character
- * and party pages' listing, not the ladder (which is `/api/ladder`).
+ * `/api/results` stays the viewer's: it is the runs index and the run,
+ * character and party pages' listing, not the ladder (which is
+ * `/api/ladder`). With evals off it defaults to every episode and serves no
+ * ladder condition (`withoutEvalFields` in `api.ts`).
  */
 export function groupOfApiPath(path: string): Group | null {
   switch (path) {
     case "/api/fleet":
     case "/api/models":
+    case "/api/tools":
       return "runner";
     case "/api/ladder":
     case "/api/campaigns":

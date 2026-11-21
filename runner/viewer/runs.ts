@@ -34,6 +34,7 @@ import { fanoutSession, runSession } from "./runs-source";
 import { characterSamplesOf, fanoutLead, fanoutReadings, isFanoutRunDir, isV1RunDir, latestReading, parseFanoutSessionId, readRunRow, readStateSamples } from "../src/run-reader";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
+import { bareSessionDir, isBareSessionDir, isBareSessionId, sessionStoreOf } from "../src/session-store";
 import { harnessOfRun, parseComparability } from "../src/comparability";
 import { runCredentialOf } from "../src/credential-slots";
 import { platformOf } from "../src/platform";
@@ -60,13 +61,25 @@ export function isValidRunId(id: string): boolean {
   return RUN_ID.test(id) && id !== "." && id !== "..";
 }
 
+/**
+ * A run's directory, or null when there is none by that id. A bare session's
+ * viewer id resolves into the session store read beside this runs directory
+ * (`runner/src/session-store.ts`), when one is and no run directory has the
+ * same name.
+ */
 export function runDir(runsDir: string, runId: string): string | null {
   if (!isValidRunId(runId)) return null;
   // `archive` is a directory of runs, not a run; the viewer never reads inside it.
   if (isArchiveDir(runId)) return null;
   const dir = join(runsDir, runId);
-  if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
-  return dir;
+  if (existsSync(dir) && statSync(dir).isDirectory()) return dir;
+  const store = isBareSessionId(runId) ? sessionStoreOf(runsDir) : null;
+  return store === null ? null : bareSessionDir(store, runId);
+}
+
+/** `runDir`, or the path a run of that id would have: for the readers that read a missing run as empty. */
+export function runPath(runsDir: string, runId: string): string {
+  return runDir(runsDir, runId) ?? join(runsDir, runId);
 }
 
 function openReadonly(dir: string): Database | null {
@@ -155,12 +168,26 @@ function partyPlaceOf(role: unknown, members: unknown, member: string): { role?:
 
 function readMetaSafe(dir: string): MetaShape | null {
   const path = join(dir, "meta.json");
-  if (!existsSync(path)) return null;
+  // A bare session has no launch: what it knows of one is its `session.json`'s (`runRowOfBareSession`).
+  if (!existsSync(path)) return isBareSessionDir(dir) ? bareMetaOf(dir) : null;
   try {
     return JSON.parse(readFileSync(path, "utf8")) as MetaShape;
   } catch {
     return null;
   }
+}
+
+/** A bare session's row as the meta.json a launch would have written: its start and its character's config. */
+function bareMetaOf(dir: string): MetaShape | null {
+  const r = readRunRow(dir, "");
+  if (r === null) return null;
+  let config: MetaShape["config"] = {};
+  try {
+    if (typeof r["config_json"] === "string") config = JSON.parse(r["config_json"]) as MetaShape["config"];
+  } catch {
+    config = {};
+  }
+  return { ...(typeof r["started_at"] === "number" ? { startedAt: r["started_at"] } : {}), config };
 }
 
 /**
@@ -245,7 +272,7 @@ function latestItems(db: Database, runId: string, cols: Set<string>): ItemSample
 }
 
 export function readRun(runsDir: string, runId: string, now = Date.now()): RunRow {
-  const dir = join(runsDir, runId);
+  const dir = runPath(runsDir, runId);
   const row: RunRow = {
     runId,
     model: null,
@@ -352,6 +379,10 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     const st = statSync(jsonl);
     row.mtime = st.mtimeMs;
     row.bytes = st.size;
+  } else if (isBareSessionDir(dir)) {
+    // A bare session has no trajectory; its writer's heartbeat is `live.json`, rewritten every tick.
+    const live = statSync(join(dir, "live.json"), { throwIfNoEntry: false });
+    if (live !== undefined) row.mtime = live.mtimeMs;
   }
 
   if (isV1RunDir(dir) || !existsSync(join(dir, "run.sqlite"))) {
@@ -476,6 +507,36 @@ function finishRow(row: RunRow, now: number): RunRow {
   if (row.platform === null) row.platform = platformOf(row.apiBase, row.driver);
   row.live =
     row.terminationReason === null && row.mtime !== null && now - row.mtime < LIVE_WINDOW_MS;
+  return closeBareSession(row, now);
+}
+
+/** A store session's verdict when its record closed it (`session.json`'s `ended`). */
+export const BARE_ENDED = "ended";
+/** ...and when its writer stopped without closing it: `live.json`'s heartbeat went quiet. */
+export const BARE_ABANDONED = "abandoned";
+
+/**
+ * A bare session's end, as the record states it (`runner/src/session-store.ts`).
+ * A run says it ended by a termination reason, which a session never writes,
+ * and every reader of a row (the listing's status, the run page's timeline,
+ * its LIVE toggle and its polling, the live map) takes a missing one as a run
+ * still going. So a session closed in its `session.json` reads as `ended` at
+ * that close, and one whose writer died without closing it, its `live.json`
+ * quiet for the listing's live window (wrath-mcp/docs/SESSION-FORMAT.md, "a
+ * session whose ended is null and whose heartbeat is old was abandoned"),
+ * reads as `abandoned` at its last heartbeat. Decided on each read, against
+ * `now`, because a stored row never learns that its writer stopped; a writer
+ * that resumes the session moves the heartbeat and it reads as live again.
+ * Any other row is returned as it was.
+ */
+export function closeBareSession<T extends Pick<RunRow, "runId" | "terminationReason" | "endedAt" | "startedAt" | "mtime" | "live">>(row: T, now: number): T {
+  if (!isBareSessionId(row.runId) || row.terminationReason !== null) return row;
+  if (row.endedAt !== null) row.terminationReason = BARE_ENDED;
+  else if (row.mtime === null || now - row.mtime >= LIVE_WINDOW_MS) {
+    row.terminationReason = BARE_ABANDONED;
+    row.endedAt = row.mtime ?? row.startedAt;
+  }
+  if (row.terminationReason !== null) row.live = false;
   return row;
 }
 
@@ -532,7 +593,7 @@ function characterSamples(runsDir: string, id: string): Record<string, unknown>[
 export function readStates(runsDir: string, runId: string): StatePoint[] {
   const character = characterSamples(runsDir, runId);
   if (character !== null) return character.map(statePointOfRow);
-  const dir = join(runsDir, runId);
+  const dir = runPath(runsDir, runId);
   if (isV1RunDir(dir)) return readStateSamples(dir, runId).map(statePointOfRow);
   const db = openReadonly(dir);
   if (db === null) return [];
@@ -556,7 +617,7 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
  * every poll; empty where the schema predates the column.
  */
 export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint, "questsCompleted">[] {
-  const dir = join(runsDir, runId);
+  const dir = runPath(runsDir, runId);
   if (isV1RunDir(dir)) return readStateSamples(dir, runId).map((r) => ({ questsCompleted: num(r["quests_completed"]) }));
   const db = openReadonly(dir);
   if (db === null) return [];
@@ -583,7 +644,7 @@ export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint
  * paying for a whole inventory per sample to ignore it.
  */
 export function readStateItems(runsDir: string, runId: string): StateItemsRow[] {
-  const dir = join(runsDir, runId);
+  const dir = runPath(runsDir, runId);
   const character = characterSamples(runsDir, runId);
   if (character !== null || isV1RunDir(dir)) {
     const out: StateItemsRow[] = [];
@@ -625,7 +686,7 @@ export async function readMoves(runsDir: string, runId: string): Promise<MoveInt
 }
 
 export function readScratchpad(runsDir: string, runId: string): string | null {
-  const path = join(runsDir, runId, "scratchpad.md");
+  const path = join(runPath(runsDir, runId), "scratchpad.md");
   if (!existsSync(path)) return null;
   try {
     return readFileSync(path, "utf8");

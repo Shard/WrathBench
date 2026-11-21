@@ -19,10 +19,17 @@
  *
  * Failures are dropped here: the page's own poll makes the same call and
  * reports what it finds.
+ *
+ * A call that belongs to a group (`@viewer/groups`) waits for `/api/info`
+ * (the shell's own first request, shared through the client) and is not made
+ * when that group is off, as its page would not make it. A failed info reads
+ * as every group, as the shell reads it.
  */
 
 import type { Client } from "../api/client";
+import type { Groups } from "@viewer/groups";
 import { episodeParam } from "./episodes";
+import { groupsOf } from "./nav";
 
 /** The homepage's ladder tier: `HOME_EPISODE` in `lib/homeladder.ts`, restated to keep that module out of the entry chunk (a test holds them equal). */
 export const HOME_PRELOAD_EPISODE = "e90";
@@ -36,7 +43,7 @@ export interface PreloadArgs {
 
 export type Preload = (args: PreloadArgs) => void;
 
-type Api = Pick<Client, "tools" | "positions" | "ladder" | "results" | "models" | "episodes" | "campaigns" | "dungeons" | "runs" | "character">;
+type Api = Pick<Client, "info" | "tools" | "positions" | "ladder" | "results" | "models" | "episodes" | "campaigns" | "dungeons" | "runs" | "character">;
 
 /** The preloads, by route, over a client. */
 export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "runs" | "models" | "about" | "campaigns" | "fleet" | "character", Preload> {
@@ -46,8 +53,17 @@ export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "run
       if (args.intent === "preload") return;
       for (const p of start(args)) void p.catch(() => undefined);
     };
+  /** The calls of the groups that are on, once `/api/info` has said which are. */
+  const gated = (calls: (g: Groups) => Promise<unknown>[]): Promise<unknown> =>
+    api
+      .info()
+      .catch(() => undefined)
+      .then((info) => Promise.all(calls(groupsOf(info))));
   return {
-    home: on(() => [api.tools(), api.positions(), api.ladder(HOME_PRELOAD_EPISODE)]),
+    home: on(() => [
+      api.positions(),
+      gated((g) => [...(g.runner ? [api.tools()] : []), ...(g.evals ? [api.ladder(HOME_PRELOAD_EPISODE)] : [])]),
+    ]),
     // The tier's ladder (a Deadmines tab's falls back to the default tier's) and the dungeon board, which fills rung 6 and the Deadmines tabs.
     ladder: on(({ location }) => [api.ladder(episodeParam(location.query["episode"])), api.dungeons()]),
     // The live map only: a replay's first request depends on the run or party
@@ -57,7 +73,7 @@ export function routePreloads(api: Api): Record<"home" | "ladder" | "map" | "run
     ),
     runs: on(() => [api.results("all", true, "all")]),
     models: on(() => [api.models(), api.ladder("freeplay")]),
-    about: on(() => [api.episodes()]),
+    about: on(() => [gated((g) => (g.evals ? [api.episodes()] : []))]),
     campaigns: on(() => [api.campaigns()]),
     // The fleet table reads `/api/fleet`, which the shell's shared feed already
     // polls on every page; there is nothing route-specific to start.

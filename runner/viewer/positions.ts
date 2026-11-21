@@ -27,7 +27,7 @@ import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, sta
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
 import { STORE_LAG_MS, runRowOf, withFanoutLeads, type RunStore } from "./clickhouse";
-import { listRuns } from "./runs";
+import { listRuns, runPath } from "./runs";
 import { questsAcrossRestarts } from "./results";
 import { latestMove, nearbyFresh, recentTrace } from "@wrathbench/inspector";
 import { fanoutSession, runSession } from "./runs-source";
@@ -269,7 +269,7 @@ interface RunDbReading {
  */
 async function readRunDb(runsDir: string, runId: string): Promise<RunDbReading> {
   const none: RunDbReading = { pos: null, quests: [], move: null, reflecting: false };
-  const dir = join(runsDir, runId);
+  const dir = runPath(runsDir, runId);
   if (isV1RunDir(dir)) return await readV1Reading(runsDir, runId, none);
   const reading = withRunDb(runsDir, runId, none, (db) => {
     const guard = <T>(empty: T, read: () => T): T => {
@@ -301,7 +301,7 @@ async function readRunDb(runsDir: string, runId: string): Promise<RunDbReading> 
  * window is the run row's.
  */
 async function readV1Reading(runsDir: string, runId: string, none: RunDbReading): Promise<RunDbReading> {
-  const dir = join(runsDir, runId);
+  const dir = runPath(runsDir, runId);
   try {
     const pos = livePositionOf(sessionDirOfRun(dir), () => readStateSamples(dir, runId));
     if (pos === null) return none;
@@ -571,8 +571,8 @@ function recordTouchedSince(runsDir: string, runId: string, since: number): bool
       return false;
     }
   };
-  const dir = join(runsDir, runId);
-  if (touched(join(dir, "session", "live.json"))) return true;
+  const dir = runPath(runsDir, runId);
+  if (touched(join(sessionDirOfRun(dir), "live.json"))) return true;
   if (!existsSync(join(dir, SESSIONS_DIR))) return false;
   return fanoutCharacters(dir).some((c) => touched(join(dir, SESSIONS_DIR, c, "live.json")));
 }

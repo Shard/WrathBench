@@ -63,6 +63,49 @@ The first `up` takes a while: the AzerothCore build, then `db-import`
 populating three databases from the AzerothCore SQL dumps. `docker compose -f
 infra/compose.yml down` stops it all and keeps the data ("Where data lives").
 
+## Viewer only
+
+WrathBench can also run as nothing but the viewer, beside a wrath-mcp and an
+AzerothCore someone else runs. Every session that wrath-mcp records, whatever
+MCP client drove it, lists on the runs page and opens as a run.
+
+Run the standalone server with a store you name. A directory named with
+`--record-dir` is kept until you delete it (unless `--record-retention-days`
+is also given), where the default one under `$TMPDIR` is pruned after three
+days and may not survive a reboot. wrath-mcp's `mcp/README.md` has the
+command for Claude Code and for any other stdio client; the part that matters
+here is:
+
+```
+bun /abs/path/to/wrath-mcp/mcp/src/main.ts --account <account> --record-dir /srv/wrath-sessions
+```
+
+Then, from a clone with the stack checked out:
+
+```
+git submodule update --init wrath-mcp
+WRATHBENCH_SESSION_STORE_HOST=/srv/wrath-sessions \
+  docker compose -f infra/compose.viewer.yml up --build
+```
+
+and open http://127.0.0.1:8090. `infra/compose.viewer.yml` is one service from
+`infra/docker/viewer.Dockerfile` (Bun, the workspace and the built dashboard;
+no game server, runner, CLIs or ClickHouse), with only the viewer group on
+(`WRATHBENCH_GROUPS=viewer`). The store is mounted read-only, and the
+container runs as `WRATHBENCH_UID`:`WRATHBENCH_GID` (default 1000), which has
+to be the user that ran wrath-mcp, because each session directory is mode
+0700. The port is published on the host's loopback only. Minimap tiles, if you
+have extracted them, come from `WRATHBENCH_MINIMAP_HOST`, an absolute path;
+without it the map draws its grid. Nothing reads a `.env`: the compose file
+and those variables are the whole of the configuration.
+
+A session lists under an id of its own (`mcp-` and 16 hex), never its
+directory's name, which is its token's fingerprint. It lists once its
+character has entered the world; a record a client opened without ever
+playing (each server start opens one) is not shown. Without Docker, the same
+viewer is `WRATHBENCH_GROUPS=viewer WRATHBENCH_SESSION_STORE=<absolute dir>
+bun runner/viewer/serve.ts` from the repository root.
+
 ## Services
 
 ```

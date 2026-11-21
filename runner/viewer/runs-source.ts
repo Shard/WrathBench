@@ -14,6 +14,11 @@
  *   reads those and presents them as the v1 record's rows. Nothing on disk is
  *   converted; a 0.5 run stays readable, not comparable.
  *
+ * - A **bare** session, one a standalone wrath-mcp recorded into the store
+ *   read beside the runs (`WRATHBENCH_SESSION_STORE`,
+ *   `runner/src/session-store.ts`), has no run around it: read like a v1
+ *   run's record, under its viewer id (`mcp-…`), never its directory's name.
+ *
  * - A **fan-out** run, one agent driving several characters, keeps one
  *   record per character in `<run>/sessions/<Character>/` and has no
  *   `session/`: each is a session of its own, under `<run-id>~<Character>`.
@@ -37,11 +42,12 @@
  * serves is scoped to a user.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
 import type { SessionFile } from "@wrathbench/mcp/record";
-import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, parseFanoutSessionId, SESSIONS_DIR } from "../src/run-reader";
+import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, sessionDirOfRun, SESSIONS_DIR } from "../src/run-reader";
+import { listBareSessions, sessionStoreOf, type BareSession } from "../src/session-store";
 import { legacy05Session } from "./legacy05-source";
 import { runDir } from "./runs";
 
@@ -50,9 +56,10 @@ export { FANOUT_SEP, fanoutSessionId, SESSIONS_DIR };
 /** The session record's directory inside a run directory (`runner/src/session-record.ts`). */
 export const SESSION_DIR = "session";
 
-/** Whether a run directory holds a single-character v1 session record. */
+/** Whether a run directory holds a single-character v1 session record; a bare session's id is one (`session-store.ts`). */
 export function isV1Run(runsDir: string, runId: string): boolean {
-  return existsSync(join(runsDir, runId, SESSION_DIR, "session.json"));
+  const dir = runDir(runsDir, runId);
+  return dir !== null && isV1RunDir(dir);
 }
 
 /** Whether a run is a fan-out run (`isFanoutRunDir`): several characters, a record each. */
@@ -85,6 +92,17 @@ export function isWithheldFanoutRun(runsDir: string, runId: string): boolean {
   }
 }
 
+/**
+ * The bare sessions read beside a runs directory (`session-store.ts`), each
+ * under its viewer id: none when no store is, and never one whose id a run
+ * directory also has, since `runDir` opens the run for that id.
+ */
+export function bareSessionsOf(runsDir: string): BareSession[] {
+  const store = sessionStoreOf(runsDir);
+  if (store === null) return [];
+  return listBareSessions(store).filter((s) => statSync(join(runsDir, s.id), { throwIfNoEntry: false })?.isDirectory() !== true);
+}
+
 /** A fan-out run's sessions, one per character with a record, in name order; empty for any other run. */
 export function fanoutSessions(runsDir: string, runId: string): { id: string; character: string }[] {
   return fanoutCharacters(join(runsDir, runId)).map((character) => ({ id: fanoutSessionId(runId, character), character }));
@@ -110,7 +128,8 @@ class RunSessionHandle extends StoredSessionHandle {
  * one character's: its routes that read "the run's session" answer empty.
  */
 export function runSession(runsDir: string, runId: string): SessionHandle {
-  return isV1Run(runsDir, runId) ? new RunSessionHandle(runId, join(runsDir, runId, SESSION_DIR)) : legacy05Session(runsDir, runId);
+  const dir = runDir(runsDir, runId);
+  return dir !== null && isV1RunDir(dir) ? new RunSessionHandle(runId, sessionDirOfRun(dir)) : legacy05Session(runsDir, runId);
 }
 
 /**
@@ -161,6 +180,13 @@ export function runsSource(runsDir: string): SessionSource {
           if (h === null || session === null || !inScope(session, scope)) continue;
           out.push({ id, session, live: await h.live(), group: name });
         }
+      }
+      // A bare session in the store read beside the runs, under its viewer id; a run of that name shadows it.
+      for (const { id } of bareSessionsOf(runsDir)) {
+        const h = runSession(runsDir, id);
+        const session = await h.session();
+        if (session === null || !inScope(session, scope)) continue;
+        out.push({ id, session, live: await h.live() });
       }
       return out.sort((a, b) => b.session.opened - a.session.opened);
     },

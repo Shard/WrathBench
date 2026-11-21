@@ -20,8 +20,8 @@ import { InfoHint } from "../components/InfoHint";
 import { VideoExcerpt } from "../components/Replay";
 import { STACK_URL } from "../lib/repo";
 import type { HighlightResponse } from "../api/client";
-import { useFeeds } from "../lib/feeds";
-import { groupsOf } from "../lib/nav";
+import { NEVER, useFeeds } from "../lib/feeds";
+import { homeGroups, type HomeGroups } from "../lib/homegroups";
 
 /** What the loop diagram is showing, one hover off its heading; per-harness detail lives here, not in the drawing. */
 const LOOP_NOTE =
@@ -35,7 +35,17 @@ const LADDER_POLL_MS = 30_000;
 const PARETO_KEY = "wb.home.pareto";
 
 export default function Home() {
-  const tools = poll(() => api.tools().then((r) => r.tools), TOOLS_POLL_MS);
+  const feeds = useFeeds();
+  /*
+   * The tool list is the runner group's and the ladder the evals group's:
+   * each is absent with its group off, and neither is asked for until
+   * `/api/info` has said the group is there (`homeGroups`).
+   */
+  const shown = (): HomeGroups => homeGroups(feeds.info.latest);
+  const tools = poll(
+    async () => ((await feeds.groups()).runner ? api.tools().then((r) => r.tools) : NEVER),
+    () => (shown().tools ? TOOLS_POLL_MS : 3_600_000),
+  );
   /*
    * The envelope's clock rides along with the positions, exactly as the map
    * carries it (`MapPage.tsx`): on the public build a reading is up to a
@@ -68,10 +78,7 @@ export default function Home() {
     .highlight()
     .then((h) => setHighlight(h.highlight))
     .catch(() => setHighlight(null));
-  // The ladder is the evals group's: absent with it, and not asked for until
-  // `/api/info` has said the group is there.
-  const feeds = useFeeds();
-  const evals = (): boolean => feeds.info.latest !== undefined && groupsOf(feeds.info.latest).evals;
+  const evals = (): boolean => shown().ladder;
 
   return (
     <div class="page home">
@@ -167,6 +174,7 @@ export default function Home() {
         </div>
       </div>
 
+      <Show when={shown().tools}>
       <h2 class="section">the tools</h2>
       <p class="dim">
         The same tools for every model on a harness. Pick one to see the description the model is given.
@@ -237,6 +245,7 @@ export default function Home() {
             )}
           </Show>
         </div>
+      </Show>
       </Show>
 
       <h2 class="section">the sdk</h2>
