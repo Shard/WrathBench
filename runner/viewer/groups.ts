@@ -127,12 +127,23 @@ export function isAdminPage(pathname: string): boolean {
 }
 
 /**
+ * What the store's `site` block changes about which pages exist: an about
+ * page of the deployment's own (`site.about`, `runner/src/site-settings.ts`)
+ * is mounted whatever the evals group says, since it no longer reads the
+ * episodes that make the built-in one that group's.
+ */
+export interface PageSite {
+  about?: boolean;
+}
+
+/**
  * Whether a page is mounted for these groups and this admin switch. The
  * viewer's own pages always are; the dashboard reaches none of this before
  * `/api/info` says what the deployment is.
  */
-export function pageMounted(pathname: string, groups: Groups, admin: boolean): boolean {
+export function pageMounted(pathname: string, groups: Groups, admin: boolean, site: PageSite = {}): boolean {
   if (isAdminPage(pathname)) return admin;
+  if (site.about === true && `/${pathname.split("/")[1] ?? ""}` === "/about") return true;
   const g = groupOfPage(pathname);
   return g === null || groups[g];
 }

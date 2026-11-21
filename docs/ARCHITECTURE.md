@@ -82,6 +82,13 @@ deciding what the deployment runs. Switching a group changes what is launched
 and shown, never what a result means: with evals off nothing scored is
 launched, and nothing is counted differently.
 
+What the viewer calls and paints itself is the config store's `site` block,
+not a group: a name, four colour tokens, what `/` opens and the about page's
+text as markdown (`runner/src/site-settings.ts`), so a viewer deployed beside
+someone else's wrath-mcp is theirs with no code change. A custom about page
+is mounted with evals off, since it no longer reads the episodes; the legal
+text and the Blizzard attribution are not settings.
+
 The admin interface sits beside the groups as a switch of its own, off by
 default: the viewer's config API, its admin status route and the admin pages,
 from which the operator edits credentials, the roster, freeplay agents,

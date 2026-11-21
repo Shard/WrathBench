@@ -62,6 +62,13 @@ is created empty, and every page serves its labelled empty state.
   `/api/episodes` and `/api/dungeons`. `/api/info` names the groups when one is off, the public
   projection keeps them, and the dashboard drops those pages. A viewer told the
   viewer group is off refuses to start.
+- The config store's `site` block (docs/RUNBOOK.md, "Config reference") is
+  read on each `/api/info`: `name`, `theme`, `home` and `about` ride under
+  `site`, only when one is set, so a deployment without them serves the body
+  it did. `about` is markdown rendered here (`site-info.ts`) with raw HTML
+  shown as text, images dropped to their alt text and links kept only to
+  http(s), mailto, `/…` and `#…`; the public projection copies the four
+  field by field.
 - `WRATHBENCH_ADMIN=1` is the admin switch: it mounts the config API and
   `/api/admin` ("Endpoints"), the only routes that write or say anything about
   credentials. Unset, this process has no write route at all. Refused together

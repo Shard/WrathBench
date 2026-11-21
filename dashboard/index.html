@@ -4,6 +4,26 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WrathBench</title>
+    <!--
+      The deployment's own name and colours as this browser last saw them
+      (src/lib/site.ts, SITE_CACHE_KEY), painted before the bundle arrives so
+      a themed site does not flash the default first. The live values replace
+      them once /api/info answers.
+    -->
+    <script>
+      (function () {
+        try {
+          var s = JSON.parse(localStorage.getItem("wb.site") || "null");
+          if (s && typeof s.css === "string" && /^[\w\s:;#{}().,@%-]*$/.test(s.css)) {
+            var el = document.createElement("style");
+            el.id = "site-theme";
+            el.textContent = s.css;
+            document.head.appendChild(el);
+          }
+          if (s && typeof s.name === "string") document.title = s.name;
+        } catch (e) {}
+      })();
+    </script>
     <!-- The public build's data-host hints (vite.config.ts, src/lib/data-hints.ts). -->
     <!-- wrathbench:data -->
     <!--

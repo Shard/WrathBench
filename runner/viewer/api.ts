@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { json } from "./http";
 import { harnessSeries } from "../src/comparability";
 import type { SiteSettings } from "../src/site-settings";
+import { siteInfoField } from "./site-info";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { EPISODES, EPISODE_IDS, EPISODE_LIST, hasBoard, isTaskEpisode } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
@@ -1733,6 +1734,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         harnessSeries: await seriesCensus(),
         // Only when the store's `site` block names one, so a deployment without it serves the body it did.
         ...previewSeriesField(fleetRoster().site),
+        // The deployment's name, theme, home and about, likewise only when set.
+        ...siteInfoField(fleetRoster().site),
         // Only when one is off, so today's deployment serves the body it did.
         ...(allGroupsOn(groups) ? {} : { groups: { ...groups } }),
         ...(admin ? { admin: true } : {}),

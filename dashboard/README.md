@@ -99,8 +99,9 @@ page renders as it does where the script is blocked; `--real-wowhead` lets it
 through. Nothing reads the operator's ClickHouse, config store or runs. The
 private viewer has the admin switch on (`--no-admin` is the chart's default
 viewer, without it); `--seed` gives its config store
-`infra/fleet.example.json`, and `--groups` sets the deployment's groups on
-both sites. For states that need clicks, import `startRig` and drive
+`infra/fleet.example.json`, `--groups` sets the deployment's groups on
+both sites, and `--site-config FILE` puts a JSON `site` block (a name, theme,
+home or about) in its config store. For states that need clicks, import `startRig` and drive
 `rig.page(...)` from a script.
 
 **Groups and the admin switch** decide which pages exist (`@viewer/groups`):
@@ -111,6 +112,15 @@ page that belongs to a group or to admin waits for `/api/info` before it
 renders, so a deployment without it never draws it on the way. The status
 badge and the fleet feed are the runner group's; the homepage's ladder is the
 evals group's.
+
+**The deployment's own site** (`lib/site.ts`): `/api/info`'s `site` names
+the wordmark and tab title, paints the theme as a `<style id="site-theme">`
+of `html:root` rules (a light one under the stylesheet's own media query),
+sends `/` elsewhere when `home` says so (`/` waits for `/api/info` for that),
+and replaces the about page's text with the viewer's sanitized HTML, which
+also mounts `/about` with the evals group off. A copy of the theme's CSS and
+the name is kept in `localStorage` (`wb.site`) and painted by `index.html`'s
+first script before the bundle arrives; absent, nothing is painted or kept.
 
 ## The ladder's derivations
 

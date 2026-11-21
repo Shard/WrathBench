@@ -67,6 +67,13 @@ describe("ogSvgOf", () => {
     expect(svg.endsWith("</svg>")).toBe(true);
   });
 
+  test("the wordmark is the site's name when it has one, escaped, and WrathBench otherwise", () => {
+    expect(ogSvgOf(RUNS)).toContain('font-weight="700" fill="#d8dee6">WrathBench</text>');
+    const svg = ogSvgOf(RUNS, { name: "Lab <&> One" });
+    expect(svg).toContain(">Lab &lt;&amp;&gt; One</text>");
+    expect(svg).not.toContain(">WrathBench</text>");
+  });
+
   test("one puck per entry, and a frontier segment for every step but the first", () => {
     const svg = ogSvgOf(RUNS);
     // Each mark is a separation disc, a white puck, and its art or fallback.
