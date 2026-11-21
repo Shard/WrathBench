@@ -49,13 +49,13 @@ services:
         source: ${WRATHBENCH_SESSION_STORE_HOST:?set WRATHBENCH_SESSION_STORE_HOST to the directory wrath-mcp records into (--record-dir)}
         target: /sessions
         read_only: true
-      # Optional minimap tiles (minimap/README.md), by default the checkout's
-      # gitignored data/minimap; the map draws a labelled grid where there are
-      # none, so an empty directory is fine.
-      - type: bind
-        source: ${WRATHBENCH_MINIMAP_HOST:-../data/minimap}
-        target: /minimap
-        read_only: true
-        bind:
-          create_host_path: true
+      # Optional minimap tiles (minimap/README.md): set WRATHBENCH_MINIMAP_HOST
+      # to an absolute path and it is bind-mounted. Unset, the mount is an
+      # empty named volume, and the map draws a labelled grid where a tile is
+      # missing. Not a default host path: Docker would create a missing one as
+      # root, inside the checkout.
+      - ${WRATHBENCH_MINIMAP_HOST:-no-minimap}:/minimap:ro
     restart: unless-stopped
+
+volumes:
+  no-minimap:

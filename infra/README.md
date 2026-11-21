@@ -91,9 +91,9 @@ no game server, runner, CLIs or ClickHouse), with only the viewer group on
 container runs as `WRATHBENCH_UID`:`WRATHBENCH_GID` (default 1000), which has
 to be the user that ran wrath-mcp, because each session directory is mode
 0700. The port is published on the host's loopback only. Minimap tiles, if you
-have extracted them, come from `WRATHBENCH_MINIMAP_HOST` (default
-`data/minimap`). Nothing reads a `.env`: the compose file is the whole of the
-configuration.
+have extracted them, come from `WRATHBENCH_MINIMAP_HOST`, an absolute path;
+without it the map draws its grid. Nothing reads a `.env`: the compose file
+and those variables are the whole of the configuration.
 
 A session lists under an id of its own (`mcp-` and 16 hex), never its
 directory's name, which is its token's fingerprint. It lists once its
