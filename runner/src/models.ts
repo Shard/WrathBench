@@ -3201,7 +3201,10 @@ export function planNextJobs(
   return { jobs, held };
 }
 
-/** `planNextJobs` without the explanation — what the supervisor consumes. */
+/**
+ * `planNextJobs` without the `held` explanation: the picks alone, for the
+ * tests. The supervisor calls `planNextJobs` itself (`infra/run-fleet-plan.ts`).
+ */
 export function nextJobs(
   states: readonly ModelState[],
   freeAccounts: readonly string[],
