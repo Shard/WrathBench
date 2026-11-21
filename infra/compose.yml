@@ -17,7 +17,11 @@
 # checks the env var first and only falls back to the parsed file). So the
 # generated .conf files under data/etc are the stock dist files and every
 # setting we care about is pinned here instead.
-
+#
+# The project name. COMPOSE_PROJECT_NAME (from the shell or an --env-file)
+# and `-p` both win over this line, so a second checkout picks its own with
+# an exported COMPOSE_PROJECT_NAME and nothing here changes (infra/README.md,
+# "A second stack on one machine").
 name: wrathbench
 
 x-db-info: &db-info
@@ -137,6 +141,10 @@ services:
       WRATHBENCH_ACCOUNT_PASSWORD: ${WRATHBENCH_ACCOUNT_PASSWORD:-RUNNER}
       # The generated pool: each missing POOLnn is created, its password its name.
       WRATHBENCH_POOL_SIZE: *pool-size
+      # Accounts of the operator's own, comma-separated: each missing one is
+      # created, its password its name, and the worldserver's allowlist below
+      # appends the same list. Unset, nothing (and the key is not passed).
+      WRATHBENCH_EXTRA_ACCOUNTS:
     volumes:
       - ..:/wrathbench
     networks: [wrathbench]
@@ -273,20 +281,25 @@ services:
       # one can still resume; POOL01..POOL04 are the generated pool, which
       # must match x-pool-size above.
       #
+      # WRATHBENCH_EXTRA_ACCOUNTS, when set, is appended (comma-separated), and
+      # bootstrap creates those accounts too: a name of your own needs no edit
+      # here. Unset, the list is exactly the one above.
+      #
       # ADDING ONE IS TWO STEPS. A name here takes effect only when the
-      # worldserver container is next recreated, and until then the module
+      # worldserver container is next recreated (an `up` with the variable
+      # set does that, and reruns bootstrap first), and until then the module
       # answers 403 account_not_permitted for it; and the account must exist in
-      # auth first: `docker compose -f infra/compose.yml run --rm --no-deps
-      # -e WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2
-      # bootstrap`.
-      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4,POOL01,POOL02,POOL03,POOL04"
+      # auth first: `bun wb --local accounts ensure SMOKE2`.
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4,POOL01,POOL02,POOL03,POOL04${WRATHBENCH_EXTRA_ACCOUNTS:+,}${WRATHBENCH_EXTRA_ACCOUNTS:-}"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc
       - ../data/logs:/azerothcore/env/dist/logs
       # AzerothCore server data directory: dbc/ maps/ vmaps/ mmaps/.
-      # Supplied by the operator. Read-only, never in git.
-      - ../data/client:/azerothcore/env/dist/data:ro
+      # Supplied by the operator. Read-only, never in git. Elsewhere than this
+      # checkout's data/client: WRATHBENCH_CLIENT_DIR, an absolute path (a
+      # relative one resolves against infra/, not the shell's directory).
+      - ${WRATHBENCH_CLIENT_DIR:-../data/client}:/azerothcore/env/dist/data:ro
     # Loopback only, for operator inspection.
     # Per docs/DATA-AND-LEGAL.md this must never bind beyond 127.0.0.1.
     ports:

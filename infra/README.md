@@ -59,9 +59,31 @@ stamp the worldserver's `/health` build, export
 `WRATHBENCH_BUILD="$(git describe --tags --always --dirty)"` before building;
 unstamped, it says `unknown`.
 
+The server data directory can live outside the checkout: set
+`WRATHBENCH_CLIENT_DIR` to its absolute path (in `.env`, or the shell) and
+compose mounts that instead of `data/client`. A relative value is resolved
+against `infra/`, not the directory you run compose from.
+
 The first `up` takes a while: the AzerothCore build, then `db-import`
 populating three databases from the AzerothCore SQL dumps. `docker compose -f
 infra/compose.yml down` stops it all and keeps the data ("Where data lives").
+
+### A second stack on one machine
+
+The project is named `wrathbench` in `compose.yml`, so two checkouts share one
+project, and its database volume, unless one picks another name.
+Compose's own `COMPOSE_PROJECT_NAME` wins over the file's `name:` (and `-p`
+over both), so no edit is needed: put `COMPOSE_PROJECT_NAME=wb2` in that
+checkout's `.env` and pass `--env-file .env` to every compose command there
+(`down`, `ps` and `logs` included), or export it in the shell. Prefer that to
+`-p`, which `bun wb --local` and `run-episode.sh` never pass; `bun wb` reads
+`.env` itself. An exported value also renames `compose.viewer.yml`'s project,
+so give that one `-p wrathbench-viewer` in such a shell, and
+`infra/export-world-ids.sh` needs `WRATHBENCH_DB_CONTAINER=<project>-db-1`.
+Two stacks still
+cannot run at the same time: the loopback ports (3724, 8085, 8123) are fixed,
+and both builds tag the same `wrathbench/*` images, so the last `--build`
+wins for both.
 
 ## The game server alone, for an MCP client
 
@@ -69,8 +91,8 @@ To drive a character from an MCP client (Claude Code or any other) rather
 than through the runner, the quickstart's game server is all you need. Name
 the two servers and compose brings up `db`, `db-import` and `bootstrap` with
 them, and leaves out the runner and its image build, ClickHouse and the
-collector. Of the `data/` directories above, only `client`, `etc` and `logs`
-are used.
+collector. Of the `data/` directories above, only `client` (or
+`WRATHBENCH_CLIENT_DIR`), `etc` and `logs` are used.
 
 `compose.yml` does not publish the module's port, because the runner reaches
 it on the compose network. wrath-mcp runs on the host, so publish the port on
@@ -97,11 +119,16 @@ For the account:
   with its name as its password, and all five are in the module's allowlist.
   Give each client its own account; `RUNNER` is the runner's default.
 - **In the allowlist but not created.** The other allowlisted names (`PROBE`,
-  `SHAKEOUT`, `SMOKE2` and the rest) need the `bootstrap` service form in
-  "Bootstrap". Use that form rather than `bun wb --local accounts ensure`,
-  which execs into the `runner` container that this setup does not start.
-- **A name of your own.** It also has to go into `AC_WRATH_BENCH_ACCOUNTS` in
-  `compose.yml`, and then the worldserver has to be recreated.
+  `SHAKEOUT`, `SMOKE2` and the rest) need creating once: `bun wb --local
+  accounts ensure PROBE`, which runs a one-off of the `bootstrap` service and
+  needs only `db` up, or the `bootstrap` service form in "Bootstrap" without
+  Bun on the host.
+- **A name of your own.** Set `WRATHBENCH_EXTRA_ACCOUNTS=ALICE,BOB` in `.env`
+  and run the same `up` again. Compose appends the names to the module's
+  allowlist and recreates the worldserver with it, and bootstrap, which runs
+  first, creates each missing one with its name as its password. A name that
+  is not a letter then up to 15 letters and digits, or is `SPECTATOR` or a
+  `TENANTnn`, fails bootstrap, and then the servers do not start.
 
 wrath-mcp's `mcp/README.md`, "Connect an MCP client", takes it from there. In
 this checkout the stack is the `wrath-mcp/` submodule, and the root's
@@ -230,7 +257,10 @@ before the servers on the quickstart. It does three things, idempotently:
 3. Creates each missing account of the generated pool, `POOL01` to the pool
    size (`WRATHBENCH_POOL_SIZE`), its password its name, and hosted mode's
    tenant pool when `WRATHBENCH_TENANT_POOL_SIZE` is set (docs/RUNBOOK.md,
-   "The account pool").
+   "The account pool"). On the quickstart it also creates each missing name
+   in `WRATHBENCH_EXTRA_ACCOUNTS`, its password its name; compose appends the
+   same names to the module's allowlist. The chart never sets it: there an
+   account of your own goes in `worldserver.accounts`.
 
 The smoke probes run by hand (`bun wb smoke <name>`; `travel.ts` holds a
 session for minutes) use a second account `PROBE` so they never contend with `RUNNER` for the
@@ -239,25 +269,24 @@ one-live-session-per-account limit. Create it, and every extra account
 
     bun wb accounts ensure PROBE SHAKEOUT
 
-That is `bootstrap.ts --accounts-only` in the runner pod (`bun wb --local …` on
-the quickstart). It creates each named account that is missing, with its name
-as its password, and writes nothing else: no realm row, no account that
-already exists. A plain `bootstrap.ts` in the runner pod would re-advertise the
-realm at the file's defaults, because the pod carries none of the Job's realm
-settings; wb refuses the command while the deployed image predates the flag.
-The quickstart without Bun on the host can use the `bootstrap` service instead,
-which runs the whole bootstrap with the named account as the configured one
-(so it also re-upserts the realm row from compose's settings, and resets that
-account's password if it differs):
+That is `bootstrap.ts --accounts-only` in the runner pod. It creates each
+named account that is missing, with its name as its password, and writes
+nothing else: no realm row, no account that already exists. A plain
+`bootstrap.ts` in the runner pod would re-advertise the realm at the file's
+defaults, because the pod carries none of the Job's realm settings; wb refuses
+the command while the deployed image predates the flag. On the quickstart,
+`bun wb --local accounts ensure …` runs the same mode as a one-off of the
+`bootstrap` service, which needs only `db` up, not the runner. Without Bun on
+the host, that is:
 
-    docker compose -f infra/compose.yml run --rm --no-deps \
-      -e WRATHBENCH_ACCOUNT_USER=PROBE -e WRATHBENCH_ACCOUNT_PASSWORD=PROBE \
-      bootstrap
+    docker compose --env-file .env -f infra/compose.yml run --rm --no-deps -T \
+      bootstrap bun infra/bootstrap/bootstrap.ts --accounts-only PROBE
 
-Either is a pure auth-database write, safe on a running server, but the account
-is not usable by the module until it is in the module's allowlist
-(`worldserver.accounts` in the chart's values, `AC_WRATH_BENCH_ACCOUNTS` in
-compose), which is read when the worldserver is recreated.
+It is a pure auth-database write, safe on a running server, but the account is
+not usable by the module until it is in the module's allowlist
+(`worldserver.accounts` in the chart's values; `AC_WRATH_BENCH_ACCOUNTS` in
+compose, which `WRATHBENCH_EXTRA_ACCOUNTS` appends to), which is read when the
+worldserver is recreated.
 
 `bootstrap.ts` writes SQL directly rather than using SOAP or the worldserver
 console. SOAP cannot create the *first* account — `ACSoap.cpp` requires the caller to be

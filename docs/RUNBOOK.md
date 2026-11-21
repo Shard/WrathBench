@@ -1563,7 +1563,7 @@ the plan.
 
 **Gate accounts.** Every account a smoke is bound to must exist in auth and be
 in the module's allowlist — `worldserver.accounts` in the chart's values
-(`AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml` on the quickstart stack),
+(`AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml`, plus `WRATHBENCH_EXTRA_ACCOUNTS`, on the quickstart stack),
 which the module reads **only at worldserver recreate**. A smoke bound to an
 account the running module does not permit gets 403 `account_not_permitted`,
 the gate fails, and no job spawns until it is fixed, so a new gate account is
@@ -1577,12 +1577,11 @@ bun wb accounts ensure SMOKE2
 
 It is `infra/bootstrap/bootstrap.ts --accounts-only` in the runner pod: the
 password is the account's name, an account that exists is left alone, and no
-realm row is written. On the quickstart without Bun, compose's `bootstrap`
-service makes one account by running the whole bootstrap with it as the
-configured account, which also re-upserts the realm row and resets that
-account's password if it differs: `docker compose -f infra/compose.yml run
---rm --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE2 -e
-WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap`.
+realm row is written. On the quickstart, `bun wb --local accounts ensure`
+runs the same mode as a one-off of compose's `bootstrap` service, which needs
+only `db` up (infra/README.md, "Bootstrap", has the form without Bun), and an
+account of the operator's own can instead go in `WRATHBENCH_EXTRA_ACCOUNTS`,
+which both creates it and appends it to the allowlist at the next `up`.
 
 The gate accounts must be their own: an enabled job or campaign pinned to
 one is refused, a gate account in the account pool rejects the config, and

@@ -232,7 +232,14 @@ export const ENTRIES: readonly Entry[] = [
     takes: "<NAME>…",
     summary: "create each named account that is missing (password: its name); nothing else is written",
     requires: "--accounts-only",
-    ...inRunner("bun", BOOTSTRAP, "--accounts-only"),
+    cluster: { place: "runner", argv: ["bun", BOOTSTRAP, "--accounts-only"] },
+    // On the quickstart, a one-off of compose's `bootstrap` service rather
+    // than an exec into `runner`: the same file, with Bun, the repository and
+    // the database's coordinates, and it needs only `db` up, so it works on a
+    // stack that runs the game server alone (infra/README.md). --no-deps
+    // leaves db-import and everything else as it is; --accounts-only reads
+    // none of the service's realm or runner-account settings.
+    local: { place: "host", argv: ["docker", "compose", "-f", COMPOSE_FILE, "run", "--rm", "--no-deps", "-T", "bootstrap", "bun", BOOTSTRAP, "--accounts-only"] },
   },
   {
     group: "accounts",
@@ -550,6 +557,26 @@ function explainMissing(form: Form, opts: Options): void {
   );
 }
 
+/**
+ * When a --local runner command fails, is compose's `runner` container up at
+ * all? A stack brought up for an MCP client alone (infra/README.md, "The game
+ * server alone") never starts it, and compose's own "service is not running"
+ * does not say how to.
+ */
+function explainNoRunner(): void {
+  const ps = Bun.spawnSync(["docker", "compose", "-f", COMPOSE_FILE, "ps", "--status", "running", "-q", "runner"], {
+    cwd: REPO_ROOT,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  if (ps.exitCode !== 0 || ps.stdout.toString().trim() !== "") return;
+  console.error(
+    "wb: under --local this command runs in compose's `runner` container, which is not running. Start it with\n" +
+      `  docker compose --env-file .env -f ${COMPOSE_FILE} up -d --no-deps runner\n` +
+      "(it builds the runner image on first use; --no-deps leaves the game server exactly as it is).",
+  );
+}
+
 /** One `sh -c` in the runner pod, its stdout trimmed; empty when kubectl fails. */
 function podProbe(opts: Options, script: string, ...args: string[]): string {
   return Bun.spawnSync(["kubectl", "-n", opts.namespace, "exec", runnerPod(opts), "--", "sh", "-c", script, "sh", ...args], {
@@ -631,6 +658,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const code = await child.exited;
   // Not after a signal: an interrupted command is not a missing one.
   if (code !== 0 && code < 128 && form?.place === "runner" && parsed.opts.target === "cluster") explainMissing(form, parsed.opts);
+  if (code !== 0 && code < 128 && form?.place === "runner" && parsed.opts.target === "local") explainNoRunner();
   return code;
 }
 

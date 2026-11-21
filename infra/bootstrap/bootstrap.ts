@@ -21,6 +21,11 @@
  * with no `account_access` row, so it is a plain player (security level 0) on
  * every realm. An existing tenant account keeps its password.
  *
+ * With WRATHBENCH_EXTRA_ACCOUNTS set (the quickstart's accounts of the
+ * operator's own, comma-separated; compose appends the same list to the
+ * worldserver's allowlist, and the chart never sets it) the plain run also
+ * creates each of those that is missing, as `--accounts-only` would.
+ *
  * `--accounts-only NAME…` (`bun wb accounts ensure NAME…`) does neither. It
  * creates each named account that does not exist yet, with its own name as its
  * password, and changes nothing else: not the realm rows, not an account that
@@ -415,8 +420,9 @@ const ACCOUNT_NAME = /^[A-Z][A-Z0-9]{0,15}$/;
 
 const USAGE = `usage: bun infra/bootstrap/bootstrap.ts                    the realm row, the configured runner account and the
                                                              generated pool (POOL01… to WRATHBENCH_POOL_SIZE), the eval
-                                                             pool (EVAL01… to WRATHBENCH_EVAL_POOL_SIZE), and
-                                                             hosted mode's tenants (TENANT01… to WRATHBENCH_TENANT_POOL_SIZE)
+                                                             pool (EVAL01… to WRATHBENCH_EVAL_POOL_SIZE), hosted
+                                                             mode's tenants (TENANT01… to WRATHBENCH_TENANT_POOL_SIZE),
+                                                             and the names in WRATHBENCH_EXTRA_ACCOUNTS (comma-separated)
        bun infra/bootstrap/bootstrap.ts ${ACCOUNTS_ONLY} NAME…   create each named account that is missing, password = its name;
                                                              nothing else is written`;
 
@@ -431,14 +437,41 @@ export function parseArgs(argv: readonly string[]): Mode {
   for (const raw of argv.slice(1)) {
     if (raw === "-h" || raw === "--help") return { kind: "help" };
     if (raw.startsWith("-")) return { kind: "error", message: `unknown flag ${raw}` };
-    const name = raw.toUpperCase();
-    if (!ACCOUNT_NAME.test(name)) return { kind: "error", message: `${JSON.stringify(raw)} is not an account name: a letter, then letters and digits, 16 at most` };
-    if (name === "SPECTATOR") return { kind: "error", message: "SPECTATOR is the operator's GM account; infra/spectator-account.ts (bun wb accounts spectator) owns it" };
-    if (isTenantAccountName(name)) return { kind: "error", message: `${name} is a hosted tenant account; only the bootstrap Job creates one, with a password nobody knows, never its name` };
+    const name = harnessAccountName(raw);
+    if (typeof name !== "string") return { kind: "error", message: name.error };
     if (!names.includes(name)) names.push(name);
   }
   if (names.length === 0) return { kind: "error", message: `${ACCOUNTS_ONLY} needs the accounts to create, by name; it has no default` };
   return { kind: "accounts", names };
+}
+
+/**
+ * One name of an account whose password is its name, uppercased, or why it
+ * cannot be one: the rule `--accounts-only` and WRATHBENCH_EXTRA_ACCOUNTS share.
+ */
+function harnessAccountName(raw: string): string | { error: string } {
+  const name = raw.toUpperCase();
+  if (!ACCOUNT_NAME.test(name)) return { error: `${JSON.stringify(raw)} is not an account name: a letter, then letters and digits, 16 at most` };
+  if (name === "SPECTATOR") return { error: "SPECTATOR is the operator's GM account; infra/spectator-account.ts (bun wb accounts spectator) owns it" };
+  if (isTenantAccountName(name)) return { error: `${name} is a hosted tenant account; only the bootstrap Job creates one, with a password nobody knows, never its name` };
+  return name;
+}
+
+/**
+ * WRATHBENCH_EXTRA_ACCOUNTS, the quickstart's accounts of the operator's own:
+ * comma-separated, blanks around a name ignored, uppercased and deduplicated.
+ * Unset or empty is none.
+ */
+export function extraAccountsOf(env: Record<string, string | undefined>): { names: string[] } | { error: string } {
+  const names: string[] = [];
+  for (const part of (env["WRATHBENCH_EXTRA_ACCOUNTS"] ?? "").split(",")) {
+    const raw = part.trim();
+    if (raw === "") continue;
+    const name = harnessAccountName(raw);
+    if (typeof name !== "string") return { error: `WRATHBENCH_EXTRA_ACCOUNTS: ${name.error}` };
+    if (!names.includes(name)) names.push(name);
+  }
+  return { names };
 }
 
 /**
@@ -476,6 +509,11 @@ export async function main(
     console.error(`bootstrap: ${tenants.error}`);
     return 2;
   }
+  const extras = mode.kind === "bootstrap" ? extraAccountsOf(env) : { names: [] };
+  if ("error" in extras) {
+    console.error(`bootstrap: ${extras.error}`);
+    return 2;
+  }
   const sql = await open();
   try {
     if (mode.kind === "accounts") {
@@ -493,6 +531,10 @@ export async function main(
         await ensureNamedAccounts(sql, evalPoolAccountNames(evals.size));
       }
       if (tenants.size > 0) await ensureTenantAccounts(sql, tenantAccountNames(tenants.size));
+      if (extras.names.length > 0) {
+        log(`the extra accounts: ${extras.names.join(", ")}`);
+        await ensureNamedAccounts(sql, extras.names);
+      }
     }
     log("done");
   } finally {
