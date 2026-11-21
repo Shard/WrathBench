@@ -77,16 +77,26 @@ export interface BareSession {
 export function listBareSessions(storeDir: string): BareSession[] {
   const out: BareSession[] = [];
   for (const dir of new SessionStore(storeDir).dirs()) {
-    const name = readSessionFile(dir)?.character?.name;
-    if (typeof name === "string" && name !== "") out.push({ id: bareSessionId(basename(dir)), dir });
+    if (reachedWorld(dir)) out.push({ id: bareSessionId(basename(dir)), dir });
   }
   return out;
 }
 
-/** A bare session's directory by its viewer id, or null when the store holds none by that id. */
+/** Whether a session's record names a character: it entered the world (`listBareSessions`). */
+function reachedWorld(dir: string): boolean {
+  const name = readSessionFile(dir)?.character?.name;
+  return typeof name === "string" && name !== "";
+}
+
+/**
+ * A bare session's directory by its viewer id, or null when the store holds
+ * none by that id. Matched by the directory names' ids, which are memoised,
+ * so only the one match's `session.json` is read.
+ */
 export function bareSessionDir(storeDir: string, id: string): string | null {
   if (!isBareSessionId(id)) return null;
-  return listBareSessions(storeDir).find((s) => s.id === id)?.dir ?? null;
+  const dir = new SessionStore(storeDir).dirs().find((d) => bareSessionId(basename(d)) === id);
+  return dir !== undefined && reachedWorld(dir) ? dir : null;
 }
 
 const attached = new Map<string, string>();

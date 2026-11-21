@@ -42,7 +42,7 @@
  * serves is scoped to a user.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
 import type { SessionFile } from "@wrathbench/mcp/record";
@@ -100,7 +100,7 @@ export function isWithheldFanoutRun(runsDir: string, runId: string): boolean {
 export function bareSessionsOf(runsDir: string): BareSession[] {
   const store = sessionStoreOf(runsDir);
   if (store === null) return [];
-  return listBareSessions(store).filter((s) => runDir(runsDir, s.id) === s.dir);
+  return listBareSessions(store).filter((s) => statSync(join(runsDir, s.id), { throwIfNoEntry: false })?.isDirectory() !== true);
 }
 
 /** A fan-out run's sessions, one per character with a record, in name order; empty for any other run. */

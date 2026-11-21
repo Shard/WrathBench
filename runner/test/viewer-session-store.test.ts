@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionWriter, type SessionCharacter } from "@wrathbench/mcp/record";
 import { createApi, INSPECTOR_BASE } from "../viewer/api";
@@ -305,5 +305,88 @@ describe("the API", () => {
     await get("/api/runs");
     await get(`/api/run/${id}`);
     expect(readdirSync(join(store, FP_A)).sort()).toEqual(before);
+  });
+});
+
+describe("a session being played", () => {
+  test("lists as live off its heartbeat, and a new reading moves its level", async () => {
+    const runs = tempDir("wb-runs-");
+    const store = tempDir("wb-store-");
+    const at = Date.now() - 90_000;
+    const dir = join(store, FP_A);
+    const clock = { now: at };
+    const writer = new SessionWriter({ dir, id: FP_A, stack: { version: "0.0.0-test" }, now: () => clock.now, log: () => {} });
+    writer.open();
+    const first = traceOfReading({ ts: at + 1_000, level: 4, xp: 300, map: 1, x: 10, y: 20, z: 30 });
+    clock.now = at + 1_000;
+    writer.ingest(recordDrain({ trace: first.trace, character: HERO }));
+    const handle = createApi({ runsDir: runs, tilesDir: join(runs, "tiles"), moduleUrl: "http://127.0.0.1:1", groups: { runner: false, evals: false, viewer: true }, sessionStore: store });
+    const listed = (await (await handle(new Request("http://127.0.0.1/api/runs"))).json()) as RunsResponse;
+    expect(listed.runs.map((r) => [r.runId, r.live, r.level])).toEqual([[bareSessionId(FP_A), true, 4]]);
+
+    // The collector's next pass, after the writer wrote on: the heartbeat moved, so the session is read on.
+    const states: Record<string, unknown>[] = [];
+    const sink = {
+      async insert(table: string, batch: readonly unknown[]) {
+        if (table === "states") states.push(...(batch as Record<string, unknown>[]));
+      },
+      async exec() {},
+    };
+    const collector = new Collector({ cfg: readConfig({ runsDir: runs, dataDir: runs, stateDb: ":memory:", sessionStore: store }), sink, offsets: new OffsetStore(":memory:"), log: () => {} });
+    await collector.pass();
+    expect(Math.max(...states.map((s) => Number(s["level"])))).toBe(4);
+    const second = traceOfReading({ ts: at + 30_000, level: 5, xp: 10, map: 1, x: 12, y: 22, z: 30 });
+    clock.now = at + 30_000;
+    writer.ingest(recordDrain({ trace: second.trace, character: HERO }));
+    // Moved even within one clock tick: the heartbeat's mtime is what a pass compares.
+    const later = new Date(Date.now() + 1_000);
+    utimesSync(join(dir, "live.json"), later, later);
+    const again = await collector.pass();
+    expect(again.ingested).toBe(1);
+    expect(Math.max(...states.map((s) => Number(s["level"])))).toBe(5);
+    await writer.close();
+  });
+});
+
+describe("a damaged session", () => {
+  test("names no fingerprint in any error it answers with", async () => {
+    const runs = tempDir("wb-runs-");
+    const store = tempDir("wb-store-");
+    // One session whose closed segments are not zstd, one whose trace this process cannot read.
+    const corrupt = await writeBareSession(store, FP_A, { at: Date.now() - 600_000 });
+    for (const f of readdirSync(join(corrupt, "trace"))) writeFileSync(join(corrupt, "trace", f), "not zstd at all");
+    const locked = await writeBareSession(store, FP_B, { at: Date.now() - 500_000 });
+    chmodSync(join(locked, "trace"), 0o000);
+    try {
+      const handle = createApi({ runsDir: runs, tilesDir: join(runs, "tiles"), moduleUrl: "http://127.0.0.1:1", groups: { runner: false, evals: false, viewer: true }, sessionStore: store });
+      const all = "from=0&to=9999999999999";
+      const paths = (id: string): string[] => [
+        "/api/runs",
+        "/api/results",
+        `/api/run/${id}`,
+        `/api/run/${id}/trace`,
+        `/api/run/${id}/track`,
+        `/api/run/${id}/entries`,
+        `/api/character/${id}`,
+        `${INSPECTOR_BASE}/sessions`,
+        `${INSPECTOR_BASE}/sessions/${id}`,
+        `${INSPECTOR_BASE}/sessions/${id}/rows/trace?${all}`,
+        `${INSPECTOR_BASE}/sessions/${id}/rows/calls?${all}`,
+      ];
+      const listed = (await (await handle(new Request("http://127.0.0.1/api/runs"))).json()) as RunsResponse;
+      expect(listed.runs.map((r) => r.runId).sort()).toEqual([bareSessionId(FP_A), bareSessionId(FP_B)].sort());
+      for (const p of [...paths(bareSessionId(FP_A)), ...paths(bareSessionId(FP_B))]) {
+        let text: string;
+        try {
+          text = await (await handle(new Request(`http://127.0.0.1${p}`))).text();
+        } catch (err) {
+          // What serve.ts answers a throw with: the error's message.
+          text = err instanceof Error ? err.message : String(err);
+        }
+        expect({ p, leaks: text.includes(FP_A) || text.includes(FP_B) }).toEqual({ p, leaks: false });
+      }
+    } finally {
+      chmodSync(join(locked, "trace"), 0o755);
+    }
   });
 });
