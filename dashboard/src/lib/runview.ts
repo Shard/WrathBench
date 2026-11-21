@@ -108,6 +108,15 @@ export function xpChartModel(
   return { points, bands, t0: start, t1, yMax };
 }
 
+/**
+ * Whether a run has a model side: a model, its tokens and its cost. A session
+ * read from a wrath-mcp store (`RunRow.source`) has the stack's record alone,
+ * so the run page draws none of the cards that would read as zeros and dashes.
+ */
+export function hasModelSide(run: { source?: "store" }): boolean {
+  return run.source !== "store";
+}
+
 /** What `XpChart` is drawn from: the samples, their window, and the seams. */
 export interface RunChartInput {
   states: ChartSample[];

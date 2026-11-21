@@ -98,7 +98,7 @@ import {
   writeExpandPref,
   type ExpandPreset,
 } from "../lib/feedview";
-import { atBottom, chartClock, contextHint, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
+import { atBottom, chartClock, contextHint, hasModelSide, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 import { partyHref, partyReplayHref } from "../lib/party";
@@ -1059,52 +1059,54 @@ export default function RunDetail() {
                     attempts are a pane under the milestones, closed until opened.
                   */}
                   <div class="cards">
-                    <div class="card">
-                      <div class="k">model</div>
-                      <div class="v">
-                        <ModelIcon model={run().model} />
-                        {/* The roster row this run's model belongs to, when it is on the roster:
-                            a run records a model string, never the name that scheduled it, so
-                            the server matches it (`rosterName` on the detail). */}
-                        <Show when={run().model} fallback="—">
-                          {(full) => (
-                            <span title={full()}>
-                              <Show when={linkable(feeds.info.latest, "/models") ? detail()?.rosterName : undefined} fallback={modelDisplay(full())}>
-                                {(name) => <A href={modelsHref(name())}>{modelDisplay(full())}</A>}
-                              </Show>
-                            </span>
-                          )}
-                        </Show>
-                      </div>
-                      <div class="sub">
-                        {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
-                        {/* The world it played on, a world per eval's id; nothing for the shared one. */}
-                        <Show when={run().world !== undefined && run().world !== "shared" ? run().world : undefined}>
-                          {(w) => <span class="mono" title="world"> · {w()}</span>}
-                        </Show>
-                        <Show when={d().camera === true}>
-                          <span title="a camera followed this run; it changes nothing about the run"> · camera</span>
-                        </Show>
-                      </div>
-                      {/* The id the provider actually served, plus the CLI that
-                          drove it: `sonnet` is a roster alias the Claude Code CLI
-                          resolves at launch, and this is where the run says to what. */}
-                      <Show when={resolvedLabel(run().model, run().resolvedModel) ?? run().cliVersion}>
-                        <div class="sub">
-                          <Show when={resolvedLabel(run().model, run().resolvedModel)}>
-                            {(id) => <span title={id()}>served as {modelDisplay(id())}</span>}
-                          </Show>
-                          <Show when={run().cliVersion}>
-                            {(v) => (
-                              <>
-                                <Show when={resolvedLabel(run().model, run().resolvedModel)}> · </Show>
-                                cli {v()}
-                              </>
+                    <Show when={hasModelSide(run())}>
+                      <div class="card">
+                        <div class="k">model</div>
+                        <div class="v">
+                          <ModelIcon model={run().model} />
+                          {/* The roster row this run's model belongs to, when it is on the roster:
+                              a run records a model string, never the name that scheduled it, so
+                              the server matches it (`rosterName` on the detail). */}
+                          <Show when={run().model} fallback="—">
+                            {(full) => (
+                              <span title={full()}>
+                                <Show when={linkable(feeds.info.latest, "/models") ? detail()?.rosterName : undefined} fallback={modelDisplay(full())}>
+                                  {(name) => <A href={modelsHref(name())}>{modelDisplay(full())}</A>}
+                                </Show>
+                              </span>
                             )}
                           </Show>
                         </div>
-                      </Show>
-                    </div>
+                        <div class="sub">
+                          {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
+                          {/* The world it played on, a world per eval's id; nothing for the shared one. */}
+                          <Show when={run().world !== undefined && run().world !== "shared" ? run().world : undefined}>
+                            {(w) => <span class="mono" title="world"> · {w()}</span>}
+                          </Show>
+                          <Show when={d().camera === true}>
+                            <span title="a camera followed this run; it changes nothing about the run"> · camera</span>
+                          </Show>
+                        </div>
+                        {/* The id the provider actually served, plus the CLI that
+                            drove it: `sonnet` is a roster alias the Claude Code CLI
+                            resolves at launch, and this is where the run says to what. */}
+                        <Show when={resolvedLabel(run().model, run().resolvedModel) ?? run().cliVersion}>
+                          <div class="sub">
+                            <Show when={resolvedLabel(run().model, run().resolvedModel)}>
+                              {(id) => <span title={id()}>served as {modelDisplay(id())}</span>}
+                            </Show>
+                            <Show when={run().cliVersion}>
+                              {(v) => (
+                                <>
+                                  <Show when={resolvedLabel(run().model, run().resolvedModel)}> · </Show>
+                                  cli {v()}
+                                </>
+                              )}
+                            </Show>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
                     <div class="card">
                       <div class="k">character</div>
                       <div class="v">
@@ -1241,18 +1243,20 @@ export default function RunDetail() {
                         </Show>
                       </ChartCard>
                     </Show>
-                    <div class="card">
-                      <div class="k">
-                        context / total tokens
-                        <InfoHint label="how the tokens were counted" text={tokenHint(detail(), tokens()?.source)} />
+                    <Show when={hasModelSide(run())}>
+                      <div class="card">
+                        <div class="k">
+                          context / total tokens
+                          <InfoHint label="how the tokens were counted" text={tokenHint(detail(), tokens()?.source)} />
+                        </div>
+                        <div class="v mono" title={contextHint(tokens())}>
+                          {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
+                        </div>
+                        <div class="sub">
+                          {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns · {tpsShort(detail())}
+                        </div>
                       </div>
-                      <div class="v mono" title={contextHint(tokens())}>
-                        {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
-                      </div>
-                      <div class="sub">
-                        {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns · {tpsShort(detail())}
-                      </div>
-                    </div>
+                    </Show>
                     <div class="card">
                       <div class="k">playtime</div>
                       <div class="v mono">{fmtDuration(playtime())}</div>
@@ -1262,22 +1266,24 @@ export default function RunDetail() {
                         {total()} entries
                       </div>
                     </div>
-                    <div class="card">
-                      <div class="k">tokens in / out</div>
-                      <div class="v mono">
-                        {fmtTokens(tokens()?.promptTokens ?? null)} / {fmtTokens(tokens()?.completionTokens ?? null)}
+                    <Show when={hasModelSide(run())}>
+                      <div class="card">
+                        <div class="k">tokens in / out</div>
+                        <div class="v mono">
+                          {fmtTokens(tokens()?.promptTokens ?? null)} / {fmtTokens(tokens()?.completionTokens ?? null)}
+                        </div>
+                        <div class="sub">
+                          cache r/w {fmtTokens(tokens()?.cacheReadTokens ?? null)} /{" "}
+                          {fmtTokens(tokens()?.cacheWriteTokens ?? null)}
+                        </div>
                       </div>
-                      <div class="sub">
-                        cache r/w {fmtTokens(tokens()?.cacheReadTokens ?? null)} /{" "}
-                        {fmtTokens(tokens()?.cacheWriteTokens ?? null)}
-                      </div>
-                    </div>
-                    {/*
-                      Cost sits with the token cards because it is the same
-                      measurement read in another unit. One card, the actual
-                      as its headline where there is one (`CostCard`).
-                    */}
-                    <CostCard reading={runCostReading(detail()?.cost)} />
+                      {/*
+                        Cost sits with the token cards because it is the same
+                        measurement read in another unit. One card, the actual
+                        as its headline where there is one (`CostCard`).
+                      */}
+                      <CostCard reading={runCostReading(detail()?.cost)} />
+                    </Show>
                   </div>
 
                   {/* The model's own notes, under the figures about the run. Absent for a run with none. */}

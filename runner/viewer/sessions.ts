@@ -85,6 +85,17 @@ export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
 }
 
 /**
+ * A store session's segments (`RunRow.source`): it has no trajectory to mark
+ * them, so its one segment is its record's own span, opened when it started
+ * and closed when it ended (or was abandoned, `closeBareSession`), the span
+ * the run page's timeline draws. Open while it is still being written; none
+ * when the record names no start.
+ */
+export function recordSegments(run: { startedAt: number | null; endedAt: number | null }): ActiveSegment[] {
+  return run.startedAt === null ? [] : [{ start: run.startedAt, end: run.endedAt }];
+}
+
+/**
  * Cumulative active time: the sum of the segments, with an open one closed at
  * `now` for a live run and at the last entry otherwise.
  *

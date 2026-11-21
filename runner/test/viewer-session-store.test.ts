@@ -433,6 +433,87 @@ describe("a session's end", () => {
 
   test("a run is never closed by the rule, only a store session's id is", () => {
     const row = { runId: "run-20261121-120000", terminationReason: null, endedAt: 5, startedAt: 1, mtime: null, live: false };
-    expect(closeBareSession({ ...row }, Date.now())).toEqual(row);
+    // Strict: a run's row gains no key at all, not even an undefined `source`.
+    expect(closeBareSession({ ...row }, Date.now())).toStrictEqual(row);
+  });
+});
+
+describe("a session's model side and time", () => {
+  type Detail = {
+    run: { source?: string };
+    playtimeMs: number | null;
+    sessions: { start: number; end: number | null }[];
+  };
+
+  /** The listing's row, the runs page's results row and the run page's detail for `fp`, plus `/api/runs` whole. */
+  async function readAll(store: string, fp: string, runs = tempDir("wb-runs-")) {
+    const handle = createApi({ runsDir: runs, tilesDir: join(runs, "tiles"), moduleUrl: "http://127.0.0.1:1", groups: { runner: false, evals: false, viewer: true }, sessionStore: store });
+    const get = async <T,>(path: string): Promise<T> => (await (await handle(new Request(`http://127.0.0.1${path}`))).json()) as T;
+    const id = bareSessionId(fp);
+    const listing = await get<RunsResponse>("/api/runs");
+    const results = await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1&harness=all");
+    return {
+      listing,
+      results,
+      listed: listing.runs.find((r) => r.runId === id)!,
+      result: results.runs.find((r) => r.runId === id)!,
+      detail: await get<Detail>(`/api/run/${id}`),
+      get,
+    };
+  }
+
+  test("a store session's row says so, and its playtime is its record's span on every page", async () => {
+    const store = tempDir("wb-store-");
+    const at = Date.now() - 10 * 60_000;
+    await writeBareSession(store, FP_A, { at });
+    const { listed, result, detail } = await readAll(store, FP_A);
+    expect(listed.source).toBe("store");
+    expect(detail.run.source).toBe("store");
+    // Opened at `at`, closed two minutes later (`writeBareSession`): the span the timeline draws.
+    expect(detail.sessions).toEqual([{ start: at, end: at + 120_000 }]);
+    expect(detail.playtimeMs).toBe(120_000);
+    expect(listed.playtimeMs).toBe(120_000);
+    expect(result.playtimeMs).toBe(120_000);
+    expect(result.sessions).toEqual(detail.sessions);
+    // No model side: nothing the runs list would show as a figure.
+    expect([listed.model, listed.tokens, listed.cost, listed.modelResponses]).toEqual([null, null, null, null]);
+    expect([result.model, result.tokens, result.actualCost, result.expectedCost, result.modelResponses]).toEqual([null, null, null, null, null]);
+  });
+
+  test("an abandoned session's playtime closes at its last heartbeat", async () => {
+    const store = tempDir("wb-store-");
+    const at = Date.now() - 30 * 60_000;
+    const dir = await writeBareSession(store, FP_A, { at, open: true });
+    const quiet = new Date(Date.now() - 20 * 60_000);
+    utimesSync(join(dir, "live.json"), quiet, quiet);
+    const { listed, detail } = await readAll(store, FP_A);
+    expect(detail.sessions).toEqual([{ start: at, end: quiet.getTime() }]);
+    expect(detail.playtimeMs).toBe(quiet.getTime() - at);
+    expect(listed.playtimeMs).toBe(quiet.getTime() - at);
+  });
+
+  test("a session being written is charged up to now", async () => {
+    const store = tempDir("wb-store-");
+    const at = Date.now() - 60_000;
+    await writeBareSession(store, FP_A, { at, open: true });
+    const { detail } = await readAll(store, FP_A);
+    expect(detail.sessions).toEqual([{ start: at, end: null }]);
+    expect(detail.playtimeMs!).toBeGreaterThanOrEqual(60_000);
+  });
+
+  test("a run beside the store carries no source", async () => {
+    const store = tempDir("wb-store-");
+    const runs = tempDir("wb-runs-");
+    await writeBareSession(store, FP_A, { at: Date.now() - 10 * 60_000 });
+    const runId = "run-20261121-120000";
+    mkdirSync(join(runs, runId));
+    writeFileSync(join(runs, runId, "meta.json"), JSON.stringify({ runId, startedAt: Date.now() - 60_000, config: {} }));
+    writeFileSync(join(runs, runId, "trajectory.jsonl"), JSON.stringify({ t: "meta", ts: Date.now() - 60_000 }) + "\n");
+    const { listing, results, get } = await readAll(store, FP_A, runs);
+    const row = listing.runs.find((r) => r.runId === runId)!;
+    expect(row).toBeDefined();
+    expect("source" in row).toBe(false);
+    expect("source" in results.runs.find((r) => r.runId === runId)!).toBe(false);
+    expect("source" in (await get<Detail>(`/api/run/${runId}`)).run).toBe(false);
   });
 });
