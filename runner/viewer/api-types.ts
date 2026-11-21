@@ -515,6 +515,13 @@ export interface RunRow {
   mtime: number | null;
   bytes: number | null;
   live: boolean;
+  /**
+   * `store` on a session a standalone wrath-mcp recorded, read from the
+   * session store beside the runs (`runner/src/session-store.ts`): it has the
+   * stack's record and no model side, so no model, tokens, cost or turns, and
+   * its time is its record's span (`recordSegments`). Absent on every run.
+   */
+  source?: "store";
   error?: string;
 }
 

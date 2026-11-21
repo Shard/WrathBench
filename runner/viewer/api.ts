@@ -143,7 +143,7 @@ import {
   tileNotModified,
   tileValidators,
 } from "./tiles";
-import { playtimeMs, segmentsFrom } from "./sessions";
+import { playtimeMs, recordSegments, segmentsFrom } from "./sessions";
 import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
 
 /**
@@ -1224,6 +1224,15 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /**
+   * A store session's playtime, which has no trajectory totals to sum: its
+   * record's span (`recordSegments`), the same one its run page serves. Null
+   * on any other row without totals.
+   */
+  function storePlaytime(row: RunRow, now: number): number | null {
+    return row.source === "store" ? playtimeMs(recordSegments(row), { lastTs: row.endedAt, live: row.live, now }) : null;
+  }
+
+  /**
    * The listing facts a `ResultRun` carries: playtime, tokens, and the cost.
    *
    * `runCost` is the listing's own, over the same memoised totals, so no page
@@ -1284,7 +1293,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         resultRunOf(
           row,
           states.map(statePointOf),
-          totals?.segments ?? [],
+          totals?.segments ?? (row.source === "store" ? recordSegments(row) : []),
           totals === null
             ? null
             : {
@@ -1293,7 +1302,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
                 modelResponses: totals.modelResponses,
               },
           totals === null
-            ? null
+            ? row.source === "store"
+              ? { playtimeMs: storePlaytime(row, now), tokens: null, actualCost: null, expectedCost: null }
+              : null
             : listingFacts(row, totals, now),
           totals?.areas ?? null,
           totals?.achievements ?? null,
@@ -1586,7 +1597,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       lastTs: totals?.lastTs ?? null,
       playtimeMs:
         totals === null
-          ? null
+          ? storePlaytime(row, Date.now())
           : playtimeMs(totals.segments, {
               lastTs: totals.lastTs,
               live: row.live,
@@ -2030,7 +2041,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * degenerate view asks `/api/character/<id>` for it.
        */
       const character = whole !== null && whole.attempts > 1 ? whole : null;
-      const sessions = segmentsFrom(marks);
+      // A store session has no trajectory to mark its sessions: its record's span is its one.
+      const sessions = run.source === "store" ? recordSegments(run) : segmentsFrom(marks);
       const states = await statesOfRun(runId);
       /*
        * A party member's own records (`party-marks.ts`), off the tail just

@@ -527,10 +527,14 @@ export const BARE_ABANDONED = "abandoned";
  * reads as `abandoned` at its last heartbeat. Decided on each read, against
  * `now`, because a stored row never learns that its writer stopped; a writer
  * that resumes the session moves the heartbeat and it reads as live again.
- * Any other row is returned as it was.
+ * Both row homes pass every row through here, so it is also where a session's
+ * row is stamped as the store's (`RunRow.source`). Any other row is returned
+ * as it was.
  */
-export function closeBareSession<T extends Pick<RunRow, "runId" | "terminationReason" | "endedAt" | "startedAt" | "mtime" | "live">>(row: T, now: number): T {
-  if (!isBareSessionId(row.runId) || row.terminationReason !== null) return row;
+export function closeBareSession<T extends Pick<RunRow, "runId" | "terminationReason" | "endedAt" | "startedAt" | "mtime" | "live" | "source">>(row: T, now: number): T {
+  if (!isBareSessionId(row.runId)) return row;
+  row.source = "store";
+  if (row.terminationReason !== null) return row;
   if (row.endedAt !== null) row.terminationReason = BARE_ENDED;
   else if (row.mtime === null || now - row.mtime >= LIVE_WINDOW_MS) {
     row.terminationReason = BARE_ABANDONED;

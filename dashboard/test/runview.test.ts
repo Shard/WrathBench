@@ -11,7 +11,8 @@
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../../runner/viewer/api-types";
 import { createMemo, createRoot, createSignal } from "solid-js";
-import { atBottom, chartClock, runChartInput, xpChartModel } from "../src/lib/runview";
+import { playtimeMs, recordSegments } from "../../runner/viewer/sessions";
+import { atBottom, chartClock, chartWindowMs, hasModelSide, runChartInput, xpChartModel } from "../src/lib/runview";
 
 function s(ts: number, level: number | null, xp: number | null): StatePoint {
   return { ts, level, xp, map: null, x: null, y: null, z: null, eventCount: null, lastSeq: null, turn: null };
@@ -146,11 +147,41 @@ describe("runChartInput", () => {
     expect([m.t0, m.t1]).toEqual([0, 90 * 60_000]);
   });
 
+  test("a store session is drawn over its record's span, the timeline's, not 0:00 to 0:00", () => {
+    // `recordSegments`: one segment, the record's open to its close; playtime its length.
+    const span = 9 * 60_000 + 39_000;
+    const record = recordSegments({ startedAt: T0, endedAt: T0 + span });
+    expect(record).toEqual([{ start: T0, end: T0 + span }]);
+    const served = playtimeMs(record, { lastTs: null, live: false, now: T0 + DAY });
+    expect(served).toBe(span);
+    const run = { source: "store" as const, live: false, comparability: null, startedAt: T0, endedAt: T0 + span };
+    const c = runChartInput([s(T0, 3, 410), s(T0 + 5 * 60_000, 3, 820)], run, record, served, T0 + DAY);
+    // The window runs to the record's end, past the last sample at five minutes.
+    const m = xpChartModel(c.states, { startedAt: c.startedAt, endedAt: c.endedAt, episodeMs: chartWindowMs(run, served), now: c.now });
+    expect([m.t0, m.t1]).toEqual([0, span]);
+    expect(c.endedAt).toBe(span);
+  });
+
+  test("chartWindowMs: a run's episode budget, an ended store session's span, a live one's nothing", () => {
+    const budget = { budget: { episodeMs: 90 * 60_000 } };
+    expect(chartWindowMs({ live: false, comparability: budget }, 30_000)).toBe(90 * 60_000);
+    expect(chartWindowMs({ live: false, comparability: null }, 30_000)).toBeNull();
+    expect(chartWindowMs({ source: "store", live: false, comparability: null }, 579_000)).toBe(579_000);
+    expect(chartWindowMs({ source: "store", live: true, comparability: null }, 579_000)).toBeNull();
+  });
+
   test("a run served without sessions keeps the wall clock", () => {
     const c = runChartInput(states, { startedAt: T0, endedAt: null, live: true }, undefined, null, RESUME + HOUR);
     expect(c.states).toEqual(states);
     expect([c.startedAt, c.endedAt, c.now]).toEqual([T0, null, RESUME + HOUR]);
     expect(c.seams).toEqual([]);
+  });
+});
+
+describe("hasModelSide", () => {
+  test("a store session has none, so its run page draws no model, token or cost card; every run has one", () => {
+    expect(hasModelSide({ source: "store" })).toBe(false);
+    expect(hasModelSide({})).toBe(true);
   });
 });
 

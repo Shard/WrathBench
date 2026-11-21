@@ -251,9 +251,10 @@ describe("the run page's sidebar order", () => {
     const char = at('<div class="k">character</div>');
     expect(side).toBeLessThan(model);
     expect(model).toBeLessThan(char);
-    // Nothing between the sidebar's start and the model but a comment and the grid.
+    // Nothing between the sidebar's start and the model but a comment, the grid and the
+    // gate a store session's page drops it by (it has no model side, `hasModelSide`).
     expect(src.slice(side, model).replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\s+/g, " ").trim()).toBe(
-      '<aside class="runview-side"> <div class="cards"> <div class="card">',
+      '<aside class="runview-side"> <div class="cards"> <Show when={hasModelSide(run())}> <div class="card">',
     );
     expect(at('<h2 class="section">milestones</h2>')).toBeLessThan(at("<CharacterTotalsPanel"));
     // The video's chapter list is a pane under the milestones too, not a table under the player.
