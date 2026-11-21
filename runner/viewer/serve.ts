@@ -5,7 +5,8 @@
  *   bun runner/viewer/serve.ts            # from the repo root, on the host
  *
  * This file is only the bind: environment in, `createApi` out. The routes and
- * everything they are allowed to serve live in `api.ts`.
+ * everything they are allowed to serve live in `api.ts` and the route
+ * modules it mounts (`api-*.ts`).
  *
  * Loopback by default. Trajectory content carries game-derived text; the
  * DATA-AND-LEGAL.md posture is no public endpoint and no distribution, so a

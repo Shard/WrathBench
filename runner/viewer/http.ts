@@ -9,3 +9,11 @@ export function json(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
+
+export function notFound(msg: string): Response {
+  return json({ error: msg }, 404);
+}
+
+export function withheld(): Response {
+  return json({ error: "withheld in public mode" }, 403);
+}

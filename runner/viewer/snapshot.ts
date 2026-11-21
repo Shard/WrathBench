@@ -678,7 +678,7 @@ export function createRenderer(
     const results = projectResults(keepResults(await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1")));
     const ladders: [string, ResultsResponse][] = [];
     // `probing` has no ladder (operator, 2026-08-29; the reason is at
-    // `LADDER_EPISODES` in api.ts), so no `ladder-probing.json` is published.
+    // `LADDER_EPISODES` in api-evals.ts), so no `ladder-probing.json` is published.
     // None at all with the evals group off, nor its other two aggregates.
     if (groups.evals) {
       for (const ep of EPISODE_IDS.filter((id) => id !== "probing" && !isTaskEpisode(id))) {

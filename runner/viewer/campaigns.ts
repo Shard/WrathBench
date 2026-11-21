@@ -46,7 +46,7 @@ export interface CampaignsRoster {
   models: readonly { name: string; model: string; effort?: string | undefined; compactWindow?: string | undefined; driver?: string | undefined }[];
 }
 
-/** The page's whole body, minus the envelope `api.ts` adds. */
+/** The page's whole body, minus the envelope `api-evals.ts` adds. */
 export interface CampaignsView {
   campaigns: CampaignView[];
   refused: { key: string; reason: string }[];

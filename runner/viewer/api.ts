@@ -2,8 +2,10 @@
  * The viewer's read-only HTTP surface, as a handler you can call directly.
  *
  * Split out of `serve.ts` so the routes can be tested without binding a port,
- * and so the boundary is one file an auditor can read end to end. Two rules
- * hold everywhere below:
+ * and so the boundary is one handler an auditor can read end to end: this
+ * file and the route modules it mounts (`api-fleet.ts`, `api-evals.ts`,
+ * `api-run.ts`, over `api-tails.ts` and `api-context.ts`). Two rules hold
+ * everywhere below:
  *
  * - **Nothing writes.** Databases open readonly, the runs directory is only
  *   ever listed and read, and there is no route that accepts a body.
@@ -21,110 +23,61 @@
  * (docs/PUBLIC-DASHBOARD.md, "The live viewer is not a public service").
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { json } from "./http";
+import { json, notFound, withheld } from "./http";
 import { harnessSeries } from "../src/comparability";
 import type { SiteSettings } from "../src/site-settings";
 import { siteInfoField } from "./site-info";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { EPISODES, EPISODE_IDS, EPISODE_LIST, hasBoard, isTaskEpisode } from "../src/episodes";
 import { HARNESSES, isNotAModelRun } from "../src/config";
-import { badEvidenceReason, countedRun } from "../src/lapse";
 import type {
   ClipsResponse,
   HighlightResponse,
   ApiInfoResponse,
-  CampaignsResponse,
-  DungeonsResponse,
   CostFigure,
   E90TokenProfileView,
-  EntrySummary,
-  EpisodeIdView,
-  EpisodesResponse,
-  ResultsResponse,
   ResultRun,
   CharacterResponse,
   CharacterStatePoint,
-  FleetAccountView,
-  FleetJobView,
-  FleetPausedView,
-  FleetRunFacts,
-  FleetResponse,
-  FleetServerView,
-  FleetSessionView,
   HarnessView,
-  ModelsResponse,
-  RunDetailResponse,
   RunListRow,
   RunRow,
   RunsResponse,
   StateItemsRow,
   StatePoint,
   TokenTotals,
-  TrackResponse,
 } from "./api-types";
-import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
-import { scriptedReferenceLines } from "./scripted-reference";
-import { ENTRIES_WINDOW } from "./public-keys";
-import { campaignsView } from "./campaigns";
-import { modelsResponse, readFleetRoster, rosterNameOf } from "./models";
-import { modelStates, outstandingWork, type RunFact } from "../src/models";
+import { resultRunOf } from "./results";
+import { readFleetRoster } from "./models";
+import type { RunFact } from "../src/models";
 import { positionsFromStore } from "./positions";
-import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
-import { creatureNamesOf, partyDetailOf } from "./party-marks";
-import { bossKillsOf, isBossKill } from "./timeline-marks";
-import { boardsOf, DEADMINES_BOSSES, DUNGEON_BOARD_VERSION } from "./dungeons";
-import { dungeonMarksOf } from "./dungeon-marks";
 import {
-  projectCampaigns,
-  projectDungeons,
   projectCharacterResponse,
-  projectEntries,
-  projectEpisodes,
-  projectFleet,
-  projectRunFacts,
   projectInfo,
-  projectModels,
   projectPositions,
-  projectResults,
-  projectRunDetail,
-  projectClips,
   projectHighlight,
   projectRuns,
-  projectTools,
-  projectTrack,
-  projectTraceIndex,
-  projectTraceSegment,
-  projectNearby,
 } from "./public-projection";
-import { NEARBY_SPAN_MS } from "@wrathbench/inspector/codec/nearby";
-import { scrubPathsText } from "./scrub-paths";
 import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
-import { SEG_MS } from "@wrathbench/inspector/codec/trace";
-import { closedWindowsMemo, createInspectorApi, nearbyWindow, traceIndex, traceSegment } from "@wrathbench/inspector";
-import { fanoutSession, fanoutSessions, isFanoutRun, isWithheldFanoutRun, runSession, runsSource } from "./runs-source";
+import { closedWindowsMemo, createInspectorApi } from "@wrathbench/inspector";
+import { fanoutSessions, isFanoutRun, isWithheldFanoutRun, runSession, runsSource } from "./runs-source";
 import { attachSessionStore, isBareSessionId } from "../src/session-store";
-import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
-import { latestFrameResponse } from "./camera-live";
-import { CLIP_CONTENT_TYPE, CLIP_MEDIA_ROUTE, clipMedia, clipsView, fileResponse, hadCamera, pickHighlight, type ClipMediaKind } from "./camera";
-import { readMoves, readScratchpad, readStateItems, readStates } from "./runs";
+import { fanoutLead, fanoutReadings } from "../src/run-reader";
+import { clipsView, pickHighlight } from "./camera";
+import { readStateItems, readStates } from "./runs";
 import { isValidRunId, LIVE_WINDOW_MS, readRun, runDir } from "../src/run-list";
 import {
   factOf,
-  moveViewsOf,
   runRowOf,
   statePointOf,
   storeFor,
   totalsOf,
   withFanoutLeads,
-  STORE_LAG_MS,
-  type RunListingRow,
   type RunStore,
 } from "./clickhouse";
-import { isArchiveDir } from "../src/archive-dir";
 import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import { createAdminApi } from "./admin-api";
@@ -144,79 +97,32 @@ import {
   tileNotModified,
   tileValidators,
 } from "./tiles";
-import { playtimeMs, recordSegments, segmentsFrom } from "../src/sessions";
-import { TrajectoryTail } from "./tail";
+import { playtimeMs, recordSegments } from "../src/sessions";
 import { RunTotalsScanner, type RunTotals } from "../src/run-totals";
+import type { ApiContext } from "./api-context";
+import { createFleetApi, sharedStore, STORE_SHARE_MS } from "./api-fleet";
+import { createTailCache } from "./api-tails";
+import { createEvalsApi } from "./api-evals";
+import { createRunApi } from "./api-run";
 
-/**
- * How often the live tail rescans, and the biggest entries window a client may
- * ask for: the run page's own window (`ENTRIES_WINDOW`), which the publisher
- * reads through this handler too, so a smaller cap would cut the published
- * window and leave a hole in the private page's "load earlier".
- */
-export const POLL_MS = 1000;
-export const WINDOW_MAX = ENTRIES_WINDOW;
-
-/** The five-man bosses known by entry: elites by rank, so the rank alone does not say (`isBossKill`). */
-const NAMED_BOSSES: ReadonlySet<number> = new Set(DEADMINES_BOSSES);
-
-/**
- * Where the `/entries` window that shows the moment `at` begins: the window
- * of `limit` entries with the last entry at or before `at` a quarter of the
- * way in, so a reader who jumped to a time has a little of what led up to it
- * and most of what came after. Clamped to the run, so a time before the first
- * entry is the first window and one past the last is the tail.
- */
-export function entriesWindowAt(entries: readonly { ts: number }[], at: number, limit: number): number {
-  let lo = 0;
-  let hi = entries.length - 1;
-  let found = 0;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (entries[mid]!.ts <= at) {
-      found = mid;
-      lo = mid + 1;
-    } else hi = mid - 1;
-  }
-  return Math.max(0, Math.min(found - Math.floor(limit / 4), entries.length - limit));
-}
-
-/**
- * How long a run's entry index (`TrajectoryTail`) outlives its last reader.
- * Ten minutes covers an operator flipping between a handful of run pages; past
- * it the next visit re-reads the file, which is what the first visit cost.
- */
-export const TAIL_IDLE_MS = 10 * 60_000;
-
-/**
- * How many trajectory bytes the tails nobody is streaming may index between
- * them. Measured on the fleet's runs, a tail holds roughly a third of its
- * file's size as live objects (~200 MB for a 500–800 MB freeplay trajectory),
- * so a GiB of trajectory is a few hundred MB of heap in a 3 GiB pod, beside
- * whatever the open streams pin.
- */
-export const TAIL_CACHE_BYTES = 1024 ** 3;
-
-/**
- * How long a terminated run's files must have been quiet before its track is
- * treated as final. Far past the collector's five-second poll, so the store
- * holds the last of its states and moves before anything is kept.
- */
-export const TRACK_SETTLE_MS = 5 * 60_000;
-
-/** How many settled runs' track cores are kept; each is one replay's points, inventory patches and moves. */
-export const TRACK_MEMO_RUNS = 6;
-
-type TrackCore = Pick<TrackResponse, "points" | "inv" | "moves">;
-
-/** Whether a request's `If-None-Match` names this ETag (weak comparison, as RFC 9110 has for it). */
-function ifNoneMatch(req: Request, etag: string): boolean {
-  const header = req.headers.get("if-none-match");
-  if (header === null) return false;
-  if (header.trim() === "*") return true;
-  const bare = (t: string): string => t.trim().replace(/^W\//, "");
-  return header.split(",").some((t) => bare(t) === bare(etag));
-}
+/* The fleet readers moved to `api-fleet.ts`; re-exported here unchanged. */
+export {
+  coldRuns,
+  fleetRunIds,
+  heldAccounts,
+  readFleet,
+  readServerState,
+  SERVER_PHASES,
+  sharedStore,
+  STORE_SHARE_MS,
+  withoutRuns,
+} from "./api-fleet";
+/* The tail cache moved to `api-tails.ts`; its bounds are re-exported here unchanged. */
+export { TAIL_CACHE_BYTES, TAIL_IDLE_MS } from "./api-tails";
+/* The evals builders moved to `api-evals.ts`; re-exported here unchanged. */
+export { withoutEvalFields } from "./api-evals";
+/* The run routes moved to `api-run.ts`; their constants and helpers are re-exported here unchanged. */
+export { entriesWindowAt, POLL_MS, streamStart, TRACK_MEMO_RUNS, TRACK_SETTLE_MS, WINDOW_MAX } from "./api-run";
 
 export interface ApiOptions {
   runsDir: string;
@@ -326,26 +232,8 @@ function worldserverIdentity(moduleUrl: string): () => Promise<ApiInfoResponse["
   };
 }
 
-/** The one shared scoreability verdict (`badEvidenceReason`), applied to a projected result row. */
-function badEvidenceOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | "terminationReason">): string | null {
-  return badEvidenceReason({
-    live: r.live === true,
-    paused: r.pauseReason !== null,
-    modelResponses: r.modelResponses,
-    terminationReason: r.terminationReason,
-  });
-}
-
-function notFound(msg: string): Response {
-  return json({ error: msg }, 404);
-}
-
 /** Where the inspector's API is mounted on a private handle. */
 export const INSPECTOR_BASE = "/api/inspector";
-
-function withheld(): Response {
-  return json({ error: "withheld in public mode" }, 403);
-}
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -476,323 +364,6 @@ export function harnessSeriesCensus(rows: readonly { harnessVersion: string | nu
       const [bm, bn] = b.series.split(".").map((n) => Number.parseInt(n, 10));
       return (bm! - am!) || (bn! - an!);
     });
-}
-
-/**
- * How stale a run's files may be and still be read as holding its account.
- *
- * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runner/src/run-list.ts`'s
- * `LIVE_WINDOW_MS` (120s): the job's run has to be resolved the same way the
- * account guard and `--status` resolve it, or the dashboard would disagree with
- * the supervisor about which run a job holds near the boundary. The constant
- * is duplicated rather than imported because importing from `infra/` would drag
- * its repo-root and process assumptions into the viewer.
- */
-const ACCOUNT_HELD_MS = 3 * 60_000;
-
-/**
- * Age of the most recently touched artefact of a run — either file, whichever.
- *
- * Deliberately narrower than `archive.ts`'s four-file version: an account is
- * held only while the run is still WRITING, and `meta.json` and `scratchpad.md`
- * are written once at launch, so counting them would keep an account held for
- * minutes after the writer died.
- */
-function runActivityAge(dir: string, now: number): number | undefined {
-  let newest: number | undefined;
-  // `run.sqlite-wal`: a 0.5 run's database writes land there until a checkpoint;
-  // a v1 run's session writer rewrites `live.json` on every tick.
-  for (const name of ["trajectory.jsonl", "run.sqlite", "run.sqlite-wal", "session/live.json"]) {
-    try {
-      const m = statSync(join(dir, name)).mtimeMs;
-      if (newest === undefined || m > newest) newest = m;
-    } catch {
-      // not written yet
-    }
-  }
-  return newest === undefined ? undefined : now - newest;
-}
-
-/** The account a run was launched against, straight off its own meta.json. */
-function accountOfRun(dir: string): string | undefined {
-  try {
-    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as {
-      config?: { account?: unknown };
-    };
-    const a = meta.config?.account;
-    // No recorded account means no claim: `accountHeldBy` skips such a run too,
-    // rather than guessing that it took the default one.
-    return typeof a === "string" && a.length > 0 ? a : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Which run holds each account right now, by the same inference `--status`
- * makes (`accountHeldBy` in `run-roster.ts`): a run whose files are warm, with
- * no termination row and no pause row. A paused run has already given its
- * session back, so it holds nothing — the job reads as idle, not as driving a
- * run it has finished with.
- *
- * The map is keyed on account, not on job: a hand-started run, or a previous
- * cycle that has not gone cold, holds the account just as hard as a fleet one
- * and will show under the job that shares it. That is the honest reading of
- * "what has this account" — `--status` says the same, adding only that the
- * holder is "not fleet-managed" when the job's own process is gone.
- *
- * The prefilter is the point. `/api/fleet` polls every five seconds and a runs
- * directory holds hundreds of finished runs; only the handful whose files were
- * touched inside the window are opened. Where `accountHeldBy` takes the first
- * readdir match, this takes the freshest, which is the honest answer when a
- * crashed run and its successor briefly overlap.
- *
- * `cold` goes one step earlier, for a caller with the derived store: the runs
- * the store already knows cannot hold an account (`coldRuns`), which are not
- * even stat'ed. Two stats per run directory on the fleet's iSCSI volume were
- * 55-74 ms a poll over ~1,900 directories, nearly all of them long finished.
- * A directory the store has no row for is never in it: that is a run in its
- * first seconds, exactly when its job holds the account.
- */
-export function heldAccounts(
-  runsDir: string,
-  now = Date.now(),
-  cold: ReadonlySet<string> = new Set(),
-): Map<string, { runId: string; model: string | null }> {
-  const out = new Map<string, { runId: string; model: string | null; age: number }>();
-  let names: string[];
-  try {
-    names = readdirSync(runsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name) && !cold.has(d.name))
-      .map((d) => d.name);
-  } catch {
-    return new Map();
-  }
-  for (const id of names) {
-    const dir = join(runsDir, id);
-    const age = runActivityAge(dir, now);
-    if (age === undefined || age >= ACCOUNT_HELD_MS) continue;
-    const account = accountOfRun(dir);
-    if (account === undefined) continue;
-    const row = readRun(runsDir, id, now);
-    if (row.terminationReason !== null || row.pauseReason !== null) continue;
-    const key = account.toUpperCase();
-    const prev = out.get(key);
-    if (prev === undefined || age < prev.age) out.set(key, { runId: id, model: row.model, age });
-  }
-  return new Map([...out].map(([k, v]) => [k, { runId: v.runId, model: v.model }]));
-}
-
-/**
- * The run ids the store already knows hold no account: terminated (final; a
- * resume clears a pause, never a termination), or with a trajectory the store
- * last saw older than the hold window plus its own lag. The pause column is
- * not read: the files, not the store, answer whether a warm run is paused.
- *
- * The one lag this admits: a run paused for longer than that window and then
- * resumed in place (same run id) is ruled out until the collector's next pass
- * records its fresh trajectory, so its job shows no run for up to one
- * collector poll (five seconds, more when the collector is behind). The map's
- * feed has the same prefilter and the same delay.
- */
-export function coldRuns(rows: readonly RunListingRow[], now: number): Set<string> {
-  const out = new Set<string>();
-  for (const r of rows) {
-    const quiet = r.trajectory_mtime !== 0 && now - r.trajectory_mtime >= ACCOUNT_HELD_MS + STORE_LAG_MS;
-    if (r.termination_reason.length > 0 || quiet) out.add(r.run_id);
-  }
-  return out;
-}
-
-/**
- * How long one corpus-wide store read stands in for the next.
- *
- * Seconds, and few: the fleet page polls `/api/fleet` every five seconds per
- * tab, the map polls `/api/positions` as often, and `/api/models`, `/api/runs`
- * and the per-run routes ask for the same handful of whole-table reads
- * (`runRows`, `totalsRows`, the latest readings), each of them megabytes of
- * JSON out of ClickHouse. Every caller inside the window gets the one read in
- * flight (or just finished), so N tabs and M routes cost one query. Nothing is
- * kept past it: a row can be at most this much older than the store, which is
- * itself a five-second collector poll behind the files.
- */
-export const STORE_SHARE_MS = 3_000;
-
-/**
- * The store, with its corpus-wide reads shared over `windowMs`: the pattern
- * `allResultRuns` holds a listing build on. The pending promise is what is
- * kept, so a burst shares one read; the window is stamped when the read
- * settles; a read that fails is not kept. Per-run reads pass through
- * untouched. Callers must not mutate what a shared read returns: every reader
- * in the window holds the same arrays.
- */
-export function sharedStore(store: RunStore, windowMs = STORE_SHARE_MS): RunStore {
-  const share = <T>(read: () => Promise<T>): (() => Promise<T>) => {
-    let held: { at: number; value: Promise<T> } | undefined;
-    return () => {
-      if (held === undefined || Date.now() - held.at >= windowMs) {
-        const value = read();
-        held = { at: Date.now(), value };
-        value.then(
-          () => {
-            if (held?.value === value) held = { at: Date.now(), value };
-          },
-          () => {
-            if (held?.value === value) held = undefined;
-          },
-        );
-      }
-      return held.value;
-    };
-  };
-  return {
-    runRows: share(() => store.runRows()),
-    runRow: (id) => store.runRow(id),
-    totalsRows: share(() => store.totalsRows()),
-    totalsRow: (id) => store.totalsRow(id),
-    latestStates: share(() => store.latestStates()),
-    latestReadings: share(() => store.latestReadings()),
-    latestState: (id) => store.latestState(id),
-    runListing: share(() => store.runListing()),
-    factRows: share(() => store.factRows()),
-    stateRows: (id) => store.stateRows(id),
-    stateItemRows: (id) => store.stateItemRows(id),
-    stateRowsByRun: (ids) => store.stateRowsByRun(ids),
-    moveRows: (id) => store.moveRows(id),
-  };
-}
-
-/** Keyed by the union, so the compiler holds this set to `FleetServerView["phase"]` both ways. */
-const SERVER_PHASE_KEYS: Record<FleetServerView["phase"], true> = {
-  running: true,
-  draining: true,
-  waiting: true,
-  verifying: true,
-  resuming: true,
-  failed: true,
-};
-export const SERVER_PHASES: ReadonlySet<string> = new Set(Object.keys(SERVER_PHASE_KEYS));
-
-/**
- * Read the deploy script's phase file. Absent (or unreadable, or nonsense) is
- * `running` with nothing to say: the only state a page can safely assume.
- */
-export function readServerState(runsDir: string, now = Date.now()): FleetServerView {
-  const rest: FleetServerView = { phase: "running", since: now, build: "", detail: "", updatedAt: now };
-  const path = join(runsDir, "server-state.json");
-  if (!existsSync(path)) return rest;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<FleetServerView>;
-    if (typeof raw.phase !== "string" || !SERVER_PHASES.has(raw.phase)) return rest;
-    return {
-      phase: raw.phase,
-      since: typeof raw.since === "number" ? raw.since : now,
-      build: typeof raw.build === "string" ? raw.build : "",
-      detail: typeof raw.detail === "string" ? raw.detail : "",
-      updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
-    };
-  } catch {
-    return rest;
-  }
-}
-
-/** Read the fleet supervisor's published state. Absent is normal, not an error. */
-export function readFleet(runsDir: string, now = Date.now(), cold: ReadonlySet<string> = new Set()): FleetResponse {
-  const path = join(runsDir, "fleet-state.json");
-  const server = readServerState(runsDir, now);
-  const absent: FleetResponse = { present: false, server, jobs: [], accounts: [], paused: [], ended: [], now };
-  if (!existsSync(path)) return absent;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as {
-      fleetPid?: number;
-      startedAt?: number;
-      heartbeatAt?: number;
-      containerized?: boolean;
-      stamp?: string;
-      configLoadedAt?: number;
-      configRejected?: { since: number; error: string; mtime: number };
-      preflight?: FleetResponse["preflight"];
-      jobs?: Record<string, Omit<FleetJobView, "name" | "accountClass" | "runId" | "model">>;
-      accounts?: { pinned?: Record<string, string>; pool?: Record<string, string | null> };
-      credentials?: FleetResponse["credentials"];
-      worlds?: FleetResponse["worlds"];
-      worldsHold?: string;
-      paused?: FleetPausedView[];
-      ended?: FleetResponse["ended"];
-      session?: FleetSessionView;
-    };
-    const held = heldAccounts(runsDir, now, cold);
-    const classOf = new Map<string, FleetAccountView["class"]>();
-    for (const a of Object.keys(raw.accounts?.pool ?? {})) classOf.set(a.toUpperCase(), "pool");
-    /*
-     * Jobs as the supervisor wrote them — the job (ref, tier, account, source)
-     * and its process — plus what only the runs directory knows: the run
-     * holding the job's account. `rosterPath`/`jsonl`/`log` stay behind: they
-     * are paths on the supervisor's side of the mount.
-     */
-    const jobs: FleetJobView[] = Object.entries(raw.jobs ?? {})
-      .map(([name, j]) => {
-        const run = held.get(j.account.toUpperCase());
-        return {
-          name,
-          ref: j.ref,
-          // Unknown stays unknown: the supervisor writes null rather than a guess.
-          episode: j.episode ?? null,
-          account: j.account,
-          accountClass: classOf.get(j.account.toUpperCase()) ?? "pinned",
-          source: j.source,
-          ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
-          ...(j.resuming !== undefined ? { resuming: j.resuming } : {}),
-          models: Array.isArray(j.models) ? j.models : [],
-          runId: run?.runId ?? null,
-          model: run?.model ?? null,
-          pid: j.pid,
-          spawnedAt: j.spawnedAt,
-          exitCode: j.exitCode ?? null,
-          draining: j.draining === true,
-          alive: j.alive === true,
-        };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
-    /*
-     * Accounts, pinned then the pool, with what holds each: the idle rows of
-     * the fleet table. A pinned account the pool also lists (the coexistence
-     * rule) is the pool's, so `pinned` is filtered against the pool rather
-     * than concatenated with it.
-     */
-    const accounts: FleetAccountView[] = [
-      ...Object.entries(raw.accounts?.pinned ?? {})
-        .filter(([a]) => !classOf.has(a.toUpperCase()))
-        .map(([account, job]) => ({ account, class: "pinned" as const, job })),
-      ...Object.entries(raw.accounts?.pool ?? {}).map(([account, job]) => ({ account, class: "pool" as const, job })),
-    ];
-    // `fleetConfig` is deliberately not forwarded: it is a host path, and the
-    // API says what the fleet is doing, not where this machine keeps things.
-    // The rejection's file mtime stays behind for the same reason.
-    return {
-      present: true,
-      server,
-      fleetPid: raw.fleetPid,
-      startedAt: raw.startedAt,
-      heartbeatAt: raw.heartbeatAt,
-      containerized: raw.containerized,
-      stamp: raw.stamp,
-      ...(raw.configLoadedAt !== undefined ? { configLoadedAt: raw.configLoadedAt } : {}),
-      ...(raw.configRejected !== undefined ? { configRejected: { since: raw.configRejected.since, error: raw.configRejected.error } } : {}),
-      ...(raw.preflight !== undefined ? { preflight: raw.preflight } : {}),
-      jobs,
-      accounts,
-      paused: Array.isArray(raw.paused) ? raw.paused : [],
-      ended: Array.isArray(raw.ended) ? raw.ended : [],
-      ...(raw.session !== undefined ? { session: raw.session } : {}),
-      ...(Array.isArray(raw.credentials) ? { credentials: raw.credentials } : {}),
-      ...(Array.isArray(raw.worlds) ? { worlds: raw.worlds } : {}),
-      ...(typeof raw.worldsHold === "string" ? { worldsHold: raw.worldsHold } : {}),
-      now,
-    };
-  } catch {
-    return absent;
-  }
 }
 
 /**
@@ -936,89 +507,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
   /** A run's closed trace windows, memoised per run (`closedWindowsMemo`). */
   const traceSegs = (runId: string, now: number) => closedWindows(`${runsDir}\0${runId}`, runSession(runsDir, runId), now);
 
-  /**
-   * One tail per run, shared by every reader; scans are serialised per run.
-   *
-   * Held least-recently-used first (a `Map` keeps insertion order, and an
-   * access re-inserts), and bounded: a tail is the whole entry index of a
-   * trajectory, ~200 MB of live objects for a big freeplay run, so a viewer
-   * that kept every run it was ever asked about would OOM its pod after a
-   * dozen. See `evictTails` for what is dropped and when.
-   */
-  const tails = new Map<string, TrajectoryTail>();
-  const scans = new Map<string, Promise<EntrySummary[]>>();
-  const tailUsedAt = new Map<string, number>();
-  /** Settled runs' track cores, least-recently-used first (`trackCoreOf`). */
-  const trackCores = new Map<string, TrackCore>();
-  /** Open SSE streams per run: a pinned tail is never evicted. */
-  const tailPins = new Map<string, number>();
-
-  function tailFor(runId: string, dir: string): TrajectoryTail {
-    let t = tails.get(runId);
-    if (t === undefined) t = new TrajectoryTail(join(dir, "trajectory.jsonl"));
-    else tails.delete(runId);
-    tails.set(runId, t);
-    tailUsedAt.set(runId, Date.now());
-    evictTails(runId);
-    return t;
-  }
-
-  function pin(runId: string, tail: TrajectoryTail): void {
-    // Re-seat the tail this stream reads, in case it was dropped between the
-    // route's `tailFor` and here; a stream must read the tail the map holds.
-    if (tails.get(runId) !== tail) tails.set(runId, tail);
-    tailPins.set(runId, (tailPins.get(runId) ?? 0) + 1);
-  }
-
-  function unpin(runId: string): void {
-    const n = (tailPins.get(runId) ?? 0) - 1;
-    if (n > 0) tailPins.set(runId, n);
-    else tailPins.delete(runId);
-    tailUsedAt.set(runId, Date.now());
-  }
-
-  /** Forget one run's tail and everything keyed to it. */
-  function dropTail(runId: string): void {
-    tails.delete(runId);
-    scans.delete(runId);
-    tailUsedAt.delete(runId);
-    trackCores.delete(runId);
-  }
-
-  /**
-   * Drop the tails nobody is reading. A tail with an open stream is kept
-   * whatever its age or size — that is a live run being watched, and dropping
-   * it would cost the next tick a whole-file re-read. Of the rest, newest use
-   * first, a tail goes when it has sat unasked for `TAIL_IDLE_MS`, or once the
-   * trajectories the kept ones index pass `TAIL_CACHE_BYTES` between them.
-   * The one just asked for (`keep`) always stays, even alone over budget.
-   *
-   * Run on every request rather than on a timer: a viewer with any tab open is
-   * polled every few seconds, and one with none is not paying for anything
-   * but the memory it already holds. What eviction costs is the next visit's
-   * re-read of that file, which is what the first visit paid.
-   */
-  function evictTails(keep: string | null = null): void {
-    const now = Date.now();
-    let bytes = 0;
-    for (const id of [...tails.keys()].reverse()) {
-      if ((tailPins.get(id) ?? 0) > 0) continue;
-      bytes += tails.get(id)!.size;
-      if (id === keep) continue;
-      if (now - (tailUsedAt.get(id) ?? 0) >= TAIL_IDLE_MS || bytes > TAIL_CACHE_BYTES) dropTail(id);
-    }
-  }
-
-  /** Serialise scans: two concurrent readers must not both consume the same bytes. */
-  function scan(runId: string, tail: TrajectoryTail): Promise<EntrySummary[]> {
-    const prev = scans.get(runId) ?? Promise.resolve([] as EntrySummary[]);
-    const next = prev.then(
-      () => tail.scan(),
-      () => tail.scan(),
-    );
-    scans.set(runId, next);
-    return next;
-  }
+  /** The runs' tails and settled track cores, and forgetting them (`api-tails.ts`). */
+  const tails = createTailCache();
+  const { evictTails, release, cachedRuns } = tails;
 
   /**
    * Every run row, mapped and ordered as the listing wants it.
@@ -1380,25 +871,6 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /**
-   * The `?episode=` filter, shared by `/api/results` and `/api/ladder`.
-   *
-   * Defaults to `e90` — the scored tier — because a chart that quietly mixes a
-   * ninety-minute run with a six-hour one is the thing the tiers exist to stop.
-   * `all` is a first-class value, not an escape hatch: the episodes page counts
-   * every tier from one call, and a filtered page has to be able to say how
-   * many rows the filter dropped. An unknown value is a 400 rather than a
-   * silent fallback to the default, which would show the wrong data under the
-   * right heading. With the evals group off there are no tiers to default
-   * to, and an absent filter is `all`.
-   */
-  function episodeFilter(url: URL): EpisodeIdView | "all" | null {
-    const raw = url.searchParams.get("episode");
-    if (raw === null) return groups.evals ? "e90" : "all";
-    if (raw === "all") return "all";
-    return (EPISODE_IDS as readonly string[]).includes(raw) ? (raw as EpisodeIdView) : null;
-  }
-
-  /**
    * The optional `?harness=` filter, shared by `/api/results`,
    * `/api/ladder` and `/api/models`. Defaults to `all`: the harness is a tag
    * on the row, not a partition, so a chart shows both loops unless asked
@@ -1408,163 +880,6 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const raw = url.searchParams.get("harness");
     if (raw === null || raw === "all") return "all";
     return (HARNESSES as readonly string[]).includes(raw) ? (raw as HarnessView) : null;
-  }
-
-  /**
-   * The episodes a ladder is offered for.
-   *
-   * `probing` is not one (operator, 2026-08-29). A probe campaign is a
-   * commissioned sweep whose cells vary on purpose, so a table that ranks its
-   * runs against each other ranks the sweep, not the models — and unlike the
-   * scored ids there is no group for a row to belong to. Probe runs stay
-   * visible everywhere runs are listed; they just have no ladder. It is only
-   * the ladder that loses the id: `/api/results?episode=probing` still answers,
-   * and `EPISODE_IDS` is untouched.
-   */
-  // Nor are the task episodes (operator, 2026-11-14): a staged level-20
-  // dungeon run would top a level ladder, and their runs are read on the
-  // dungeon board instead.
-  const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing" && !isTaskEpisode(id));
-
-  async function resultsResponse(url: URL, ladder = false): Promise<Response> {
-    const episode = episodeFilter(url);
-    if (episode === null) {
-      return json({ error: `unknown episode; one of: ${[...EPISODE_IDS, "all"].join(", ")}` }, 400);
-    }
-    if (ladder && episode !== "all" && !LADDER_EPISODES.includes(episode)) {
-      return json({ error: `no ladder for that episode; one of: ${LADDER_EPISODES.join(", ")}` }, 400);
-    }
-    const harness = harnessFilter(url);
-    if (harness === null) {
-      return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
-    }
-    /*
-     * An override is a membership question, and only a scored id has a
-     * membership to lose: `freeplay` pins nothing but its own name and its
-     * unscored reason, so a freeplay run given its own leash has not fallen
-     * out of any group — the same reason `docs/EPISODES.md` gives for never
-     * reporting a probe run as overridden. The freeplay ladder is the whole
-     * active field (operator, 2026-08-29), so it holds them.
-     */
-    const unscoredLadder =
-      ladder && episode !== "all" && episode !== null && !EPISODES[episode].scored;
-    const includeOverrides = url.searchParams.get("includeOverrides") === "1" || unscoredLadder;
-    const everything = await resultRuns();
-    const all = harness === "all" ? everything : everything.filter((r) => r.harness === harness);
-    /*
-     * Filtering to a tier means filtering to its *members*: stamped
-     * with the id and not overridden. A derived label is countable but is not
-     * membership, and an overridden run is only shown when asked for by name.
-     */
-    const tiered =
-      episode === "all"
-        ? all
-        : all.filter(
-            (r) =>
-              r.episode === episode &&
-              r.episodeSource === "stamped" &&
-              (includeOverrides || !r.episodeOverride),
-          );
-    // With evals off the rows are a listing, not a comparison: no ladder condition rides on them.
-    const runs = groups.evals ? tiered : tiered.map(withoutEvalFields);
-    const body: ResultsResponse = {
-      runs,
-      episode,
-      harness,
-      includeOverrides,
-      filteredOut: everything.length - runs.length,
-      overridesExcluded:
-        episode === "all" || includeOverrides
-          ? 0
-          : all.filter(
-              (r) => r.episode === episode && r.episodeSource === "stamped" && r.episodeOverride,
-            ).length,
-      now: Date.now(),
-      // The ladder's reference line, as numbers, off every run: the reference
-      // run is withheld from a public handle's rows, and this is all of it
-      // that is published (`scripted-reference.ts`).
-      ...(ladder ? { scriptedReference: scriptedReferenceLines(await allResultRuns(), episode) } : {}),
-    };
-    return pub(body, projectResults);
-  }
-
-  async function episodesResponse(): Promise<Response> {
-    /*
-     * Every run here is a run that happened: a launch that produced no model
-     * response is archived by the runner as it terminates, so the counts below
-     * cannot be padded by launches that never got off the ground.
-     */
-    const all = await resultRuns();
-    const body: EpisodesResponse = {
-      episodes: EPISODE_LIST.map((tier) => {
-        // A run whose driver is not a model ran an episode's shape and is no
-        // member of its group: the scripted reference is a labelled line, not
-        // a run of the tier (docs/METHODOLOGY.md, "Scoring").
-        const tagged = all.filter((r) => r.episode === tier.id && !isNotAModelRun(r));
-        const stamped = tagged.filter((r) => r.episodeSource === "stamped");
-        // An attempt that never became an episode is not a member of the tier's
-        // group — the same predicate the ladder filters on, so this
-        // count and that chart hold the same runs.
-        const notEvidence = (r: (typeof stamped)[number]): boolean => badEvidenceOf(r) !== null;
-        const lapsed = (r: (typeof stamped)[number]): boolean => r.terminationReason !== null && notEvidence(r);
-        return {
-          ...tier,
-          members: stamped.filter((r) => !r.episodeOverride && !notEvidence(r)).length,
-          lapsed: stamped.filter((r) => !r.episodeOverride && lapsed(r)).length,
-          overrides: stamped.filter((r) => r.episodeOverride).length,
-          derived: tagged.length - stamped.length,
-        };
-      }),
-      untiered: all.filter((r) => r.episode === null).length,
-      now: Date.now(),
-    };
-    return pub(body, projectEpisodes);
-  }
-
-  /**
-   * The probe lane, one entry per published campaign version
-   * (`campaignsView`), with every refusal the campaign parser made.
-   *
-   * The published definitions and the store row come from the config store,
-   * read exactly as the supervisor reads them; the runs from the run
-   * directory, matched by their own stamps. `counted` is the scheduler's own
-   * definition (`countedRun`, lapse.ts) over a result row — never `unscored`, which is non-null for
-   * every probe.
-   */
-  /**
-   * The dungeon board (`dungeons.ts`): the runs of each Deadmines id with a
-   * table (`hasBoard`, `deadmines-solo` alone), read with each character's
-   * milestones. Off the handle's own listing, so a run a public handle
-   * withholds is in no row.
-   */
-  async function dungeonsResponse(): Promise<Response> {
-    const all = (await resultRuns()).filter((r) => hasBoard(r.episode) && r.episodeSource === "stamped");
-    const runs = await Promise.all(
-      all.map(async (run) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character }) })),
-    );
-    // The same table on either handle: the one-agent id's runs are the only
-    // fan-out runs a public handle lists (`resultRuns`).
-    const boards = boardsOf(runs);
-    const body: DungeonsResponse = { version: DUNGEON_BOARD_VERSION, boards, now: Date.now() };
-    return pub(body, projectDungeons);
-  }
-
-  async function campaignsResponse(): Promise<Response> {
-    const all = await resultRuns();
-    const roster = fleetRoster();
-    const view = campaignsView(all, roster, (r) =>
-      countedRun({
-        extra: r.extra,
-        episodeOverride: r.episodeOverride,
-        notAModel: isNotAModelRun(r),
-        live: r.live === true,
-        paused: r.pauseReason !== null,
-        modelResponses: r.modelResponses,
-        terminationReason: r.terminationReason,
-      }),
-    );
-    const body: CampaignsResponse = { now: Date.now(), campaigns: view.campaigns, refused: view.refused };
-    return pub(body, projectCampaigns);
   }
 
   async function listWithTotals(): Promise<RunListRow[]> {
@@ -1608,143 +923,54 @@ export function createApi(opts: ApiOptions): ApiHandle {
     };
   }
 
-  /**
-   * The fleet table's figures for the runs it shows: every run a job is
-   * driving, and the paused run each idle account's row names (`fleetRunIds`)
-   * — a handful, where the runs index is every run on disk and the
-   * supervisor's paused list can be long. Point reads per run (`runRowOne`,
-   * `runTotals`), never the corpus-wide ones: on the five-second fleet poll
-   * those would be megabytes a tick that only `/api/runs` and `/api/models`
-   * ever shared. `runRowOne` falls back to the run's own files only for a run
-   * the store has not seen yet, its first seconds, whose files the account
-   * scan (`heldAccounts`) has just opened anyway. A run that cannot be read
-   * is left out, and its row shows dashes, as a run missing from the index did.
-   *
-   * Shared over `STORE_SHARE_MS` for the same set of runs, as the corpus-wide
-   * reads are: every open tab's status badge polls this route, so N tabs cost
-   * one set of reads a window rather than N.
-   */
-  function fleetRunFacts(f: FleetResponse, now: number): Promise<FleetRunFacts[]> {
-    const ids = fleetRunIds(f).filter(isValidRunId);
-    const key = [...ids].sort().join("\n");
-    if (factsHeld !== undefined && factsHeld.key === key && Date.now() - factsHeld.at < STORE_SHARE_MS) return factsHeld.value;
-    const value = readFleetRunFacts(ids, now);
-    const held = { at: Date.now(), key, value };
-    factsHeld = held;
-    value.catch(() => {
-      if (factsHeld === held) factsHeld = undefined;
-    });
-    return value;
-  }
-  let factsHeld: { at: number; key: string; value: Promise<FleetRunFacts[]> } | undefined;
-
-  async function readFleetRunFacts(ids: readonly string[], now: number): Promise<FleetRunFacts[]> {
-    const facts = await Promise.all(
-      ids.map(async (id) => {
-        try {
-          const [raw, totals] = await Promise.all([runRowOne(id, now), runTotals(id)]);
-          return projectRunFacts(listRowOf(raw, totals));
-        } catch {
-          return null;
-        }
-      }),
-    );
-    return facts.filter((x): x is FleetRunFacts => x !== null);
-  }
-
   function dashboardIndex(): Response {
     if (dashboardDir === undefined) return unbuilt();
     return staticFile(dashboardDir, "index.html") ?? unbuilt();
   }
 
   /**
-   * Whether a run can no longer change underneath its track: terminated, and
-   * its files quiet for `TRACK_SETTLE_MS`, which is what lets the collector —
-   * a five-second poll — have stored the last of its states and moves.
+   * What the route modules share with this closure (`api-context.ts`): the
+   * store, the projection helper and the listing reads, so every module reads
+   * the one memo rather than a copy of it.
    */
-  function isSettled(run: RunRow): boolean {
-    return run.terminationReason !== null && run.mtime !== null && Date.now() - run.mtime >= TRACK_SETTLE_MS;
-  }
-
-  /**
-   * The store-derived half of a run's track: its points with the inventory as
-   * patches, and its moves. For a live run, read fresh every time. For a
-   * settled one, read once and kept (`trackCores`): those rows cannot change
-   * any more, and reading them is the expensive part of the route — a long
-   * run's whole `items` history out of the store, hundreds of milliseconds and
-   * tens of MB a call. Nothing invalidates an entry but eviction: the LRU
-   * bound, `release`, and the run's tail being dropped.
+  const ctx: ApiContext = {
+    runsDir,
+    store,
+    publicMode,
+    groups,
+    pub,
+    fleetRoster,
+    harnessFilter,
+    runRows,
+    allTotals,
+    withResolved,
+    runFacts,
+    unpublishedRuns,
+    runRowOne,
+    runTotals,
+    listRowOf,
+    resultRuns,
+    allResultRuns,
+    struckFor,
+    publicText,
+    tails,
+    runRowAndLead,
+    statesOfRun,
+    stateItemsOfRun,
+    withheldRun,
+    closedWindows,
+    traceSegs,
+  };
+  // A group that is off is absent: its module is not built (`groups.ts`).
+  const fleetApi = groups.runner ? createFleetApi(ctx) : null;
+  /*
+   * The evals group's builders (`api-evals.ts`), built whatever the groups say:
+   * `/api/results` is the viewer's and shares its builder with the ladder. The
+   * group gate at the top of `api` is what keeps the evals routes absent.
    */
-  async function trackCoreOf(runId: string, settled: boolean): Promise<TrackCore> {
-    const held = settled ? trackCores.get(runId) : undefined;
-    if (held !== undefined) {
-      trackCores.delete(runId);
-      trackCores.set(runId, held);
-      return held;
-    }
-    const [states, items, moveRows] = await Promise.all([
-      statesOfRun(runId),
-      stateItemsOfRun(runId),
-      store.moveRows(runId),
-    ]);
-    const core: TrackCore = {
-      ...trackFrom(states, items),
-      // Same fallback as the track's own points: a run whose moves the
-      // collector has not reached yet still draws its intentions.
-      moves: moveRows.length > 0 ? moveViewsOf(moveRows) : await readMoves(runsDir, runId),
-    };
-    if (settled) {
-      trackCores.set(runId, core);
-      while (trackCores.size > TRACK_MEMO_RUNS) trackCores.delete(trackCores.keys().next().value!);
-    }
-    return core;
-  }
-
-  /**
-   * A fan-out character's replay feed, under its session id
-   * (`<run-id>~<Character>`, `runs-source.ts`): `/track`, `/trace` and
-   * `/trace/<t0>`, read as a run's are, off the character's own record and
-   * the store's rows under that id (the collector keys them so). Its run's
-   * row answers the rest: the model, the harness, whether the track can still
-   * change. A public handle answers none: a fan-out run it publishes (a
-   * `deadmines-solo` attempt) is published without its characters, so no
-   * character's id is public. No travel marks: those are the
-   * trajectory's, and the run's one trajectory is no one character's.
-   */
-  async function fanoutCharacterRoute(id: string, parent: string, character: string, rest: string): Promise<Response> {
-    const session = runDir(runsDir, parent) === null ? null : fanoutSession(runsDir, id);
-    if (session === null || publicMode) return notFound(`no such run: ${id}`);
-    if (rest === "/trace") return pub(await traceIndex(session, Date.now()), projectTraceIndex, [parent]);
-    const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
-    if (traceMatch !== null) {
-      const t0 = Number(traceMatch[1]);
-      if (!Number.isSafeInteger(t0) || t0 % SEG_MS !== 0) return notFound("no such trace window");
-      const found = await traceSegment(session, t0, Date.now());
-      if (found === null) return notFound("no trace in that window");
-      return new Response(JSON.stringify(found.segment), {
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": found.closed ? "public, max-age=31536000, immutable" : "no-store",
-        },
-      });
-    }
-    if (rest !== "/track") return notFound(`no such route for ${id}`);
-    const run = await runRowOne(parent);
-    const core = await trackCoreOf(id, isSettled(run));
-    const trace = await closedWindows(`${runsDir}\0${id}`, session, Date.now());
-    const body: TrackResponse = {
-      runId: id,
-      characterName: character,
-      model: run.model,
-      harnessVersion: run.harnessVersion,
-      points: core.points,
-      inv: core.inv,
-      moves: core.moves,
-      travel: [],
-      ...(trace === null ? {} : { trace }),
-    };
-    return pub(body, projectTrack, [parent]);
-  }
+  const { resultsResponse, episodesResponse, dungeonsResponse, campaignsResponse } = createEvalsApi(ctx);
+  // A run's own routes, the viewer group's.
+  const runRoute = createRunApi(ctx);
 
   async function api(req: Request, url: URL, path: string): Promise<Response | null> {
     // A group that is off has no routes: its paths are unknown paths here.
@@ -1798,8 +1024,6 @@ export function createApi(opts: ApiOptions): ApiHandle {
       return pub({ positions }, projectPositions, positions.map((p) => p.runId));
     }
     if (path === "/api/episodes") return await episodesResponse();
-    /* The model-facing tool list, off `toolsFor` at request time (`tools.ts`); harness text only. */
-    if (path === "/api/tools") return pub(toolsResponse(), projectTools);
     if (path === "/api/campaigns") return await campaignsResponse();
     if (path === "/api/dungeons") return await dungeonsResponse();
     /*
@@ -1813,116 +1037,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
      */
     if (path === "/api/results") return await resultsResponse(url);
     if (path === "/api/ladder") return await resultsResponse(url, true);
-    if (path === "/api/fleet") {
-      /*
-       * The supervisor's published state, plus one thing only the roster and
-       * the run history know: how many counted runs the policy still owes
-       * (`outstandingWork` in `runner/src/models.ts`, where the bounds and the
-       * ETA formula are written out). Computed here rather than published by
-       * the supervisor so it is right with the fleet down, and off the same
-       * projection `/api/models` serves — the page cannot disagree with the
-       * models table about who owes what.
-       */
-      const now = Date.now();
-      const listing = await store.runListing();
-      const cold = coldRuns(listing, now);
-      const withheld: ReadonlySet<string> = publicMode ? new Set(await unpublishedRuns()) : new Set();
-      const body = withoutRuns(readFleet(runsDir, now, cold), withheld);
-      /*
-       * What the table's rows show, and the count its link to the runs index
-       * names, carried here so the fleet page need not read that whole index
-       * (2.4 MB) to fill five rows. The count is the index's own set — the
-       * store's unarchived runs, less what a public handle withholds — off the
-       * liveness listing this route reads anyway.
-       */
-      body.runFacts = await fleetRunFacts(body, now);
-      body.runCount = listing.filter((r) => r.archived === 0 && !withheld.has(r.run_id)).length;
-      const roster = fleetRoster();
-      if (roster.shape === "roster") {
-        const runs = await runFacts(now);
-        const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
-        body.outstanding = outstandingWork({
-          states,
-          excluded: roster.excluded.map((e) => e.name),
-          accounts: roster.accounts,
-          credentials: roster.credentials,
-          maxSessions: roster.policy.maxSessions,
-        });
-      }
-      return pub(body, projectFleet);
-    }
-    /*
-     * `/api/models` is the scheduler's own verdict, served rather than
-     * recomputed: `modelStates` in `runner/src/models.ts` is what the fleet
-     * supervisor schedules on and what `--status` prints, so the page and the
-     * supervisor cannot disagree about why a model is not running. The route
-     * adds only the run ids behind each count and the last error text.
-     */
-    if (path === "/api/models") {
-      const harness = harnessFilter(url);
-      if (harness === null) {
-        return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
-      }
-      const now = Date.now();
-      const roster = fleetRoster();
-      const runs = await runFacts(now);
-      const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
-      // The refs with a job in flight, off the supervisor's state: the verdict
-      // says "running (one character per model)" exactly where --status does.
-      const cold = coldRuns(await store.runListing(), now);
-      const jobs = readFleet(runsDir, now, cold).jobs;
-      const running = new Set(jobs.flatMap((j) => j.ref.split("+")));
-      // A probe in flight holds only its own entry, never the model's others.
-      const holding = new Set(jobs.filter((j) => j.episode !== "probing").flatMap((j) => j.ref.split("+")));
-      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running, holding, evals: groups.evals });
-      /*
-       * Cost is attached here rather than in the projection: `runner/src/models.ts`
-       * is what the supervisor schedules on and knows nothing about prices, and
-       * the figure must be the listing's own — same memoised totals, same
-       * `runCost` — or the two pages would quote different dollars for one run.
-       */
-      const [rowList, totalsByRun] = await Promise.all([runRows(now), allTotals()]);
-      const rows = new Map(rowList.map((r) => [r.runId, r]));
-      for (const row of body.models) {
-        for (const r of row.runs) {
-          const totals = totalsByRun.get(r.runId) ?? null;
-          // The run's own record, not the roster entry: whether a model is local
-          // is a fact about the `apiBase` it was actually served from.
-          const rawRow = rows.get(r.runId);
-          const runRow = rawRow === undefined ? undefined : withResolved(rawRow, totals);
-          r.cost =
-            totals === null || runRow === undefined
-              ? null
-              : runCost({
-                  run: runRow,
-                  tokens: totals.tokens,
-                  reportedUsd: totals.reportedCostUsd,
-                  coverage: totals.responseCost,
-                });
-          /*
-           * The starting character rides along from the same row, so the panel
-           * can label an extras-cycle run without the scheduler's
-           * projection having to learn about races.
-           */
-          r.race = runRow?.race ?? null;
-          r.raceName = runRow?.raceName ?? null;
-          r.class = runRow?.class ?? null;
-          r.className = runRow?.className ?? null;
-          r.characterLabel = runRow?.characterLabel ?? null;
-          /*
-           * Which model this run was really on. The row keeps its roster
-           * grouping — that is the unit the scheduler counts in — and the ids
-           * are collected below, so an alias that resolved two ways shows both
-           * rather than one of them standing for the other.
-           */
-          r.resolvedModel = runRow?.resolvedModel ?? null;
-        }
-        row.resolvedModels = [
-          ...new Set(row.runs.map((r) => r.resolvedModel).filter((m): m is string => typeof m === "string")),
-        ].sort();
-      }
-      return pub(body, projectModels);
-    }
+    // The runner group's routes (`api-fleet.ts`): `/api/fleet`, `/api/models` and `/api/tools`.
+    const runner = fleetApi === null ? null : await fleetApi(url, path);
+    if (runner !== null) return runner;
 
     /*
      * One character, whole: the aggregate every attempt's page
@@ -1963,497 +1080,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
       return pub(body, projectCharacterResponse, view.runs.map((r) => r.runId));
     }
 
-    const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
-    if (m === null) return null;
-    const runId = m[1]!;
-    const rest = m[2] ?? "";
-    // A fan-out character, under its session id: its replay feed and nothing else.
-    const named = parseFanoutSessionId(runId);
-    if (named !== null) return await fanoutCharacterRoute(runId, named.runId, named.character, rest);
-    const dir = runDir(runsDir, runId);
-    if (dir === null) return notFound(`no such run: ${runId}`);
-    // Every per-run route, the trace windows and the nearby ring included: a
-    // withheld run is not there, to a public handle.
-    if (await withheldRun(runId)) return notFound(`no such run: ${runId}`);
-    const tail = tailFor(runId, dir);
-
-    if (rest === "" || rest === "/") {
-      await scan(runId, tail);
-      /*
-       * The resolved model is the one fact here that does not grow: it is
-       * observed once, in the run's first turn, and never revised. So it comes
-       * off the memoised whole-file totals rather than the incremental tail —
-       * one derivation, shared with the listing — and a run that stamped it at
-       * write time short-circuits the scan entirely.
-       */
-      const { run: row, lead } = await runRowAndLead(runId);
-      const run = withResolved(row, await runTotals(runId));
-      /*
-       * Playtime comes off the tail's own index rather than `runTotals`: the
-       * tail is incremental, where a live run misses the (size, mtime) totals
-       * cache on every poll and would re-read the whole file. Both paths run
-       * the same `segmentsFrom`/`playtimeMs`, so the two pages agree by
-       * construction.
-       */
-      const entries = tail.entries;
-      // Off the tail rather than the served list: the tail sees every line,
-      // and the listing's figure is read off every line too — a run whose last
-      // record the feed does not serve must not close its segment early here.
-      const lastTs = tail.lastTs;
-      /*
-       * The segment marks, accumulated by the tail as it indexes: every
-       * `SEGMENT_MARKS` entry and the first entry with a timestamp (`ts > 0`
-       * keeps an unparseable first line, which `scanRunTotals` drops outright,
-       * from spending the no-meta bootstrap on a zero timestamp).
-       */
-      const marks = tail.segmentMarks;
-      /*
-       * Tokens, cost, coverage and speed ride the same incremental path: the
-       * tail accumulates the cost as it indexes and holds the token and speed
-       * derivations until it grows (`TrajectoryTail.tokens`), so a live run's
-       * figure grows with its trajectory instead of waiting for the (size,
-       * mtime) totals cache to miss, and a warm poll does not re-walk every
-       * entry the run ever wrote.
-       */
-      const tokens = tail.tokens;
-      /*
-       * The freeplay character this run is one attempt of, aggregated across the
-       * whole chain (`character.ts`). Every figure the runner records is per
-       * attempt, so without this the run page shows a twelfth session's quests
-       * under a character that has been playing for a fortnight.
-       *
-       * Gated on the run being freeplay at all — the stamped tier, or a
-       * `continuedFrom` for a run whose metadata predates the stamp — so a
-       * scored run's page pays nothing for it. Behind the gate it is the
-       * listing's own rows, and this route is why that listing is held on a
-       * window at all: `resultRuns` shares one build for
-       * `RESULT_RUNS_CACHE_MS`, so a burst of run pages pays for one, and this
-       * page and `/api/ladder` cannot disagree about what a character is.
-       */
-      const whole =
-        run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
-          ? characterViewOf(runId, await resultRuns())
-          : null;
-      /*
-       * `characterViewOf` is universal since — every run has a
-       * character, a scored one's being a chain of one — but a card and a strip
-       * reading "attempt 1 of 1" are noise standing where a fact should be
-       * (`hasLineage`, lineage.ts). So the field stays absent below the
-       * threshold that gate has always drawn, and a reader who wants the
-       * degenerate view asks `/api/character/<id>` for it.
-       */
-      const character = whole !== null && whole.attempts > 1 ? whole : null;
-      // A store session has no trajectory to mark its sessions: its record's span is its one.
-      const sessions = run.source === "store" ? recordSegments(run) : segmentsFrom(marks);
-      const states = await statesOfRun(runId);
-      /*
-       * A party member's own records (`party-marks.ts`), off the tail just
-       * scanned and the run's own files: gated on the row's stamp, so every
-       * other run's page pays nothing and keeps its shape.
-       */
-      const party = run.party === undefined ? null : await partyDetailOf(runsDir, runId, dir, tail);
-      /*
-       * The run's boss kills, for the timeline's chapters (`timeline-marks.ts`):
-       * rank-3 victims and the Deadmines' named bosses off the same kill
-       * marks, each named as the run's own client cache answered its entry.
-       */
-      const bossMarks = tail.kills.filter((k) => isBossKill(k, NAMED_BOSSES));
-      const bosses = bossKillsOf(bossMarks, NAMED_BOSSES, creatureNamesOf(dir, new Set(bossMarks.map((k) => k.entry).filter((e): e is number => e !== null))));
-      const body: RunDetailResponse = {
-        /*
-         * The row's quest count is the newest sample's, and the counter is the
-         * running process's: a run resumed in place reads zero after the
-         * resume. This route holds the series, so it serves the whole run's
-         * count — the figure `ResultRun.questsCompleted` carries, from the same
-         * `questsAcrossRestarts`.
-         */
-        run: { ...run, questsCompleted: questsAcrossRestarts(states) ?? run.questsCompleted },
-        states,
-        total: entries.length,
-        tokens,
-        cost: runCost({
-          run,
-          tokens,
-          reportedUsd: tail.reportedCostUsd,
-          coverage: tail.costCoverage,
-        }),
-        playtimeMs: playtimeMs(sessions, { lastTs, live: run.live, now: Date.now() }),
-        // The segments that figure sums, so the page's charts close the same
-        // pauses the playtime does (`sessions.ts`).
-        sessions,
-        /*
-         * The models-table row this run links to, so the page need not fetch
-         * the whole models aggregate for one name. Off the roster the config
-         * store holds now (`fleetRoster`, shared on its short window), like
-         * `/api/models` itself. Public-safe: `models.json` publishes every row
-         * name. A cold run's published detail is only re-rendered on the full
-         * pass, so a renamed roster entry reaches it that late.
-         */
-        rosterName: rosterNameOf(
-          fleetRoster(),
-          run.model,
-          run.comparability?.effort ?? null,
-          run.comparability?.compactWindow ?? null,
-        ),
-        // Same incremental path as tokens and cost: the tail accumulates the
-        // milestone marks as it indexes, so a live run's line grows with it.
-        achievements: tail.achievements,
-        taxi: tail.taxi,
-        leveling: tail.leveling,
-        deaths: tail.deaths,
-        // Only where there is one: a run with none keeps the body, and the published key, it had.
-        ...(bosses.length > 0 ? { bosses } : {}),
-        spells: tail.spells,
-        talents: tail.talents,
-        trades: tail.trades,
-        // Same incremental path again: a live run's rate advances with the tail
-        // rather than waiting on the (size, mtime) totals cache to miss.
-        tps: tail.tps,
-        // The turns spent reflecting, from the same pass: the feed accents them
-        // by turn, and the window that opens one can sit far above whatever
-        // slice of entries the page happens to have loaded.
-        reflections: tail.reflections,
-        // Absent, not null, on a run with no character: an optional field the page
-        // falls back from, the same shape the facts above take.
-        ...(character === null ? {} : { character }),
-        ...(party === null ? {} : { party }),
-        // A fan-out run's characters, so the page can open each one's session,
-        // and the one whose level and xp the run's row reads.
-        ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
-        ...(lead === null ? {} : { fanoutLead: lead }),
-        // A label off meta.json, read here rather than carried on the row:
-        // it is no part of the listing and no store column holds it.
-        ...(hadCamera(runsDir, runId) ? { camera: true as const } : {}),
-      };
-      return pub(body, projectRunDetail, [runId]);
-    }
-
-    /*
-     * The camera's clips (`camera.ts`): the list off `camera/clips.json`, and
-     * each clip's video and poster, which only a clip the list names reaches
-     * and the frames never do. Public mode serves both too: the snapshot
-     * publishes the same clips, and the list crosses `projectClips`, which
-     * redacts each caption as model text is. A run with no clips is a 404 to
-     * a public handle and `null` to a private one: the private pages ask on
-     * every run, filmed or not (the `camera` label lags a live run's filming),
-     * and a 404 there is a console error on every page.
-     */
-    if (rest === "/clips") {
-      const body = clipsView(runsDir, runId);
-      if (body === null) return publicMode ? notFound("no clips") : json(null);
-      return pub(body, projectClips, [runId]);
-    }
-    /*
-     * The newest camera frame and its `{seq, t}` (`camera-live.ts`), for the
-     * run page's live still. Private only: frames are never published, and
-     * nothing on the public site may act as a live view of the world, so a
-     * public handle has no such route, before anything is read.
-     */
-    if (rest.startsWith("/camera/")) {
-      if (publicMode) return notFound("no such route");
-      const live = latestFrameResponse(req, runsDir, runId, rest);
-      if (live !== null) return live;
-    }
-    const media = CLIP_MEDIA_ROUTE.exec(rest);
-    if (media !== null) {
-      const kind = media[2] as ClipMediaKind;
-      const hit = clipMedia(runsDir, runId, media[1]!, kind);
-      if (hit === null) return notFound("no such clip");
-      return fileResponse(req, hit.file, hit.stat, CLIP_CONTENT_TYPE[kind]);
-    }
-
-    if (rest === "/track") {
-      // The replay feed: the same position shape the live map
-      // consumes, read from one finished run instead of every live one.
-      const run = await runRowOne(runId);
-      /*
-       * Where this attempt sits in its character, so the map's transport can step
-       * to the one either side of it without a second fetch.
-       *
-       * Deliberately the same expression the detail route gates its `character`
-       * with, and the same `characterViewOf` call behind it: a scored run's
-       * replay pays nothing, a freeplay one pays what its run page already
-       * pays — and pays it only once, since both routes take the listing off
-       * the same `RESULT_RUNS_CACHE_MS` window — and the two routes cannot
-       * come to different answers about who continues whom.
-       */
-      const whole =
-        run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
-          ? characterViewOf(runId, await resultRuns())
-          : null;
-      // Same threshold as the detail route's, for the same reason: a bar with
-      // no attempt either side of it has nothing to step to.
-      const character = whole !== null && whole.attempts > 1 ? whole : null;
-      const trace = await traceSegs(runId, Date.now());
-      // The travel marks ride the same incremental tail the run page reads, so
-      // a replay opened after the page — and every publisher pass, which asks
-      // for both — pays nothing for them; a cold replay pays the page's scan.
-      await scan(runId, tail);
-      const settled = isSettled(run);
-      const core = await trackCoreOf(runId, settled);
-      const body: TrackResponse = {
-        runId,
-        characterName: run.character,
-        model: run.model,
-        harnessVersion: run.harnessVersion,
-        // The points, and the inventory along them as patches (`inv`), so the
-        // replay pip can show what the live pip shows.
-        points: core.points,
-        inv: core.inv,
-        // The intentions beside the track: same run, different cadence.
-        moves: core.moves,
-        // How the character crossed each gap — flights, hearths, graveyard
-        // releases — derived from the trajectory at read time, never stored.
-        travel: tail.travel,
-        // Absent, not null, on a run with no character — as on the detail route.
-        ...(character === null
-          ? {}
-          : {
-              character: {
-                characterId: character.characterId,
-                attempt: character.attempt,
-                attempts: character.attempts,
-                previous: character.previous,
-                next: character.next,
-              },
-            }),
-        // The closed trace windows, each `/trace/<t0>`. Absent on a run with
-        // none, so a track from before the recorder is the bytes it was.
-        ...(trace === null ? {} : { trace }),
-        // A fan-out run's characters, whose tracks the map replays together.
-        ...(isFanoutRun(runsDir, runId) ? { fanout: fanoutSessions(runsDir, runId) } : {}),
-      };
-      if (!settled) return pub(body, projectTrack, [runId]);
-      /*
-       * A settled run's track revalidates rather than re-downloads: a weak
-       * ETag over the body as served (weak because the bytes on the wire
-       * depend on the encoding), answered with a 304 while it holds. Not
-       * `immutable`, although the run cannot change: the body also carries
-       * the character's `next` attempt, which appears when a continuation
-       * starts, and the trace windows, the last of which may still be settling.
-       */
-      const text = JSON.stringify(publicMode ? struckFor(projectTrack(body), [runId]) : body);
-      const etag = `W/"${Bun.hash(text).toString(36)}"`;
-      // `Vary` on the 304 too: it stands for a body that varied on it.
-      const headers = { etag, "cache-control": "no-cache", vary: "Accept-Encoding" };
-      if (ifNoneMatch(req, etag)) return new Response(null, { status: 304, headers });
-      return new Response(text, { headers: { "content-type": "application/json; charset=utf-8", ...headers } });
-    }
-
-    if (rest === "/trace") {
-      // The trace index: the closed windows and the tail so far. Never cached:
-      // the tail moves with every drain.
-      return pub(await traceIndex(runSession(runsDir, runId), Date.now()), projectTraceIndex, [runId]);
-    }
-
-    const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
-    if (traceMatch !== null) {
-      const t0 = Number(traceMatch[1]);
-      if (!Number.isSafeInteger(t0) || t0 % SEG_MS !== 0) return notFound("no such trace window");
-      const found = await traceSegment(runSession(runsDir, runId), t0, Date.now());
-      if (found === null) return notFound("no trace in that window");
-      /*
-       * A closed window is settled (`SETTLE_MS` past its end), so its segment
-       * can never change and is cached as an immutable asset is; the window
-       * still open or settling is served as it stands, uncached. Its chat
-       * lines are the model's own text, so a public body is struck like the
-       * run's other text (`publicText`).
-       */
-      const body = JSON.stringify(publicMode ? projectTraceSegment(found.segment) : found.segment);
-      return new Response(publicMode ? publicText(body, [runId]) : body, {
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": found.closed ? "public, max-age=31536000, immutable" : "no-store",
-        },
-      });
-    }
-
-    if (rest === "/nearby") {
-      /*
-       * The units around a live character, for the live map: the last `span`
-       * ms of the run's ring (the inspector's `nearbyWindow`, at most its reach), one
-       * window. Never cached — the ring moves every drain — and an empty
-       * window, not a 404, for a run with none: no units is a state. In public
-       * mode the window crosses `projectNearby`.
-       */
-      const spanParam = Number(url.searchParams.get("span") ?? NEARBY_SPAN_MS);
-      const span = Number.isFinite(spanParam) ? spanParam : NEARBY_SPAN_MS;
-      return pub(await nearbyWindow(runSession(runsDir, runId), span, Date.now()), projectNearby);
-    }
-
-    if (rest === "/entries") {
-      await scan(runId, tail);
-      const total = tail.entries.length;
-      const limit = Math.min(WINDOW_MAX, Math.max(1, Number(url.searchParams.get("limit") ?? ENTRIES_WINDOW)));
-      const fromParam = url.searchParams.get("from");
-      // `at` is the timeline's jump to a time: the window that holds that moment (`entriesWindowAt`).
-      const atParam = Number(url.searchParams.get("at") ?? Number.NaN);
-      const from =
-        fromParam !== null
-          ? Math.max(0, Number(fromParam))
-          : Number.isFinite(atParam)
-            ? entriesWindowAt(tail.entries, atParam, limit)
-            : Math.max(0, total - limit);
-      const page = { from, total, entries: tail.entries.slice(from, from + limit) };
-      // Public mode serves the same window the snapshot publishes: each entry
-      // through the per-type allowlist and the game-prose redactor.
-      return pub(page, projectEntries, [runId]);
-    }
-
-    const rawMatch = /^\/raw\/(\d+)$/.exec(rest);
-    if (rawMatch !== null) {
-      if (publicMode) return withheld();
-      await scan(runId, tail);
-      const raw = await tail.raw(Number(rawMatch[1]));
-      if (raw === null) return notFound("no such entry");
-      return new Response(raw, {
-        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-      });
-    }
-
-    // The scratchpad is the model's own notes, published as written since
-    // 2026-08-30 (docs/DATA-AND-LEGAL.md, "Trajectory logs"); no public gate.
-    // It has no projector — it is text, not a body — so the path scrub every
-    // projector applies is applied here by hand when the handle is public.
-    if (rest === "/scratchpad") {
-      const text = readScratchpad(runsDir, runId);
-      if (text === null) return notFound("no scratchpad");
-      return new Response(publicMode ? publicText(scrubPathsText(text), [runId]) : text, {
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
-    }
-
-    if (rest === "/stream") {
-      /*
-       * The live tail has no projected form: it pushes entry batches as they
-       * are written, and a public reader's window is the static snapshot's
-       * one published tail instead (the SPA guards SSE off in snapshot mode).
-       * Withheld rather than projected so public mode is not a set of routes
-       * an operator has to remember — GitHub issue #30.
-       */
-      if (publicMode) return withheld();
-      await scan(runId, tail);
-      /*
-       * The stream's own position in the shared tail. `scan` hands what it
-       * newly read only to the caller that ran it, and every reader of this
-       * run shares the one tail — a second tab, the run page's own detail
-       * poll, `/entries`, `/track` — so forwarding `scan`'s return value lost
-       * whatever another reader happened to read first. Each stream sends
-       * `entries.slice(cursor)` instead, after any scan by anyone, and starts
-       * over from the top when the tail was rebuilt under it (a truncated or
-       * rotated file; `generation`).
-       *
-       * Where it starts is the client's to say. The run page loads its window
-       * from `/entries` and only then opens this, so a stream starting at the
-       * tail's end would drop whatever was written between the two; the page
-       * passes `?from=` (the index of the first entry it does not hold — an
-       * entry's `i`, which is its index in `entries`) and the stream sends
-       * from there. Every frame that moves the cursor carries it as the SSE
-       * `id`, so the browser's own reconnect sends it back as `Last-Event-ID`,
-       * which wins over the URL's `from`: a reconnect resumes where the last
-       * connection stopped, neither losing the gap nor replaying what it
-       * already delivered. A start past the tail's end means the file was
-       * rebuilt shorter since the client read it, so that starts over at 0,
-       * as a rebuild under an open stream does. No start at all is the end.
-       */
-      const start = streamStart(req, url);
-      let cursor = start === null ? tail.entries.length : start > tail.entries.length ? 0 : start;
-      let gen = tail.generation;
-      let timer: ReturnType<typeof setInterval> | undefined;
-      let closed = false;
-      // Pinned while open: eviction must never drop a tail a stream is reading,
-      // or the stream would keep an orphan while `tailFor` built a second one.
-      pin(runId, tail);
-      const unpinOnce = (): void => {
-        if (closed) return;
-        closed = true;
-        if (timer !== undefined) clearInterval(timer);
-        unpin(runId);
-      };
-      const stream = new ReadableStream({
-        start(controller) {
-          const enc = new TextEncoder();
-          // `id` only on the frames that move the cursor: a browser keeps the
-          // last id it saw across frames that carry none.
-          const send = (data: unknown, id?: number): void => {
-            if (closed) return;
-            try {
-              const head = id === undefined ? "" : `id: ${id}\n`;
-              controller.enqueue(enc.encode(`${head}data: ${JSON.stringify(data)}\n\n`));
-            } catch {
-              unpinOnce(); // the client went away between ticks
-            }
-          };
-          /** Everything past the cursor, as one batch; false when there was nothing. */
-          const flush = (): boolean => {
-            if (tail.generation !== gen) {
-              gen = tail.generation;
-              cursor = 0;
-            }
-            if (cursor >= tail.entries.length) return false;
-            const added = tail.entries.slice(cursor);
-            cursor = tail.entries.length;
-            // The token figure is the tail's memo: one derivation per batch
-            // however many streams are open.
-            send({ entries: added, tokens: tail.tokens }, cursor);
-            return true;
-          };
-          send({ hello: runId, total: tail.entries.length }, cursor);
-          // What was written before the stream opened, at once rather than on
-          // the first tick.
-          flush();
-          timer = setInterval(() => {
-            void scan(runId, tail)
-              .then(() => {
-                // A heartbeat keeps proxies and fetch timeouts from calling it dead.
-                if (!flush()) send({ tick: Date.now() });
-              })
-              .catch(() => undefined);
-          }, POLL_MS);
-        },
-        cancel() {
-          unpinOnce();
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-store",
-          connection: "keep-alive",
-        },
-      });
-    }
-
-    return notFound("no such path");
+    // A run's own routes (`api-run.ts`): `/api/run/<id>` and everything under it.
+    return await runRoute(req, url, path);
   }
-
-  /**
-   * See `ApiHandle.release`. The entry index, its scan lock and the run's
-   * settled track core, and nothing else — because the entry index is both the
-   * heavy memo and the only one a pass is genuinely finished with when it has
-   * published a run.
-   *
-   * A `TrajectoryTail` keeps one `EntrySummary` per record for the whole file:
-   * on the 1,016-run tree that was ~570 MB of live objects at the end of a
-   * pass, against ~8 MB for the run rows and rather less for the totals. It is
-   * also per-run in the strict sense — only `/api/run/<id>` and its feed touch
-   * one — so dropping it costs nothing else this pass.
-   *
-   * It is the heaviest per-run memo this handle holds, beside the settled
-   * track cores (`trackCoreOf`), which only a run that can no longer change
-   * gets. The run rows, the state series and the per-run totals used to be
-   * memoised here because each one cost a file open or a whole-file scan; they
-   * are rows in the derived store now, shared only over a few seconds
-   * (`sharedStore`). The one other, the trace window
-   * list (`closedWindowsMemo`), is a few numbers per run and is kept on purpose:
-   * it is what spares a pass a `run.sqlite` open per run.
-   */
-  const release = (runId: string): void => {
-    tailPins.delete(runId);
-    dropTail(runId);
-  };
-
-  const cachedRuns = (): { entries: number } => ({ entries: tails.size });
 
   /**
    * The token profile a config draft's estimate is priced at (`drafts.ts`):
@@ -2627,73 +1256,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   );
 }
 
-/**
- * A results row as a deployment without the evals group serves it
- * (`groups.ts`): without the comparison condition the ladder groups rows by,
- * which only the evals group reads (`ResultRun.condition`, `ResultRun.wiki`,
- * both optional, absent is "not answered"). The run's own stamps stay: its
- * episode and why it cannot be scored are what it recorded, and a null
- * `unscored` would read as "scored", which nothing here has decided.
- */
-export function withoutEvalFields(r: ResultRun): ResultRun {
-  const { condition: _condition, wiki: _wiki, ...rest } = r;
-  return rest;
-}
-
 /** Whether a run row is one a public handle withholds: its driver, or its stamp, says it is not a model's. */
 function isWithheldRow(r: Pick<RunRow, "driver" | "shakeout">): boolean {
   return isNotAModelRun({ driver: r.driver, unscored: r.shakeout });
-}
-
-/**
- * The runs the fleet table has a row for, by the table's own rule
- * (`fleetRows` in `dashboard/src/lib/fleet.ts`): each job's run, and on each
- * account no job is on, the first paused run the supervisor lists against it.
- * The rest of the paused list is the page's folded list of ids, which shows no
- * figures.
- */
-export function fleetRunIds(f: Pick<FleetResponse, "jobs" | "accounts" | "paused">): string[] {
-  const ids = new Set<string>();
-  const busy = new Set<string>();
-  for (const j of f.jobs) {
-    busy.add(j.account.toUpperCase());
-    if (j.runId !== null) ids.add(j.runId);
-  }
-  for (const a of f.accounts) {
-    if (busy.has(a.account.toUpperCase())) continue;
-    const here = f.paused.find((p) => (p.account ?? "").toUpperCase() === a.account.toUpperCase());
-    if (here !== undefined) ids.add(here.runId);
-  }
-  return [...ids];
-}
-
-/**
- * Where a `/stream` starts, as the client asked: the browser's `Last-Event-ID`
- * on a reconnect (the cursor the last connection's frames carried), else the
- * URL's `from`. Null when neither is a non-negative integer, which starts the
- * stream at the tail's end.
- */
-export function streamStart(req: Request, url: URL): number | null {
-  for (const raw of [req.headers.get("last-event-id"), url.searchParams.get("from")]) {
-    if (raw === null || !/^\d+$/.test(raw.trim())) continue;
-    const n = Number(raw.trim());
-    if (Number.isSafeInteger(n)) return n;
-  }
-  return null;
-}
-
-/**
- * The supervisor's state without the rows that name a withheld run. The
- * supervisor never schedules one, but a hand launch can still be paused or
- * ended on its watch, and a job row names its run.
- */
-export function withoutRuns(f: FleetResponse, withheld: ReadonlySet<string>): FleetResponse {
-  if (withheld.size === 0) return f;
-  return {
-    ...f,
-    jobs: f.jobs.map((j) => (j.runId !== null && withheld.has(j.runId) ? { ...j, runId: null, model: null } : j)),
-    paused: f.paused.filter((p) => !withheld.has(p.runId)),
-    ended: f.ended.filter((e) => !withheld.has(e.runId)),
-    ...(f.runFacts !== undefined ? { runFacts: f.runFacts.filter((r) => !withheld.has(r.runId)) } : {}),
-  };
 }

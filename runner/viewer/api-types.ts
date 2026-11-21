@@ -1156,7 +1156,7 @@ export interface PartyDetailView {
 /**
  * One stretch of turns spent reflecting rather than acting. Turn indices only:
  * it is a fact about this harness's own loop, with nothing of the world in it.
- * The derivation and the half-open convention are `tail.ts`
+ * The derivation and the half-open convention are `run-marks.ts`
  * (`reflectionWindowsFrom`), which is where the "why" lives.
  */
 export interface ReflectionWindowView {

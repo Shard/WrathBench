@@ -19,7 +19,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import {
@@ -203,10 +203,13 @@ describe("public mode is projected everywhere", () => {
    * The routes above are a list a future route can be added without. This is
    * the check that notices: every `/api` body in the handler is emitted
    * through `pub`, which projects it when the handle is public, so a new
-   * `return json(body)` fails here rather than shipping unprojected.
+   * `return json(body)` fails here rather than shipping unprojected. The
+   * handler is `api.ts` and the route modules it mounts (`api-*.ts`).
    */
   test("no /api route emits a body outside the projection helper", () => {
-    const src = readFileSync(join(import.meta.dir, "..", "viewer", "api.ts"), "utf8");
-    expect(src).not.toContain("return json(body);");
+    const dir = join(import.meta.dir, "..", "viewer");
+    const files = readdirSync(dir).filter((f) => f === "api.ts" || (f.startsWith("api-") && f.endsWith(".ts") && f !== "api-types.ts"));
+    expect(files).toContain("api-run.ts");
+    for (const f of files) expect(readFileSync(join(dir, f), "utf8")).not.toContain("return json(body);");
   });
 });
