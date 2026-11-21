@@ -19,6 +19,12 @@ image:
     authserver: wrathbench-authserver
     dbImport: wrathbench-db-import
     runner: wrathbench-runner
+    # The viewer's image. Empty runs the viewer from the runner image, as it
+    # always has. `wrathbench-viewer` is the slim one (infra/docker/
+    # viewer.Dockerfile: Bun, the workspace and the built dashboard, no CLIs),
+    # for a deployment that is only a viewer; it is built only on request
+    # (`infra/build-images.sh --only viewer`), never by a release.
+    viewer: ""
 
 # Empty by default: a node name is one cluster's, and on a single-node cluster
 # no selector is the right answer. Where the data PVC is RWO and shared by
@@ -224,6 +230,18 @@ groups:
     enabled: true
   viewer:
     enabled: true
+
+# The game this deployment runs: MySQL, the authserver, the long-lived
+# worldserver, the db-import and bootstrap Jobs, the database volume and the
+# audit log's retention CronJob. On by default. Off renders none of them, for a
+# deployment that is only a viewer beside a wrath-mcp and an AzerothCore
+# someone else runs (values-viewer-only.yaml; infra/README.md, "Viewer only").
+# Not a group: no pod reads it, and nothing about the pages changes with it.
+# Everything that drives or films the in-chart world needs it, so the chart
+# refuses it off with the runner group's fleet or runner pod, `staging`,
+# `hosted` or `camera` on.
+game:
+  enabled: true
 
 # The admin interface: the viewer's config API (every write route it has)
 # and its admin pages, from which the operator edits credentials, the roster,
@@ -735,6 +753,44 @@ viewer:
       ephemeral-storage: 256Mi
     limits:
       memory: 3Gi
+  # The module /api/info asks /health of, for the worldserver build it names.
+  # Empty is the in-chart worldserver with `game` on and none with it off,
+  # when the viewer answers `worldserver: null` and works otherwise. Set it
+  # only with `game` off, to another deployment's module (http://host:8086);
+  # with `game` on the chart refuses it. The readiness probe reads /api/info
+  # with the kubelet's one-second timeout and the viewer waits up to two
+  # seconds for /health, so a module that drops packets rather than refusing
+  # them keeps the viewer unready: name one it can reach, or none. With
+  # `networkPolicy` on, the viewer's egress admits the in-chart module only,
+  # so another deployment's is reached only through `networkPolicy.internet`.
+  moduleUrl: ""
+  # The env Secret's key holding that module's port secret, sent on /health.
+  # With `game` on the viewer always carries WRATHBENCH_MODULE_SECRET, as it
+  # always has, and this is ignored. With it off, empty sends none (a hardened
+  # module answers 401 and the build reads as unknown), and a key named here
+  # is an optional reference, so the viewer starts without the Secret.
+  moduleSecretKey: ""
+  # The pod's uid, gid and fsGroup. A wrath-mcp session store (below) makes
+  # each session directory mode 0700, owned by the user that recorded it, so
+  # the viewer reads it only as that same uid (`id -u` of the recording user;
+  # never 0, as the pod runs as non-root). fsGroup still governs the chart's
+  # own data volume, whose `config/` the viewer writes.
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  # A standalone wrath-mcp's record directory (its `--record-dir`), whose
+  # sessions list on the runs page and open as runs (runner/src/
+  # session-store.ts). Mounted read-only at /wrathbench/sessions and passed as
+  # WRATHBENCH_SESSION_STORE. At most one source: an existing PVC in this
+  # namespace (`claimName`, with `subPath` inside it), or a directory on the
+  # node (`hostPath`, with `nodeSelector` pinning the pod there). Both empty
+  # mounts nothing. The listing is built in memory from the store, so the
+  # chart refuses it with ClickHouse on, whose collector it does not reach.
+  sessionStore:
+    claimName: ""
+    subPath: ""
+    hostPath: ""
   ingress:
     enabled: true
     # Canonical name: first rule host, the one NOTES.txt and dashboard tiles

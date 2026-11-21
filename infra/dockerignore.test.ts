@@ -40,6 +40,22 @@ describe("the runner image's ignore list", () => {
   });
 });
 
+describe("the viewer image's ignore list", () => {
+  const patterns = parse("infra/docker/viewer.Dockerfile.dockerignore");
+
+  test("leaves out env files, data and the private reference program", () => {
+    for (const p of [...ENV_FILES, "data/runs/r/run.sqlite", "runner/src/reference/index.ts", "runner/test/reference/a.test.ts"]) {
+      expect([p, ignored(patterns, p)]).toEqual([p, true]);
+    }
+  });
+
+  test("keeps what the viewer runs", () => {
+    for (const p of ["runner/viewer/serve.ts", "runner/src/session-store.ts", "wrath-mcp/mcp/src/index.ts", "dashboard/src/App.tsx", "package.json", "bun.lock"]) {
+      expect([p, ignored(patterns, p)]).toEqual([p, false]);
+    }
+  });
+});
+
 describe("the server image's ignore list", () => {
   const patterns = parse(".dockerignore");
 

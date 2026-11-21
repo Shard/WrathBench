@@ -103,17 +103,32 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "wrathbench.image.runner" -}}
 {{ include "wrathbench.registry" . }}/{{ .Values.image.names.runner }}:{{ include "wrathbench.tag" . }}
 {{- end -}}
+{{- /* The viewer's: the slim viewer image when `image.names.viewer` names one, else the runner's. */}}
+{{- define "wrathbench.image.viewer" -}}
+{{- with .Values.image.names.viewer -}}
+{{ include "wrathbench.registry" $ }}/{{ . }}:{{ include "wrathbench.tag" $ }}
+{{- else -}}
+{{ include "wrathbench.image.runner" . }}
+{{- end -}}
+{{- end -}}
 
 {{/*
 Pod security. uid/gid 1000 everywhere: the runner image's `bun` user and the
 server images' `acore` user are both 1000, and the data PVC is written by both.
-fsGroup makes the volume group-writable for them.
+fsGroup makes the volume group-writable for them. The viewer alone may run as
+another uid (values.yaml `viewer.podSecurityContext`), the one a wrath-mcp
+session store it reads was recorded as; 1000 is its default too.
 */}}
 {{- define "wrathbench.podSecurityContext" -}}
+{{ include "wrathbench.podSecurityContextAs" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000) }}
+{{- end -}}
+
+{{- /* The same, as another uid (the viewer's, values.yaml `viewer.podSecurityContext`). */}}
+{{- define "wrathbench.podSecurityContextAs" -}}
 runAsNonRoot: true
-runAsUser: 1000
-runAsGroup: 1000
-fsGroup: 1000
+runAsUser: {{ int .runAsUser }}
+runAsGroup: {{ int .runAsGroup }}
+fsGroup: {{ int .fsGroup }}
 seccompProfile:
   # Verified on the reference node (kernel 6.13, containerd 2.2, Landlock ABI
   # 6): containerd's RuntimeDefault profile permits landlock_create_ruleset /
@@ -338,8 +353,10 @@ here: run.ts never opens it, and a run pod mounts no config. */}}
 {{- define "wrathbench.runEnv" -}}
 - name: WRATHBENCH_HARNESS_VERSION
   value: {{ include "wrathbench.tag" . | quote }}
+{{- if include "wrathbench.on.game" . }}
 - name: WRATHBENCH_MODULE_URL
   value: "http://worldserver:8086"
+{{- end }}
 - name: WRATHBENCH_RUNS_DIR
   value: /wrathbench/data/runs
 {{- /* The self-hosted model hosts the provider table pairs with LMSTUDIO_KEY
@@ -550,6 +567,8 @@ reads it.
 {{- define "wrathbench.on.clickhouse" -}}{{ if and .Values.groups.viewer.enabled .Values.clickhouse.enabled }}true{{ end }}{{- end -}}
 {{- /* A world per eval (values.yaml `worlds`): the fleet creates them, and only for scored and probing attempts. */}}
 {{- define "wrathbench.on.worlds" -}}{{ if and .Values.worlds.enabled (include "wrathbench.on.fleet" .) .Values.groups.evals.enabled }}true{{ end }}{{- end -}}
+{{- /* The in-chart game (values.yaml `game`): MySQL, the authserver, the long-lived worldserver and their Jobs. */}}
+{{- define "wrathbench.on.game" -}}{{ if .Values.game.enabled }}true{{ end }}{{- end -}}
 {{- define "wrathbench.on.collector" -}}{{ if and (include "wrathbench.on.clickhouse" .) .Values.collector.enabled }}true{{ end }}{{- end -}}
 
 {{/*

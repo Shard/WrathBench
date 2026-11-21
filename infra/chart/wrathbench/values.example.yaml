@@ -87,6 +87,11 @@ realm:
   address: 127.0.0.1
   port: 8085
 
+# The in-chart game (db, authserver, worldserver and their Jobs). Off is a
+# viewer-only deployment: values-viewer-only.yaml.
+game:
+  enabled: true
+
 db:
   image: mysql:8.4
   resources:

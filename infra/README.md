@@ -106,6 +106,19 @@ playing (each server start opens one) is not shown. Without Docker, the same
 viewer is `WRATHBENCH_GROUPS=viewer WRATHBENCH_SESSION_STORE=<absolute dir>
 bun runner/viewer/serve.ts` from the repository root.
 
+On Kubernetes the chart does the same from values alone:
+`infra/chart/wrathbench/values-viewer-only.yaml` turns the runner and evals
+groups, the game (`game.enabled`), ClickHouse and the publisher off, and
+renders the viewer's Deployment, Service and Ingress and the chart's own data
+volume, which holds the config store and its `site` block. The store comes
+from `viewer.sessionStore`, an existing PVC in the namespace or a hostPath,
+mounted read-only; `viewer.podSecurityContext.runAsUser` is the recording
+user's uid, for the same 0700 reason. `image.names.viewer: wrathbench-viewer`
+runs the slim image, which `infra/build-images.sh --only viewer` builds (a
+release does not). `viewer.moduleUrl` and `viewer.moduleSecretKey` optionally
+point `/api/info` at the other deployment's module; without them the viewer
+needs no Secret at all. values.yaml says what each key does.
+
 ## Services
 
 ```

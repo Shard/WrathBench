@@ -1,3 +1,4 @@
+{{- if include "wrathbench.on.game" $ }}
 {{/*
 The auth handshake. ClusterIP only, un-prefixed Service name (`authserver`), no
 Ingress — a spectator port-forwards 3724.
@@ -97,3 +98,4 @@ spec:
         - name: temp
           emptyDir:
             sizeLimit: {{ .Values.authserver.tempSizeLimit }}
+{{- end }}

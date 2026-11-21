@@ -7,6 +7,7 @@
 #   ./infra/build-images.sh --registry registry.example/wrathbench
 #   ./infra/build-images.sh --tag v0.6.0         # override the computed tag
 #   ./infra/build-images.sh --only runner        # one image (repeatable)
+#   ./infra/build-images.sh --only viewer        # the slim viewer image, built only when named
 #   ./infra/build-images.sh --commit <sha> --tag <tag>   # a named commit (k8s-release.sh)
 #   ./infra/build-images.sh --private-dir <dir>  # where the reference program comes from
 #   ./infra/build-images.sh --without-reference  # a runner image without it (local, or a public registry)
@@ -32,8 +33,14 @@
 # scanned by infra/image-guard.sh before anything is pushed; one it refuses is
 # untagged and stops the run.
 #
+# The slim viewer image (infra/docker/viewer.Dockerfile, `wrathbench-viewer`)
+# is built only when named with --only viewer, never by default, so a release
+# builds and pushes the same four images it always has. It is for a deployment
+# that is only a viewer (the chart's values-viewer-only.yaml); it never
+# carries the reference program (its ignore file drops it from the context).
+#
 # The same tag becomes:
-#   - the four image tags,
+#   - the four image tags (and the viewer's, when it is built),
 #   - `image.tag` in the chart's values (infra/chart/wrathbench),
 #   - WRATHBENCH_BUILD on the worldserver (the module's /health `build` field),
 #   - WRATHBENCH_BUILD_VERSION in the runner image and, via the chart,
@@ -97,7 +104,7 @@ while [[ $# -gt 0 ]]; do
     --private-dir) PRIVATE_DIR="$2"; shift 2 ;;
     --without-reference) WITHOUT_REFERENCE=1; shift ;;
     --probe) PROBE="${2:-}"; PROBE_SET=1; shift 2 ;;
-    -h|--help) sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build-images: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -157,6 +164,14 @@ wants() {
   return 1
 }
 wants_server() { wants wrathbench-worldserver || wants wrathbench-authserver || wants wrathbench-db-import; }
+# Named with --only, not merely included by an empty --only: the viewer image is opt-in.
+named() {
+  local w short="${1#wrathbench-}"
+  for w in "${ONLY[@]}"; do
+    [[ "${w}" == "$1" || "${w#wrathbench-}" == "${short}" ]] && return 0
+  done
+  return 1
+}
 
 # ------------------------------------------------- the reference program
 #
@@ -347,12 +362,22 @@ build_runner() {
   BUILT+=("${ref}")
 }
 
+build_viewer() {
+  local ref="${REGISTRY}/wrathbench-viewer:${TAG}"
+  named "wrathbench-viewer" || return 0
+  say "building ${ref} (viewer.Dockerfile)"
+  docker build -t "${ref}" -f "${CONTEXT}/infra/docker/viewer.Dockerfile" "${CONTEXT}"
+  guard "${ref}"
+  BUILT+=("${ref}")
+}
+
 build_server_target worldserver wrathbench-worldserver
 build_server_target authserver  wrathbench-authserver
 build_server_target db-import   wrathbench-db-import
 build_runner
+build_viewer
 
-[[ "${#BUILT[@]}" -gt 0 ]] || die "--only ${ONLY[*]} matched no image; names are worldserver, authserver, db-import, runner"
+[[ "${#BUILT[@]}" -gt 0 ]] || die "--only ${ONLY[*]} matched no image; names are worldserver, authserver, db-import, runner, viewer"
 
 say "built, and passed the image guard:"
 for ref in "${BUILT[@]}"; do

@@ -31,6 +31,24 @@ keeps the readiness probe (Host: the pod IP) and a port-forward working.
 */}}
 {{- $ing := .Values.viewer.ingress }}
 {{- $hosts := prepend ($ing.extraHosts | default list) $ing.host }}
+{{- /* Beside someone else's game (values.yaml `game`, `viewer.moduleUrl`,
+       `viewer.sessionStore`): what the viewer reads that this chart did not
+       render. Refused rather than half-wired. */}}
+{{- $game := include "wrathbench.on.game" $ }}
+{{- if and $game .Values.viewer.moduleUrl }}
+{{- fail "viewer.moduleUrl names another deployment's module, and is for game.enabled=false: with the game on, the viewer asks the in-chart worldserver" }}
+{{- end }}
+{{- $store := .Values.viewer.sessionStore | default dict }}
+{{- if and $store.claimName $store.hostPath }}
+{{- fail "viewer.sessionStore: set claimName or hostPath, not both" }}
+{{- end }}
+{{- if and (or $store.claimName $store.hostPath) (include "wrathbench.on.clickhouse" $) }}
+{{- fail "viewer.sessionStore: with ClickHouse on the viewer lists runs from the collector's store, and the collector is not given the session store, so its sessions would never list. Turn clickhouse.enabled off (the viewer then builds its listing in memory, store included)." }}
+{{- end }}
+{{- $psc := .Values.viewer.podSecurityContext }}
+{{- if or (eq (int $psc.runAsUser) 0) (eq (int $psc.fsGroup) 0) }}
+{{- fail "viewer.podSecurityContext: the pod runs as non-root, so runAsUser and fsGroup may not be 0 (a session store recorded by root cannot be read here)" }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -77,13 +95,13 @@ spec:
       priorityClassName: {{ . }}
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
-      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContextAs" $psc | nindent 8 }}
       {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
       # Only the fleet pod holds an API token (templates/run-pods.yaml).
       automountServiceAccountToken: false
       containers:
         - name: viewer
-          image: {{ include "wrathbench.image.runner" . }}
+          image: {{ include "wrathbench.image.viewer" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
           workingDir: /wrathbench
@@ -148,6 +166,7 @@ spec:
             # gitignored, so it exists nowhere else).
             - name: WRATHBENCH_DASHBOARD_DIR
               value: /wrathbench/dashboard/dist
+            {{- if $game }}
             # The module secret only, so /api/info can name the worldserver
             # build off /health. Deliberately NOT envFrom the whole Secret: the
             # viewer has no business holding a model key or an S3 credential.
@@ -156,6 +175,33 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.envSecretName }}
                   key: WRATHBENCH_MODULE_SECRET
+            {{- else }}
+            {{- with .Values.viewer.moduleUrl }}
+            # Another deployment's module, for the build /api/info names.
+            - name: WRATHBENCH_MODULE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.viewer.moduleSecretKey }}
+            # Its port secret, optional: without it the build reads as unknown.
+            - name: WRATHBENCH_MODULE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.envSecretName }}
+                  key: {{ . }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.image.names.viewer (not (include "wrathbench.groupsEnv" . | trim)) }}
+            # The slim image defaults WRATHBENCH_GROUPS to the viewer alone;
+            # every group is on here, so it is said outright.
+            - name: WRATHBENCH_GROUPS
+              value: "runner,evals,viewer"
+            {{- end }}
+            {{- if or $store.claimName $store.hostPath }}
+            # A standalone wrath-mcp's record directory, listed beside the runs.
+            - name: WRATHBENCH_SESSION_STORE
+              value: /wrathbench/sessions
+            {{- end }}
           ports:
             - name: http
               containerPort: 8090
@@ -203,10 +249,34 @@ spec:
               subPath: publish
               readOnly: true
             {{- end }}
+            {{- if or $store.claimName $store.hostPath }}
+            # Read-only: the viewer never writes a session, and a live
+            # recorder keeps writing beside it (JSONL, no sqlite sidecars).
+            - name: sessions
+              mountPath: /wrathbench/sessions
+              readOnly: true
+              {{- with $store.subPath }}
+              subPath: {{ . }}
+              {{- end }}
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
+        {{- if $store.claimName }}
+        # readOnly on the source as well as the mount: the volume is then
+        # read-only to the kubelet too, which skips its fsGroup ownership pass
+        # rather than re-group someone else's record.
+        - name: sessions
+          persistentVolumeClaim:
+            claimName: {{ $store.claimName }}
+            readOnly: true
+        {{- else if $store.hostPath }}
+        - name: sessions
+          hostPath:
+            path: {{ $store.hostPath }}
+            type: Directory
+        {{- end }}
 {{- if $ing.enabled }}
 {{- if $ing.issuer }}
 ---
