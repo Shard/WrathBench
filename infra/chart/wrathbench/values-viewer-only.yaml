@@ -9,7 +9,8 @@
 # own data volume (the config store, with the `site` block that names and
 # themes the deployment; minimap tiles if you add them; an empty runs
 # directory). No game, runner, fleet, ClickHouse, collector or publisher, and
-# no reference to an env Secret. Comments on each key are in values.yaml.
+# no reference to an env Secret (a pull Secret only if one is named below).
+# Comments on each key are in values.yaml.
 
 image:
   # REQUIRED: where the images are, and the immutable tag they were built at.
@@ -19,6 +20,9 @@ image:
     # The slim viewer image (infra/docker/viewer.Dockerfile), built with
     # `infra/build-images.sh --only viewer`. Empty uses the runner image.
     viewer: wrathbench-viewer
+
+# The cluster's pull Secret for that registry, if it is private.
+imagePullSecrets: []
 
 # The viewer group alone: run pages, the runs listing and the map.
 groups:
