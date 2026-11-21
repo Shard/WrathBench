@@ -194,6 +194,23 @@ export function pageSeries(
   return resolveSeries(choice, available, preview);
 }
 
+/**
+ * The series a listing filters to on this deployment: `pageSeries` where the
+ * evals group is on, and no filter where it is off. The series is the
+ * comparability group, which is the evals group's, so the shell has no
+ * selector there, and a choice remembered from elsewhere or carried in a link
+ * must not drop rows with no control on screen to say so.
+ */
+export function listingSeries(
+  evals: boolean,
+  choice: SeriesChoice,
+  shellAvailable: readonly string[],
+  rows: readonly { harnessSeries?: string | null; harnessVersion?: string | null }[],
+  preview?: string | null,
+): string | null {
+  return evals ? pageSeries(choice, shellAvailable, rows, preview) : null;
+}
+
 const PREF_KEY = "wrathbench.harnessSeries";
 
 /** The remembered choice, or null. Blocked storage reads as "nothing remembered". */

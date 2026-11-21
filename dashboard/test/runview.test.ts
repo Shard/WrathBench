@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../../runner/viewer/api-types";
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { playtimeMs, recordSegments } from "../../runner/src/sessions";
-import { atBottom, chartClock, chartWindowMs, hasModelSide, runChartInput, xpChartModel } from "../src/lib/runview";
+import { atBottom, chartClock, chartWindowMs, hasModelSide, runChartInput, showsComparability, xpChartModel } from "../src/lib/runview";
 
 function s(ts: number, level: number | null, xp: number | null): StatePoint {
   return { ts, level, xp, map: null, x: null, y: null, z: null, eventCount: null, lastSeq: null, turn: null };
@@ -182,6 +182,19 @@ describe("hasModelSide", () => {
   test("a store session has none, so its run page draws no model, token or cost card; every run has one", () => {
     expect(hasModelSide({ source: "store" })).toBe(false);
     expect(hasModelSide({})).toBe(true);
+  });
+});
+
+describe("showsComparability", () => {
+  test("a run with a model side on a deployment with evals on draws the tuple and the server line", () => {
+    expect(showsComparability({}, { evals: true })).toBe(true);
+  });
+  test("a store session draws neither, whatever the groups", () => {
+    expect(showsComparability({ source: "store" }, { evals: true })).toBe(false);
+    expect(showsComparability({ source: "store" }, { evals: false })).toBe(false);
+  });
+  test("with evals off no run draws them", () => {
+    expect(showsComparability({}, { evals: false })).toBe(false);
   });
 });
 

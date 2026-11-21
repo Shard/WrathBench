@@ -297,4 +297,60 @@ describe("the runs page", () => {
       dispose();
     }
   });
+
+  test("with the evals group off the shell's series filters nothing", async () => {
+    const served = { runs: runs() };
+    const document = installDom(served);
+    const { Runs, FeedsContext, MemoryRouter, Route, createMemoryHistory } = await loadEntry();
+    jest.useFakeTimers();
+    const [evals, setEvals] = createSignal(true);
+    // A series no row is in: a remembered choice, or one carried in a link.
+    const [series, setSeries] = createSignal("0.4");
+    const feeds = {
+      fleet: { latest: undefined, error: undefined, stalled: false, refresh: () => {} },
+      info: {
+        get latest() {
+          return { groups: { runner: true, evals: evals(), viewer: true } };
+        },
+        error: undefined,
+        stalled: false,
+        refresh: () => {},
+      },
+      stale: () => false,
+      seriesChoice: series,
+      setSeriesChoice: setSeries,
+      seriesAvailable: () => ["0.5", "0.4"],
+      seriesPreview: () => null,
+    };
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const history = createMemoryHistory();
+    history.set({ value: "/runs" });
+    const dispose = render(
+      () =>
+        createComponent(FeedsContext.Provider, {
+          value: feeds as never,
+          get children() {
+            return createComponent(MemoryRouter, {
+              history,
+              get children() {
+                return [createComponent(Route, { path: "/runs", component: Runs })];
+              },
+            });
+          },
+        }),
+      mount,
+    );
+    const rows = (): Element[] => [...mount.querySelectorAll("table.runs tbody tr")].filter((r) => r.querySelector("td:nth-child(2) a") !== null);
+    try {
+      await settle();
+      expect(rows()).toHaveLength(0);
+      setEvals(false);
+      await settle();
+      expect(rows()).toHaveLength(100);
+      expect(mount.textContent?.replace(/\s+/g, " ")).toContain("250 runs · sorted by started desc");
+    } finally {
+      dispose();
+    }
+  });
 });

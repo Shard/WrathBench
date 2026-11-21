@@ -5,6 +5,7 @@ import {
   displayedChoice,
   filterBySeries,
   latestSeries,
+  listingSeries,
   pageSeries,
   resolveSeries,
   seriesOf,
@@ -221,6 +222,28 @@ describe("pageSeries — degrading against a viewer that predates /api/info's li
 
   test("with neither source there is nothing to filter to", () => {
     expect(pageSeries("latest", [], [])).toBeNull();
+  });
+});
+
+describe("listingSeries — the series filter is the evals group's", () => {
+  const rows = [
+    { harnessSeries: "0.5", harnessVersion: "harness-0.5-1-gaaa" },
+    { harnessSeries: "0.4", harnessVersion: "harness-0.4-1-gbbb" },
+    { harnessSeries: null, harnessVersion: null },
+  ];
+
+  test("with evals on it is pageSeries", () => {
+    expect(listingSeries(true, "latest", ["0.5", "0.4"], rows)).toBe("0.5");
+    expect(listingSeries(true, "0.4", ["0.5", "0.4"], rows)).toBe("0.4");
+    expect(listingSeries(true, "latest", ["0.5", "0.4"], rows, "0.6")).toBe(pageSeries("latest", ["0.5", "0.4"], rows, "0.6"));
+  });
+
+  test("with evals off nothing is filtered, whatever a link or a remembered choice says", () => {
+    for (const choice of ["latest", "0.4", "all"]) {
+      const series = listingSeries(false, choice, ["0.5", "0.4"], rows);
+      expect(series).toBeNull();
+      expect(filterBySeries(rows, series)).toHaveLength(3);
+    }
   });
 });
 
