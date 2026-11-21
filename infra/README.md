@@ -69,11 +69,15 @@ WrathBench can also run as nothing but the viewer, beside a wrath-mcp and an
 AzerothCore someone else runs. Every session that wrath-mcp records, whatever
 MCP client drove it, lists on the runs page and opens as a run.
 
-Run the standalone server with a store you name, so its sessions outlive a
-temp directory (a named store is kept; only the default one is pruned):
+Run the standalone server with a store you name. A directory named with
+`--record-dir` is kept until you delete it (unless `--record-retention-days`
+is also given), where the default one under `$TMPDIR` is pruned after three
+days and may not survive a reboot. wrath-mcp's `mcp/README.md` has the
+command for Claude Code and for any other stdio client; the part that matters
+here is:
 
 ```
-bun mcp/src/main.ts --account <account> --record-dir /srv/wrath-sessions   # in wrath-mcp; its mcp/README.md
+bun /abs/path/to/wrath-mcp/mcp/src/main.ts --account <account> --record-dir /srv/wrath-sessions
 ```
 
 Then, from a clone with the stack checked out:
