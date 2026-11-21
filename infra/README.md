@@ -114,13 +114,18 @@ what compose sets; change compose.
 
 `infra/bootstrap/bootstrap.ts` runs on Bun after `db-import`: the chart's
 `bootstrap` Job on every install and upgrade, compose's `bootstrap` service
-before the servers on the quickstart. It does two things, idempotently:
+before the servers on the quickstart. It does three things, idempotently:
 
 1. Upserts the `auth.realmlist` row for realm 1 at the configured address
-   (loopback, for a port-forwarded client), and deletes any other realm row.
+   (loopback, for a port-forwarded client), and deletes any other realm row
+   but a world per eval's (`isWorldRealm`), which the world launcher owns.
 2. Ensures an account (`RUNNER` / `RUNNER` by default) exists with the
    configured password, computing the SRP6 salt and verifier the same way
    `AccountMgr::CreateAccount` does.
+3. Creates each missing account of the generated pool, `POOL01` to the pool
+   size (`WRATHBENCH_POOL_SIZE`), its password its name, and hosted mode's
+   tenant pool when `WRATHBENCH_TENANT_POOL_SIZE` is set (docs/RUNBOOK.md,
+   "The account pool").
 
 The smoke probes run by hand (`bun wb smoke <name>`; `travel.ts` holds a
 session for minutes) use a second account `PROBE` so they never contend with `RUNNER` for the
@@ -207,7 +212,8 @@ so does `runner`, where the operator execs the smokes, so
 needs no `-e` flags at all. A benchmark episode cannot pass those credentials
 on: `sandboxChildEnv` in `wrath-mcp/mcp/src/sandbox/host.ts` forwards the snippet
 child a named list of variables (PATH, HOME, TMPDIR, the sandbox's fault
-knobs) plus the four the host sets itself, so no `WRATHBENCH_DB_*` var and
+knobs) plus the few the host sets itself (the module URL, the session token
+and secret, the account, the record flag), so no `WRATHBENCH_DB_*` var and
 not `WRATHBENCH_MODULE_SECRET`, the module's port secret the smokes present
 (`infra/smoke/lib/auth.ts`), reaches it on either service.
 
@@ -273,8 +279,9 @@ keeps compose from deciding `db-import` needs a rerun against a live stack.
 
 ## Rosters
 
-`infra/run-roster.sh <roster.json>` runs a list of episodes one at a time
-through `run-episode.sh`. The roster JSON is a plain array; every entry is
+`infra/run-roster.sh <roster.json>` runs a list of episodes one at a time:
+through `run-episode.sh` from a host, and as `bun runner/src/run.ts` (or a run
+pod) inside the runner image, where the fleet runs it. The roster JSON is a plain array; every entry is
 config and everything but `model` has a default (`infra/run-roster.ts` is the
 schema). An unset `effort` means the provider's own default, which is not the
 same as any named level.
@@ -289,7 +296,8 @@ there. Never copied: a second copy of `auth.json` spends the other side's
 refresh token.
 
 `--loop` restarts the roster when the list is exhausted, until `--until` or
-`--max-hours` (one of which it requires). Cycle 2 onward gets `-cN` run ids;
+`--max-hours`, or with neither until it is stopped or its job is disabled,
+which is the fleet's shape. Cycle 2 onward gets `-cN` run ids;
 since a fresh episode wipes the account's characters first, every cycle starts
 at level 1 whatever the model names its new one. Loop mode burns tokens, it does not build
 a levelling curve.
@@ -388,8 +396,8 @@ Before adding a local model, prove the endpoint can drive the tool loop:
 
     bun wb smoke local-model
 
-It hits the endpoint directly with one tool definition and no `tool_choice`
-(mirroring the adapter), and asserts the model *elects* a tool call whose shape
+It sends one request through the runner's own adapter, streamed and parsed as
+a run would be, with one tool definition and no `tool_choice`, and asserts the model *elects* a tool call whose shape
 satisfies the adapter's exact contract. It reports a
 clear no-go if the model answers in prose or returns a shape the adapter would
 reject. No game account or module needed.
@@ -487,7 +495,7 @@ whatever does that for you. It is run as
 
 and only has to return once the pin is *placed*. It does not have to wait for
 the cluster: the `pin` phase does that itself, by reading the image tag the
-worldserver and viewer Deployments actually run and then waiting out every
+worldserver, runner and viewer Deployments actually run and then waiting out every
 rollout. That is the check a hook cannot get wrong, and the one a release needs
 — a deploy window that runs against a pin that never merged smokes
 the old release and calls it verified. With no hook the phase prints the tag,
