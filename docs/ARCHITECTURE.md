@@ -320,6 +320,16 @@ config API the admin switch mounts. Split in two along
 one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
+The viewer is a leaf of the code as well as a group: it imports from
+`runner/src/` freely, and neither the runner's core nor the collector ever
+imports from `runner/viewer/`, types included (`infra/viewer-boundary.test.ts`).
+What both sides read lives in `runner/src/`: the run listing (`run-list.ts`),
+a trajectory's totals (`run-totals.ts`, the scanner the collector stores),
+their types (`run-types.ts`, re-exported by the wire contract `api-types.ts`),
+a run's sessions, the race and class names and the archive directory's name.
+So the code a model sees never moves when a viewer module does, and the
+viewer deploys alone.
+
 - `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
   run, the inspector's API at `/api/inspector` (the session record unprojected,
   so a public handle withholds it whole; its id reads as the session's id
@@ -884,8 +894,8 @@ first and last timestamp — is SQL. Anything ordering-sensitive — active
 segments and playtime, the zone and death timelines, the level ladder, tokens
 per second over reply spans — is a state machine, and a SQL reimplementation
 would be a second implementation that can disagree with the first about a
-published number. So the collector runs the viewer's own `RunTotalsScanner`
-and `readRunFact` as it tails and stores the result as JSON on the run. Same
+published number. So the collector runs the same `RunTotalsScanner` the viewer
+runs (`runner/src/run-totals.ts`) and `readRunFact` as it tails and stores the result as JSON on the run. Same
 code, same bytes, by construction.
 
 **The viewer reads the store; the supervisor still reads the files.** Every

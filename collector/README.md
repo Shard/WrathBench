@@ -8,7 +8,8 @@ than walk a live run's files. It runs as a container beside the fleet,
 in both the compose quickstart and the Helm chart, and nothing else in the
 system depends on it: the runner does not know it exists, a viewer with no
 ClickHouse builds the same rows in memory, and inspect with none reads the
-files and says so.
+files and says so. It imports the runner's readers (`runner/src/`) and never
+the viewer's (`infra/viewer-boundary.test.ts`).
 
 The store is **derived and disposable**. The files under `data/runs/` are the
 evidence record and the only write path; nothing here ever writes to them.

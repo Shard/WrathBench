@@ -120,6 +120,12 @@ answers with a plain-text notice naming the build command, and `/api` keeps
 serving throughout. The dashboard's own rules are in `dashboard/README.md`;
 what follows is what the server decides before the UI sees it.
 
+The viewer imports from `runner/src/`, and nothing there or in the collector
+imports from here (`infra/viewer-boundary.test.ts`), so what both read lives
+on the runner's side: the run listing (`runner/src/run-list.ts`), a
+trajectory's totals (`runner/src/run-totals.ts`) and their types
+(`runner/src/run-types.ts`, re-exported by `api-types.ts`).
+
 ## Loopback only
 
 The viewer binds 127.0.0.1. Trajectories contain game-derived text — quest text,
@@ -454,7 +460,8 @@ cache reads as `cached_tokens` and says nothing at all about writes, and
 estimates instead** — characters ÷ 4, flagged as estimated — and newer runs
 carry provider-reported counts automatically; the viewer decides per run by
 whether it finds any usage in the file. A turn's reported prompt size replaces
-the estimate for that turn, so the two never double-count.
+the estimate for that turn, so the two never double-count. The accounting is
+`runner/src/run-totals.ts`, which the collector runs too.
 
 The one exception is the claude-code harness (driver id `claude-code`, formerly
 `claude-subscription`). Its
