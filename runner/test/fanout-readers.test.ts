@@ -22,7 +22,7 @@ import { MAX_CHARACTERS_LIMIT } from "@wrathbench/mcp/fanout";
 import { bestLevelOf, characterSamplesOf, fanoutCharacters, fanoutLead, fanoutReadings, isFanoutRunDir, isV1RunDir, latestReading, parseFanoutSessionId, readRunRow, readStateSamples, SAMPLER_MEMO_MAX, traceSamplesOf } from "../src/run-reader";
 import { localRunStore, withFanoutLeads } from "../viewer/clickhouse";
 import { positionsFromStore, readPositions } from "../viewer/positions";
-import { readRun } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import type { TrackResponse } from "../viewer/api-types";
 import { FANOUT_CHARACTERS, FANOUT_ROSTER_TOKEN, FANOUT_RUN, writeFanoutRun, type FanoutCharacter } from "./fixtures/fanout";
 import { DEAD_RUN, poisonedRunsDir } from "./fixtures/poisoned-runs";

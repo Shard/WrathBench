@@ -50,7 +50,7 @@ import type {
   TradeFacts,
 } from "./api-types";
 import { conditionOf } from "./condition";
-import { itemSamplesOf } from "./runs";
+import { itemSamplesOf } from "../src/run-list";
 import { encodeInventory } from "@wrathbench/inspector/codec/inventory";
 import { activeMsUntil, type ActiveSegment } from "../src/sessions";
 import type { MilestoneInstants } from "./tail";

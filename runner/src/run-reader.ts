@@ -59,7 +59,7 @@ const CHARACTER_NAME = /^[A-Za-z]+$/;
 
 /**
  * What joins a fan-out run's id to one of its characters' names in a session
- * id. `~` never occurs in a run id (`isValidRunId` in `viewer/runs.ts`), so
+ * id. `~` never occurs in a run id (`isValidRunId` in `run-list.ts`), so
  * the split is unambiguous, and it needs no escaping in a URL path.
  */
 export const FANOUT_SEP = "~";

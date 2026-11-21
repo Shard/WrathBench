@@ -27,7 +27,7 @@ import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, sta
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
 import { STORE_LAG_MS, runRowOf, withFanoutLeads, type RunStore } from "./clickhouse";
-import { listRuns, runPath } from "./runs";
+import { listRuns, runPath } from "../src/run-list";
 import { questsAcrossRestarts } from "./results";
 import { latestMove, nearbyFresh, recentTrace } from "@wrathbench/inspector";
 import { fanoutSession, runSession } from "./runs-source";
@@ -36,7 +36,7 @@ import { characterSamplesOf, fanoutCharacters, fanoutSessionDir, fanoutSessionId
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
- * than the trajectory-liveness window in `runs.ts` on purpose: a run that is
+ * than the trajectory-liveness window in `runner/src/run-list.ts` on purpose: a run that is
  * thinking hard, or paused mid-turn, is still somewhere.
  */
 export const POSITION_WINDOW_MS = 600_000;

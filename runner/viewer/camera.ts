@@ -20,7 +20,7 @@
 import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import type { CaptionCueView, ChapterView, ClipsResponse, HighlightResponse, VideoPartView } from "./api-types";
-import { isValidRunId } from "./runs";
+import { isValidRunId } from "../src/run-list";
 import { excerptAround, fitTimeline, totalSeconds, videoToRun } from "./video-time";
 
 /** Under the run's directory. */

@@ -121,7 +121,7 @@ export const MANIFEST_MEMBER = "manifest.json";
 export const PDUMP_MEMBER = "character.pdump";
 export const RUN_PREFIX = "run/";
 
-/** A run id, as every reader of the runs directory accepts one (`models.ts`, `viewer/runs.ts`). */
+/** A run id, as every reader of the runs directory accepts one (`models.ts`, `run-list.ts`). */
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 const CHUNK = 1 << 20;
 /** Characters of the previous window rescanned with each new one, so a secret split across two chunks is still seen. */

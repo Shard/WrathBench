@@ -21,7 +21,8 @@ import { Trajectory } from "../src/trajectory";
 import { writeLegacy05Moves, writeLegacy05Run } from "./fixtures/legacy05-writer";
 import { readRunRow } from "../src/run-reader";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
-import { readRun, readStateItems, readStates, readMoves } from "../viewer/runs";
+import { readStateItems, readStates, readMoves } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import {
   clickhouseConfigFromEnv,
   clickhouseErrorMessage,

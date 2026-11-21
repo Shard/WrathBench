@@ -110,7 +110,8 @@ import { attachSessionStore, isBareSessionId } from "../src/session-store";
 import { fanoutLead, fanoutReadings, parseFanoutSessionId } from "../src/run-reader";
 import { latestFrameResponse } from "./camera-live";
 import { CLIP_CONTENT_TYPE, CLIP_MEDIA_ROUTE, clipMedia, clipsView, fileResponse, hadCamera, pickHighlight, type ClipMediaKind } from "./camera";
-import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
+import { readMoves, readScratchpad, readStateItems, readStates } from "./runs";
+import { isValidRunId, LIVE_WINDOW_MS, readRun, runDir } from "../src/run-list";
 import {
   factOf,
   moveViewsOf,
@@ -479,7 +480,7 @@ export function harnessSeriesCensus(rows: readonly { harnessVersion: string | nu
 /**
  * How stale a run's files may be and still be read as holding its account.
  *
- * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runs.ts`'s
+ * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runner/src/run-list.ts`'s
  * `LIVE_WINDOW_MS` (120s): the job's run has to be resolved the same way the
  * account guard and `--status` resolve it, or the dashboard would disagree with
  * the supervisor about which run a job holds near the boundary. The constant

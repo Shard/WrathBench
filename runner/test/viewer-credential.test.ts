@@ -13,7 +13,7 @@ import { readRunFact } from "../src/models";
 import { Trajectory } from "../src/trajectory";
 import { createApi } from "../viewer/api";
 import type { RunDetailResponse, RunsResponse } from "../viewer/api-types";
-import { readRun } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

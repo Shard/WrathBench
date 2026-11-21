@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLASS_NAMES, RACE_NAMES, characterLabel, className, raceName } from "../src/characters";
-import { readRun } from "../viewer/runs";
+import { readRun } from "../src/run-list";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

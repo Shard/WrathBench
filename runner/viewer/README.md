@@ -46,7 +46,7 @@ is created empty, and every page serves its labelled empty state.
   name wins, and a record whose character never entered the world is not
   listed. A session reads as `ended` at the close its `session.json` records,
   and as `abandoned` at its last heartbeat once `live.json` has been quiet for
-  the live window (`closeBareSession` in `runs.ts`), so its run page stops at
+  the live window (`closeBareSession` in `runner/src/run-list.ts`), so its run page stops at
   that end like any finished run's. With no trajectory, its feed's tool-call
   cards are its record's `call` and `result` rows, each drawn where it
   returned (`pairStoreCalls` in `record-feed.ts`); a call still running is

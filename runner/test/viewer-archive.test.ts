@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
-import { listRuns } from "../viewer/runs";
+import { listRuns } from "../src/run-list";
 import { ARCHIVE_DIR } from "../src/archive-dir";
 import { scanRunTotals } from "../viewer/tail";
 import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds, runActivityAge } from "../src/archive";

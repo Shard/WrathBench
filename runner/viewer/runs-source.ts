@@ -49,7 +49,7 @@ import type { SessionFile } from "@wrathbench/mcp/record";
 import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, sessionDirOfRun, SESSIONS_DIR } from "../src/run-reader";
 import { listBareSessions, sessionStoreOf, type BareSession } from "../src/session-store";
 import { legacy05Session } from "./legacy05-source";
-import { runDir } from "./runs";
+import { runDir } from "../src/run-list";
 
 export { FANOUT_SEP, fanoutSessionId, SESSIONS_DIR };
 

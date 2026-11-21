@@ -38,7 +38,7 @@ import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
-import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } from "./runs";
+import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } from "../src/run-list";
 import { runCredentialOf } from "../src/credential-slots";
 import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";
 import { sessionStoreOf } from "../src/session-store";
@@ -492,7 +492,7 @@ export function runRowOf(r: RunTableRow, latest: LatestState | LatestReading | u
   const comparability = parseComparability(
     r.comparability_json.length === 0 ? undefined : JSON.parse(r.comparability_json),
   ) as ComparabilityView | null;
-  // A run whose model chooses its start holds a placeholder until its character is seen (`runs.ts`).
+  // A run whose model chooses its start holds a placeholder until its character is seen (`runner/src/run-list.ts`).
   const startUnchosen = config["chooseStart"] === true && config["character"] === undefined;
   const race = startUnchosen ? null : num(config["race"]);
   const klass = startUnchosen ? null : num(config["class"]);
