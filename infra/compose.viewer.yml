@@ -1,0 +1,61 @@
+# WrathBench as a pure viewer, beside someone else's wrath-mcp and AzerothCore.
+#
+#   WRATHBENCH_SESSION_STORE_HOST=/path/to/store \
+#     docker compose -f infra/compose.viewer.yml up --build
+#
+# then open http://127.0.0.1:8090. The store is the directory a standalone
+# wrath-mcp records into (`--record-dir <dir>`): each of its sessions lists on
+# the runs page as a run and opens as one. infra/README.md, "Viewer only", says
+# the rest.
+#
+# One service. No game server, runner, fleet or ClickHouse: the viewer builds
+# its rows in memory from the store with the collector's own code, which is
+# right for one machine's sessions. No repository bind mount and no env file:
+# the image carries the code, this file carries the configuration, and the
+# viewer reads no `.env` (viewer.Dockerfile).
+#
+# Its own project name: compose would otherwise name it after this directory,
+# as it does the quickstart (compose.yml), and the two would share a project.
+name: wrathbench-viewer
+services:
+  viewer:
+    image: wrathbench/viewer
+    build:
+      context: ..
+      dockerfile: infra/docker/viewer.Dockerfile
+    # wrath-mcp makes each session directory mode 0700, owned by whoever ran
+    # it, so the viewer has to run as that uid to read them. Set both to the
+    # recording user's `id -u` and `id -g`; 1000 is the usual first user.
+    user: "${WRATHBENCH_UID:-1000}:${WRATHBENCH_GID:-1000}"
+    environment:
+      # The viewer group alone: run pages, the runs listing and the map. No
+      # fleet, models or tools (runner) and no ladder or episodes (evals).
+      WRATHBENCH_GROUPS: viewer
+      WRATHBENCH_SESSION_STORE: /sessions
+      WRATHBENCH_MINIMAP_DIR: /minimap
+      # The viewer binds loopback only and refuses anything else unless told
+      # the network is trusted (runner/viewer/README.md, "Loopback only").
+      # Inside a container loopback is the container's own, so it binds
+      # 0.0.0.0 here; what keeps it private is the port below, published on
+      # the HOST's loopback and nowhere else. Change that address only for a
+      # network you would let read every session's game text.
+      WRATHBENCH_VIEWER_LAN: "1"
+    ports:
+      - "127.0.0.1:${WRATHBENCH_VIEWER_PORT:-8090}:8090"
+    volumes:
+      # Read-only: the viewer never writes a session, and a live writer keeps
+      # writing beside it.
+      - type: bind
+        source: ${WRATHBENCH_SESSION_STORE_HOST:?set WRATHBENCH_SESSION_STORE_HOST to the directory wrath-mcp records into (--record-dir)}
+        target: /sessions
+        read_only: true
+      # Optional minimap tiles (minimap/README.md), by default the checkout's
+      # gitignored data/minimap; the map draws a labelled grid where there are
+      # none, so an empty directory is fine.
+      - type: bind
+        source: ${WRATHBENCH_MINIMAP_HOST:-../data/minimap}
+        target: /minimap
+        read_only: true
+        bind:
+          create_host_path: true
+    restart: unless-stopped
