@@ -63,11 +63,58 @@ The first `up` takes a while: the AzerothCore build, then `db-import`
 populating three databases from the AzerothCore SQL dumps. `docker compose -f
 infra/compose.yml down` stops it all and keeps the data ("Where data lives").
 
+## The game server alone, for an MCP client
+
+To drive a character from an MCP client (Claude Code or any other) rather
+than through the runner, the quickstart's game server is all you need. Name
+the two servers and compose brings up `db`, `db-import` and `bootstrap` with
+them, and leaves out the runner and its image build, ClickHouse and the
+collector. Of the `data/` directories above, only `client`, `etc` and `logs`
+are used.
+
+`compose.yml` does not publish the module's port, because the runner reaches
+it on the compose network. wrath-mcp runs on the host, so publish the port on
+the host's loopback with an override file that stays out of git. `data/` is
+gitignored, so it can live there:
+
+```
+cat > data/mcp-port.yml <<'EOF'
+services:
+  worldserver:
+    ports: ["127.0.0.1:8086:8086"]
+EOF
+docker compose --env-file .env -f infra/compose.yml -f data/mcp-port.yml \
+  up -d authserver worldserver
+```
+
+Pass the same files to every later `up`. The module is then at
+`WRATHBENCH_MODULE_URL=http://127.0.0.1:8086`, and its port secret is
+`WRATHBENCH_MODULE_SECRET` from `.env`.
+
+For the account:
+
+- **Ready to use.** Bootstrap creates `RUNNER` and `POOL01` to `POOL04`, each
+  with its name as its password, and all five are in the module's allowlist.
+  Give each client its own account; `RUNNER` is the runner's default.
+- **In the allowlist but not created.** The other allowlisted names (`PROBE`,
+  `SHAKEOUT`, `SMOKE2` and the rest) need the `bootstrap` service form in
+  "Bootstrap". Use that form rather than `bun wb --local accounts ensure`,
+  which execs into the `runner` container that this setup does not start.
+- **A name of your own.** It also has to go into `AC_WRATH_BENCH_ACCOUNTS` in
+  `compose.yml`, and then the worldserver has to be recreated.
+
+wrath-mcp's `mcp/README.md`, "Connect an MCP client", takes it from there. In
+this checkout the stack is the `wrath-mcp/` submodule, and the root's
+`bun install --frozen-lockfile` already installs its dependencies; never run
+an install inside `wrath-mcp/`. Name a `--record-dir` and "Viewer only" below
+shows the sessions.
+
 ## Viewer only
 
 WrathBench can also run as nothing but the viewer, beside a wrath-mcp and an
-AzerothCore someone else runs. Every session that wrath-mcp records, whatever
-MCP client drove it, lists on the runs page and opens as a run.
+AzerothCore someone else runs, or the game server above. Every session that
+wrath-mcp records, whatever MCP client drove it, lists on the runs page and
+opens as a run.
 
 Run the standalone server with a store you name. A directory named with
 `--record-dir` is kept until you delete it (unless `--record-retention-days`
@@ -97,7 +144,9 @@ to be the user that ran wrath-mcp, because each session directory is mode
 0700. The port is published on the host's loopback only. Minimap tiles, if you
 have extracted them, come from `WRATHBENCH_MINIMAP_HOST`, an absolute path;
 without it the map draws its grid. Nothing reads a `.env`: the compose file
-and those variables are the whole of the configuration.
+and those variables are the whole of the configuration. Every other command on
+this file needs `WRATHBENCH_SESSION_STORE_HOST` set too, `ps`, `logs` and
+`down` included, because compose interpolates the whole file before it acts.
 
 A session lists under an id of its own (`mcp-` and 16 hex), never its
 directory's name, which is its token's fingerprint. It lists once its
