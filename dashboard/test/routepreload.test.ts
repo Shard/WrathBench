@@ -22,13 +22,14 @@ import { HOME_PRELOAD_EPISODE, routePreloads, type PreloadArgs } from "../src/li
 type Call = [string, ...unknown[]];
 
 /** A client that records each call and answers it with nothing. */
-function recorder(fail = false): { api: Parameters<typeof routePreloads>[0]; calls: Call[] } {
+function recorder(fail = false, info: object = {}): { api: Parameters<typeof routePreloads>[0]; calls: Call[] } {
   const calls: Call[] = [];
-  const answer = (name: string) => (...args: unknown[]) => {
+  const answer = (name: string, body: object = {}) => (...args: unknown[]) => {
     calls.push([name, ...args]);
-    return fail ? Promise.reject(new Error(name)) : Promise.resolve({} as never);
+    return fail ? Promise.reject(new Error(name)) : Promise.resolve(body as never);
   };
   const api = {
+    info: answer("info", info),
     tools: answer("tools"),
     positions: answer("positions"),
     ladder: answer("ladder"),
@@ -54,7 +55,8 @@ const page = (name: string): string => readFileSync(fileURLToPath(new URL(`../sr
 describe("routePreloads", () => {
   test("each route asks for what its page asks for first", () => {
     const cases: [keyof ReturnType<typeof routePreloads>, PreloadArgs, Call[]][] = [
-      ["home", nav(), [["tools"], ["positions"], ["ladder", "e90"]]],
+      // The group-owned calls wait for `/api/info` (below).
+      ["home", nav(), [["positions"], ["info"]]],
       ["ladder", nav(), [["ladder", "e90"], ["dungeons"]]],
       ["ladder", nav({ episode: "freeplay" }), [["ladder", episodeParam("freeplay")], ["dungeons"]]],
       ["ladder", nav({ episode: "nonsense" }), [["ladder", episodeParam("nonsense")], ["dungeons"]]],
@@ -63,7 +65,7 @@ describe("routePreloads", () => {
       ["map", nav(), [["positions"]]],
       ["runs", nav(), [["results", "all", true, "all"]]],
       ["models", nav(), [["models"], ["ladder", "freeplay"]]],
-      ["about", nav(), [["episodes"]]],
+      ["about", nav(), [["info"]]],
       ["campaigns", nav(), [["campaigns"]]],
       ["fleet", nav(), []],
       ["character", nav({}, { id: "run-1" }), [["character", "run-1"]]],
@@ -72,6 +74,25 @@ describe("routePreloads", () => {
       const { api, calls } = recorder();
       routePreloads(api)[route](args);
       expect([route, calls]).toEqual([route, want]);
+    }
+  });
+
+  test("a group's calls are made once /api/info says the group is on, and never when it is off", async () => {
+    const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+    const cases: [object, keyof ReturnType<typeof routePreloads>, Call[]][] = [
+      // Every group: an info that names none, and one that failed (below).
+      [{}, "home", [["positions"], ["info"], ["tools"], ["ladder", "e90"]]],
+      [{}, "about", [["info"], ["episodes"]]],
+      [{ groups: { runner: false, evals: false, viewer: true } }, "home", [["positions"], ["info"]]],
+      [{ groups: { runner: false, evals: false, viewer: true } }, "about", [["info"]]],
+      [{ groups: { runner: true, evals: false, viewer: true } }, "home", [["positions"], ["info"], ["tools"]]],
+      [{ groups: { runner: false, evals: true, viewer: true } }, "home", [["positions"], ["info"], ["ladder", "e90"]]],
+    ];
+    for (const [info, route, want] of cases) {
+      const { api, calls } = recorder(false, info);
+      routePreloads(api)[route](nav());
+      await settle();
+      expect([info, route, calls]).toEqual([info, route, want]);
     }
   });
 

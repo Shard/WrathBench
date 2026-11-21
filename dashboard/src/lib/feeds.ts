@@ -14,11 +14,18 @@ import { api } from "../api/client";
 import { type Poll, poll } from "./poll";
 import { SERIES_LATEST, type SeriesChoice, readSeriesPref, seriesParam, writeSeriesPref } from "./harness";
 import { groupsOf } from "./nav";
+import type { Groups } from "@viewer/groups";
 
 export interface Feeds {
   fleet: Poll<FleetResponse>;
   /** Slow on purpose: a build stamp changes on a deploy, not on a tick. */
   info: Poll<ApiInfoResponse>;
+  /**
+   * The deployment's groups, once `/api/info` has first answered: what a
+   * group's feed waits on before it asks for anything. A failed first info
+   * reads as every group, which is what an older viewer is.
+   */
+  groups: () => Promise<Groups>;
   /** True once the served dashboard build differs from the one this tab loaded. */
   stale: () => boolean;
   /**
@@ -75,7 +82,7 @@ export interface SeriesUrl {
 }
 
 /** A promise that never settles, shared, so a feed with nothing to ask holds no new one per tick. */
-const NEVER: Promise<never> = new Promise(() => {});
+export const NEVER: Promise<never> = new Promise(() => {});
 
 export function createFeeds(url: SeriesUrl): Feeds {
   /*
@@ -110,6 +117,7 @@ export function createFeeds(url: SeriesUrl): Feeds {
   // rewritten: the whole comparison is "what I loaded" against "what is served
   // now", so letting it follow the newest value would make it always equal.
   let first: string | null | undefined;
+  const groups = async (): Promise<Groups> => groupsOf(info.latest ?? (await firstInfo));
   return {
     /*
      * The runner group's feed: with that group off there is no fleet to ask
@@ -117,10 +125,11 @@ export function createFeeds(url: SeriesUrl): Feeds {
      * reads it then: the status badge and the fleet page are that group's too.
      */
     fleet: poll(
-      async () => (groupsOf(info.latest ?? (await firstInfo)).runner ? api.fleet() : NEVER),
+      async () => ((await groups()).runner ? api.fleet() : NEVER),
       () => (groupsOf(info.latest).runner ? 5_000 : 3_600_000),
     ),
     info,
+    groups,
     stale: (): boolean => {
       const now = info.latest?.dashboardBuild;
       if (first === undefined && now !== undefined) first = now;
