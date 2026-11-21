@@ -44,7 +44,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 
 /** One usage window, normalised: what the operator decided may be recorded, and nothing more. */
 export interface UsageWindow {

@@ -17,11 +17,13 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * rather than duplicated: the API wire types, the world→tile transform (with
  * the names of the maps that have tiles), the freeplay lineage walk, the
  * character aggregation over it, a run's sessions, the public projection's
- * allowlist, the public bucket's keys, the race and class names and the tile
- * index. All are import-free by construction (the wire types take one type
- * from the import-free driver registry and the session-side ones from the
- * inspector's, and the tile index its grid from the world→tile transform), so
- * nothing server-side follows them in. The trace and nearby codecs are the
+ * allowlist, the public bucket's keys and the tile index. The race and class
+ * names are the runner's (`runner/src/characters.ts`, by relative path), since
+ * the runner's core reads them too and never imports the viewer. All are
+ * import-free by construction (the wire types take one type from the
+ * import-free driver registry and the session-side ones from the inspector's,
+ * and the tile index its grid from the world→tile transform), so nothing
+ * server-side follows them in. The trace and nearby codecs are the
  * inspector's, imported by package name (`@wrathbench/inspector/codec/*`).
  */
 const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.1:8090";

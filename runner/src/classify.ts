@@ -19,7 +19,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 import { TERMINATION_REASONS, type TerminationReason } from "./config";
 import { RUN_DB_FILE } from "./rundb";
 import { readRunRow } from "./run-reader";

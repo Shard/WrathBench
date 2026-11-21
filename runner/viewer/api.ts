@@ -123,7 +123,7 @@ import {
   type RunListingRow,
   type RunStore,
 } from "./clickhouse";
-import { isArchiveDir } from "./archive-dir";
+import { isArchiveDir } from "../src/archive-dir";
 import { compressResponse } from "./compress";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import { createAdminApi } from "./admin-api";

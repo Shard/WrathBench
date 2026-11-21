@@ -14,7 +14,7 @@ import { mkdirSync, existsSync, readFileSync, statSync, utimesSync, writeFileSyn
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { listRuns } from "../viewer/runs";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "../src/archive-dir";
 import { scanRunTotals } from "../viewer/tail";
 import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds, runActivityAge } from "../src/archive";
 import { FANOUT_CHARACTERS, FANOUT_RUN, writeFanoutRun } from "./fixtures/fanout";

@@ -10,7 +10,7 @@
 
 import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { ARCHIVE_DIR } from "../../runner/viewer/archive-dir";
+import { ARCHIVE_DIR } from "../../runner/src/archive-dir";
 import { isValidRunId } from "../../runner/viewer/runs";
 import { holdsOnlyLaunchFiles } from "../../runner/src/launch-files";
 import { fanoutCharacters, SESSIONS_DIR } from "../../runner/src/run-reader";

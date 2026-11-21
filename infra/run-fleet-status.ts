@@ -99,7 +99,7 @@ import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy, accountHolders } from "./run-roster";
 import { EPISODE_LIST, EPISODES } from "../runner/src/episodes";
-import { className as classNameOf, raceName as raceNameOf } from "../runner/viewer/characters";
+import { className as classNameOf, raceName as raceNameOf } from "../runner/src/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
 import { runCampaignFile } from "../runner/src/campaign-file";
 import { isConcluded, type Campaign, type CampaignRefusal } from "../runner/src/campaigns";

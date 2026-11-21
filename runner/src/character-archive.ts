@@ -106,7 +106,7 @@ import { basename, dirname, join } from "node:path";
 import { finished } from "node:stream/promises";
 import { createGunzip, createGzip, type Gzip } from "node:zlib";
 import { z } from "zod";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 import { DEFAULT_DRIVER } from "./drivers";
 import { liveOwnerOf, readRunFact } from "./models";
 import { formatLike } from "./move-credential";

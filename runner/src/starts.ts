@@ -6,7 +6,7 @@
  * The pairs are what a 3.3.5a client's character-creation screen offers: the
  * pinned AzerothCore tree's `playercreateinfo` rows, by the client's own ids
  * (`enum Races`/`enum Classes` in SharedDefines.h, named in
- * `runner/viewer/characters.ts`). The Death Knight (class 6) is left out: the
+ * `runner/src/characters.ts`). The Death Knight (class 6) is left out: the
  * server creates one only on an account that already holds a level-55
  * character (`CharacterCreating.MinLevelForHeroicCharacter`), which a fresh
  * run's account does not, so it is not a start this harness can offer.

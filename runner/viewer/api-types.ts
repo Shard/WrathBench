@@ -427,7 +427,7 @@ export interface RunRow {
   /**
    * The starting character the run was launched with (the extras cycle
    * gives free models a different one per extra run). Ids are the client's own
-   * 3.3.5a race/class ids; the names are `runner/viewer/characters.ts`
+   * 3.3.5a race/class ids; the names are `runner/src/characters.ts`
    * resolving them, with an id no table knows rendering as its own number.
    * Null is "not recorded" — a run whose metadata predates the fields.
    */
@@ -2242,7 +2242,7 @@ export interface ResultRun {
   extra: boolean;
   /**
    * The run's starting character (the extras cycle). Ids as recorded,
-   * names resolved by `runner/viewer/characters.ts`; null is "not recorded".
+   * names resolved by `runner/src/characters.ts`; null is "not recorded".
    * A dimension the charts *label and filter on*, never a group key: the
    * baseline character is the comparison set.
    */

@@ -77,7 +77,7 @@ export const HEARTBEAT_DEAD_MS = 120_000;
 export const MIN_TOKEN_LENGTH = 32;
 /** wrath-mcp/mcp/src/redact.ts. */
 export const REDACTED = "[redacted]";
-/** runner/viewer/archive-dir.ts. */
+/** runner/src/archive-dir.ts. */
 export const ARCHIVE_DIR = "archive";
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;

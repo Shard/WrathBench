@@ -38,7 +38,7 @@ import { join } from "node:path";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { readRunRow } from "./run-reader";
 import { readMeta } from "./trajectory";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 
 /** The newest run on an account that played a character name, and whether it ended. */
 export interface CharacterOwner {

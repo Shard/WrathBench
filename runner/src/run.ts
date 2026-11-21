@@ -54,7 +54,7 @@ import { join } from "node:path";
 import { hostname } from "node:os";
 import { latestReading } from "./run-reader";
 import { archiveIfNoResponses } from "./archive";
-import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { ARCHIVE_DIR } from "./archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseRunSecret, moduleAuthHeaders, moduleIdentity, releaseSessionSecret } from "@wrathbench/mcp/module-auth";
 import { comparabilityOf, fetchServerBuild, harnessSeries, sameComparability } from "./comparability";
@@ -113,7 +113,7 @@ import { harnessVersion, stackCommit } from "./version";
 import { SDK_VERSION } from "@wrathbench/sdk";
 import { Watchdogs } from "./watchdogs";
 import { watchEndRequest } from "./end-request";
-import { className, raceName } from "../viewer/characters";
+import { className, raceName } from "./characters";
 
 /**
  * A boolean flag: bare `--wiki-coords` or `--wiki-coords true|1|yes` is on,

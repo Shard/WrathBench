@@ -33,7 +33,7 @@
  */
 
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
-import { characterLabel, className, raceName } from "./characters";
+import { characterLabel, className, raceName } from "../src/characters";
 import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";

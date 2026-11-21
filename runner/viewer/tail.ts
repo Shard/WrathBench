@@ -57,7 +57,7 @@ import {
   systemTextMatches,
   windowEntryIndices,
 } from "../src/request-record";
-import { MODEL_RESPONSE_RECORD } from "./archive-dir";
+import { MODEL_RESPONSE_RECORD } from "../src/archive-dir";
 import { SEGMENT_MARKS, segmentsFrom, type ActiveSegment, type SegmentMark } from "./sessions";
 
 const NEWLINE = 0x0a;
