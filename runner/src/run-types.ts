@@ -437,7 +437,7 @@ export interface EntrySummary {
 /**
  * One session: a stretch of a run during which the harness was actually
  * driving, from its first `meta` or a `resume` to a `pause` or the
- * `termination` (`runner/viewer/sessions.ts`, which owns the derivation). A
+ * `termination` (`runner/src/sessions.ts`, which owns the derivation). A
  * run resumed in place days later is two of these under one run id.
  */
 export interface ActiveSegment {

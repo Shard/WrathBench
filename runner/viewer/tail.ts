@@ -58,7 +58,7 @@ import {
   windowEntryIndices,
 } from "../src/request-record";
 import { MODEL_RESPONSE_RECORD } from "../src/archive-dir";
-import { SEGMENT_MARKS, segmentsFrom, type ActiveSegment, type SegmentMark } from "./sessions";
+import { SEGMENT_MARKS, segmentsFrom, type ActiveSegment, type SegmentMark } from "../src/sessions";
 
 const NEWLINE = 0x0a;
 

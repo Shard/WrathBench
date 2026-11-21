@@ -202,8 +202,8 @@ table and the run page cannot disagree. Note that this is not the
 `episode-limit` watchdog's clock, which is per-process uptime since the current
 resume and so never sees paused time.
 
-Those segments are the run's **sessions** (`sessions.ts`, the one definition the
-viewer and the dashboard share over `@viewer/*`). A run is one session or more:
+Those segments are the run's **sessions** (`runner/src/sessions.ts`, the one definition the
+run totals, the viewer and the dashboard share). A run is one session or more:
 a paused freeplay run is resumed in place by the fleet, however much later, so
 one run id can hold two sessions days apart. `/api/run/<id>` serves them as
 `sessions`, the results rows and a character's attempts carry them too, and

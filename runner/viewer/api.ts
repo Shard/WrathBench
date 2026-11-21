@@ -143,7 +143,7 @@ import {
   tileNotModified,
   tileValidators,
 } from "./tiles";
-import { playtimeMs, recordSegments, segmentsFrom } from "./sessions";
+import { playtimeMs, recordSegments, segmentsFrom } from "../src/sessions";
 import { TrajectoryTail, RunTotalsScanner, type RunTotals } from "./tail";
 
 /**

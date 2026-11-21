@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformOf } from "../src/platform";
 import { readRun } from "../viewer/runs";
-import { playtimeMs, segmentsFrom } from "../viewer/sessions";
+import { playtimeMs, segmentsFrom } from "../src/sessions";
 import {
   TrajectoryTail,
   claudeModelTurns,
