@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { calculateVerifier, isWorldRealm, main, parseArgs } from "./bootstrap";
+import { calculateVerifier, extraAccountsOf, isWorldRealm, main, parseArgs } from "./bootstrap";
 import { newWorldId, REALM_MAX, REALM_MIN } from "../world";
 
 type Row = { id: number; salt: string; verifier: string };
@@ -180,6 +180,46 @@ describe("the generated pool", () => {
       })();
       expect(code).toBe(2);
       expect(opened).toBe(false);
+    }
+  });
+});
+
+describe("WRATHBENCH_EXTRA_ACCOUNTS", () => {
+  test("the plain run creates each named one, its name its password, trimmed, uppercased and once", async () => {
+    const db = fakeDb();
+    expect(await run([], db, { WRATHBENCH_EXTRA_ACCOUNTS: " alice,BOB ,, Alice" })).toBe(0);
+    expect([...db.accounts.keys()].sort()).toEqual(["ALICE", "BOB", "RUNNER"]);
+    const bob = db.accounts.get("BOB")!;
+    expect(calculateVerifier("BOB", "BOB", Buffer.from(bob.salt, "hex")).toString("hex").toUpperCase()).toBe(bob.verifier);
+    expect(extraAccountsOf({ WRATHBENCH_EXTRA_ACCOUNTS: " alice,BOB ,, Alice" })).toEqual({ names: ["ALICE", "BOB"] });
+  });
+
+  test("an existing one is left as it is; unset or empty creates none; the account-only mode ignores it", async () => {
+    const seeded = fakeDb({ ALICE: { id: 7, salt: "AA", verifier: "BB" } });
+    await run([], seeded, { WRATHBENCH_EXTRA_ACCOUNTS: "ALICE" });
+    expect(seeded.accounts.get("ALICE")).toEqual({ id: 7, salt: "AA", verifier: "BB" });
+    for (const env of [{}, { WRATHBENCH_EXTRA_ACCOUNTS: "" }, { WRATHBENCH_EXTRA_ACCOUNTS: " , " }]) {
+      const db = fakeDb();
+      await run([], db, env);
+      expect([...db.accounts.keys()]).toEqual(["RUNNER"]);
+    }
+    const only = fakeDb();
+    await run(["--accounts-only", "SMOKE6"], only, { WRATHBENCH_EXTRA_ACCOUNTS: "ALICE" });
+    expect([...only.accounts.keys()]).toEqual(["SMOKE6"]);
+  });
+
+  test("a bad, GM or tenant name exits 2 before anything connects", async () => {
+    for (const bad of ["ALICE,5BOB", "ALICE BOB", "spectator", "TENANT01"]) {
+      let opened = false;
+      const error = console.error;
+      console.error = () => {};
+      try {
+        const code = await main([], async () => ((opened = true), fakeDb().sql), { WRATHBENCH_EXTRA_ACCOUNTS: bad });
+        expect(code, bad).toBe(2);
+      } finally {
+        console.error = error;
+      }
+      expect(opened, bad).toBe(false);
     }
   });
 });

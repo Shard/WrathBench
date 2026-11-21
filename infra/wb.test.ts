@@ -241,6 +241,7 @@ for a in "$@"; do
   if [ "$a" = "sh" ]; then echo "\${FAKE_PRESENT:-present}"; exit 0; fi
 done
 if [ "\${3:-}" = "get" ]; then echo "registry.example/wrathbench-runner:harness-0.5-1-gold"; exit 0; fi
+if [ "\${4:-}" = "ps" ]; then echo "\${FAKE_RUNNER_ID:-}"; exit 0; fi
 exit "\${FAKE_RC:-0}"
 `;
 
@@ -320,10 +321,23 @@ describe("bun wb, for real", () => {
     ]);
   });
 
-  test("--local checks nothing first: compose's runner has this checkout's file", () => {
+  test("--local checks nothing first, and needs no runner: a one-off of compose's bootstrap service, this checkout's file", () => {
     const r = runWb(["--local", "accounts", "ensure", "SMOKE5"]);
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual([["docker", "compose", "-f", "infra/compose.yml", "exec", "-T", "runner", "bun", "infra/bootstrap/bootstrap.ts", "--accounts-only", "SMOKE5"]]);
+    expect(r.calls).toEqual([
+      ["docker", "compose", "-f", "infra/compose.yml", "run", "--rm", "--no-deps", "-T", "bootstrap", "bun", "infra/bootstrap/bootstrap.ts", "--accounts-only", "SMOKE5"],
+    ]);
+  });
+
+  test("a failed --local runner command says how to start the runner when it is not running, and only then", () => {
+    const down = runWb(["--local", "smoke", "module-slice"], { FAKE_RC: "1" });
+    expect(down.code).toBe(1);
+    expect(down.calls[1]).toEqual(["docker", "compose", "-f", "infra/compose.yml", "ps", "--status", "running", "-q", "runner"]);
+    expect(down.err).toContain("compose's `runner` container, which is not running");
+    expect(down.err).toContain("up -d --no-deps runner");
+    const up = runWb(["--local", "smoke", "module-slice"], { FAKE_RC: "1", FAKE_RUNNER_ID: "abc123" });
+    expect(up.code).toBe(1);
+    expect(up.err).not.toContain("not running");
   });
 
   test("help, and an unknown command, run nothing", () => {
