@@ -1992,11 +1992,12 @@ export interface TokenSum {
  * records, the only place the finished figures are. The driver writes one
  * usage-bearing `response` per message (a message's earlier envelopes carry
  * none), and that usage's input is the finished count but its output the
- * API's `message_start` snapshot, a token or a few (runner/src/adapter-claude.ts).
+ * API's `message_start` snapshot, a token or a few, unless the driver recorded
+ * the message's finished count (`completion_final`; runner/src/adapter-claude.ts).
  * A result closes one driver turn: its `num_turns` and `usage` are that turn's
  * (`costUsd` alone is cumulative), so the run's are the sums. Whatever messages
  * no result's usage covers — a turn cut short, killed or paused before its
- * result — keep their own figures, and say which half of them is a snapshot.
+ * result — keep their own figures, and say which of them is a snapshot.
  *
  * Fed in record order. A `driver` record opens a new CLI process, so a turn
  * still open there never gets its result; a result that carries no usage
@@ -2016,18 +2017,19 @@ export interface ClaudeTally {
   done: TokenSum;
   /**
    * Messages of driver turns that are over with no result's usage: input
-   * finished, output an opening snapshot. `unresulted`: those of the turns
-   * that got no result at all, which the CLI's cost leaves out too.
+   * finished, output an opening snapshot except on the `final` of them, whose
+   * finished count the driver recorded. `unresulted`: those of the turns that
+   * got no result at all, which the CLI's cost leaves out too.
    */
-  open: TokenSum & { messages: number; turns: number; unresulted: number };
+  open: TokenSum & { messages: number; turns: number; unresulted: number; final: number };
   /** The same, for the driver turn the record ends inside: in flight on a live run. */
-  pending: TokenSum & { messages: number; turns: Set<number | null> };
+  pending: TokenSum & { messages: number; turns: Set<number | null>; final: number };
 }
 
 const noTokens = (): TokenSum => ({ input: 0, output: 0, cacheRead: null, cacheWrite: null });
 
 function newClaude(): ClaudeTally {
-  return { results: 0, covering: 0, turns: 0, done: noTokens(), open: { ...noTokens(), messages: 0, turns: 0, unresulted: 0 }, pending: { ...noTokens(), messages: 0, turns: new Set() } };
+  return { results: 0, covering: 0, turns: 0, done: noTokens(), open: { ...noTokens(), messages: 0, turns: 0, unresulted: 0, final: 0 }, pending: { ...noTokens(), messages: 0, turns: new Set(), final: 0 } };
 }
 
 /**
@@ -2105,8 +2107,9 @@ function closeClaudeTurn(k: ClaudeTally, resulted: boolean): void {
   mergeTokens(k.open, p);
   k.open.messages += p.messages;
   k.open.turns += p.turns.size;
+  k.open.final += p.final;
   if (!resulted) k.open.unresulted += p.turns.size;
-  k.pending = { ...noTokens(), messages: 0, turns: new Set() };
+  k.pending = { ...noTokens(), messages: 0, turns: new Set(), final: 0 };
 }
 
 /**
@@ -2138,6 +2141,8 @@ function noteClaude(k: ClaudeTally, t: string, p: Record<string, unknown> | null
     addTokens(k.pending, f);
     k.pending.messages++;
     k.pending.turns.add(intOf(p?.["turn"]));
+    // The driver recorded the message's finished output count (runner/src/run-totals.ts `ReportedUsage.final`).
+    if (obj(p?.["usage"])["completion_final"] === true) k.pending.final++;
   } else if (t === "claude_result") {
     k.results++;
     const f = resultFigures(p);
@@ -2149,7 +2154,7 @@ function noteClaude(k: ClaudeTally, t: string, p: Record<string, unknown> | null
     k.covering++;
     if (k.pending.messages > 0) k.turns += numTurnsOf(p) ?? k.pending.messages;
     addTokens(k.done, f);
-    k.pending = { ...noTokens(), messages: 0, turns: new Set() };
+    k.pending = { ...noTokens(), messages: 0, turns: new Set(), final: 0 };
   }
 }
 
@@ -2196,8 +2201,9 @@ function inputText(input: number, cacheRead: number | null, cacheWrite: number |
  * its responses reported. A claude-code run's (`claude`, or any run with a
  * `claude_result`) reads its tokens and model turns off the CLI's results
  * instead, and names what no result covers as what it is: finished input and
- * an opening-snapshot output. `live`: the record's last driver turn is still
- * running, so its messages are in flight rather than cut short.
+ * an opening-snapshot output, or the finished output where the driver recorded
+ * it. `live`: the record's last driver turn is still running, so its messages
+ * are in flight rather than cut short.
  */
 export function costLine(
   c: CostTally,
@@ -2226,6 +2232,7 @@ export function costLine(
       open.messages += k.pending.messages;
       open.turns += k.pending.turns.size;
       open.unresulted += k.pending.turns.size;
+      open.final += k.pending.final;
     }
     // The CLI's figure alone: the viewer adds the turns no result covered, at list (runner/viewer/pricing.ts `backfilled`).
     const usd =
@@ -2237,11 +2244,15 @@ export function costLine(
       parts.push(`tokens on ${k.covering} CLI result(s): ${inputText(k.done.input, k.done.cacheRead, k.done.cacheWrite)}, out ${fmtTokens(k.done.output)} over ${k.turns} model turns`);
     }
     // Named before its figures, so a line cut at the terminal's width never shows a snapshot bare.
-    const snapshot = (s: TokenSum): string => `${inputText(s.input, s.cacheRead, s.cacheWrite)}, out ${fmtTokens(s.output)} (opening snapshots)`;
+    // A message the driver gave its finished output count is no snapshot, and says so.
+    const kind = (s: { messages: number; final: number }): string =>
+      s.final === 0 ? "snapshot output only" : s.final >= s.messages ? "finished output" : `finished output on ${s.final}, snapshot on the rest`;
+    const snapshot = (s: TokenSum & { messages: number; final: number }): string =>
+      `${inputText(s.input, s.cacheRead, s.cacheWrite)}, out ${fmtTokens(s.output)} (${s.final === 0 ? "opening snapshots" : s.final >= s.messages ? "finished counts" : "partly opening snapshots"})`;
     if (open.messages > 0) {
-      parts.push(`${k.covering > 0 ? "with no result" : "no CLI result reported usage"}, snapshot output only: ${open.messages} message(s) in ${open.turns} driver turn(s), ${snapshot(open)}`);
+      parts.push(`${k.covering > 0 ? "with no result" : "no CLI result reported usage"}, ${kind(open)}: ${open.messages} message(s) in ${open.turns} driver turn(s), ${snapshot(open)}`);
     }
-    if (flight !== null && flight.messages > 0) parts.push(`in flight, no result yet, snapshot output only: ${flight.messages} message(s), ${snapshot(flight)}`);
+    if (flight !== null && flight.messages > 0) parts.push(`in flight, no result yet, ${kind(flight)}: ${flight.messages} message(s), ${snapshot(flight)}`);
     if (parts.length === 0) parts.push("no tokens reported");
     if (u.responses > u.reported) parts.push(`${u.responses} response records, ${u.reported} with usage (one per message; the rest are its earlier envelopes)`);
     return `over the run: ${usd} · ${parts.join(" · ")}`;
@@ -4377,7 +4388,8 @@ export async function inspectSession(runId: string, opts: SessionOptions, out: O
  * `DriverEntry.usage`, copied because this file imports nothing, and pinned by
  * the test. `response`: one `response` record per request, its usage the
  * request's. `turn-snapshot` (claude-code): one usage-bearing `response` per
- * message, its input finished but its output the stream's opening snapshot,
+ * message, its input finished but its output the stream's opening snapshot
+ * unless the driver recorded the message's finished count (`completion_final`),
  * the turn's finished output and its model-turn count (`num_turns`) on its
  * `claude_result`. `exec-tally` (codex): one
  * `response` per CLI turn, its figures a tally of every call in it.
@@ -4398,7 +4410,8 @@ export const DRIVER_USAGE: Readonly<Record<string, UsageShape>> = {
  * A figure not reported is null, never 0. `prompt` is the whole prompt with
  * the cached part inside it, the runner's convention for every driver;
  * `output` is the finished count, which on claude-code is the turn's result
- * spread evenly over the turn's messages, and null where the turn has none.
+ * spread evenly over the turn's messages, and where the turn has none the
+ * message's own finished count if the driver recorded it, else null.
  * `weight` is how many requests the record stands for: 1, except on
  * claude-code, where a message its turn's result covers stands for an even
  * share of the CLI's own `num_turns` for that turn.
@@ -4451,8 +4464,10 @@ export interface RequestScan {
   regressions: number;
   /** claude-code: the CLI's `num_turns`, summed over the results that cover messages. */
   cliTurns: number;
-  /** claude-code: messages no result covers (a driver turn cut short), and how many driver turns they are in. */
-  open: { calls: number; turns: number };
+  /** claude-code: messages no result covers (a driver turn cut short), how many driver turns they are in, and how many of them carry their finished output count. */
+  open: { calls: number; turns: number; final: number };
+  /** claude-code: messages whose record carries their finished output count (`completion_final`), result or none. */
+  finalCalls: number;
   /** claude-code: a result's output and turns with no message of its own to spread them over. */
   orphanOutput: number;
   orphanTurns: number;
@@ -4508,7 +4523,8 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
     derived: 0,
     regressions: 0,
     cliTurns: 0,
-    open: { calls: 0, turns: 0 },
+    open: { calls: 0, turns: 0, final: 0 },
+    finalCalls: 0,
     orphanOutput: 0,
     orphanTurns: 0,
     cli: [],
@@ -4524,11 +4540,12 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
   let thread: string | null = null;
   // claude-code: the messages since the last result in this CLI process, which the next result covers.
   let segment: ModelCall[] = [];
-  /** The segment's messages get no result: each stays one request, its output unreported. */
+  /** The segment's messages get no result: each stays one request, its output unreported unless the driver recorded its finished count. */
   const closeSegment = (): void => {
     if (segment.length === 0) return;
     a.open.calls += segment.length;
     a.open.turns += new Set(segment.map((c) => c.turn)).size;
+    a.open.final += segment.filter((c) => c.output !== null).length;
     segment = [];
   };
   const fn: RecFn = (r) => {
@@ -4583,7 +4600,9 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
           } else {
             a.cliTurns += turns ?? segment.length;
             for (const c of segment) {
+              // The result settles the turn whole: a message's own finished count is replaced, never added to.
               c.output = out / segment.length;
+              c.reasoning = null;
               c.weight = (turns ?? segment.length) / segment.length;
             }
           }
@@ -4605,8 +4624,10 @@ function requestReducer(shape: UsageShape): { fn: RecFn; done: () => RequestScan
           return;
         }
         if (shape === "turn-snapshot" && f !== null) {
-          // The input is the finished count; the output an opening snapshot, settled from the turn's result when it lands.
-          f = { ...f, output: null, reasoning: null };
+          // The input is the finished count; the output an opening snapshot, settled from the turn's result when it lands,
+          // unless the driver recorded the message's finished count, which stands until a result settles the turn.
+          if (obj(raw)["completion_final"] === true) a.finalCalls++;
+          else f = { ...f, output: null, reasoning: null };
         } else if (shape === "exec-tally" && f !== null && p?.["usageCumulative"] === undefined) {
           // A thread total, from before the driver wrote per-turn deltas: the turn's is what it added.
           const cur: CodexTotal = { prompt: f.prompt ?? 0, completion: f.output ?? 0 };
@@ -5263,9 +5284,13 @@ export async function inspectRequests(runId: string, opts: RequestsOptions, out:
   if (shape === "turn-snapshot") {
     notes.push(
       `claude-code: requests are the CLI's own model turns (num_turns on each claude_result, ${tidy(scan.cliTurns)} in all), each turn's spread evenly over its messages, the response records carrying usage (${scan.envelopes} earlier envelope(s) of a message carry none); ` +
-        `a message's input is the finished count, its output the stream's opening snapshot, so output is each turn's claude_result spread the same way` +
+        (scan.finalCalls === 0
+          ? `a message's input is the finished count, its output the stream's opening snapshot, so output is each turn's claude_result spread the same way`
+          : `a message's input is the finished count, and so is its output on the ${scan.finalCalls} message(s) whose finished count the driver recorded (the stream's opening snapshot on the rest); where a turn has a claude_result, output is that result spread the same way, replacing the messages' own`) +
         (scan.open.calls > 0
-          ? `; ${scan.open.calls} message(s) in ${scan.open.turns} driver turn(s) have no result (cut short, or still running): each counts as one request, its output unreported (the record holds only the snapshot), never a figure`
+          ? scan.open.final === 0
+            ? `; ${scan.open.calls} message(s) in ${scan.open.turns} driver turn(s) have no result (cut short, or still running): each counts as one request, its output unreported (the record holds only the snapshot), never a figure`
+            : `; ${scan.open.calls} message(s) in ${scan.open.turns} driver turn(s) have no result (cut short, or still running): each counts as one request, its output its own finished count on ${scan.open.final} of them and unreported on the rest (the record holds only the snapshot), never a figure`
           : ""),
     );
     if (scan.orphanOutput > 0) notes.push(`claude-code: ${fmtTokens(scan.orphanOutput)} output and ${scan.orphanTurns} model turn(s) on result(s) with no message of their own are left out`);

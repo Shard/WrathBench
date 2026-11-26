@@ -265,9 +265,12 @@ envelopes carry the API's `message_start` usage, whose
 `output_tokens` is the snapshot taken before the reply exists — one to
 thirty-odd tokens, never the finished count — while its input figures are
 right. Summing them read ~300× low (508 responses summing to 671 output tokens
-on a run whose 23 `claude_result` records report 207,062). So where a turn has a
+on a run whose 23 `claude_result` records report 207,062). The driver now
+replaces that snapshot with the message's finished count where the CLI streams
+it (`completion_final`, read as `usage.final`), but a run recorded before that,
+or a message cut off mid-stream, has only the snapshot. So where a turn has a
 `claude_result`, the viewer takes that turn's output from it and ignores the
-snapshots, and the turn becomes the measured unit for `tps`: the result's
+responses' own, and the turn becomes the measured unit for `tps`: the result's
 `output_tokens` over the SUM of that turn's span clocks, each timed by the rule
 above (so a stretch across a pause drops out). The clock stays model time, which
 keeps the figure comparable to the fixed loop's request-to-response; the CLI's
@@ -280,15 +283,20 @@ The result's `iterations` array is documented as one
 entry per API call but holds only the last call on every CLI version logged so
 far, so the per-reply path is gated on the entries summing to the turn total —
 true on a one-call turn, declined on everything else. A turn with no result (in
-flight, or cut short by a watchdog) keeps its snapshot figures, which are all
-anyone has for it.
+flight, or cut short by a watchdog) keeps its responses' figures, which are all
+anyone has for it: finished counts where the driver recorded them, snapshots
+elsewhere.
 
 A run where NONE of the turns produced a result — 21 of the 29 claude-code runs
-on disk, because a watchdog kill is the normal ending — has a
-completion total resting entirely on those snapshots, and `tokenTotals` reports
-`source: "snapshot"` for it rather than `"reported"`. It is neither an estimate
-nor a measurement: provider-reported and known to be far too low, so the run page
-labels it and its rate as under-read. A run that
+on disk, because a watchdog kill was the normal ending, and every freeplay run
+while it lasts — has a completion total resting on its responses alone. Where
+its snapshot-only replies outnumber its finished-count ones, `tokenTotals`
+reports `source: "snapshot"` for it rather than `"reported"`. It is neither an
+estimate nor a measurement: provider-reported and known to be far too low, so
+the run page labels it and its rate as under-read. A majority and not "any",
+because a run recorded across the driver's change holds both kinds and reads
+`snapshot` until the finished counts outnumber the old replies; with no
+finished-count reply it is the old rule exactly. A run that
 resolved its turns and was cut off mid-flight on the last one stays `reported`;
 labelling that `snapshot` over a handful of tokens would be the same mistake
 pointing the other way.

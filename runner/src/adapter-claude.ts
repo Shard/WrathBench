@@ -76,12 +76,14 @@
  *
  * ## Winding down instead of killing mid-turn
  *
- * The whole episode is usually ONE CLI turn, and the only place the finished
- * output count, the metered cost and the turn clock ever appear is the
- * stream-json `result` envelope that closes it (`claude_result`). So killing
- * the CLI the instant a watchdog fires threw all three away: on 2026-08-25, 6
- * of 9 lane-2 runs fell back to `tokens.source: "snapshot"` — the API's
- * `message_start` snapshots, ~300× low — with no cost at all.
+ * The whole episode is usually ONE CLI turn, and the only place the metered
+ * cost and the turn clock ever appear is the stream-json `result` envelope that
+ * closes it (`claude_result`). So killing the CLI the instant a watchdog fires
+ * threw both away: on 2026-08-25, 6 of 9 lane-2 runs fell back to
+ * `tokens.source: "snapshot"` — the API's `message_start` snapshots, ~300× low
+ * — with no cost at all. Each message's finished output count now also arrives
+ * on its own `message_delta` stream event (`--include-partial-messages`), but
+ * the cost still does not.
  *
  * So a watchdog or the tool-call ceiling firing WHILE A TURN IS IN FLIGHT no
  * longer sends SIGTERM. The termination is recorded first, exactly as before —
@@ -408,6 +410,11 @@ function assistantBlocks(msg: Record<string, unknown>): AssistantBlock[] {
  * do the same arithmetic either way. `cache_write_tokens` is the one field with
  * no OpenAI-compat counterpart: it is present only when the provider says so,
  * because "unknown" and "zero" must not render alike.
+ *
+ * An `assistant` envelope's output count is the API's `message_start`
+ * snapshot, not what the message ended up producing. The driver replaces it
+ * with the finished count off the message's `message_delta` stream event when
+ * one arrives (`finalizeClaudeUsage`), and says so with `completion_final`.
  */
 export interface ClaudeUsage {
   prompt_tokens: number;
@@ -415,6 +422,10 @@ export interface ClaudeUsage {
   total_tokens: number;
   cached_tokens?: number;
   cache_write_tokens?: number;
+  /** Present, and true, only where `completion_tokens` is the message's finished count. */
+  completion_final?: true;
+  /** The message's thinking tokens, part of `completion_tokens`; only beside a finished count that says. */
+  reasoning_tokens?: number;
 }
 
 export function normalizeClaudeUsage(raw: unknown): ClaudeUsage | undefined {
@@ -442,6 +453,64 @@ export function normalizeClaudeUsage(raw: unknown): ClaudeUsage | undefined {
 function assistantUsage(msg: Record<string, unknown>): ClaudeUsage | undefined {
   const message = msg["message"] as { usage?: unknown } | undefined;
   return normalizeClaudeUsage(message?.usage);
+}
+
+/**
+ * What a `stream_event` envelope (`--include-partial-messages`) says about a
+ * message's finished output, or null when it says nothing.
+ *
+ * The CLI forwards the API's raw stream events, each wrapped with the message
+ * id it belongs to (`api_message_id`). Only `message_delta` matters here: it
+ * closes the message and its `usage.output_tokens` is the finished count, where
+ * the `assistant` envelopes carry the `message_start` snapshot (on the 2.1.321
+ * probe, 16 there against 52 here, and the deltas of a turn sum exactly to its
+ * `result`). `message_start` is read for its id only, the fallback where a
+ * delta's wrapper carries none. Every other event is token-by-token content
+ * the `assistant` envelopes repeat whole.
+ */
+export type ClaudeStreamEvent =
+  | { kind: "start"; id: string }
+  | { kind: "delta"; id: string | undefined; usage: Record<string, unknown> };
+
+export function claudeStreamEvent(msg: Record<string, unknown>): ClaudeStreamEvent | null {
+  const event = msg["event"];
+  if (event === null || typeof event !== "object") return null;
+  const e = event as Record<string, unknown>;
+  const wrapped = typeof msg["api_message_id"] === "string" ? msg["api_message_id"] : undefined;
+  if (e["type"] === "message_start") {
+    const id = (e["message"] as { id?: unknown } | undefined)?.id;
+    const own = typeof id === "string" ? id : wrapped;
+    return own === undefined ? null : { kind: "start", id: own };
+  }
+  if (e["type"] !== "message_delta") return null;
+  const usage = e["usage"];
+  if (usage === null || typeof usage !== "object") return null;
+  const out = (usage as Record<string, unknown>)["output_tokens"];
+  if (typeof out !== "number" || !Number.isFinite(out)) return null;
+  return { kind: "delta", id: wrapped, usage: usage as Record<string, unknown> };
+}
+
+/**
+ * A message's usage with its output side replaced by the finished count off
+ * its `message_delta` (`claudeStreamEvent`). The input side stays the
+ * envelope's, which is already the finished count; where the envelope carried
+ * no usage at all, the delta's own is normalised instead. Thinking tokens ride
+ * along where the delta reports them.
+ */
+export function finalizeClaudeUsage(base: ClaudeUsage | undefined, delta: Record<string, unknown>): ClaudeUsage | undefined {
+  const from = base ?? normalizeClaudeUsage(delta);
+  if (from === undefined) return undefined;
+  const completion = delta["output_tokens"] as number;
+  const usage: ClaudeUsage = {
+    ...from,
+    completion_tokens: completion,
+    total_tokens: from.prompt_tokens + completion,
+    completion_final: true,
+  };
+  const details = delta["output_tokens_details"];
+  const thinking = details !== null && typeof details === "object" ? (details as Record<string, unknown>)["thinking_tokens"] : undefined;
+  if (typeof thinking === "number" && Number.isFinite(thinking)) usage.reasoning_tokens = thinking;
+  return usage;
 }
 
 /** The envelope type `wakeReader` pushes; not a CLI message, and acted on nowhere. */
@@ -543,7 +612,8 @@ export function compactionRecord(turn: number, msg: Record<string, unknown>): Co
 
 /**
  * The exact flag set, in one place so the README and the tests can assert it.
- * Every flag here exists in claude 2.1.238 (`claude -p --help`); nothing is
+ * Every flag here exists in claude 2.1.238 (`claude -p --help`) except
+ * `--include-partial-messages`, verified on the pinned 2.1.321; nothing is
  * invented. Notably absent: `--max-turns` (not in this CLI version — driver
  * turns are bounded by `maxTurns` in the runner instead) and
  * `--permission-mode` (`--allowed-tools` grants exactly the tools our server
@@ -558,6 +628,11 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     "stream-json",
     "--output-format",
     "stream-json",
+    // The API's raw stream events as `stream_event` envelopes: each message's
+    // `message_delta` carries its finished output count, which the `assistant`
+    // envelopes do not (they carry the `message_start` snapshot). Read for that
+    // one figure and never recorded; nothing about what the model sees changes.
+    "--include-partial-messages",
     "--system-prompt",
     o.systemPrompt ?? CLAUDE_CODE_SYSTEM_PROMPT,
     "--mcp-config",
@@ -1299,11 +1374,18 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    *
    * Which means the newest entry of a message is held back by one envelope: it
    * is written as soon as anything shows it was not the last (a new message id,
-   * the end of the turn) and, failing that, by shutdown().
+   * the end of the turn) and, failing that, by shutdown(). While it is held,
+   * the message's `message_delta` stream event lands and replaces its output
+   * snapshot with the finished count (`finalizeClaudeUsage`).
    */
-  let pendingResponse:
-    | { idKey: string; entry: Record<string, unknown> & { t: string }; usage: ReturnType<typeof assistantUsage> }
-    | null = null;
+  interface PendingResponse {
+    idKey: string;
+    entry: Record<string, unknown> & { t: string };
+    usage: ClaudeUsage | undefined;
+  }
+  let pendingResponse: PendingResponse | null = null;
+  /** The id of the newest `message_start` seen, for a `message_delta` whose wrapper names none. */
+  let streamMessageId: string | undefined;
   const flushPendingResponse = (): void => {
     if (pendingResponse === null) return;
     const { entry, usage } = pendingResponse;
@@ -1533,10 +1615,10 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               // and it is the LAST envelope's. Note what that figure is and is
               // not: input is the finished count, output is the `message_start`
               // snapshot the API sends before the reply exists (1–33 tokens),
-              // never what the reply ended up costing. The finished output count
-              // arrives only on the turn's `result` envelope, which is where the
-              // viewer reads it; a turn cut short by the wall clock never gets
-              // one, and its snapshots are all anyone has.
+              // never what the reply ended up costing. The message's
+              // `message_delta` stream event, which lands while this entry is
+              // held, replaces it with the finished count (`stream_event`
+              // below); a message cut short before its delta keeps the snapshot.
               const messageId = (msg["message"] as { id?: unknown } | undefined)?.id;
               const idKey = typeof messageId === "string" ? messageId : undefined;
               const entry = {
@@ -1561,7 +1643,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                   // Same message: the earlier envelope goes out without usage,
                   // and the newest running total rides on the newest entry.
                   trajectory.append(pendingResponse.entry);
-                  pendingResponse = { idKey, entry, usage: usage ?? pendingResponse.usage };
+                  // A finished count already in hand outranks a later envelope's snapshot.
+                  const held: ClaudeUsage | undefined = pendingResponse.usage;
+                  pendingResponse = { idKey, entry, usage: held?.completion_final === true ? held : (usage ?? held) };
                 }
               }
             }
@@ -1616,10 +1700,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               // Raw for fidelity; normalised so a reader never has to know two
               // token vocabularies. This covers ONE harness turn — one CLI
               // invocation, `num_turns` API calls inside it — so a run's output
-              // is the sum over these records. It is NOT the sum of the turn's
-              // `response` entries: their usage is the `message_start` snapshot
-              // (a token or two), never the finished count, so the viewer reads
-              // output tokens from here and prompt tokens from the responses.
+              // is the sum over these records. The viewer reads a turn's output
+              // tokens from here and prompt tokens from the responses: a
+              // response's output is the finished count only where its
+              // `message_delta` landed (`completion_final`), and the snapshot
+              // (a token or two) otherwise, so this settles the turn whole.
               usageRaw: msg["usage"],
               usage: normalizeClaudeUsage(msg["usage"]),
               text: resultText.slice(0, 2_000),
@@ -1641,12 +1726,33 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             }
             break;
           }
+          case "stream_event": {
+            // One per token delta, so never recorded and never logged: the
+            // `assistant` envelopes already carry every content block whole.
+            // Read for one figure, the finished output count on the message's
+            // `message_delta`, which goes onto the response entry still held
+            // for that message. A message with no held entry (neither text nor
+            // a tool call) wrote no response and gets none here.
+            const ev = claudeStreamEvent(msg);
+            if (ev?.kind === "start") streamMessageId = ev.id;
+            else if (ev?.kind === "delta") {
+              const id = ev.id ?? streamMessageId;
+              // Cast like `wd` above: assigned from closures the compiler does not follow.
+              const held = pendingResponse as PendingResponse | null;
+              if (held !== null && id !== undefined && held.idKey === id) {
+                pendingResponse = { ...held, usage: finalizeClaudeUsage(held.usage, ev.usage) };
+              }
+            }
+            break;
+          }
           default:
-            // stream_event, etc. The MCP side already records tool calls and
-            // results authoritatively.
+            // The MCP side already records tool calls and results authoritatively.
             break;
         }
-        settleCompactions(false);
+        // Not per stream event: a compaction's summary lookup reads the CLI's
+        // transcript and is bounded by count, which token deltas would spend
+        // in milliseconds.
+        if (msg["type"] !== "stream_event") settleCompactions(false);
         // A wind-down is `done()` by construction — the termination is already
         // recorded — and breaking here is exactly what used to throw the
         // closing `result` away. Keep reading until `finishWindDown` runs.

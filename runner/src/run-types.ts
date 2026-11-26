@@ -325,6 +325,12 @@ export interface ReportedUsage {
    * driver logged it.
    */
   lastCall?: { prompt: number; contextWindow?: number };
+  /**
+   * claude-code only: `completion` is the message's finished output count,
+   * which the driver read off its `message_delta` (`completion_final` on the
+   * record), rather than the `message_start` snapshot. Present only when true.
+   */
+  final?: true;
 }
 
 /** Token accounting for a whole run. */
@@ -332,8 +338,9 @@ export interface TokenTotals {
   /**
    * `reported` only when a driver actually logged provider usage, `estimated`
    * when nobody counted, and `snapshot` for a claude-code run whose completion
-   * figure rests on the API's opening usage snapshots because the turns that
-   * produced it never emitted a `claude_result` — reported, and known to
+   * figure rests on the API's opening usage snapshots: no turn emitted a
+   * `claude_result`, and its replies with only a snapshot outnumber those
+   * whose finished count the driver recorded — reported, and known to
    * under-read badly. See `tokenTotals` in `run-totals.ts`.
    */
   source: "reported" | "estimated" | "snapshot";
@@ -394,8 +401,9 @@ export interface TpsFacts {
  * The tokens of a claude-code run that no `claude_result` covers: whatever a
  * session's responses used after its last result (or in a session that never
  * got one). Read off the responses' usage, so the input side is the finished
- * count and the output side the API's opening snapshot — under-read
- * (`tokenTotals`). See `ClaudeCostTally` in `run-totals.ts`.
+ * count and the output side the message's finished count where the driver
+ * recorded one, else the API's opening snapshot — under-read (`tokenTotals`).
+ * See `ClaudeCostTally` in `run-totals.ts`.
  */
 export interface UnreportedUsage {
   turns: number;
@@ -403,6 +411,12 @@ export interface UnreportedUsage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   completionTokens: number;
+  /**
+   * Present, and true, only when every response counted here carried its
+   * finished output count, so the output side is not under-read. Absent reads
+   * as under-read, which is what every figure derived before it existed was.
+   */
+  outputFinal?: true;
 }
 
 /**

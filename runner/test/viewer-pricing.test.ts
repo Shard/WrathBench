@@ -1277,7 +1277,7 @@ describe("a claude-code actual with turns the CLI never reported a cost for", ()
   function trajectory(
     sessions: {
       id: string;
-      turns: { turn: number; usage: Record<string, number> }[];
+      turns: { turn: number; usage: Record<string, number | boolean> }[];
       result?: { afterTurn: number; costUsd: number };
       end?: "pause" | "termination";
     }[],
@@ -1344,6 +1344,32 @@ describe("a claude-code actual with turns the CLI never reported a cost for", ()
     expect(c.actual.asIfMetered).toBe(true);
     expect(c.actual.note).toContain("includes $6.04 estimated at claude-opus-5 list price for 1 turn that ended before the CLI reported a cost");
     expect(c.actual.note).toContain("$3.40");
+    // Turn 2's output is the opening snapshot, so the estimate is a floor.
+    expect(c.actual.note).toContain("(a floor: output there is under-read)");
+  });
+
+  test("an unreported turn whose responses all carry their finished output count is no floor", async () => {
+    // Recorded after the driver read each message's `message_delta`: the
+    // output side is right, so the estimate is not marked low.
+    const finished = opusLow.map((r) =>
+      r["t"] === "response" && r["turn"] === 2 ? { ...r, usage: { ...(r["usage"] as object), completion_tokens: 31_000, completion_final: true } } : r,
+    );
+    const unreported = { turns: 1, promptTokens: 11_024_920, cacheReadTokens: 10_978_009, cacheWriteTokens: 46_655, completionTokens: 31_000, outputFinal: true as const };
+    expect(responseCostCoverage(summarised(finished)).unreported).toEqual(unreported);
+    const path = join(tempDir("wrathbench-backfill-final-"), "trajectory.jsonl");
+    writeFileSync(path, `${finished.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    expect((await scanRunTotals(path)).responseCost.unreported).toEqual(unreported);
+    const c = costOfRun(opusRun, finished);
+    expect(c.actual.note).toContain("includes $");
+    expect(c.actual.note).not.toContain("a floor");
+    // One snapshot-only response in the gap makes it a floor again.
+    const mixed = [
+      ...finished.slice(0, -1),
+      { t: "response", ts: 50, turn: 2, message: { content: "" }, usage: { prompt_tokens: 10, completion_tokens: 3 } },
+      finished.at(-1)!,
+    ];
+    expect(responseCostCoverage(summarised(mixed)).unreported?.outputFinal).toBeUndefined();
+    expect(costOfRun(opusRun, mixed).actual.note).toContain("(a floor: output there is under-read)");
   });
 
   test("a turn still in flight is not unreported yet: a live run's figure is the CLI's own, unmarked", () => {

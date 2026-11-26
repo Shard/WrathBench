@@ -595,6 +595,50 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("each message's message_delta finishes its output count; stream events are never recorded", async () => {
+    const run = async (extra: Record<string, string>) => {
+      const { runDir, recordPath, trajectory, options } = setupEpisode("partial-messages", { maxTurns: 1 }, extra);
+      await runClaudeEpisode(options);
+      const records = readTrajectory(runDir);
+      const argv = readRecord(recordPath)["argv"] as string[];
+      trajectory.close();
+      return { records, argv };
+    };
+    const { records, argv } = await run({});
+    // The flag is what makes the CLI stream them at all.
+    expect(argv).toContain("--include-partial-messages");
+    const responses = records.filter((r) => r.t === "response");
+    const withUsage = responses.filter((r) => r["usage"] !== undefined);
+    // Message a (text + tool_use) is two entries, its last carrying usage; b had
+    // neither text nor a tool call and writes nothing; c is one entry.
+    expect(responses).toHaveLength(3);
+    expect(withUsage).toHaveLength(2);
+    // The opening snapshot was 16; the delta's finished count is 52, 9 of them thinking.
+    expect(withUsage[0]!["usage"]).toEqual({
+      prompt_tokens: 3_032,
+      completion_tokens: 52,
+      total_tokens: 3_084,
+      cached_tokens: 3_000,
+      cache_write_tokens: 30,
+      completion_final: true,
+      reasoning_tokens: 9,
+    });
+    // c's delta names no message id: the last message_start's stands in.
+    expect(withUsage[1]!["usage"]).toMatchObject({ completion_tokens: 6, total_tokens: 3_038, completion_final: true, reasoning_tokens: 0 });
+    // Not one stream event reaches the trajectory, under any name.
+    expect(records.filter((r) => r.t === "stream_event" || "api_message_id" in r || JSON.stringify(r).includes("message_delta"))).toEqual([]);
+
+    // The same turn without the stream events: the same records, snapshot counts.
+    const plain = await run({ WB_FAKE_NO_STREAM_EVENTS: "1" });
+    const kinds = (rs: typeof records) => rs.map((r) => r.t).filter((t) => t !== "state");
+    expect(kinds(plain.records)).toEqual(kinds(records));
+    const plainUsage = plain.records.filter((r) => r.t === "response" && r["usage"] !== undefined).map((r) => r["usage"]);
+    expect(plainUsage).toEqual([
+      { prompt_tokens: 3_032, completion_tokens: 16, total_tokens: 3_048, cached_tokens: 3_000, cache_write_tokens: 30 },
+      { prompt_tokens: 3_032, completion_tokens: 4, total_tokens: 3_036, cached_tokens: 3_000, cache_write_tokens: 30 },
+    ]);
+  }, 30_000);
+
   test("the spawned CLI never sees API-key credentials", async () => {
     const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     await runClaudeEpisode(options);
@@ -973,6 +1017,7 @@ describe("claude-code driver", () => {
   test("claudeArgs uses only flags that exist, and never invents --max-turns", () => {
     const args = claudeArgs({ mcpConfigPath: "/tmp/x.json", model: "opus" });
     expect(args.slice(0, 2)).toEqual(["-p", "--verbose"]);
+    expect(args.slice(2, 7)).toEqual(["--input-format", "stream-json", "--output-format", "stream-json", "--include-partial-messages"]);
     expect(args).toContain("--strict-mcp-config");
     expect(args).not.toContain("--max-turns");
     expect(args[args.indexOf("--tools") + 1]).toBe("");

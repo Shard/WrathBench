@@ -124,6 +124,8 @@ export function reportedUsage(rec: Record<string, unknown>): ReportedUsage | nul
         const w = last?.["context_window"];
         if (typeof w === "number" && Number.isFinite(w)) out.lastCall.contextWindow = w;
       }
+      // claude-code: the output is the message's finished count, not its opening snapshot.
+      if (o["completion_final"] === true) out.final = true;
       return out;
     }
   }
@@ -139,8 +141,11 @@ export function reportedUsage(rec: Record<string, unknown>): ReportedUsage | nul
  * OUTPUT — one to thirty-odd tokens, whatever had been emitted when the stream
  * opened. Summing them read ~300× low: on the haiku run of 2026-08-25, 508
  * responses summed to 671 output tokens against the 207,062 the 23 result
- * records report. So output for a claude-code turn is read here and nowhere
- * else, and prompt tokens keep coming off the responses, where they are right.
+ * records report. So output for a claude-code turn that has a result is read
+ * here and nowhere else, and prompt tokens keep coming off the responses, where
+ * they are right. A response the driver gave its finished count
+ * (`ReportedUsage.final`) is right on both sides, but where its turn has a
+ * result the result still settles it, so nothing is counted twice.
  *
  * `iterations` is documented as one entry per API call in the turn. It is not,
  * on any CLI version we have logged: it holds a single entry, the LAST call, on
@@ -246,6 +251,12 @@ export interface ReplySpan {
    */
   snapshot?: boolean;
   /**
+   * True where the span held a claude-code reply in a turn with no
+   * `claude_result` whose finished output count the driver recorded
+   * (`ReportedUsage.final`): reported, and right, but not settled by a result.
+   */
+  final?: boolean;
+  /**
    * A duration the driver measured, which overrides the span clock. Set only on
    * a collapsed claude-code turn, where the whole turn is the measured unit.
    */
@@ -261,10 +272,12 @@ export interface ReplySpan {
  * last carries usage, and that last figure is the running total for the whole
  * message (`adapter-claude.ts`), so adding an estimate for the earlier
  * envelopes counts their text twice. That is true of the
- * message's INPUT side only: its `completion` is the API's opening snapshot,
- * so where the turn has a `claude_result` the spans are resolved against it —
+ * message's INPUT side only: its `completion` is the API's opening snapshot
+ * unless the driver recorded the finished count (`ReportedUsage.final`), so
+ * where the turn has a `claude_result` the spans are resolved against it —
  * `perReplyTokens` where the turn's `iterations` really describe its replies,
- * `collapseClaudeTurns` otherwise.
+ * `collapseClaudeTurns` otherwise — and where it has none, each reply is marked
+ * `snapshot` or `final` by which of the two it carries.
  *
  * Reported figures are SUMMED, not taken from the last: one span can hold
  * several messages — several API calls — and each carries its own running
@@ -305,8 +318,12 @@ export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
         } else {
           open.reported += usage.completion;
           // Nothing will replace this: the turn produced no result, so its
-          // opening snapshot is the whole of what anyone can say.
-          if (claudeCode && (turn === null || !claude.has(turn))) open.snapshot = true;
+          // opening snapshot, or the finished count the driver recorded, is
+          // the whole of what anyone can say.
+          if (claudeCode && (turn === null || !claude.has(turn))) {
+            if (usage.final === true) open.final = true;
+            else open.snapshot = true;
+          }
         }
       } else {
         open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
@@ -500,6 +517,14 @@ export function claudeModelTurns(entries: readonly EntrySummary[]): number {
  * and whose second was killed is the case this rule reads generously; the
  * per-turn truth is in the spans for anyone who needs it.
  *
+ * The driver now records each message's finished output count where the CLI
+ * streams it (`ReportedUsage.final`), so a run with no result can still hold
+ * right figures. Those replies are not "resolved by a result", and a run
+ * recorded across that change holds both kinds, so the label goes by the
+ * majority of replies: `snapshot` while the snapshot-only replies outnumber the
+ * finished-count ones, `reported` once they do not. A run with no
+ * finished-count reply reads exactly as it always did.
+ *
  * Completion tokens come from `replySpans`, so a reply split across several
  * `response` records counts once, and a claude-code turn counts
  * its `claude_result` output total instead of its responses' opening snapshots
@@ -572,13 +597,18 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   /** Split of the reported half, which decides between `reported` and `snapshot`. */
   let fromSnapshots = 0;
   let resolved = 0;
+  /** Replies with no result, by kind: opening snapshot only, or the finished count. */
+  let snapshotSpans = 0;
+  let finalSpans = 0;
   for (const s of replySpans(entries)) {
     completion += s.sawUsage ? s.reported : s.estimated;
     if (!s.sawUsage) continue;
+    if (s.snapshot === true) snapshotSpans++;
+    if (s.final === true) finalSpans++;
     if (s.snapshot === true) fromSnapshots += s.reported;
-    else resolved += s.reported;
+    else if (s.final !== true) resolved += s.reported;
   }
-  const snapshot = fromSnapshots > 0 && resolved === 0;
+  const snapshot = fromSnapshots > 0 && resolved === 0 && snapshotSpans > finalSpans;
 
   return {
     source: snapshot ? "snapshot" : reported ? "reported" : "estimated",
@@ -636,9 +666,11 @@ export const TPS_RECENT_REPLIES = 10;
  * where ANY record of the span reported usage, and `chars ÷ 4` only where none
  * did, never both.
  *
- * The claude-code driver is one exception and only one: its responses carry
+ * The claude-code driver is one exception and only one: its responses carried
  * opening snapshots rather than finished output counts, so a whole harness turn
- * collapses to a single measured reply carrying the turn's output total. The
+ * that has a result collapses to a single measured reply carrying the turn's
+ * output total (a reply whose finished count the driver recorded is settled by
+ * the result all the same, and in a turn with none is timed as any other). The
  * clock does not change with it — the denominator is the SUM of that turn's
  * spans, each timed by the rule above, so the figure stays inside model time
  * and stays comparable to the fixed loop's request→response. The CLI's own
@@ -721,7 +753,7 @@ export class ClaudeCostTally {
   /** Per session: what its responses used since its last result, and which turns those were. */
   private readonly pending = new Map<
     string,
-    { prompt: number; read: number; write: number; completion: number; turns: Set<number | null> }
+    { prompt: number; read: number; write: number; completion: number; turns: Set<number | null>; underRead: boolean }
   >();
   /** Sessions that can report nothing more: paused, terminated, or followed by another. */
   private readonly over = new Set<string>();
@@ -745,13 +777,14 @@ export class ClaudeCostTally {
       if (u === null || (u.prompt === 0 && u.completion === 0)) return;
       let p = this.pending.get(this.current);
       if (p === undefined) {
-        p = { prompt: 0, read: 0, write: 0, completion: 0, turns: new Set() };
+        p = { prompt: 0, read: 0, write: 0, completion: 0, turns: new Set(), underRead: false };
         this.pending.set(this.current, p);
       }
       p.prompt += u.prompt;
       p.read += u.cachedRead ?? 0;
       p.write += u.cacheWrite ?? 0;
       p.completion += u.completion;
+      if (u.final !== true) p.underRead = true;
       p.turns.add(typeof rec["turn"] === "number" ? rec["turn"] : null);
       return;
     }
@@ -783,6 +816,7 @@ export class ClaudeCostTally {
   unreported(): UnreportedUsage | undefined {
     if (this.perSession.size === 0) return undefined;
     const out: UnreportedUsage = { turns: 0, promptTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, completionTokens: 0 };
+    let underRead = false;
     for (const [session, p] of this.pending) {
       if (!this.over.has(session)) continue;
       out.turns += p.turns.size;
@@ -790,8 +824,12 @@ export class ClaudeCostTally {
       out.cacheReadTokens += p.read;
       out.cacheWriteTokens += p.write;
       out.completionTokens += p.completion;
+      if (p.underRead) underRead = true;
     }
-    return out.turns === 0 ? undefined : out;
+    if (out.turns === 0) return undefined;
+    // Only where every counted response carried its finished output count.
+    if (!underRead) out.outputFinal = true;
+    return out;
   }
 }
 

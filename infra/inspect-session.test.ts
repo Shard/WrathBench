@@ -203,6 +203,29 @@ const BRAVO: Character = { name: "Bravo", guid: "902", level: 3, xp: 120, events
 const CLI = "run-claude-cli";
 writeRun(join(RUNS, CLI), CLI, { driver: "claude-code", character: "Clawick" }, CLAUDE_CLI_TURNS, false);
 
+/**
+ * claude-code with no result, recorded after the driver read each message's
+ * finished output count off its `message_delta` (`completion_final`): one
+ * message finished, one a snapshot; and a run whose messages are all finished.
+ */
+const finished = (prompt: number, cached: number, out: number): Record<string, unknown> => ({ ...claudeUsage(prompt, cached, out), completion_final: true, reasoning_tokens: 40 });
+const CLI_MIXED = "run-claude-mixed";
+writeRun(join(RUNS, CLI_MIXED), CLI_MIXED, { driver: "claude-code", character: "Clawick" }, [
+  { t: "driver", driver: "claude-code" },
+  { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(200) },
+  { t: "response", turn: 1, message: { role: "assistant", content: "a" }, usage: finished(3000, 2000, 600) },
+  { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: claudeUsage(3200, 3000, 2) },
+  { t: "pause", reason: "operator-pause" },
+], false);
+const CLI_FINISHED = "run-claude-finished";
+writeRun(join(RUNS, CLI_FINISHED), CLI_FINISHED, { driver: "claude-code", character: "Clawick" }, [
+  { t: "driver", driver: "claude-code" },
+  { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(200) },
+  { t: "response", turn: 1, message: { role: "assistant", content: "a" }, usage: finished(3000, 2000, 600) },
+  { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: finished(3200, 3000, 900) },
+  { t: "pause", reason: "operator-pause" },
+], false);
+
 /** A 0.5 run: its row and samples in run.sqlite, its turns' usage the same shape. */
 const OLD = "run-05";
 writeRun(join(RUNS, OLD), OLD, { character: "Oldwick" }, OPENROUTER_TURNS, false);
@@ -330,6 +353,13 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
           " · tokens on 1 CLI result(s): in 11.2k (cache read 9.5k, write 500), out 1.8k over 5 model turns" +
           " · with no result, snapshot output only: 1 message(s) in 1 driver turn(s), in 5.0k (cache read 4.5k), out 4 (opening snapshots)" +
           " · 5 response records, 4 with usage (one per message; the rest are its earlier envelopes)",
+      );
+      // A message whose finished output count the driver recorded is said to be one, never a snapshot.
+      expect(line((await inspect(["run", CLI_MIXED, "--width", "1000"], store)).out, "cost")).toContain(
+        " · no CLI result reported usage, finished output on 1, snapshot on the rest: 2 message(s) in 1 driver turn(s), in 6.2k (cache read 5.0k), out 602 (partly opening snapshots)",
+      );
+      expect(line((await inspect(["run", CLI_FINISHED, "--width", "1000"], store)).out, "cost")).toContain(
+        " · no CLI result reported usage, finished output: 2 message(s) in 1 driver turn(s), in 6.2k (cache read 5.0k), out 1.5k (finished counts)",
       );
       // Another driver's run keeps the plain reading: a response record is a request.
       expect(line((await inspect(["run", V1, "--width", "1000"], store)).out, "activity")).toContain(" · 3 responses · ");

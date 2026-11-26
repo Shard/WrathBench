@@ -924,6 +924,85 @@ describe("tokensPerSecond", () => {
     expect(t.completionTokens).toBe(18);
   });
 
+  /** A claude-code response whose finished output count the driver read off its `message_delta`. */
+  const fin = (ts: number, turn: number, completion: number) =>
+    summarize(
+      {
+        t: "response",
+        ts,
+        turn,
+        message: { role: "assistant", content: "y" },
+        usage: { prompt_tokens: 10, completion_tokens: completion, completion_final: true, reasoning_tokens: 2 },
+      },
+      ts,
+      0,
+      1,
+    );
+  const driver = summarize({ t: "driver", ts: 900, driver: "claude-code" }, 0, 0, 1);
+  /** A turn's replies, one span each: a tool result opens the next. */
+  const replies = (turn: number, at: number, make: (ts: number) => ReturnType<typeof res>, n: number) =>
+    Array.from({ length: n }, (_, k) => [snippetResult(at + k * 1000, turn), make(at + k * 1000 + 500)]).flat();
+
+  test("finished-count replies with no result read reported, and carry their real figure", () => {
+    // A freeplay run recorded after the driver read each message's
+    // `message_delta`: one turn that never closes, every reply a finished count.
+    const t = tokenTotals([driver, req(1000, 1), ...replies(1, 2000, (ts) => fin(ts, 1, 400), 3)]);
+    expect(t.source).toBe("reported");
+    expect(t.completionTokens).toBe(1200);
+    expect(summarize({ t: "response", ts: 1, turn: 1, usage: { prompt_tokens: 1, completion_tokens: 2, completion_final: true } }, 1, 0, 1)["usage"]).toEqual({ prompt: 1, completion: 2, final: true });
+    // No marker where the record carries none: older summaries are untouched.
+    expect(res(1, 1, 2)["usage"]).toEqual({ prompt: 10, completion: 2 });
+  });
+
+  test("a run spanning the change follows the majority of its replies", () => {
+    // The live longplay shape: snapshot-only replies, then finished counts.
+    const before = replies(1, 2000, (ts) => res(ts, 1, 3), 4);
+    const mostlyOld = tokenTotals([driver, req(1000, 1), ...before, ...replies(1, 10_000, (ts) => fin(ts, 1, 500), 3)]);
+    expect(mostlyOld.source).toBe("snapshot");
+    expect(mostlyOld.completionTokens).toBe(12 + 1500);
+    // A tie is no longer a majority of snapshots.
+    expect(tokenTotals([driver, req(1000, 1), ...before, ...replies(1, 10_000, (ts) => fin(ts, 1, 500), 4)]).source).toBe("reported");
+    expect(tokenTotals([driver, req(1000, 1), ...before, ...replies(1, 10_000, (ts) => fin(ts, 1, 500), 5)]).source).toBe("reported");
+    // An all-snapshot run is exactly as before.
+    expect(tokenTotals([driver, req(1000, 1), ...before]).source).toBe("snapshot");
+  });
+
+  test("a turn with a result is settled by it, finished counts or not", () => {
+    // The result is authoritative: its total replaces the replies' own, and the
+    // finished counts are never added on top.
+    const withResult = (make: (ts: number) => ReturnType<typeof res>) =>
+      tokenTotals([driver, req(1000, 1), ...replies(1, 2000, make, 2), claudeResult(5000, 1, { output_tokens: 900 }, { durationMs: 3000 })]);
+    const snap = withResult((ts) => res(ts, 1, 3));
+    const final = withResult((ts) => fin(ts, 1, 450));
+    expect(final).toEqual(snap);
+    expect(final.completionTokens).toBe(900);
+    expect(final.source).toBe("reported");
+  });
+
+  test("the file scan and the tail agree on finished-count replies", async () => {
+    const dir = tempDir("wrathbench-claude-final-");
+    const path = join(dir, "trajectory.jsonl");
+    const line = (o: Record<string, unknown>): string => JSON.stringify(o);
+    writeFileSync(
+      path,
+      [
+        line({ t: "driver", ts: 900, driver: "claude-code" }),
+        line({ t: "request", ts: 1000, turn: 1, messages: [{ role: "user", content: "hi" }] }),
+        line({ t: "response", ts: 2000, turn: 1, message: { role: "assistant", content: "a" }, usage: { prompt_tokens: 50, completion_tokens: 3 } }),
+        line({ t: "snippet_result", ts: 3000, turn: 1, text: "ok" }),
+        line({ t: "response", ts: 4000, turn: 1, message: { role: "assistant", content: "b" }, usage: { prompt_tokens: 60, completion_tokens: 700, completion_final: true } }),
+        line({ t: "snippet_result", ts: 5000, turn: 1, text: "ok" }),
+        line({ t: "response", ts: 6000, turn: 1, message: { role: "assistant", content: "c" }, usage: { prompt_tokens: 70, completion_tokens: 800, completion_final: true } }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.tokens.source).toBe("reported");
+    expect(totals.tokens.completionTokens).toBe(1503);
+    expect(tokenTotals(await new TrajectoryTail(path).scan())).toEqual(totals.tokens);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("a run with no claude_result at all is untouched", () => {
     const entries = [req(1000, 1), res(3000, 1, 400), req(4000, 2), res(6000, 2, 400)];
     expect(tokensPerSecond(entries)).toEqual({ overall: 200, recent: 200, replies: 2, recentReplies: 2 });

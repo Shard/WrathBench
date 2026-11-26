@@ -472,9 +472,14 @@ Tools reach the runner over a loopback TCP MCP server plus the stack's bridge (`
 because `--mcp-config` can only launch a stdio child — running `mcp.ts` as that
 child would create a second sandbox and a second session on the same token.
 
-The flags are `claudeArgs`, all present in `claude -p --help` for 2.1.238.
+The flags are `claudeArgs`, all present in `claude -p --help` for 2.1.238
+except `--include-partial-messages`, verified on the pinned 2.1.321.
 `--verbose` is not optional: this CLI rejects `-p --output-format stream-json`
-without it. `--allowed-tools` is the whole permission story — verified against
+without it. `--include-partial-messages` adds the API's raw stream events as
+`stream_event` envelopes, one per token delta; the driver reads one figure off
+them, each message's finished output count on its `message_delta`, puts it on
+that message's `response` record (`completion_final`), and records none of
+them. The `assistant` envelopes are unchanged by it. `--allowed-tools` is the whole permission story — verified against
 the real CLI (with a local capture proxy standing in for the model, so nothing
 was billed) that it dispatches an MCP tool call in headless mode without
 `--permission-mode`. With no mode named, the `init` frame reports the mode
@@ -1644,12 +1649,13 @@ their turns can run for tens of minutes (see Drivers above).
 
 ### Winding a claude-code episode down, rather than killing it
 
-Under `claude-code` the whole episode is usually ONE CLI turn, and the finished
-output count, the metered cost and the turn clock exist in exactly one place:
-the stream-json `result` envelope that closes it. Killing the CLI the moment a
-watchdog fired threw all three away — 6 of 9 runs in one batch fell
-back to `tokens.source: "snapshot"` (the API's `message_start` figures, ~300×
-low) with no cost at all. So a watchdog or the tool-call ceiling firing mid-turn
+Under `claude-code` the whole episode is usually ONE CLI turn, and the metered
+cost and the turn clock exist in exactly one place: the stream-json `result`
+envelope that closes it. Killing the CLI the moment a watchdog fired threw both
+away — 6 of 9 runs in one batch fell back to `tokens.source: "snapshot"` (the
+API's `message_start` figures, ~300× low; each message's finished output
+count is now recorded from its own stream event, see "How it drives") with no
+cost at all. So a watchdog or the tool-call ceiling firing mid-turn
 records the termination and then *winds down* instead of signalling: every
 further tool call is refused with an error telling the model the episode is over
 and to stop calling tools — nothing is dispatched, so no observation or action

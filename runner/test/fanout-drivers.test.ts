@@ -62,12 +62,15 @@ const FANOUT_NAMES = toolsFor({ fanout: true }).map((t) => t.name);
  * return Promises (operator, 2026-11-12). With that one clause taken back
  * out the list hashes b6b0f118bee75e59, as it did before fan-out. It moved
  * again when that description stated the snippet time limit (operator,
- * 2026-11-15); without that sentence it hashes cb0608ca57a2e422.
+ * 2026-11-15); without that sentence it hashes cb0608ca57a2e422. The argv
+ * has moved once, by `--include-partial-messages`, which only lets the driver
+ * read each message's finished output count and changes nothing the model is
+ * served; without that flag it hashes 90a5a17af291fcf4.
  */
 const SINGLE = {
   toolsList: "621f80e6366c31ae",
   claudeAllowedTools: "a24dbe820edb9b8b",
-  claudeArgs: "90a5a17af291fcf4",
+  claudeArgs: "349f849104fb93dd",
 };
 const hash = (v: unknown): string => createHash("sha256").update(JSON.stringify(v)).digest("hex").slice(0, 16);
 
