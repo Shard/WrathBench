@@ -45,7 +45,7 @@
 import { partyAttempt } from "../src/campaigns";
 import { conditionKey } from "./condition";
 import { canonicalModelId } from "../../infra/model-catalogue";
-import { runCostReading } from "./run-cost";
+import { type CostedRun, runCostReading } from "./run-cost";
 import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../src/episodes";
 import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
 
@@ -144,7 +144,7 @@ export function wipesOf(characters: readonly CharacterMarks[], size: number): nu
 }
 
 /** An attempt's cost: its member runs' readings summed, or null when any member has none. */
-export function costOf(runs: readonly Pick<ResultRun, "actualCost" | "expectedCost">[]): number | null {
+export function costOf(runs: readonly CostedRun[]): number | null {
   let usd = 0;
   for (const r of runs) {
     const c = runCostReading(r);

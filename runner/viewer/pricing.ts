@@ -827,9 +827,19 @@ function expectedCost(args: {
   if (price === null) return none(unpricedNote(run));
   if (tokens === null) return none("no token totals for this run");
   const free = price.input === 0 && price.output === 0;
-  if (tokens.source !== "reported" && !free) {
+  if (tokens.source === "estimated" && !free) {
     return none("tokens were estimated from characters, not reported by the provider — no price computed");
   }
+  /*
+   * A `snapshot` total is a claude-code run none of whose turns closed with a
+   * `claude_result`: a freeplay run is one turn that never ends, so it is the
+   * standing state of every longplay. Its input side is a finished count and
+   * only its output is under-read (`tokenTotals`), so it is priced, as the
+   * floor it is, and says so; refusing it left a run of several hundred
+   * million cached tokens with no figure at all. The ladder does not plot it
+   * (`runCostReading`).
+   */
+  const floor = tokens.source === "snapshot" && !free;
   const breakdown = costOf(tokens, price);
   /*
    * A claude-code run's own figure is the CLI's `total_cost_usd`, and that is
@@ -840,7 +850,11 @@ function expectedCost(args: {
    * `claude-subscription` driver, whose per-response sums read ~4× high
    * (docs/COSTS.md, "Rules, each paid for"); those runs are not priced at all.
    */
-  const caveat = claudeCode && !free ? " — where the CLI reported its own figure, that is the one to read" : "";
+  const caveat = floor
+    ? " — a floor: no turn of this run reported a finished output count, so its input is priced in full and its output only at the API's opening snapshots, which read far too low"
+    : claudeCode && !free
+      ? " — where the CLI reported its own figure, that is the one to read"
+      : "";
   return {
     usd: breakdownTotal(breakdown),
     basis: "list-price",

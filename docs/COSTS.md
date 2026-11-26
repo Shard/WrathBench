@@ -106,8 +106,10 @@ the operator's figure in GitHub issue #66.
   and for how many turns. The estimate is a floor, because those turns' output
   is the opening snapshot (above). A model with no row (Haiku 5.5) gets nothing
   added and the `*` all the same, since the figure still reads low. A run with
-  no `claude_result` at all is not backfilled: it has no reported figure to add
-  to, and its expected cost already prices every token.
+  no `claude_result` at all is not backfilled, having no reported figure to add
+  to: its expected cost prices every token instead. That is every freeplay run
+  while it lasts (one turn that never closes), and the figure is a floor for
+  the same reason, which its note says; the ladder's cost axis leaves it out.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (docs/METHODOLOGY.md, "Known limitations"; the viewer falls back to
   an estimate only where there is no actual, and labels it). The listings do the

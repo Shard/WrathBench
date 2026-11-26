@@ -274,7 +274,7 @@ describe("priceFor", () => {
 
   /*
    * The list page's own figures (platform.claude.com/docs/en/about-claude/pricing,
-   * read 2026-10-16) for every id a claude-code roster entry names or resolves
+   * read 2026-11-26) for every id a claude-code roster entry names or resolves
    * to: base input, output, cache hit, and the 1-hour cache write. A row that
    * moves has to move here too, with the day it was read.
    */
@@ -893,7 +893,7 @@ describe("runCost", () => {
     expect(c.note).not.toContain("upper bound");
     // The date rides the wire, so a display string cannot outlive the rate.
     expect(c.priceId).toBe("claude-sonnet-5");
-    expect(c.asOf).toBe("2026-10-16");
+    expect(c.asOf).toBe("2026-11-26");
   });
 
   test("an unknown model gets no cost and says why", () => {
@@ -916,6 +916,26 @@ describe("runCost", () => {
     });
     expect(c.basis).toBe("none");
     expect(c.note).toContain("estimated");
+  });
+
+  test("a claude-code run with no result at all is priced as a floor, and says so", () => {
+    // A freeplay run is one CLI turn that never closes: input counted in full,
+    // output only the opening snapshots. Refusing it left a longplay unpriced.
+    const t = tokens({
+      source: "snapshot",
+      promptTokens: 10_000_000,
+      cacheReadTokens: 9_000_000,
+      cacheWriteTokens: 500_000,
+      completionTokens: 2_000,
+    });
+    const c = runCost({ run: sonnetRun, tokens: t, reportedUsd: null });
+    expect(c.actual.basis).toBe("none");
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.asIfMetered).toBe(true);
+    expect(c.expected.usd).toBeCloseTo(breakdownTotal(costOf({ ...t, source: "reported" }, priceFor(sonnetRun)!)), 6);
+    expect(c.expected.usd).toBeGreaterThan(0);
+    expect(c.expected.note).toContain("a floor");
+    expect(c.expected.note).not.toContain("that is the one to read");
   });
 
   test("a free model is $0 even on estimated tokens, and is marked as-if-metered", () => {

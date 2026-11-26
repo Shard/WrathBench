@@ -780,14 +780,18 @@ describe("ladderPoints over another pair of axes", () => {
     expect(byCost.omitted.map((o) => o.why)).toEqual(["no xp reading"]);
   });
 
-  test("a snapshot-read token total is not a reading either; turns and level are", () => {
-    const m = runMetrics(priced({ tokens: tokens(9000, "snapshot"), modelResponses: 42, levels: [mark(3, 1, 1000)] }));
+  test("a snapshot-read token total is not a reading either, nor is a list price over it; turns and level are", () => {
+    const floor = priced({ tokens: tokens(9000, "snapshot"), expectedCost: fig(140, "list-price", true), modelResponses: 42, levels: [mark(3, 1, 1000)] });
+    const m = runMetrics(floor);
     expect(m.tokens).toBeNull();
     expect(m.tokensOut).toBeNull();
     expect(m.turns).toBe(42);
     expect(m.level).toBe(3);
-    expect(m.cost).toBe(0);
+    // The run page shows the floor; no axis plots a cost with most of its output missing.
+    expect(m.cost).toBeNull();
     expect(m.xp).toBe(100);
+    // What the CLI did report still reads, whatever the token source.
+    expect(runMetrics({ ...floor, actualCost: fig(2, "reported") }).cost).toBe(2);
   });
 
   test("a claude-code run's turns are its CLI's model turns, every other harness's its response records", () => {
