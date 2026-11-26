@@ -247,7 +247,7 @@ export function contextHint(
 
 export function sourceHint(source: string | undefined): string {
   if (source === "snapshot") {
-    return "claude-code opening usage snapshots: this run's turns never emitted a finished output count, so the completion total and the tok/s rate are far too low";
+    return "claude-code opening usage snapshots: most of this run's replies never reported a finished output count, so the completion total and the tok/s rate are far too low";
   }
   if (source === "reported") return "provider-reported token counts";
   return "no provider counted; characters ÷ 4";

@@ -198,6 +198,31 @@ await writeRun(
 );
 
 /**
+ * claude-code recorded with each message's finished output count
+ * (`completion_final`, off its `message_delta`): a turn its result settles,
+ * then a resumed process with no result, one message finished and one a
+ * snapshot.
+ */
+const FINISHED = "run-claude-finished";
+const finished = (prompt: number, cached: number, out: number, reasoning: number): Record<string, unknown> => ({ ...claudeUsage(prompt, cached, out), completion_final: true, reasoning_tokens: reasoning });
+await writeRun(
+  FINISHED,
+  { driver: "claude-code", model: "sonnet" },
+  [
+    [T0, { t: "driver", driver: "claude-code" }],
+    [T0 + 1, { t: "request", turn: 1, adapter: "claude-code", messages: "m".repeat(400) }],
+    [T0 + 1 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "a" }, usage: finished(3000, 2000, 300, 40) }],
+    [T0 + 2 * MIN, { t: "response", turn: 1, message: { role: "assistant", content: "b" }, usage: finished(3100, 2900, 500, 60) }],
+    [T0 + 3 * MIN, { t: "claude_result", turn: 1, sessionId: "s1", numTurns: 2, costUsd: 0.3, usageRaw: { output_tokens: 1000 }, usage: { prompt_tokens: 6100, completion_tokens: 1000 } }],
+    [T0 + 4 * MIN, { t: "driver", driver: "claude-code" }],
+    [T0 + 4 * MIN + 1, { t: "request", turn: 2, adapter: "claude-code", messages: "m".repeat(400) }],
+    [T0 + 5 * MIN, { t: "response", turn: 2, message: { role: "assistant", content: "c" }, usage: finished(3300, 3000, 700, 20) }],
+    [T0 + 6 * MIN, { t: "response", turn: 2, message: { role: "assistant", content: "d" }, usage: claudeUsage(3400, 3200, 2) }],
+  ],
+  T0 + 7 * MIN,
+);
+
+/**
  * claude-code as the CLI reports it now: the result's `num_turns` (5) is more
  * than the turn's messages (2), and it lands after the run's end, in the
  * wind-down's grace, with one more message before it. A second process (a
@@ -534,6 +559,27 @@ describe("claude-code", () => {
     expect(text).toMatch(/^output\/request +—$/m);
   });
 
+  test("a message's recorded finished count is its output where no result settles its turn, and is replaced where one does", async () => {
+    for (const store of [undefined, await memoryStore(RUNS)]) {
+      const r = await readout(FINISHED, [], store);
+      const w = r.windows[0]!;
+      // The result's 2 model turns, and the resumed process's 2 messages, one each.
+      expect(w.requests).toBe(4);
+      // Output is known on the result's two messages (its 1000 spread, never added to their 300 and 500)
+      // and on the finished message after it; the snapshot stays unreported.
+      expect(w.reported).toMatchObject({ input: 4, output: 3, reasoning: 1 });
+      expect(w.outputPerRequest).toBeCloseTo((1000 + 700) / 3, 10);
+      // Reasoning only where the message's own count stands: the result settled the rest.
+      expect(w.reasoningPerRequest).toBe(20);
+      const note = r.notes.find((n) => n.startsWith("claude-code: requests"))!;
+      expect(note).toContain("so is its output on the 3 message(s) whose finished count the driver recorded");
+      expect(note).toContain("2 message(s) in 1 driver turn(s) have no result (cut short, or still running): each counts as one request, its output its own finished count on 1 of them");
+    }
+    // The viewer's totals: the result's 1000 for its turn, the finished 700 and the snapshot 2 for the other.
+    const viewer = (await scanRunTotals(join(RUNS, FINISHED, "trajectory.jsonl"))).tokens;
+    expect([viewer.source, viewer.completionTokens, viewer.turns]).toEqual(["reported", 1702, 4]);
+  });
+
   test("requests are the CLI's num_turns, a turn cut short counts its messages, and the wind-down's records are the run's", async () => {
     for (const store of [undefined, await memoryStore(RUNS)]) {
       const r = await readout(CLAUDE_TURNS, [], store);
@@ -562,7 +608,7 @@ describe("claude-code", () => {
 
 describe("claude-code's model turns, here and in the viewer", () => {
   test("a run's requests are the viewer's turns (runner/src/run-totals.ts `claudeModelTurns`), which this file copies", async () => {
-    for (const id of [CLAUDE, SNAPSHOTS, CLAUDE_TURNS]) {
+    for (const id of [CLAUDE, SNAPSHOTS, CLAUDE_TURNS, FINISHED]) {
       const viewer = (await scanRunTotals(join(RUNS, id, "trajectory.jsonl"))).tokens.turns;
       expect([id, (await readout(id)).windows[0]!.requests]).toEqual([id, viewer]);
     }

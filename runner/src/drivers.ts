@@ -270,7 +270,9 @@ export interface DriverEntry {
   /**
    * How usage reaches the trajectory: one figure per model `response`; a
    * response's opening snapshot whose finished count arrives on the turn's
-   * result (`turn-snapshot`); or a turn that is one whole CLI exec, its
+   * result (`turn-snapshot`; the claude-code driver now also records each
+   * message's own finished count where the CLI streams it, and the result
+   * still settles a turn that has one); or a turn that is one whole CLI exec, its
    * figures tallies of many calls and its context the last call's prompt
    * (`exec-tally`).
    */

@@ -24,6 +24,10 @@
  *   wind-down-deaf
  *               like long-turn, but it ignores refusals and keeps hammering
  *               tools forever, so the grace expires and the CLI is killed.
+ *   partial-messages
+ *               the `--include-partial-messages` stream: `stream_event`
+ *               envelopes around the `assistant` ones, each message's
+ *               finished output count on its `message_delta`.
  *
  * $WB_FAKE_CALLS replaces the default turn's one `run_snippet` with a script:
  * a JSON array indexed by turn, each entry the `{name, arguments}` calls that
@@ -434,6 +438,69 @@ for await (const chunk of Bun.stdin.stream()) {
         result: `turn ${turn} done`,
         num_turns: 1,
         usage: final,
+        session_id: "fake-session",
+      });
+      continue;
+    }
+
+    // The 2.1.321 stream under `--include-partial-messages` (shapes from a
+    // captured two-call turn): each API call's raw stream events arrive as
+    // `stream_event` envelopes around the unchanged `assistant` ones, whose
+    // usage is the `message_start` snapshot; the finished output count is on
+    // the message's `message_delta`. Three messages: text + tool_use (16 at
+    // the start, 52 finished, 9 of them thinking), one with neither text nor
+    // a tool call (so no response entry), and a closing text whose delta's
+    // wrapper names no message id. The flag gates the events, as on the real
+    // CLI; $WB_FAKE_NO_STREAM_EVENTS drops them to compare the same turn.
+    if (mode === "partial-messages") {
+      const partial = argv.includes("--include-partial-messages") && Bun.env["WB_FAKE_NO_STREAM_EVENTS"] === undefined;
+      const ev = (id: string | undefined, event: Record<string, unknown>): void => {
+        if (!partial) return;
+        emit({ type: "stream_event", event, session_id: "fake-session", parent_tool_use_id: null, uuid: `ev-${Math.random()}`, ...(id !== undefined ? { api_message_id: id } : {}) });
+      };
+      const opening = (out: number) => ({ input_tokens: 2, cache_creation_input_tokens: 30, cache_read_input_tokens: 3_000, output_tokens: out });
+      const finished = (out: number, thinking: number) => ({ ...opening(out), output_tokens_details: { thinking_tokens: thinking } });
+      const a = `msg-a-${turn}`;
+      ev(a, { type: "message_start", message: { id: a, type: "message", role: "assistant", content: [], usage: opening(16) } });
+      ev(a, { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      ev(a, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "reading" } });
+      emit({ type: "assistant", message: { id: a, role: "assistant", content: [{ type: "text", text: "reading" }], usage: opening(16) }, session_id: "fake-session" });
+      ev(a, { type: "content_block_stop", index: 0 });
+      ev(a, { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: `tu-${turn}`, name: "mcp__wrathbench__run_snippet", input: {} } });
+      ev(a, { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"code": "1"}' } });
+      emit({
+        type: "assistant",
+        message: { id: a, role: "assistant", content: [{ type: "tool_use", id: `tu-${turn}`, name: "mcp__wrathbench__run_snippet", input: { code: "1" } }], usage: opening(16) },
+        session_id: "fake-session",
+      });
+      ev(a, { type: "content_block_stop", index: 1 });
+      ev(a, { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: finished(52, 9) });
+      ev(a, { type: "message_stop" });
+      if (mcp !== null) {
+        const res = await mcp.call("tools/call", { name: "run_snippet", arguments: { code: "1" } });
+        (record["toolResults"] as unknown[]).push(res["result"]);
+        saveRecord();
+      }
+      emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `tu-${turn}`, content: "ok" }] }, session_id: "fake-session" });
+      const b = `msg-b-${turn}`;
+      ev(b, { type: "message_start", message: { id: b, type: "message", role: "assistant", content: [], usage: opening(1) } });
+      ev(b, { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: finished(3, 3) });
+      ev(b, { type: "message_stop" });
+      const c = `msg-c-${turn}`;
+      ev(c, { type: "message_start", message: { id: c, type: "message", role: "assistant", content: [], usage: opening(4) } });
+      ev(c, { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      ev(c, { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "done" } });
+      emit({ type: "assistant", message: { id: c, role: "assistant", content: [{ type: "text", text: "done" }], usage: opening(4) }, session_id: "fake-session" });
+      ev(c, { type: "content_block_stop", index: 0 });
+      ev(undefined, { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: finished(6, 0) });
+      ev(c, { type: "message_stop" });
+      emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: `turn ${turn} done`,
+        num_turns: 3,
+        usage: { input_tokens: 6, output_tokens: 61, cache_read_input_tokens: 9_000, cache_creation_input_tokens: 90 },
         session_id: "fake-session",
       });
       continue;

@@ -773,8 +773,11 @@ function subscriptionActual(reportedUsd: number | null, coverage: CostCoverage |
  * note. Where the model has no row (Haiku 5.5, tiered per request) nothing is
  * added, and the figure is still marked, because it still reads low.
  *
- * The estimate is a floor: those turns' output is the API's opening snapshot,
- * under-read (`tokenTotals`), and only their input side is a finished count.
+ * The estimate is a floor where any of those turns' responses carries only the
+ * API's opening snapshot for its output, under-read (`tokenTotals`); their
+ * input side is always a finished count. Where every one carried the message's
+ * finished output count (`UnreportedUsage.outputFinal`) it is not, and the
+ * note does not say so.
  */
 function backfilled(run: PriceableRun & { startedAt?: number | null }, reportedUsd: number, gap: UnreportedUsage): CostFigure {
   const price = priceFor(run, run.startedAt ?? null);
@@ -808,7 +811,7 @@ function backfilled(run: PriceableRun & { startedAt?: number | null }, reportedU
     note:
       estimate === null || price === null
         ? `the CLI's own total_cost_usd, which leaves out ${turns}; the model has no list price to estimate ${gap.turns === 1 ? "it" : "them"} at, so this reads low — ${bill}`
-        : `includes ${usdText(estimate)} estimated at ${price.id} list price for ${turns} (a floor: output there is under-read); the CLI's own figure is ${usdText(reportedUsd)} — ${bill}`,
+        : `includes ${usdText(estimate)} estimated at ${price.id} list price for ${turns}${gap.outputFinal === true ? "" : " (a floor: output there is under-read)"}; the CLI's own figure is ${usdText(reportedUsd)} — ${bill}`,
     backfill: { reportedUsd, usd: estimate, turns: gap.turns },
   };
 }
@@ -832,12 +835,13 @@ function expectedCost(args: {
   }
   /*
    * A `snapshot` total is a claude-code run none of whose turns closed with a
-   * `claude_result`: a freeplay run is one turn that never ends, so it is the
-   * standing state of every longplay. Its input side is a finished count and
-   * only its output is under-read (`tokenTotals`), so it is priced, as the
-   * floor it is, and says so; refusing it left a run of several hundred
-   * million cached tokens with no figure at all. The ladder does not plot it
-   * (`runCostReading`).
+   * `claude_result` and most of whose replies carry only the opening snapshot:
+   * a freeplay run is one turn that never ends, so it was the standing state of
+   * every longplay before the driver recorded each message's finished count.
+   * Its input side is a finished count and only its output is under-read
+   * (`tokenTotals`), so it is priced, as the floor it is, and says so; refusing
+   * it left a run of several hundred million cached tokens with no figure at
+   * all. The ladder does not plot it (`runCostReading`).
    */
   const floor = tokens.source === "snapshot" && !free;
   const breakdown = costOf(tokens, price);
@@ -851,7 +855,7 @@ function expectedCost(args: {
    * (docs/COSTS.md, "Rules, each paid for"); those runs are not priced at all.
    */
   const caveat = floor
-    ? " — a floor: no turn of this run reported a finished output count, so its input is priced in full and its output only at the API's opening snapshots, which read far too low"
+    ? " — a floor: no turn of this run reported a finished output count, so its input is priced in full and most of its output only at the API's opening snapshots, which read far too low"
     : claudeCode && !free
       ? " — where the CLI reported its own figure, that is the one to read"
       : "";

@@ -72,8 +72,9 @@ the operator's figure in GitHub issue #66.
   termination, refuses every further tool call, and reads the CLI's stream for
   up to 90s so the closing `result` can land (runner/README.md, "Winding a
   claude-code episode down"). A run that gets one reads `source: "reported"`
-  and carries a cost; a run whose CLI never closed its turn reads `snapshot`,
-  and its `wind-down` record says `grace-expired`.
+  and carries a cost; a run whose CLI never closed its turn has no cost of its
+  own, reads `snapshot` unless its responses carry finished output counts
+  (below), and its `wind-down` record says `grace-expired`.
 - A `claude_result` lands once per harness TURN, and its two halves do not cover
   the same thing: `usage` is that turn's, so a run's output is the sum over the
   records, while `total_cost_usd` is CUMULATIVE for the CLI session, so a
@@ -81,14 +82,23 @@ the operator's figure in GitHub issue #66.
   `sessionId` (the boundary a pause and resume crosses) and
   `duration_api_ms` (time inside API calls, as against `duration_ms`'s whole
   turn).
-- Per-response `usage.completion_tokens` under the claude-code driver is the
-  API's `message_start` snapshot, not the finished count — low by roughly 300×,
-  and so is any tokens/second read off it; the input side is correct. Output
-  comes off `claude_result.usageRaw.output_tokens`. Actual cost (`costUsd`)
-  never depended on it; EXPECTED cost, which prices `completionTokens`, does. A
-  run whose turns never emitted a `claude_result` at all keeps the snapshot
-  figures and is labelled `source: "snapshot"` rather than `"reported"`, in the
-  API and on the run page both.
+- The `assistant` envelopes the claude-code driver records carry the API's
+  `message_start` usage, whose output count is a snapshot taken before the
+  reply exists — low by roughly 300×, and so is any tokens/second read off it;
+  the input side is correct. The driver runs the CLI with
+  `--include-partial-messages` and replaces that snapshot with the finished
+  count off the message's own `message_delta` stream event, marking the
+  response `completion_final` (the probe on the pinned CLI: 16 at the start,
+  52 finished, and a turn's per-message counts summing exactly to its
+  result's). A message cut off before its delta keeps the snapshot, and so does
+  every response recorded before the flag. Where a turn has a `claude_result`,
+  its output still comes off `claude_result.usageRaw.output_tokens`, never
+  added to the messages' own. Actual cost (`costUsd`) never depended on any of
+  it; EXPECTED cost, which prices `completionTokens`, does. A run with no
+  `claude_result` whose snapshot-only replies outnumber its finished-count ones
+  is labelled `source: "snapshot"` rather than `"reported"`, in the API and on
+  the run page both; with no finished-count reply at all that is exactly the
+  old rule, so no earlier run's label moved.
 - As-metered cost for a claude-code run is the last `claude_result.costUsd`
   figure per CLI session, summed across sessions. Summing every record
   triangle-counts a cumulative series: the haiku run read $69.30 that way for a
@@ -103,13 +113,16 @@ the operator's figure in GitHub issue #66.
   CLI's figure; a turn still in flight is not counted, so a live run is not
   marked between results; the actual then carries both parts (`CostFigure.backfill`) and
   every surface shows it with a `*` whose hover says how much was estimated
-  and for how many turns. The estimate is a floor, because those turns' output
-  is the opening snapshot (above). A model with no row (Haiku 5.5) gets nothing
+  and for how many turns. The estimate is a floor where any of those
+  responses carries only the opening snapshot (above), and the hover says so
+  only then. A model with no row (Haiku 5.5) gets nothing
   added and the `*` all the same, since the figure still reads low. A run with
   no `claude_result` at all is not backfilled, having no reported figure to add
   to: its expected cost prices every token instead. That is every freeplay run
-  while it lasts (one turn that never closes), and the figure is a floor for
-  the same reason, which its note says; the ladder's cost axis leaves it out.
+  while it lasts (one turn that never closes). Recorded with finished counts it
+  reads `reported` and its expected cost is the real list-price figure; one
+  still labelled `snapshot` is a floor, which its note says, and the ladder's
+  cost axis leaves it out.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (docs/METHODOLOGY.md, "Known limitations"; the viewer falls back to
   an estimate only where there is no actual, and labels it). The listings do the
@@ -130,18 +143,19 @@ the operator's figure in GitHub issue #66.
   was wrong by 3.5x in the expensive direction: token volume per episode is a
   function of the model's SPEED (luna ran ~7x more snippets per minute), not a
   harness constant.
-- **Do not sum claude-code per-response `usage` into dollars.** Summed
-  per-response prompt tokens overshot a real `costUsd` by ~4x and the summed
-  output figure undercounted real output ~6.8x on the one run with ground
-  truth — and the output side is worse than that measurement suggested: the
-  figures are opening snapshots, so on the haiku run they undercount
-  by ~300×. Per-response blocks are good for the SHAPE of context growth, never
-  for absolute $, and on the output side not even for shape. The 4× prompt
-  overshoot was measured on the retired `claude-subscription` driver, whose
-  runs stay unpriced; under the `claude-code` driver the per-response prompt
-  sums equal the CLI's own per-turn `claude_result` sums, and output comes off
-  `claude_result` (§1), which is why the expected figure can be read beside
-  the CLI's.
+- **Do not sum claude-code per-response `usage` into dollars unless its
+  output is final.** Summed per-response prompt tokens overshot a real
+  `costUsd` by ~4x and the summed output figure undercounted real output ~6.8x
+  on the one run with ground truth — and the output side is worse than that
+  measurement suggested: the figures were opening snapshots, so on the haiku
+  run they undercount by ~300×. A response marked `completion_final` carries
+  the message's finished count and sums honestly; one without it is good for
+  the SHAPE of context growth only, and on the output side not even for that.
+  The 4× prompt overshoot was measured on the retired `claude-subscription`
+  driver, whose runs stay unpriced; under the `claude-code` driver the
+  per-response prompt sums equal the CLI's own per-turn `claude_result` sums,
+  and a turn with a result takes its output from it (§1), which is why the
+  expected figure can be read beside the CLI's.
 - **Price a Claude run on the model the CLI served, at the 1-hour cache-write
   rate.** The roster's `opus` and `sonnet` are aliases that changed meaning
   with CLI pins (Opus 5.5 from 2.1.280, Sonnet 5.5 from 2.1.284); priced by
