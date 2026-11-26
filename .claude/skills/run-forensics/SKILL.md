@@ -70,8 +70,10 @@ window's tokens at the catalogue's row. A
 claude-code run's tokens and model turns are its CLI results' (`num_turns`
 and `usage` on each `claude_result`), because its response records are a
 message's envelopes, only the last carrying usage, and that usage's output is
-the stream's opening snapshot; what no result covers is listed apart and
-called a snapshot, and `activity` counts model turns as the run page does:
+the stream's opening snapshot unless the driver recorded the message's
+finished count (`completion_final`); what no result covers is listed apart and
+called a snapshot or finished output by which it carries (a result, where
+there is one, still settles its turn), and `activity` counts model turns as the run page does:
 each result's `num_turns`, a message no result covers one each, the response
 records beside them. The token sums are not the bill on a codex run
 from before per-turn deltas (running totals), and the CLI's dollar figure
