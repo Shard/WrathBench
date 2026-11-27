@@ -108,6 +108,17 @@ describe("the viewer's routes", () => {
     const pub = (await (await get(handle({ runner: false, evals: true, viewer: true }, true), "/api/info")).json()) as ApiInfoResponse;
     expect(pub.groups).toEqual({ runner: false, evals: true, viewer: true });
   });
+
+  test("/api/info carries the series census only with evals on, in its place among the keys", async () => {
+    const all = (await (await get(handle(), "/api/info")).json()) as ApiInfoResponse;
+    expect(all.harnessSeries).toEqual([]);
+    expect(Object.keys(all).slice(0, 6)).toEqual(["service", "publicMode", "dashboard", "dashboardBuild", "worldserver", "harnessSeries"]);
+    for (const groups of [{ runner: true, evals: false, viewer: true }, { runner: false, evals: false, viewer: true }]) {
+      const info = (await (await get(handle(groups), "/api/info")).json()) as ApiInfoResponse;
+      expect("harnessSeries" in info).toBe(false);
+      expect("harnessSeries" in projectInfo(info)).toBe(false);
+    }
+  });
 });
 
 describe("the public snapshot", () => {

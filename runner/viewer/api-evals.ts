@@ -1,11 +1,12 @@
 /**
  * The evals group's side of the viewer's API (`groups.ts`): the episodes, the
- * dungeon board and the campaigns, over the handle's own listing
+ * dungeon board, the campaigns and `/api/info`'s series census, over the handle's own listing
  * (`ApiContext.resultRuns`). `createApi` (`api.ts`) imports this module only
  * with the group on. The results and ladder builder, which `/api/results`
  * shares with the ladder, is `api-results.ts`.
  */
 
+import { harnessSeries } from "../src/comparability-tuple";
 import { EPISODE_LIST, hasBoard } from "../src/episodes";
 import { isNotAModelRun } from "../src/config";
 import { badEvidenceReason, countedRun } from "../src/lapse";
@@ -31,9 +32,56 @@ function badEvidenceOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelRespons
   });
 }
 
+/**
+ * How long one series census stands in for the next.
+ *
+ * Minutes, not seconds: a new series appears on a deploy, never on a tick, and
+ * the census opens the run metadata for every run on disk. `/api/info` is the
+ * route every open tab polls — the one whose build id is already memoised for
+ * exactly that reason.
+ */
+export const SERIES_CACHE_MS = 300_000;
+
+/**
+ * The harness series present in the run directory, newest first, with counts.
+ *
+ * The shell's global series selector needs this before any page has fetched
+ * rows of its own, so it rides on `/api/info`. Cached on a window because that
+ * route is polled by every open tab and the answer changes only when a run
+ * starts; the census reads run metadata, never a trajectory. The evals
+ * group's: with the group off the dashboard draws no selector, and
+ * `/api/info` carries no census.
+ */
+export function harnessSeriesCensus(rows: readonly { harnessVersion: string | null }[]): { series: string; runs: number }[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const s = harnessSeries(r.harnessVersion);
+    if (s === null) continue;
+    counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  return [...counts]
+    .map(([series, runs]) => ({ series, runs }))
+    .sort((a, b) => {
+      const [am, an] = a.series.split(".").map((n) => Number.parseInt(n, 10));
+      const [bm, bn] = b.series.split(".").map((n) => Number.parseInt(n, 10));
+      return (bm! - am!) || (bn! - an!);
+    });
+}
+
 /** The evals builders over the handle's shared state (`ApiContext`). */
 export function createEvalsApi(ctx: ApiContext) {
-  const { runsDir, pub, fleetRoster, resultRuns } = ctx;
+  const { runsDir, pub, fleetRoster, resultRuns, runRows } = ctx;
+
+  // The series census for /api/info, on a window: every open tab polls that
+  // route, and the answer only moves when a run starts.
+  let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
+  async function seriesCensus(): Promise<{ series: string; runs: number }[]> {
+    const now = Date.now();
+    if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
+      seriesCache = { at: now, value: harnessSeriesCensus(await runRows(now)) };
+    }
+    return seriesCache.value;
+  }
 
   async function episodesResponse(): Promise<Response> {
     /*
@@ -114,5 +162,5 @@ export function createEvalsApi(ctx: ApiContext) {
     return pub(body, projectCampaigns);
   }
 
-  return { episodesResponse, dungeonsResponse, campaignsResponse };
+  return { episodesResponse, dungeonsResponse, campaignsResponse, seriesCensus };
 }

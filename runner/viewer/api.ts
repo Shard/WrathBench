@@ -26,7 +26,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json, notFound, withheld } from "./http";
-import { harnessSeries } from "../src/comparability-tuple";
 import type { SiteSettings } from "../src/site-settings";
 import { siteInfoField } from "./site-info";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
@@ -298,16 +297,6 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
   return id;
 }
 
-/**
- * How long one series census stands in for the next.
- *
- * Minutes, not seconds: a new series appears on a deploy, never on a tick, and
- * the census opens the run metadata for every run on disk. `/api/info` is the
- * route every open tab polls — the one whose build id is already memoised for
- * exactly that reason.
- */
-export const SERIES_CACHE_MS = 300_000;
-
 /** How long `/api/highlight` is held: it reads every listed run's `camera/clips.json`. */
 const HIGHLIGHT_CACHE_MS = 15_000;
 
@@ -331,30 +320,6 @@ export const RESULT_RUNS_CACHE_MS = 15_000;
 /** `/api/info`'s `previewSeries`, spread in: the field when the store's `site` block names one, nothing otherwise. */
 export function previewSeriesField(site: SiteSettings): { previewSeries?: string } {
   return site.previewSeries === undefined ? {} : { previewSeries: site.previewSeries };
-}
-
-/**
- * The harness series present in the run directory, newest first, with counts.
- *
- * The shell's global series selector needs this before any page has
- * fetched rows of its own, so it rides on `/api/info`. Cached on a window
- * because that route is polled by every open tab and the answer changes only
- * when a run starts; the census reads run metadata, never a trajectory.
- */
-export function harnessSeriesCensus(rows: readonly { harnessVersion: string | null }[]): { series: string; runs: number }[] {
-  const counts = new Map<string, number>();
-  for (const r of rows) {
-    const s = harnessSeries(r.harnessVersion);
-    if (s === null) continue;
-    counts.set(s, (counts.get(s) ?? 0) + 1);
-  }
-  return [...counts]
-    .map(([series, runs]) => ({ series, runs }))
-    .sort((a, b) => {
-      const [am, an] = a.series.split(".").map((n) => Number.parseInt(n, 10));
-      const [bm, bn] = b.series.split(".").map((n) => Number.parseInt(n, 10));
-      return (bm! - am!) || (bn! - an!);
-    });
 }
 
 /**
@@ -486,18 +451,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
-  // The series census for /api/info, on a window: every open tab polls that
-  // route, and the answer only moves when a run starts.
-  let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
   // The home page's clip, on a short window: it reads every listed run's camera directory.
   let highlightCache: { at: number; value: HighlightResponse } | undefined;
-  const seriesCensus = async (): Promise<{ series: string; runs: number }[]> => {
-    const now = Date.now();
-    if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
-      seriesCache = { at: now, value: harnessSeriesCensus(await runRows(now)) };
-    }
-    return seriesCache.value;
-  };
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** Each run's closed trace windows, for its track (see `release` for why it is never dropped). */
@@ -989,7 +944,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
-        harnessSeries: await seriesCensus(),
+        // The evals group's (`api-evals.ts`): with it off the dashboard draws no series selector.
+        ...(evalsApi !== null ? { harnessSeries: await (await evalsApi).seriesCensus() } : {}),
         // Only when the store's `site` block names one, so a deployment without it serves the body it did.
         ...previewSeriesField(fleetRoster().site),
         // The deployment's name, theme, home and about, likewise only when set.
