@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import { num } from "../../runner/src/values";
 
 /**
  * The record kinds that belong to a driver turn, and therefore to `turns`.
@@ -50,9 +51,6 @@ export function parseLine(text: string): ParsedLine {
   return { ok: true, rec: r.data as Record<string, unknown>, t: r.data.t, ts: r.data.ts };
 }
 
-function num(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
 function int(v: unknown): number | null {
   const n = num(v);
   return n === null ? null : Math.trunc(n);

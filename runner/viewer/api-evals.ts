@@ -17,6 +17,7 @@ import type {
   ResultRun,
 } from "./api-types";
 import { campaignsView } from "./campaigns";
+import { fullRosterOf } from "./models";
 import { boardsOf, DUNGEON_BOARD_VERSION } from "./dungeons";
 import { dungeonMarksOf } from "./dungeon-marks";
 import { projectCampaigns, projectDungeons, projectEpisodes } from "./public-projection";
@@ -146,7 +147,7 @@ export function createEvalsApi(ctx: ApiContext) {
 
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
-    const roster = fleetRoster();
+    const roster = fullRosterOf(fleetRoster());
     const view = campaignsView(all, roster, (r) =>
       countedRun({
         extra: r.extra,

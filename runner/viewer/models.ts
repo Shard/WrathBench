@@ -30,20 +30,16 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
-import { parseEntryCompactWindow } from "../src/config";
 import { DEFAULT_DRIVER, driverEntry } from "../src/drivers";
 import { entryBilling } from "../src/billing";
-import { configDbPath, readFleetConfig } from "../src/config-store";
+import { configDbPath } from "../src/config-read";
 import {
   DEFAULT_POLICY,
   LADDER_MS,
   countsTowardTarget,
   isCounted,
   parsePolicyBlock,
-  policyExclusion,
   entryOwnsRun,
-  entryOwnsWindow,
   sameModel,
   ownedWindows,
   platformOf,
@@ -51,116 +47,27 @@ import {
   verdictForGroups,
   schedulableView,
   type ModelState,
-  type PolicyJob,
-  type RosterModel,
   type SchedulingPolicy,
   type RunFact,
-  TIERS,
   TIER_TABLE,
-  IDLE_MODES,
 } from "../src/models";
 import { harnessSeries } from "../src/comparability-tuple";
-import { canonicalModelId } from "../../infra/model-catalogue";
-import { entryModelIds } from "../src/provider-options";
-import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
 import { rosterEntryRefusal } from "../src/roster-refusal";
 import { poolSizeOf } from "../src/account-pool";
 import { parseCredentials, type Credential } from "../src/credential-slots";
-import { siteSettingsOf, type SiteSettings } from "../src/site-settings";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
+import { readRosterBase, windowOf, type RosterBase, type RosterNames } from "./roster";
 import { redactSecrets } from "./tail";
-
 
 // ------------------------------------------------------------------ roster
 
-/**
- * The roster block of a fleet config, at the boundary.
- *
- * Deliberately narrow: the supervisor's own `parseFleet` validates the whole
- * file, but it lives in `infra/run-fleet.ts` beside `bun:sqlite`, a repo-root
- * assumption and the spawn path, and the viewer may not import any of that.
- * What the projection needs off an entry is its identity and its two
- * overrides, so that is all this parses; everything else is passed over
- * rather than rejected, because the viewer is not the thing that validates
- * the fleet's config.
+/*
+ * The roster's rows, its names and the `site` block are `roster.ts`'s, which
+ * every handle reads; what this adds is what only the scheduler's pages need.
  */
-const rosterEntrySchema = z
-  .object({
-    model: z.string().min(1),
-    effort: z.string().min(1).optional(),
-    /**
-     * As the operator wrote it: the store keeps the raw document, so this is
-     * canonicalised below (`windowOf`) before anything matches runs on it.
-     */
-    compactWindow: z.string().min(1).optional(),
-    driver: z.string().min(1).optional(),
-    apiBase: z.string().min(1).optional(),
-    /** The entry's providers (`runner/src/provider-options.ts`): read for what owns a run, and the first is the entry's own. */
-    providers: z.array(z.object({ credential: z.string().min(1), apiBase: z.string().min(1).optional(), model: z.string().min(1).optional() }).loose()).min(1).optional(),
-    billing: z.enum(["free", "paid"]).optional(),
-    /** An objective puts the entry outside the policy (`policyExclusion`). */
-    objective: z.string().min(1).optional(),
-    // The evidence budget and the idle axis. Validated against the
-    // projection's own exported key sets, so the two parsers cannot drift on
-    // what a tier IS even while they stay deliberate twins on everything else.
-    // Optional HERE and required in the supervisor's own parser, deliberately:
-    // the viewer does not validate the fleet's config, it reads it. An entry
-    // with no tier is one the policy does not schedule — a steered probe, or a
-    // mistake the supervisor is already refusing by name — so it is skipped
-    // below rather than rowed with a tier nobody wrote.
-    tier: z.enum(TIERS).optional(),
-    idle: z.enum(IDLE_MODES).optional(),
-  })
-  .loose();
-
-/**
- * A job, as narrowly as the membership predicate needs it: the roster names it
- * holds and the account it is pinned to. The file calls the list `queue`
- * (the key survived the concept's rename to "job"); a job
- * with an `account` is pinned.
- */
-const fleetJobSchema = z
-  .object({
-    ref: z.union([z.string(), z.array(z.string())]),
-    account: z.string().min(1).optional(),
-    episode: z.string().optional(),
-  })
-  .loose();
-
-/**
- * The account pool, as a count of live sessions. Read from the file rather
- * than from `fleet-state.json` so the page's concurrency figures agree with
- * `--status` even with the supervisor down.
- */
-const fleetAccountsSchema = z
-  .object({
-    pool: z.array(z.string()).optional(),
-    max: z.number().optional(),
-  })
-  .loose();
-
-const fleetRosterSchema = z
-  .object({
-    roster: z.record(z.string(), rosterEntrySchema),
-    queue: z.array(fleetJobSchema).optional(),
-    policy: z.unknown().optional(),
-    accounts: fleetAccountsSchema.optional(),
-    credentials: z.unknown().optional(),
-    campaigns: z.unknown().optional(),
-    "campaign-defs": z.unknown().optional(),
-  })
-  .loose();
-
-/** How a fleet config answered when asked for a roster. */
-export type RosterShape = "roster" | "missing" | "unreadable";
-
-export interface RosterRead {
-  models: RosterModel[];
-  shape: RosterShape;
-  /** The file that was consulted, as it was given — never a host path guess. */
-  path: string | null;
+export interface RosterRead extends RosterNames {
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
   /**
@@ -169,20 +76,6 @@ export interface RosterRead {
    * unreadably (the supervisor's to refuse).
    */
   credentials: Credential[];
-  /**
-   * Roster names the policy does not schedule, with why (`policyRefs` in
-   * `runner/src/models.ts` — the supervisor's own predicate): a name a pinned
-   * job holds, or one carrying an objective. Their runs are a probe's, not the
-   * model's evidence, so `/api/models` lists them apart from the rows rather
-   * than beside a model whose counts they would duplicate.
-   */
-  excluded: { name: string; reason: string }[];
-  /**
-   * Every entry the roster names — rowed or not. `models` holds only the ones
-   * the policy can schedule (a steered entry carries no tier and owns no
-   * budget), so this is what the page means by "the roster has N entries".
-   */
-  count: number;
   /** How many pool accounts may be live at once (`accounts.max`, else the pool's size): the ETA's concurrency. */
   accounts: number;
   /**
@@ -200,8 +93,6 @@ export interface RosterRead {
    * one refusal keyed `campaigns`. The campaigns page shows every one.
    */
   campaignRefusals: CampaignRefusal[];
-  /** The store's `site` block (`runner/src/site-settings.ts`); empty when absent or unreadable. */
-  site: SiteSettings;
 }
 
 /** The series this viewer runs from — what the projection counts against. */
@@ -210,57 +101,21 @@ export function currentSeries(): string | null {
 }
 
 /**
- * A roster entry's compaction window as the supervisor reads it
- * (`parseEntryCompactWindow`): canonical (`"100K"` → `"100k"`), and `auto`
- * absent except on a driver that defaults a window, where it is the entry's
- * opt-out. A value the parser refuses reads as absent too — the supervisor
- * refuses that config, so no run carries it.
+ * The whole roster off its names (`roster.ts`): the policy, the credentials,
+ * the account pool and the campaigns, read from the same document, so this
+ * page shows what the supervisor is actually scheduling. A roster that did not
+ * read carries the defaults and nothing else. `env` is where the deploy-time
+ * self-hosted model hosts are read from (`rosterEntryRefusal`), the same
+ * variable every pod that parses the store is given.
  */
-function windowOf(raw: string | undefined, driver: string | undefined): string | undefined {
-  if (raw === undefined) return undefined;
-  try {
-    return parseEntryCompactWindow(raw, driver ?? DEFAULT_DRIVER);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Read the roster out of the config store (`runner/src/config-store.ts`), the
- * only fleet config, so this page shows what the supervisor is actually
- * scheduling. An empty or absent store is `missing` — a deployment before its
- * seed, labelled rather than thrown. A store that cannot be read, or a config
- * without a `roster` map, is `unreadable` — the same posture `readFleet` takes
- * to a missing `fleet-state.json`: say it is not usable, do not synthesise
- * what it would have said. `path` is the store's. `env` is where the
- * deploy-time self-hosted model hosts are read from (`rosterEntryRefusal`),
- * the same variable every pod that parses the store is given.
- */
-export function readFleetRoster(
-  dbPath: string = configDbPath(),
+export function completeRoster(
+  base: RosterBase,
   series: string | null = currentSeries(),
   env: Record<string, string | undefined> = process.env,
 ): RosterRead {
+  const { doc: parsed, ...names } = base;
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, credentials: [], excluded: [], count: 0, accounts: 0, campaigns: [], campaignDefs: [], campaignRefusals: [], site: {} };
-  const read = readFleetConfig(dbPath);
-  const path = read.path;
-  if (read.status === "empty") return { ...empty, shape: "missing", path };
-  if (read.status === "unreadable") return { ...empty, shape: "unreadable", path };
-  let doc: unknown;
-  try {
-    doc = JSON.parse(read.text);
-  } catch {
-    return { ...empty, shape: "unreadable", path };
-  }
-  // Before the roster: a display setting holds whatever shape the roster is in.
-  const site = siteSettingsOf(typeof doc === "object" && doc !== null ? (doc as { site?: unknown }).site : undefined);
-  let parsed: z.infer<typeof fleetRosterSchema>;
-  try {
-    parsed = fleetRosterSchema.parse(doc);
-  } catch {
-    return { ...empty, site, shape: "unreadable", path };
-  }
+  if (parsed === null) return { ...names, policy: defaults, credentials: [], accounts: 0, campaigns: [], campaignDefs: [], campaignRefusals: [] };
   let policy: SchedulingPolicy = defaults;
   try {
     policy = parsePolicyBlock(parsed.policy, series);
@@ -272,43 +127,6 @@ export function readFleetRoster(
     credentials = parseCredentials(parsed.credentials);
   } catch {
     /* a malformed credential is the supervisor's to refuse; the page shows none */
-  }
-  const models: RosterModel[] = [];
-  for (const [name, e] of Object.entries(parsed.roster)) {
-    if (e.tier === undefined) continue;
-    const compactWindow = windowOf(e.compactWindow, e.driver);
-    // As the supervisor's parser leaves it: each provider's model stated, the first the entry's own.
-    const providers = e.providers?.map((p) => ({ credential: p.credential, model: p.model ?? e.model, ...(p.apiBase !== undefined ? { apiBase: p.apiBase } : {}) }));
-    const apiBase = providers === undefined ? e.apiBase : providers[0]!.apiBase;
-    models.push({
-      name,
-      model: providers?.[0]!.model ?? e.model,
-      ...(e.effort !== undefined ? { effort: e.effort } : {}),
-      ...(compactWindow !== undefined ? { compactWindow } : {}),
-      ...(e.driver !== undefined ? { driver: e.driver } : {}),
-      ...(apiBase !== undefined ? { apiBase } : {}),
-      ...(providers !== undefined ? { providers } : {}),
-      ...(e.billing !== undefined ? { billing: e.billing } : {}),
-      tier: e.tier,
-      ...(e.idle !== undefined ? { idle: e.idle } : {}),
-    });
-  }
-  /* The exclusion, from the supervisor's own predicate, over the queue. */
-  const jobs: PolicyJob[] = (parsed.queue ?? []).map((j) => {
-    const refs = typeof j.ref === "string" ? [j.ref] : j.ref;
-    return {
-      refs,
-      ...(j.account !== undefined ? { account: j.account } : {}),
-      name: `${refs[0] ?? "job"}-${typeof j.episode === "string" ? j.episode : "e90"}`,
-    };
-  });
-  // Over every roster NAME. One reason is left — a pinned job holds this
-  // account — since a catalog entry can no longer carry an objective
-  // and a campaign borrows a model rather than removing it from the schedule.
-  const excluded: { name: string; reason: string }[] = [];
-  for (const name of Object.keys(parsed.roster)) {
-    const reason = policyExclusion(jobs, {}, name);
-    if (reason !== undefined) excluded.push({ name, reason });
   }
   // No pool listed is the generated one, sized by the deployment as the supervisor reads it.
   const generated = poolSizeOf(env);
@@ -342,20 +160,37 @@ export function readFleetRoster(
     // says so instead of showing no campaigns.
     campaignRefusals = [{ key: "campaigns", reason: err instanceof Error ? err.message : String(err) }];
   }
-  return {
-    models,
-    shape: "roster",
-    path,
-    policy,
-    credentials,
-    excluded,
-    count: Object.keys(parsed.roster).length,
-    accounts,
-    campaigns,
-    campaignDefs,
-    campaignRefusals,
-    site,
-  };
+  return { ...names, policy, credentials, accounts, campaigns, campaignDefs, campaignRefusals };
+}
+
+/** Each shared read's completion (`fullRosterOf`), dropped with the read it was made from. */
+const completed = new WeakMap<RosterBase, RosterRead>();
+
+/**
+ * The whole roster over the read a handle shares (`api.ts`'s `fleetRoster`,
+ * held on the store's short window): completed once per read, so the runner
+ * and evals routes polling it cost one completion a window, as they cost one
+ * read.
+ */
+export function fullRosterOf(base: RosterBase): RosterRead {
+  let read = completed.get(base);
+  if (read === undefined) {
+    read = completeRoster(base);
+    completed.set(base, read);
+  }
+  return read;
+}
+
+/**
+ * Read the whole roster out of the config store (`runner/src/config-store.ts`):
+ * `roster.ts`'s read, completed (`completeRoster`). `path` is the store's.
+ */
+export function readFleetRoster(
+  dbPath: string = configDbPath(),
+  series: string | null = currentSeries(),
+  env: Record<string, string | undefined> = process.env,
+): RosterRead {
+  return completeRoster(readRosterBase(dbPath), series, env);
 }
 
 // ------------------------------------------------------------- run facts
@@ -554,37 +389,6 @@ export function rowOf(
     lastError,
   };
 }
-
-/**
- * The roster row a run belongs to, by name: what the run page links its model
- * to. A run records a model string, an effort and a compaction window, never
- * the name that scheduled it, so the match is on that identity over exactly
- * the rows `/api/models` lists (`modelsResponse`: the roster in order, the
- * excluded names left out). An effort or window the roster has no row for
- * still points at the model's own row, which is more useful than no link.
- * Null for a run with no model, or a model the roster does not name.
- */
-export function rosterNameOf(
-  roster: Pick<RosterRead, "models" | "excluded">,
-  model: string | null,
-  effort: string | null = null,
-  compactWindow: string | null = null,
-): string | null {
-  if (model === null) return null;
-  const outside = new Set(roster.excluded.map((e) => e.name));
-  const rows = roster.models.filter((m) => !outside.has(m.name));
-  const hit = rows.find(
-    (r) => entryModelIds(r).includes(model) && (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow),
-  );
-  if (hit !== undefined) return hit.name;
-  const own = rows.find((r) => entryModelIds(r).includes(model));
-  if (own !== undefined) return own.name;
-  // The same model on another provider is the same row (operator, 2026-11-16).
-  const canonical = canonicalModelId(model);
-  const same = rows.filter((r) => entryModelIds(r).some((m) => canonicalModelId(m) === canonical));
-  return (same.find((r) => (r.effort ?? null) === effort && entryOwnsWindow(r, compactWindow)) ?? same[0])?.name ?? null;
-}
-
 /** The whole response, given the projection and the facts it was built from. */
 export function modelsResponse(opts: {
   states: readonly ModelState[];

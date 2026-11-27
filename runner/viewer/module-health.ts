@@ -13,6 +13,7 @@
  */
 
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
+import { num } from "../src/values";
 import type { ApiInfoResponse, ModuleLimitKey, ModuleLimits, WrathMcpModuleError, WrathMcpModuleView } from "./api-types";
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -52,7 +53,6 @@ export function displayUrl(url: string): string {
   }
 }
 
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === "string" ? v.slice(0, 200) : null);
 
 /** The allowlisted view of a `/health` body. Anything not named here is dropped. */

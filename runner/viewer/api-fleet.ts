@@ -20,7 +20,7 @@ import type {
   FleetSessionView,
   ModelsResponse,
 } from "./api-types";
-import { modelsResponse } from "./models";
+import { fullRosterOf, modelsResponse } from "./models";
 import { modelStates, outstandingWork } from "../src/models";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
@@ -425,7 +425,7 @@ export function createFleetApi(ctx: ApiContext): (url: URL, path: string) => Pro
        */
       body.runFacts = await fleetRunFacts(body, now);
       body.runCount = listing.filter((r) => r.archived === 0 && !withheld.has(r.run_id)).length;
-      const roster = fleetRoster();
+      const roster = fullRosterOf(fleetRoster());
       if (roster.shape === "roster") {
         const runs = await runFacts(now);
         const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
@@ -452,7 +452,7 @@ export function createFleetApi(ctx: ApiContext): (url: URL, path: string) => Pro
         return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
       }
       const now = Date.now();
-      const roster = fleetRoster();
+      const roster = fullRosterOf(fleetRoster());
       const runs = await runFacts(now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       // The refs with a job in flight, off the supervisor's state: the verdict

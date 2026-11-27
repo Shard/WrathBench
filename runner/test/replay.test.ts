@@ -24,13 +24,8 @@ import type { ActionHintNote } from "@wrathbench/mcp";
 import { renderActionHints } from "../src/tools";
 import { Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
-import {
-  HistoryRebuilder,
-  fixedLoopRequestRecord,
-  isSlimRequest,
-  requestHash,
-  requestStats,
-} from "../src/request-record";
+import { HistoryRebuilder, fixedLoopRequestRecord, requestHash } from "../src/request-record";
+import { isSlimRequest, requestStats } from "../src/request-stats";
 import { comparabilityOf } from "../src/comparability";
 import { readMeta, readTrajectory } from "../src/trajectory";
 import { SEGMENT_TURNS, slimRun, type SlimRun } from "./fixtures/slim-run";

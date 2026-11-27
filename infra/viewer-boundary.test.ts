@@ -69,7 +69,10 @@ const GATED = [
   "runner/viewer/admin-api.ts",
   "runner/viewer/drafts.ts",
 ] as const;
-/** What a viewer-only process must never load: the agent loop, the drivers, the model's surface, and the other groups' routes. */
+/**
+ * What a viewer-only process must never load: the agent loop, the drivers,
+ * the model's surface, the scheduler, and the other groups' routes.
+ */
 const FORBIDDEN: readonly RegExp[] = [
   /^runner\/src\/loop\.ts$/,
   /^runner\/src\/adapter/,
@@ -79,14 +82,22 @@ const FORBIDDEN: readonly RegExp[] = [
   // workspace's file cap (`FILE_MAX_CHARS`, the context policy's) is read beside.
   /^wrath-mcp\/mcp\/src\/sandbox\/(?!rewrite\.ts$)/,
   /^wiki\//,
-  /^runner\/viewer\/(admin-api|config-api|drafts|api-fleet|tools|api-evals|campaigns|dungeons|dungeon-marks)\.ts$/,
+  // The scheduler: the policy and projection, the config store's write gate
+  // and the supervisor's parser behind it, the campaigns, the credential
+  // slots and providers, and the trajectory writer. A run's fact, the config
+  // store's read and a roster entry's identity are leaves of their own
+  // (`run-fact.ts`, `config-read.ts`, `roster-entry.ts`).
+  /^runner\/src\/(models|config-store|campaigns|campaign-def|run-flags|credential-slots|providers|roster-refusal|account-pool|model-lists|run-fact-cache|store-secrets|move-credential|trajectory)\.ts$/,
+  /^infra\/run-fleet(-config)?\.ts$/,
+  // `models.ts` completes the roster for the runner and evals routes; every handle reads `roster.ts`.
+  /^runner\/viewer\/(admin-api|config-api|drafts|api-fleet|tools|api-evals|campaigns|dungeons|dungeon-marks|models)\.ts$/,
 ];
 /**
  * How many `runner/src` files a viewer-only process reaches, at most. A
  * ceiling, not a target: lower it when a cut lands, and a change that raises
  * it is a change that pulls more of the runner into the viewer.
  */
-const RUNNER_SRC_CEILING = 48;
+const RUNNER_SRC_CEILING = 40;
 
 interface Edge {
   path: string;

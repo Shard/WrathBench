@@ -12,6 +12,7 @@
 
 import type { CaptionCueView, ChapterType, ChapterView } from "./api-types";
 import { isChapter } from "./timeline-marks";
+import { isRecord } from "../src/values";
 
 /**
  * Every kind a `clips.json` has ever listed, which is what a body is checked
@@ -20,8 +21,7 @@ import { isChapter } from "./timeline-marks";
  */
 export const CHAPTER_TYPES: readonly ChapterType[] = ["level", "quest", "death", "zone", "boss"];
 
-const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
-const finiteAtLeast0 = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+export const finiteAtLeast0 = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
 /** As much of a part as the timeline needs. */
 export interface TimelinePart {

@@ -48,8 +48,8 @@ import type {
   TokenTotals,
 } from "./api-types";
 import { resultRunOf } from "./results";
-import { readFleetRoster } from "./models";
-import type { RunFact } from "../src/models";
+import { readRosterBase, type RosterBase } from "./roster";
+import type { RunFact } from "../src/run-fact";
 import { positionsFromStore } from "./positions";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
@@ -364,10 +364,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * drops it at once (`route`), so an edit is never shown stale on the page
    * that made it.
    */
-  let rosterHeld: { at: number; value: ReturnType<typeof readFleetRoster> } | undefined;
-  const fleetRoster = (): ReturnType<typeof readFleetRoster> => {
+  let rosterHeld: { at: number; value: RosterBase } | undefined;
+  const fleetRoster = (): RosterBase => {
     if (rosterHeld === undefined || Date.now() - rosterHeld.at >= STORE_SHARE_MS) {
-      rosterHeld = { at: Date.now(), value: readFleetRoster(opts.configDbPath) };
+      rosterHeld = { at: Date.now(), value: readRosterBase(opts.configDbPath) };
     }
     return rosterHeld.value;
   };
@@ -1043,14 +1043,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * here and nowhere else in this file.
    */
   async function e90Profile(): Promise<E90TokenProfileView | null> {
-    const { e90TokenProfile } = await import("./drafts");
+    const { e90TokenProfile, draftPolicyOf } = await import("./drafts");
     const now = Date.now();
     const roster = fleetRoster();
     const [facts, rows, totals] = await Promise.all([runFacts(now), runRows(now), allTotals()]);
     const harness = new Map(rows.map((r) => [r.runId, r.harness]));
     return e90TokenProfile(
       facts.map((fact) => ({ fact, harness: harness.get(fact.runId) ?? null, tokens: totals.get(fact.runId)?.tokens ?? null })),
-      roster.policy,
+      draftPolicyOf(roster),
     );
   }
 

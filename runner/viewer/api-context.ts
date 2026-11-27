@@ -6,14 +6,14 @@
  * a module reaches it through the function that reads it.
  */
 
-import type { RunFact } from "../src/models";
+import type { RunFact } from "../src/run-fact";
 import type { RunTotals } from "../src/run-totals";
 import type { closedWindowsMemo } from "@wrathbench/inspector";
 import type { HarnessView, ResultRun, RunListRow, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import type { TailCache } from "./api-tails";
 import type { RunStore } from "./clickhouse";
 import type { Groups } from "./groups";
-import type { readFleetRoster } from "./models";
+import type { RosterBase } from "./roster";
 
 export interface ApiContext {
   runsDir: string;
@@ -23,8 +23,12 @@ export interface ApiContext {
   groups: Groups;
   /** Serve a body, through the public projection when the handle is public. */
   pub: <T>(body: T, project: (b: T) => unknown, runIds?: readonly string[]) => Response;
-  /** The fleet config, read as the supervisor reads it, on a short window. */
-  fleetRoster: () => ReturnType<typeof readFleetRoster>;
+  /**
+   * The fleet config's roster names and `site` block (`roster.ts`), read on a
+   * short window; a route that needs the policy or the campaigns completes it
+   * (`fullRosterOf`, `models.ts`).
+   */
+  fleetRoster: () => RosterBase;
   harnessFilter: (url: URL) => HarnessView | "all" | null;
   runRows: (now?: number) => Promise<RunRow[]>;
   allTotals: () => Promise<Map<string, RunTotals>>;

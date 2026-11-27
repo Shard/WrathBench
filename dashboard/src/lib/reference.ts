@@ -41,7 +41,7 @@
  */
 
 import type { ResultRun, ScriptedReferenceLine } from "@viewer/api-types";
-import { isReferenceResult } from "@viewer/scripted-reference";
+import { isReferenceRun } from "@runner/drivers";
 
 /* ------------------------------------------------------- empirical ceiling */
 
@@ -246,7 +246,7 @@ export interface ScriptedReference {
  * series re-runs it after a fix to its route. A run is the reference by its
  * driver or by the stamp that driver leaves, either one alone, so a row from
  * a viewer that does not carry `driver` still draws: the viewer's one
- * predicate (`isReferenceResult`), never a copy of its stamp.
+ * predicate (`isReferenceRun`), never a copy of its stamp.
  */
 
 export function scriptedReference(
@@ -257,7 +257,7 @@ export function scriptedReference(
 ): ScriptedReference | null {
   let best: ResultRun | null = null;
   for (const r of runs) {
-    if (!isReferenceResult(r) || r.episode !== episode) continue;
+    if (!isReferenceRun(r) || r.episode !== episode) continue;
     if (r.terminationReason === null || r.maxLevel === null) continue;
     if (best === null || (r.startedAt ?? 0) > (best.startedAt ?? 0)) best = r;
   }

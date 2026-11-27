@@ -12,9 +12,6 @@
 import { isReferenceRun } from "../src/drivers";
 import type { EpisodeIdView, ResultRun, ScriptedReferenceLine } from "./api-types";
 
-/** The registry's one definition (`isReferenceRun`), over a result row. */
-export const isReferenceResult: (r: Pick<ResultRun, "driver" | "unscored">) => boolean = isReferenceRun;
-
 /**
  * One line per tier and series: the newest started reference run that
  * finished with a level reading. A live one is still climbing, and a missing
@@ -24,7 +21,7 @@ export const isReferenceResult: (r: Pick<ResultRun, "driver" | "unscored">) => b
 export function scriptedReferenceLines(rows: readonly ResultRun[], episode: EpisodeIdView | "all"): ScriptedReferenceLine[] {
   const best = new Map<string, ResultRun>();
   for (const r of rows) {
-    if (!isReferenceResult(r) || r.episode === null || (episode !== "all" && r.episode !== episode)) continue;
+    if (!isReferenceRun(r) || r.episode === null || (episode !== "all" && r.episode !== episode)) continue;
     if (r.terminationReason === null || r.maxLevel === null) continue;
     const key = `${r.episode} ${r.harnessSeries ?? ""}`;
     const held = best.get(key);

@@ -21,7 +21,8 @@ import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import type { CaptionCueView, ChapterView, ClipsResponse, HighlightResponse, VideoPartView } from "./api-types";
 import { isValidRunId } from "../src/run-list";
-import { excerptAround, fitTimeline, totalSeconds, videoToRun } from "./video-time";
+import { isRecord } from "../src/values";
+import { excerptAround, finiteAtLeast0, fitTimeline, totalSeconds, videoToRun } from "./video-time";
 
 /** Under the run's directory. */
 export const CAMERA_DIR = "camera";
@@ -62,8 +63,6 @@ export function isoOrNull(v: unknown): string | null {
   return typeof v === "string" && ISO.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
-const finiteAtLeast0 = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
 /**
  * Stat a path without following a link, and only when it is the kind asked
