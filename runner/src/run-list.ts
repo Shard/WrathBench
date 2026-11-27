@@ -41,14 +41,10 @@ import { bareSessionDir, isBareSessionDir, isBareSessionId, sessionStoreOf } fro
 import { harnessOfRun, parseComparability } from "./comparability-tuple";
 import { runCredentialOf } from "./run-credential";
 import { platformOf } from "./platform";
+import { LIVE_WINDOW_MS } from "./run-fact";
 
-/**
- * A run counts as live when it has not terminated and its trajectory grew
- * recently. "No termination reason" alone is not enough — a killed process
- * leaves none — and a stale mtime is the only signal we have from outside the
- * container.
- */
-export const LIVE_WINDOW_MS = 120_000;
+/** When a run counts as live: the run fact's window (`run-fact.ts`), re-exported for the listing's readers. */
+export { LIVE_WINDOW_MS };
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 
