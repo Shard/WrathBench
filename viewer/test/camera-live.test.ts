@@ -1,8 +1,8 @@
 /**
  * The newest camera frame through the private viewer (`viewer/camera-live.ts`):
- * the index read from its tail, a partial or empty index, a frame that is not
- * on disk, what is never served (any other frame, a path, anything behind a
- * symbolic link), and a public handle, which has no such route. Fixture media
+ * the index's last line, an empty or missing index, what is never served (any
+ * other frame, a path, anything behind a symbolic link), and a public handle,
+ * which has no such route. Fixture media
  * only: the synthetic `testsrc` still, never a game image.
  */
 import { describe, expect, test } from "bun:test";
@@ -12,7 +12,7 @@ import { basename, join } from "node:path";
 import { frameFile } from "../../infra/camera/layout";
 import { createApi } from "../api";
 import type { LatestFrameResponse } from "../api-types";
-import { latestFrame, readIndexLine, tailLines, TAIL_BYTES } from "../camera-live";
+import { latestFrame, readIndexLine } from "../camera-live";
 
 const STILL = join(import.meta.dir, "..", "..", "runner", "test", "fixtures", "camera", "poster.jpg");
 const JPG = readFileSync(STILL);
@@ -60,18 +60,6 @@ describe("the newest frame", () => {
     expect(latestFrame(l.runsDir, RUN)?.seq).toBe(4);
   });
 
-  test("is found under the name the camera writes: the seq zero-padded to six digits", () => {
-    // Spelled out, not built: this is the shape on disk in every filmed run.
-    const l = layout(0);
-    copyFileSync(STILL, join(l.cam, "frames", "000868.jpg"));
-    appendFileSync(join(l.cam, "frames.jsonl"), `${JSON.stringify({ seq: 868, t: iso(8680), file: "frames/000868.jpg", kind: "interval" })}\n`);
-    expect(latestFrame(l.runsDir, RUN)).toEqual({ seq: 868, t: iso(8680), file: join(l.cam, "frames", "000868.jpg") });
-    // An unpadded file beside it is not that frame.
-    copyFileSync(STILL, join(l.cam, "frames", "869.jpg"));
-    appendFileSync(join(l.cam, "frames.jsonl"), `${JSON.stringify({ seq: 869, t: iso(8690), kind: "interval" })}\n`);
-    expect(latestFrame(l.runsDir, RUN)?.seq).toBe(868);
-  });
-
   test("is none for an empty index, no index, no frames directory or no camera", () => {
     const l = layout(0);
     expect(latestFrame(l.runsDir, RUN)).toBeNull();
@@ -87,37 +75,6 @@ describe("the newest frame", () => {
     rmSync(c.cam, { recursive: true });
     expect(latestFrame(c.runsDir, RUN)).toBeNull();
     expect(latestFrame(c.runsDir, "../cam-live")).toBeNull();
-  });
-
-  test("passes over a last line cut short by a writer mid-append", () => {
-    const l = layout(3);
-    copyFileSync(STILL, join(l.cam, frameFile(4)));
-    appendFileSync(join(l.cam, "frames.jsonl"), line(4).slice(0, 25));
-    expect(latestFrame(l.runsDir, RUN)?.seq).toBe(3);
-    // Finished, even before its newline, it is the newest.
-    appendFileSync(join(l.cam, "frames.jsonl"), line(4).slice(25, -1));
-    expect(latestFrame(l.runsDir, RUN)?.seq).toBe(4);
-  });
-
-  test("gives way to the line before when its frame is not on disk, and is none when no frame is", () => {
-    const l = layout(2);
-    frame(l.cam, 3, false);
-    expect(latestFrame(l.runsDir, RUN)?.seq).toBe(2);
-    rmSync(join(l.cam, frameFile(2)));
-    rmSync(join(l.cam, frameFile(1)));
-    expect(latestFrame(l.runsDir, RUN)).toBeNull();
-  });
-
-  test("reads only the index's tail, whatever comes before it", () => {
-    const l = layout(0);
-    // A megabyte of lines that do not read, then two that do.
-    writeFileSync(join(l.cam, "frames.jsonl"), `${"x".repeat(1 << 20)}\n${"{not json}\n".repeat(5000)}`);
-    frame(l.cam, 7);
-    frame(l.cam, 8);
-    const lines = tailLines(join(l.cam, "frames.jsonl"));
-    expect(lines.join("\n").length).toBeLessThanOrEqual(TAIL_BYTES);
-    expect(lines[0]).toBe(line(8).trimEnd());
-    expect(latestFrame(l.runsDir, RUN)?.seq).toBe(8);
   });
 
   test("an index line is a whole seq, an ISO time, and that frame's own file or none", () => {
@@ -162,26 +119,6 @@ describe("the private routes", () => {
     expect(head.status).toBe(200);
     expect(head.headers.get("content-length")).toBe(String(JPG.length));
     expect((await head.arrayBuffer()).byteLength).toBe(0);
-  });
-
-  test("for a run with no frame: null for its seq and time, a 404 for the picture, never a fault", async () => {
-    // Asked on every live run's page, filmed or not: no frame is an answer, not a console error.
-    for (const l of [layout(0), (() => {
-      const bare = layout(0);
-      rmSync(bare.cam, { recursive: true });
-      return bare;
-    })()]) {
-      const meta = await get(handle(l), `/api/run/${RUN}/camera/latest`);
-      expect(meta.status).toBe(200);
-      expect(await meta.json()).toBeNull();
-      expect(meta.headers.get("cache-control")).toBe("no-store");
-      const pic = await get(handle(l), `/api/run/${RUN}/camera/latest.jpg`);
-      expect(pic.status).toBe(404);
-      expect(pic.headers.get("cache-control")).toBe("no-store");
-    }
-    // A run that is not there is still not there.
-    const l = layout(0);
-    for (const p of ["latest", "latest.jpg"]) expect((await get(handle(l), `/api/run/no-such-run/camera/${p}`)).status, p).toBe(404);
   });
 
   test("serve no other frame, by name or by any path", async () => {

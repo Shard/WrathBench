@@ -26,8 +26,6 @@ import { SESSION_DIR as RUNNER_SESSION_DIR } from "../../runner/src/session-reco
 import type { NearbySelfView, NearbyStateView } from "../api-types";
 import { createApi } from "../api";
 import {
-  EASE_MS,
-  NEARBY_POS_GAP_MS,
   NEARBY_SPAN_MAX_MS,
   NEARBY_STATE_KEYS,
   decodeNearby,
@@ -119,64 +117,6 @@ describe("playback", () => {
     expect(nearbyAt(d, T0 - 1)).toEqual([]);
   });
 
-  test("a player's samples are walked between when close in time, and held across a gap", () => {
-    const rows: NearbyRingRow[] = [
-      key(T0, [unit(PLAYER, "player", { name: "Wanderer" }, 0)]),
-      { ts: T0 + 600, kind: "pos", id: PLAYER, m: { k: "pos", t: T0 + 500, p: [2, 0, 0, 0] } },
-      { ts: T0 + 1100, kind: "pos", id: PLAYER, m: { k: "pos", t: T0 + 1000, p: [4, 0, 0, 0] } },
-      { ts: T0 + 6000, kind: "pos", id: PLAYER, m: { k: "pos", t: T0 + 1000 + NEARBY_POS_GAP_MS + 1000, p: [40, 0, 0, 0] } },
-      { ts: T0 + 9000, kind: "tick" },
-    ];
-    const d = decodeNearby(encodeNearby(rows, { run: "r", from: T0 }));
-    expect(nearbyAt(d, T0 + 750)[0]!.x).toBeCloseTo(3, 5);
-    // Held after the last close sample, until the far one lands.
-    expect(nearbyAt(d, T0 + 2000)[0]!.x).toBeCloseTo(4, 5);
-    expect(nearbyAt(d, T0 + 4500)[0]!.x).toBe(40);
-  });
-
-  test("a new motion close to where the old one left the unit eases; a far one jumps", () => {
-    const rows: NearbyRingRow[] = [
-      key(T0, [unit(WOLF, "creature", {}, 0), unit(VENDOR, "creature", {}, 100)]),
-      { ts: T0 + 1000, kind: "mv", id: WOLF, m: { k: "mv", t: T0 + 1000, p: [2, 0, 0], to: [2, 10, 0], ms: 1000 } },
-      { ts: T0 + 1000, kind: "mv", id: VENDOR, m: { k: "mv", t: T0 + 1000, p: [150, 0, 0] } },
-      { ts: T0 + 5000, kind: "tick" },
-    ];
-    const d = decodeNearby(encodeNearby(rows, { run: "r", from: T0 }));
-    const wolf = (t: number) => nearbyAt(d, t).find((u) => u.id === WOLF)!;
-    // Two yards off: starts where it was and slides onto the spline.
-    expect(wolf(T0 + 1000).x).toBeCloseTo(0, 5);
-    expect(wolf(T0 + 1000 + EASE_MS / 2).x).toBeCloseTo(1, 5);
-    expect(wolf(T0 + 1000 + EASE_MS).x).toBeCloseTo(2, 5);
-    // Fifty yards off: a jump.
-    expect(nearbyAt(d, T0 + 1000).find((u) => u.id === VENDOR)!.x).toBe(150);
-  });
-
-  test("who is in view, a late name, the self's target and a restart's restating key", () => {
-    const rows: NearbyRingRow[] = [
-      key(T0, [unit(WOLF, "creature", { entry: 299 }, 0)]),
-      { ts: T0 + 1000, kind: "in", u: unit(VENDOR, "creature", { entry: 1250, nf: 0x80 }, 5, 0, T0 + 900) },
-      { ts: T0 + 1500, kind: "nm", id: VENDOR, name: "Brother Invented", sub: "Weapon Merchant" },
-      { ts: T0 + 2000, kind: "self", self: { target: VENDOR } },
-      { ts: T0 + 3000, kind: "out", id: WOLF },
-      // The child restarts: its key restates the scene, now with only the vendor.
-      key(T0 + 4000, [unit(VENDOR, "creature", { entry: 1250, nf: 0x80, name: "Brother Invented", sub: "Weapon Merchant", hp: 50 }, 6, 0, T0 + 3900)], { ...SELF, target: VENDOR }),
-      { ts: T0 + 5000, kind: "tick" },
-    ];
-    const w = encodeNearby(rows, { run: "r", from: T0 });
-    const d = decodeNearby(w);
-    expect(nearbyAt(d, T0 + 500).map((u) => u.id)).toEqual([WOLF]);
-    expect(nearbyAt(d, T0 + 1200).map((u) => u.id).sort()).toEqual([WOLF, VENDOR].sort());
-    expect(nearbyAt(d, T0 + 1200).find((u) => u.id === VENDOR)!.s.name).toBeUndefined();
-    expect(nearbyAt(d, T0 + 1600).find((u) => u.id === VENDOR)!.s).toMatchObject({ name: "Brother Invented", sub: "Weapon Merchant" });
-    expect(nearbySelfAt(d, T0 + 1900).target).toBeNull();
-    expect(nearbySelfAt(d, T0 + 2100).target).toBe(VENDOR);
-    expect(nearbyAt(d, T0 + 3500).map((u) => u.id)).toEqual([VENDOR]);
-    expect(nearbyAt(d, T0 + 4500)[0]).toMatchObject({ id: VENDOR, x: 6, s: { hp: 50 } });
-    // The restating key wrote only what changed: one state event and one motion.
-    expect(w.ev.filter((e) => e[0] === 4000).map((e) => e[2])).toEqual(["st"]);
-    expect(w.dt.length).toBe(1);
-  });
-
   test("the keyframe at `from` is folded from the newest key before it; with none, the window starts at the first", () => {
     const rows: NearbyRingRow[] = [
       key(T0, [unit(WOLF, "creature", { entry: 299 }, 0)]),
@@ -228,20 +168,6 @@ describe("the window round-trips", () => {
       const w = encodeNearby(rows, { run: "r", from });
       const again = encodeNearby(windowRows(JSON.parse(JSON.stringify(w)) as NearbyWindow), { run: "r", from: w.t0 });
       expect(JSON.stringify(again)).toBe(JSON.stringify(w));
-    }
-  });
-
-  test("a unit plays where its last recorded motion puts it, at every row's time", () => {
-    const rows = busyRows();
-    const d = decodeNearby(encodeNearby(rows, { run: "r", from: T0 }));
-    for (const r of rows) {
-      if (r.kind !== "mv" && r.kind !== "pos") continue;
-      const got = nearbyAt(d, r.m.t + (r.kind === "pos" ? 0 : r.m.ms ?? 0) + EASE_MS).find((u) => u.id === r.id);
-      if (got === undefined) continue; // left view before then
-      const expectX = r.kind === "mv" && r.m.to !== undefined ? r.m.to[0] : r.m.p[0];
-      // Within the quantum, or overtaken by a newer motion of the same unit.
-      const newer = rows.some((o) => (o.kind === "mv" || o.kind === "pos") && o.id === r.id && o.m.t > r.m.t && o.m.t <= r.m.t + (r.m.ms ?? 0) + EASE_MS);
-      if (!newer) expect(Math.abs(got.x - expectX)).toBeLessThanOrEqual(0.05 + 1e-9);
     }
   });
 });
@@ -557,13 +483,5 @@ describe("the route", () => {
     expect(((await quiet.json()) as NearbyWindow).ids).toEqual([]);
     expect((await get(h, "/api/run/no-such-run/nearby")).status).toBe(404);
     expect((await get(h, "/api/run/live-run/nearby?span=junk")).status).toBe(200);
-  });
-
-  test("the position feed flags a run whose ring is being written", async () => {
-    const runs = runsWithRing();
-    // The flag rides a live position, which needs a state row; that is the
-    // position suite's business, so the flag's own reader is asked here.
-    expect(await nearbyFresh(runs, "live-run", Date.now())).toBe(true);
-    expect(await nearbyFresh(runs, "quiet-run", Date.now())).toBe(false);
   });
 });

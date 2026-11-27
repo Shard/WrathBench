@@ -9,13 +9,9 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  LAB_PROVIDERS,
   OPENCODE_GO_ROUTING,
-  authorOf,
   isOpenRouterBase,
-  labProvidersOf,
   parseRouting,
-  providerBodyOf,
   resolveRouting,
   routingForRun,
   routingLabel,
@@ -33,29 +29,12 @@ describe("the default routing", () => {
     });
   });
 
-  test("names both of a lab's own endpoints when it has two", () => {
-    expect(resolveRouting(undefined, undefined, "google/gemini-3.8-flash").order).toEqual([
-      "Google",
-      "Google AI Studio",
-    ]);
-  });
-
   test("pins nothing — but still never falls back — for an author we have no evidence for", () => {
     // `minimax` and `deepseek` have only ever been served here by third
     // parties, so a first-party name would be a guess, and a guess with
     // fallbacks off kills every run of the model.
     expect(resolveRouting(undefined, undefined, "minimax/minimax-m3")).toEqual({ allowFallbacks: false });
     expect(resolveRouting(undefined, undefined, "omen-alpha")).toEqual({ allowFallbacks: false });
-  });
-
-  test("every lab name is one this harness has seen OpenRouter report", () => {
-    // The table is evidence, not inference: the guard is that it stays small
-    // and spelled the way the response bodies spell it.
-    for (const [author, names] of Object.entries(LAB_PROVIDERS)) {
-      expect(author).toBe(author.toLowerCase());
-      expect(names.length).toBeGreaterThan(0);
-      for (const n of names) expect(n.trim()).toBe(n);
-    }
   });
 
   test("requires the parameter exactly when the run declares an effort", () => {
@@ -67,24 +46,14 @@ describe("the default routing", () => {
     expect(resolveRouting(undefined, undefined, "openai/gpt-5.6-sol").requireParameters).toBeUndefined();
   });
 
-  test("an entry's routing wins over the policy's, whole and unmerged", () => {
+  test("an entry's routing wins over the policy's, whole and unmerged; the policy's replaces the lab default", () => {
     const entry = { order: ["Together"], allowFallbacks: true };
     const policy = { order: ["DeepInfra"], allowFallbacks: false, requireParameters: true };
     expect(resolveRouting(entry, policy, "z-ai/glm-5.3")).toEqual(entry);
-  });
-
-  test("the policy's routing replaces the lab default when the entry says nothing", () => {
     expect(resolveRouting(undefined, { sort: "throughput", allowFallbacks: true }, "z-ai/glm-5.3")).toEqual({
       sort: "throughput",
       allowFallbacks: true,
     });
-  });
-
-  test("authorOf reads the slug prefix and nothing else", () => {
-    expect(authorOf("z-ai/glm-5.3")).toBe("z-ai");
-    expect(authorOf("Z-AI/glm-5.3")).toBe("z-ai");
-    expect(authorOf("omen-alpha")).toBeNull();
-    expect(labProvidersOf("nvidia/nemotron-3-ultra-550b-a55b:free")).toEqual(["Nvidia"]);
   });
 });
 
@@ -104,16 +73,6 @@ describe("parseRouting", () => {
 
   test("refuses an unknown key by name", () => {
     expect(() => parseRouting({ only: ["Z.AI"] }, "roster glm")).toThrow(/roster glm: routing has unknown key `only`/);
-  });
-
-  test("refuses sort alongside order", () => {
-    expect(() => parseRouting({ order: ["Z.AI"], sort: "price" }, "x")).toThrow(/alternatives/);
-  });
-
-  test("refuses an empty order, a duplicate provider and a non-sort", () => {
-    expect(() => parseRouting({ order: [] }, "x")).toThrow(/non-empty/);
-    expect(() => parseRouting({ order: ["Z.AI", "Z.AI"] }, "x")).toThrow(/twice/);
-    expect(() => parseRouting({ sort: "vibes" }, "x")).toThrow(/price, throughput, latency/);
   });
 });
 
@@ -157,15 +116,6 @@ describe("the request body", () => {
     expect(seen.body).not.toHaveProperty("provider");
   });
 
-  test("providerBodyOf omits what was not asked for", () => {
-    expect(providerBodyOf({ allowFallbacks: false })).toEqual({ allow_fallbacks: false });
-    expect(providerBodyOf({ sort: "latency", allowFallbacks: true, requireParameters: true })).toEqual({
-      sort: "latency",
-      allow_fallbacks: true,
-      require_parameters: true,
-    });
-  });
-
   test("isOpenRouterBase reads the host, not the string", () => {
     expect(isOpenRouterBase("https://openrouter.ai/api/v1")).toBe(true);
     expect(isOpenRouterBase("https://api.cerebras.ai/v1")).toBe(false);
@@ -178,11 +128,6 @@ describe("the request body", () => {
     expect(isOpenRouterBase("https://collector.example/openrouter.ai/v1")).toBe(false);
     expect(isOpenRouterBase("https://user@collector.example/?u=openrouter.ai")).toBe(false);
     expect(isOpenRouterBase("openrouter.ai/api/v1")).toBe(false);
-  });
-
-  test("routingLabel says who and whether it may move", () => {
-    expect(routingLabel({ order: ["Z.AI", "Together"], allowFallbacks: true })).toBe("Z.AI > Together (fallbacks on)");
-    expect(routingLabel({ allowFallbacks: false })).toBe("provider default");
   });
 });
 

@@ -7,9 +7,6 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  PROSE_KEYS,
-  PROSE_OPCODES,
-  PROSE_SHAPES,
   REDACTED_PROSE,
   redactGameProse,
   redactProseText,
@@ -203,51 +200,23 @@ function proseReplaced(rendered: string, gone: readonly string[]): string {
 }
 
 describe("redactProseValue", () => {
-  for (const c of CASES) {
-    test(`${c.opcode}: the prose goes, the names stay (wrapped and unwrapped)`, () => {
+  test("every opcode's payload: the prose goes, the names stay (wrapped and unwrapped)", () => {
+    for (const c of CASES) {
       const wrapped = JSON.stringify(redactProseValue({ opcode: c.opcode, seq: 1, data: c.data }));
       check(wrapped, c.gone, c.keep);
-      expect(wrapped).toContain(REDACTED_PROSE);
+      expect(wrapped, c.opcode).toContain(REDACTED_PROSE);
       const bare = JSON.stringify(redactProseValue(c.data));
       check(bare, c.gone, c.keep);
-    });
-  }
-
-  test("the SDK's unwrapped rows: a gossip option, a mail entry, a quest-log objective", () => {
-    const out = JSON.stringify(
-      redactProseValue({
-        menu: { guid: "1", menuId: 2, options: [{ optionId: 1, text: P.gossipOption }], seq: 1, ts: 1 },
-        mail: { mailId: 3, subject: N.subject, body: P.mailBody },
-        log: [{ slot: 0, questId: 7, title: N.quest, objectives: [{ kind: "kill", entry: 6, text: P.objectiveText, required: 8, have: 3, done: false }] }],
-      }),
-    );
-    check(out, [P.gossipOption, P.mailBody, P.objectiveText], [N.subject, N.quest, '"have":3']);
+    }
   });
 
-  test("is pure and leaves unrelated shapes alone", () => {
-    const input = { opcode: "SMSG_LOG_XPGAIN", data: { amount: 50, text: "not prose by shape" }, nested: [{ name: N.npc }] };
-    const before = JSON.stringify(input);
-    const out = redactProseValue(input);
-    expect(JSON.stringify(out)).toBe(before);
-    expect(JSON.stringify(input)).toBe(before);
-    expect(out).not.toBe(input);
-  });
-
-  test("every shape with an opcode is in the whole-payload fallback set; every redacted key is a bare key", () => {
-    for (const s of PROSE_SHAPES) if (s.opcode !== null) expect(PROSE_OPCODES.has(s.opcode)).toBe(true);
-    expect(PROSE_KEYS).toEqual(
-      expect.arrayContaining(["details", "objectives", "objectivesText", "greeting", "text", "body", "description", "message", "pages"]),
-    );
-    for (const k of PROSE_KEYS) expect(k).toMatch(/^[A-Za-z]+$/);
-  });
-
-  for (const c of SDK_CASES) {
-    test(`the SDK's ${c.what}: every text field goes, every other field passes`, () => {
+  test("every SDK object: every text field goes, every other field passes", () => {
+    for (const c of SDK_CASES) {
       const out = JSON.stringify(redactProseValue(c.value));
       check(out, c.gone, c.keep);
-      expect(out).toBe(proseReplaced(JSON.stringify(c.value), c.gone));
-    });
-  }
+      expect(out, c.what).toBe(proseReplaced(JSON.stringify(c.value), c.gone));
+    }
+  });
 });
 
 describe("redactProseText", () => {
@@ -273,13 +242,6 @@ describe("redactProseText", () => {
     const summary = `level 3\nrecent chat (2):\n  <5> ${P.chat}\n  <6> ${P.chat}\nrecent notifications (1):\n  You are now AFK`;
     const out = redactProseText(summary);
     check(out, [P.chat], ["level 3", `  <5> ${REDACTED_PROSE}`, "You are now AFK"]);
-  });
-
-  test("a state.chat entry printed by a snippet keeps its sender's name and loses its words", () => {
-    // state.chat now joins a player sender's name on read. A character name
-    // is the runner's, not game text ("names and ids stay"); the message goes.
-    const entry = { seq: 3, ts: 1, type: 2, language: 7, senderGuid: "9", senderName: "Ordrick", message: P.chat, chatTag: 0 };
-    check(redactProseText(`ok (2ms)\n=> ${JSON.stringify([entry])}`), [P.chat], ['"senderName":"Ordrick"', '"senderGuid":"9"']);
   });
 
   test("the chat block's typed lines are cut the same way, whatever their head", () => {
@@ -312,11 +274,6 @@ describe("redactProseText", () => {
     // Console lines get the same treatment.
     check(redactProseText(`[log] ${JSON.stringify({ optionId: 1, text: P.gossipOption })}`), [P.gossipOption], ["[log] {"]);
   });
-
-  test("free text that does not parse passes through: the documented residual", () => {
-    const free = `The NPC said: ${P.chat}`;
-    expect(redactProseText(free)).toBe(free);
-  });
 });
 
 /** What the sandbox writes for a snippet's value and a console object (`wrath-mcp/mcp/src/sandbox/child.ts`). */
@@ -327,25 +284,25 @@ const snippetText = (v: unknown): string =>
   `ok (3ms)\n=> ${inspect(v)}\n--- console ---\n[log] ${inspect(v)}\n[log] free words after`;
 
 describe("redactProseText over the sandbox's rendering (Bun.inspect)", () => {
-  for (const c of SDK_CASES) {
-    test(`the SDK's ${c.what}, returned and logged: the text goes, every other byte stays`, () => {
+  test("every SDK object, returned and logged: the text goes, every other byte stays", () => {
+    for (const c of SDK_CASES) {
       const text = snippetText(c.value);
       const out = redactProseText(text);
       check(out, c.gone, c.keep.map((k) => k.replace(/"(\w+)":/, "$1: ")));
-      expect(out).toBe(proseReplaced(text, c.gone));
-    });
-  }
+      expect(out, c.what).toBe(proseReplaced(text, c.gone));
+    }
+  });
 
-  for (const c of CASES) {
-    test(`${c.opcode}, returned as an event and as its payload: the prose goes, every other byte stays`, () => {
+  test("every opcode, returned as an event and as its payload: the prose goes, every other byte stays", () => {
+    for (const c of CASES) {
       for (const v of [{ seq: 1, ts: 2, opcode: c.opcode, data: c.data }, c.data]) {
         const text = snippetText(v);
         const out = redactProseText(text);
         for (const g of c.gone) expect(out).not.toContain(g);
-        expect(out).toBe(proseReplaced(text, c.gone));
+        expect(out, c.opcode).toBe(proseReplaced(text, c.gone));
       }
-    });
-  }
+    }
+  });
 
   const quest = SDK_CASES[0]!;
 
@@ -361,17 +318,6 @@ describe("redactProseText over the sandbox's rendering (Bun.inspect)", () => {
     expect(cut).not.toContain("requiredNpcOrGo");
     const out = redactProseText(`ok (3ms)\n=> ${cut}\n--- console ---\n[log] after`);
     check(out, [P.objectivesText, P.details.slice(0, 6)], [N.quest, "minLevel: 3", "--- console ---\n[log] after"]);
-  });
-
-  test("objects that match no shape, and JSON a snippet read, come back byte-identical", () => {
-    const own = { chars: 10, lines: 2, hits: 1, text: "the model's own words" };
-    const file = ["=== package.json ===", JSON.stringify({ name: "x", scripts: { test: "bun test" } }, null, 2)];
-    // (A value Bun.inspect puts on ONE line that is also JSON — a short array
-    // of strings — keeps the compact JSON reading it has always had.)
-    for (const v of [own, { file }, { list: [own, own], n: 1 }]) {
-      const text = snippetText(v);
-      expect(redactProseText(text)).toBe(text);
-    }
   });
 
   test("a labelled console object, pretty JSON, and JSON inside an inspected string are all read", () => {
@@ -405,16 +351,42 @@ describe("the SDK's option lists", () => {
     check(redactProseText(`ok (2ms)\n=> ${JSON.stringify(JSON.stringify({ ok: false, hint }))}`), gone, ["pick one of"]);
   });
 
-  test("the SDK's name lists share the `id:\"…\"` form and stay: names are kept", () => {
-    const names = `error (2ms)\nTypeError: setTarget(guid) got "Kobold", which matches 2 things in view ([17:"${N.npc}", 18:"${N.npc}"])`;
-    expect(redactProseText(names)).toBe(names);
-  });
-
   test("an action note's hint loses the option text", () => {
     const base = { i: 1, ts: 1, start: 0, end: 1 };
     const hint = `Pass { option } to pick one of: 0:${opt(0)}, 1:${opt(1)}`;
     const out = redactGameProse({ ...base, t: "actions", actions: [{ ts: 1, action: "resetTalents", status: "no_option", hint }, { ts: 2, action: "say" }] });
     check(JSON.stringify(out), gone, ["resetTalents", "pick one of: 0:"]);
+  });
+});
+
+describe("names survive", () => {
+  // Keeping names is a publication rule: only prose is replaced.
+  const kept: [string, () => string, string[]][] = [
+    [
+      "the SDK's `id:\"…\"` name list, the form its option lists share",
+      () => redactProseText(`error (2ms)\nTypeError: setTarget(guid) got "Kobold", which matches 2 things in view ([17:"${N.npc}", 18:"${N.npc}"])`),
+      [`17:"${N.npc}"`, `18:"${N.npc}"`],
+    ],
+    [
+      "a mail subject and a quest title beside the prose that goes",
+      () =>
+        JSON.stringify(
+          redactProseValue({
+            mail: { mailId: 3, subject: N.subject, body: P.mailBody },
+            log: [{ slot: 0, questId: 7, title: N.quest, objectives: [{ kind: "kill", entry: 6, text: P.objectiveText, required: 8, have: 3, done: false }] }],
+          }),
+        ),
+      [N.subject, N.quest],
+    ],
+    [
+      "a name in a shape that is not prose, whatever its other keys are called",
+      () => JSON.stringify(redactProseValue({ opcode: "SMSG_LOG_XPGAIN", data: { amount: 50, text: "not prose by shape" }, nested: [{ name: N.npc }] })),
+      [N.npc, "not prose by shape"],
+    ],
+  ];
+  test.each(kept)("%s", (_label, render, names) => {
+    const out = render();
+    for (const name of names) expect(out).toContain(name);
   });
 });
 

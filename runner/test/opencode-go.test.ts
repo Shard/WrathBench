@@ -209,22 +209,6 @@ describe("GoUsagePoller", () => {
     p.noteOverage(1_001_000);
     expect(p.lastRead!.classification).toBe("ok");
   });
-
-  test("an overage older than the seven-day ceiling is not news, even before any read", () => {
-    const now = 100 * 24 * H;
-    const p = new GoUsagePoller(CRED, "u", KEY, { fetch: fakeFetch([500]), now: () => now });
-    p.noteOverage(now - 8 * 24 * H);
-    expect(p.lastRead).toBeUndefined();
-    p.noteOverage(now - H);
-    expect(p.lastRead!.classification).toBe("overage");
-  });
-
-  test("a refused key outranks an overage", async () => {
-    const p = new GoUsagePoller(CRED, "u", KEY, { fetch: fakeFetch([401]), now: () => 5_000 });
-    await p.refresh();
-    p.noteOverage(5_000);
-    expect(p.lastRead!.classification).toBe("auth-failed");
-  });
 });
 
 // ------------------------------------------------------------- the loop

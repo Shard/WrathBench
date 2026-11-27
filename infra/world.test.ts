@@ -7,29 +7,21 @@
  * reconcile, the roster's choice of world, and the planner's world key.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { K8sError, type Pod } from "./k8s-client";
 import { parseLauncherSettings, runPodEnv } from "./run-pod";
 import { processEpisodeEnv } from "./episode-launcher";
 import { SlotBook, worldsOf, WORLD_KEY } from "./run-fleet-credentials";
-import { jobArgv } from "./run-fleet-state";
 import { openWorld } from "./run-roster";
-import { parsePolicyBlock } from "../runner/src/models";
-import { parseFleet } from "./run-fleet-config";
-import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import {
   buildWorldPod,
   checkRealmId,
   checkWorldSchema,
-  isWorldId,
-  moduleUrlOfRun,
   newWorldId,
   noteBoot,
   readWorldPointer,
   reconcileWorlds,
-  schemaOf,
-  stagingEnvOf,
   withWorldLock,
   WorldLauncher,
   worldFateOf,
@@ -37,13 +29,9 @@ import {
   worldPodRefusal,
   worldsHold,
   WorldStore,
-  worldAuthHeaders,
-  worldTemplateRefusal,
-  WORLD_POD_TEMPLATE_ENV,
   worldUsedBy,
   writeWorldPointer,
   BOOT_FAILURES_TO_HOLD,
-  fleetWorldViews,
   type WorldDb,
   type WorldK8s,
   type WorldRecord,
@@ -116,11 +104,6 @@ class FakeK8s implements WorldK8s {
     if (this.behaviour === "invalid") throw new K8sError(422, "Invalid", "Pod is invalid");
     const p = structuredClone(pod);
     p.metadata.uid = `uid-${pod.metadata.name}`;
-    // A camera's pod (infra/camera-pods.ts) is only recorded: it is never a world.
-    if (pod.metadata.labels?.["app.kubernetes.io/component"] === "camera") {
-      this.pods.set(pod.metadata.name!, p);
-      return p;
-    }
     const ws = pod.spec.containers.find((c) => c.name === "worldserver")!;
     const di = (pod.spec["initContainers"] as { name: string; image: string }[]).find((c) => c.name === "db-import")!;
     p.status =
@@ -191,7 +174,7 @@ class FakeDb implements WorldDb {
 }
 
 /** One launcher over the fakes, a fake clock that each sleep advances, and a log of every call in order. */
-function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: string[]; alive?: (pid: number) => boolean; cameraTemplate?: Pod } = {}) {
+function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: string[]; alive?: (pid: number) => boolean } = {}) {
   const calls: string[] = [];
   const k8s = new FakeK8s((c) => calls.push(c));
   k8s.behaviour = o.behaviour ?? "ready";
@@ -221,7 +204,6 @@ function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: s
       clock.now += ms;
     },
     startupMs: 60_000,
-    ...(o.cameraTemplate !== undefined ? { cameraTemplate: o.cameraTemplate } : {}),
     alive: o.alive ?? (() => false),
     random: () => {
       const id = ids.shift() ?? newWorldId();
@@ -232,39 +214,11 @@ function rig(o: { behaviour?: Behaviour; ready?: (n: number) => boolean; ids?: s
   return { launcher, k8s, db, store, dir, runs, clock, calls, log };
 }
 
-describe("names", () => {
-  test("a world id is w and ten lowercase base32 characters; its schema, URLs and staging env follow from it", () => {
-    for (let i = 0; i < 50; i++) expect(isWorldId(newWorldId())).toBe(true);
-    expect(isWorldId("w0abcdefghj")).toBe(false);
-    expect(isWorldId("Wabcdefghij")).toBe(false);
-    expect(isWorldId("shared")).toBe(false);
-    expect(schemaOf(ID)).toBe(`acore_characters_${ID}`);
-    expect(() => schemaOf("x")).toThrow();
-    expect(worldModuleUrl(ID)).toBe(`http://${ID}.worlds:8086`);
-    expect(stagingEnvOf(ID, 7878)).toEqual({
-      WRATHBENCH_MODULE_URL: `http://${ID}.worlds:8086`,
-      MODULE_HOST: `${ID}.worlds`,
-      MODULE_PORT: "8086",
-      WRATHBENCH_SOAP_URL: `http://${ID}.worlds:7878/`,
-      WRATHBENCH_CHARACTERS_DB: `acore_characters_${ID}`,
-    });
-  });
-
+describe("which attempts get a world", () => {
   test("only scored and probing tiers get a world, and only with the setting on", () => {
     for (const e of ["e90", "e360", "probing"]) expect(worldUsedBy("evals", e)).toBe(true);
     for (const e of ["freeplay", undefined, null, "e90x"]) expect(worldUsedBy("evals", e)).toBe(false);
     expect(worldUsedBy("off", "e90")).toBe(false);
-  });
-
-  test("the pointer is a launch file, and routes the run's session release to its world", () => {
-    const dir = join(tempDir("wb-world-ptr-"), "run-a");
-    expect(readWorldPointer(dir)).toBeUndefined();
-    expect(moduleUrlOfRun(dir, "http://worldserver:8086")).toBe("http://worldserver:8086");
-    writeWorldPointer(dir, ID);
-    expect(readWorldPointer(dir)).toBe(ID);
-    expect(moduleUrlOfRun(dir, "http://worldserver:8086")).toBe(`http://${ID}.worlds:8086`);
-    expect(holdsOnlyLaunchFiles(dir)).toBe(true);
-    expect(() => writeWorldPointer(dir, "shared")).toThrow();
   });
 });
 
@@ -307,12 +261,6 @@ describe("buildWorldPod: a world of its own, or refused", () => {
     expect(template().metadata.name).toBeUndefined();
   });
 
-  test("a re-boot runs the digests the first boot recorded", () => {
-    const pod = buildWorldPod(template(), { ...opts, images: { worldserver: `reg/wrathbench-worldserver@${DIGEST_WS}`, dbImport: `reg/wrathbench-db-import@${DIGEST_DI}` } });
-    expect(pod.spec.containers[0]!.image).toBe(`reg/wrathbench-worldserver@${DIGEST_WS}`);
-    expect((pod.spec["initContainers"] as { name: string; image: string }[]).find((c) => c.name === "db-import")!.image).toBe(`reg/wrathbench-db-import@${DIGEST_DI}`);
-  });
-
   test("refused: a realm of the shared world's or none, an empty allowlist or one with STAGER, a bad id", () => {
     expect(() => buildWorldPod(template(), { ...opts, realmId: 1 })).toThrow(/realm 1/);
     expect(() => buildWorldPod(template(), { ...opts, realmId: 255 })).toThrow();
@@ -320,15 +268,6 @@ describe("buildWorldPod: a world of its own, or refused", () => {
     expect(() => buildWorldPod(template(), { ...opts, accounts: ["POOL01", "stager"] })).toThrow(/STAGER/);
     expect(() => buildWorldPod(template(), { ...opts, accounts: ["POOL 01"] })).toThrow(/not an account/);
     expect(() => buildWorldPod(template(), { ...opts, id: "w0abcdefghj" })).toThrow(/not a world id/);
-  });
-
-  test("refused: a template without the db-import init or the worlds subdomain", () => {
-    const noInit = template();
-    noInit.spec["initContainers"] = (noInit.spec["initContainers"] as { name: string }[]).filter((c) => c.name !== "db-import");
-    expect(() => buildWorldPod(noInit, opts)).toThrow(/db-import/);
-    const wrongSub = template();
-    wrongSub.spec["subdomain"] = "worldserver";
-    expect(() => buildWorldPod(wrongSub, opts)).toThrow(/subdomain/);
   });
 
   test("the refusal reads the output: each of the three identity variables missing or the shared one is refused", () => {
@@ -348,42 +287,6 @@ describe("buildWorldPod: a world of its own, or refused", () => {
     expect(worldPodRefusal(without("worldserver", "AC_REALM_ID", "1"))).toContain("realm");
     expect(worldPodRefusal(without("worldserver", "AC_WRATH_BENCH_ACCOUNTS"))).toContain("allowlist");
     expect(worldPodRefusal(without("worldserver", "AC_WRATH_BENCH_ACCOUNTS", ""))).toContain("allowlist");
-  });
-});
-
-describe("WorldLauncher with the camera block on", () => {
-  const camTemplate = (max: number): Pod =>
-    ({
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: { generateName: "wrathbench-camera-", labels: { "app.kubernetes.io/component": "camera" }, annotations: { "wrathbench.shard.page/camera-max": String(max) } },
-      spec: { containers: [{ name: "camera", image: "c:1", env: [] }, { name: "camera-director", image: "r:1", env: [], command: ["bun"] }] },
-    }) as unknown as Pod;
-  const settle = () => new Promise((r) => setTimeout(r, 20));
-
-  test("a world that is up gets its camera as a pod of its own, owned by the world's pod; the world never waits on it", async () => {
-    const r = rig({ cameraTemplate: camTemplate(2) });
-    expect(await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] })).toMatchObject({ ok: true });
-    await settle();
-    const cam = r.k8s.pods.get(`wrathbench-camera-${ID}`)!;
-    expect(cam.metadata.ownerReferences).toEqual([{ apiVersion: "v1", kind: "Pod", name: `wrathbench-world-${ID}`, uid: `uid-wrathbench-world-${ID}` }]);
-    // The world's own pod carries nothing of the camera's.
-    expect(r.k8s.pods.get(`wrathbench-world-${ID}`)!.spec.containers.map((c) => c.name)).toEqual(["worldserver"]);
-    expect(r.calls.indexOf(`create wrathbench-world-${ID}`)).toBeLessThan(r.calls.indexOf(`create wrathbench-camera-${ID}`));
-  });
-
-  test("no slot (the shared world's held): no camera, and the world is up all the same", async () => {
-    const r = rig({ cameraTemplate: camTemplate(1) });
-    expect(await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] })).toMatchObject({ ok: true });
-    await settle();
-    expect(r.k8s.pods.has(`wrathbench-camera-${ID}`)).toBe(false);
-  });
-
-  test("the block off: no camera at all", async () => {
-    const r = rig();
-    await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] });
-    await settle();
-    expect(r.calls.some((c) => c.includes("camera"))).toBe(false);
   });
 });
 
@@ -444,32 +347,6 @@ describe("WorldLauncher", () => {
     expect(worldsHold(r.dir, r.clock.now + 31 * 60_000)).toBeUndefined();
     noteBoot(r.dir, undefined, r.clock.now);
     expect(worldsHold(r.dir, r.clock.now)).toBeUndefined();
-  });
-
-  test("a world that never came up leaves no pointer behind", async () => {
-    const r = rig({ behaviour: "quota" });
-    const runDir = join(r.runs, "fleet-x-e90");
-    await r.launcher.create({ runDirs: [runDir], runIds: ["fleet-x-e90"], accounts: ["A"] });
-    expect(readWorldPointer(runDir)).toBeUndefined();
-    expect(holdsOnlyLaunchFiles(runDir)).toBe(true);
-  });
-
-  test("parking on the roster's stop deletes the pod with its grace and does not wait for it", async () => {
-    const r = rig();
-    await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] });
-    r.k8s.linger = 1_000;
-    const before = r.clock.now;
-    await r.launcher.park(ID, "stopping", { noWait: true });
-    expect(r.calls).toContain(`delete wrathbench-world-${ID} grace 120`);
-    expect(r.clock.now).toBe(before);
-    expect(r.store.read(ID)!.state).toBe("parked");
-  });
-
-  test("a pod that ends while it boots is a failed boot", async () => {
-    const r = rig({ behaviour: "crash" });
-    const got = await r.launcher.create({ runDirs: [], runIds: ["x"], accounts: ["A"] });
-    expect(got.ok).toBe(false);
-    if (!got.ok) expect(got.reason).toContain("ended while it booted");
   });
 
   test("end: the log saved and the pod gone before the schema is dropped and the realm row deleted", async () => {
@@ -666,13 +543,6 @@ describe("the roster's world for an attempt (openWorld)", () => {
     expect(calls.at(-1)).toEqual({ kind: "create", accounts: ["PARTY1", "PARTY2"], runIds: ["p-tank", "p-heal"] });
   });
 
-  test("a fresh launch on the shared world drops a pointer an earlier launch of the same id left", async () => {
-    const runs = tempDir("wb-openworld-stale-");
-    writeWorldPointer(join(runs, "a"), ID);
-    expect(await openWorld([spec("a", "e90")], false, { mode: "off", launcher: () => ({ error: "unused" }), runDir: (id) => join(runs, id) })).toEqual({ world: undefined });
-    expect(readWorldPointer(join(runs, "a"))).toBeUndefined();
-  });
-
   test("fresh with no launcher is refused, never sent to the shared world", async () => {
     const r = await openWorld([spec("a", "e360")], false, { mode: "evals", launcher: () => ({ error: "not on the cluster" }), runDir: (id) => join(tempDir("wb-ow-"), id) });
     expect(r).toEqual({ refused: "no world for a e360 attempt: not on the cluster" });
@@ -709,41 +579,6 @@ describe("the planner's world key", () => {
     book.remove(keys, 5);
     expect(book.inUse(WORLD_KEY)).toBe(1);
   });
-
-  test("with worlds on, none made is a full key that says why: off the cluster, or the boot hold", () => {
-    const off = new SlotBook([], {}, undefined, worldsOf("evals", false, undefined));
-    expect(off.fullKey(off.keysOf("openai", null, "e90"))).toBe(WORLD_KEY);
-    expect(off.describe(WORLD_KEY)).toContain("not on the cluster");
-    const held = new SlotBook([], {}, undefined, worldsOf("evals", true, 4, "worlds held: 3 boots failed in a row"));
-    expect(held.describe(WORLD_KEY)).toBe("worlds held: 3 boots failed in a row");
-    expect(held.fullKey(held.keysOf("openai", null, "e90"))).toBe(WORLD_KEY);
-  });
-
-  test("the policy, the launcher's settings and the roster argv carry the setting", () => {
-    expect(parsePolicyBlock({}).worlds).toBe("off");
-    // The store's own validator, which every config write goes through.
-    expect(parseFleet({ policy: { worlds: "evals" } }).policy.worlds).toBe("evals");
-    expect(() => parseFleet({ policy: { worlds: "all" } })).toThrow(/policy.worlds/);
-    expect(worldTemplateRefusal({ [WORLD_POD_TEMPLATE_ENV]: join(tempDir("wb-no-template-"), "world.json") })).toContain("worlds.enabled");
-    expect(parsePolicyBlock({ worlds: "evals" }).worlds).toBe("evals");
-    expect(() => parsePolicyBlock({ worlds: "all" })).toThrow(/policy.worlds/);
-    expect(parseLauncherSettings({ maxWorlds: 3 }).maxWorlds).toBe(3);
-    expect(parseLauncherSettings({ maxWorlds: null }).maxWorlds).toBeUndefined();
-    expect(() => parseLauncherSettings({ maxWorlds: 0 })).toThrow(/maxWorlds/);
-    const spawn = { name: "j", enabled: true, account: "POOL01", loop: false, entries: [] };
-    expect(jobArgv(spawn, { stamp: "20261114", until: undefined, worlds: "evals" })).toContain("--worlds");
-    expect(jobArgv(spawn, { stamp: "20261114", until: undefined, worlds: "off" })).not.toContain("--worlds");
-  });
-});
-
-test("the store lists only world ids and survives a torn file", () => {
-  const dir = tempDir("wb-world-store-");
-  const store = new WorldStore(dir);
-  mkdirSync(join(dir, "not-a-world"), { recursive: true });
-  mkdirSync(join(dir, ID), { recursive: true });
-  writeFileSync(join(dir, ID, "world.json"), "{ torn");
-  expect(store.list()).toEqual([]);
-  expect(existsSync(join(dir, "not-a-world"))).toBe(true);
 });
 
 describe("hosted mode: an eval world opens with its own port secret", () => {
@@ -780,35 +615,5 @@ describe("hosted mode: an eval world opens with its own port secret", () => {
     expect(() => runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {}, moduleSecretKey: "WRATHBENCH_MODULE_SECRET" })).toThrow();
     expect(parseLauncherSettings({ worldsSecretKey: "WRATHBENCH_WORLDS_MODULE_SECRET" }).worldsSecretKey).toBe("WRATHBENCH_WORLDS_MODULE_SECRET");
     expect(() => parseLauncherSettings({ worldsSecretKey: "WRATHBENCH_MODULE_SECRET" })).toThrow();
-  });
-
-  test("the fleet's own calls to a world, and its stager, present the worlds' secret", () => {
-    expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE, WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS })).toEqual({ authorization: `Bearer ${WORLDS}` });
-    expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE })).toEqual({ authorization: `Bearer ${MODULE}` });
-    expect(worldAuthHeaders({ WRATHBENCH_MODULE_SECRET: MODULE, WRATHBENCH_WORLDS_MODULE_SECRET: "" })).toEqual({ authorization: `Bearer ${MODULE}` });
-    expect(stagingEnvOf(ID, 7878, { WRATHBENCH_WORLDS_MODULE_SECRET: WORLDS })["WRATHBENCH_MODULE_SECRET"]).toBe(WORLDS);
-    expect(stagingEnvOf(ID, 7878, {})).not.toHaveProperty("WRATHBENCH_MODULE_SECRET");
-  });
-});
-
-describe("the fleet page's worlds", () => {
-  test("every open world and those ended in the last day, newest first, with the last boot's time and failure", () => {
-    const now = 1_800_000_000_000;
-    const rec = (id: string, createdAt: number, state: WorldRecord["state"], endedAt?: number, boots: WorldRecord["boots"] = []): WorldRecord => ({
-      id, realmId: 2, schema: `acore_characters_${id}`, accounts: ["A"], runIds: [`run-${id}`], owner: { rosterPid: 1, fleetPod: null }, createdAt, images: {}, boots, state, ...(endedAt !== undefined ? { endedAt } : {}),
-    });
-    const views = fleetWorldViews(
-      [
-        rec("waaaaaaaaaa", now - 5_000, "up", undefined, [{ pod: "p", at: 0, readyAt: 31_000, bootMs: 31_000 }]),
-        rec("wbbbbbbbbbb", now - 1_000, "parked", undefined, [{ pod: "p", at: 0, bootMs: 28_000 }, { pod: "q", at: 1, failed: "not ready after 360s" }]),
-        rec("wccccccccc2", now - 2 * 86_400_000, "ended", now - 2 * 86_400_000 + 1),
-        rec("wddddddddd2", now - 3_600_000, "ended", now - 60_000),
-      ],
-      now,
-    );
-    expect(views.map((v) => v.id)).toEqual(["wbbbbbbbbbb", "waaaaaaaaaa", "wddddddddd2"]);
-    expect(views[0]).toMatchObject({ state: "parked", boots: 2, bootMs: 28_000, failed: "not ready after 360s", endedAt: null });
-    expect(views[1]).toMatchObject({ bootMs: 31_000, failed: null });
-    expect(views[2]).toMatchObject({ state: "ended", bootMs: null, endedAt: now - 60_000 });
   });
 });

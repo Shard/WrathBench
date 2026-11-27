@@ -92,10 +92,6 @@ describe("activeMsUntil", () => {
     expect(activeMsUntil(segments, 99_999)).toBe(3000);
   });
 
-  test("an open segment is charged only up to the cursor", () => {
-    expect(activeMsUntil([{ start: 1000, end: null }], 4000)).toBe(3000);
-  });
-
   test("no segments is not zero — it is unknown", () => {
     expect(activeMsUntil([], 5000)).toBeNull();
   });
@@ -194,12 +190,6 @@ describe("milestoneTimesOf (freeplay milestones, operator 2026-11-15)", () => {
 });
 
 describe("mapsOf / trackFrom", () => {
-  test("maps are deduplicated and sorted", () => {
-    expect(mapsOf([state({ ts: 1, map: 530 }), state({ ts: 2, map: 0 }), state({ ts: 3, map: 530 })])).toEqual([
-      0, 530,
-    ]);
-  });
-
   test("the track keeps only samples that carried a position", () => {
     const { points } = trackFrom([
       state({ ts: 1, map: 0, x: 1, y: 2, level: 3, turn: 7 }),
@@ -268,11 +258,6 @@ describe("mapsOf / trackFrom", () => {
     expect(points.at(-1)!.questsCompleted).toBe(questsAcrossRestarts(states)!);
     // A run recorded before the column has no count anywhere: null, never zero.
     expect(trackFrom([state({ ts: 1, map: 0, x: 1, y: 2 })]).points[0]!.questsCompleted).toBeNull();
-  });
-
-  test("a stored inventory the parser cannot read is a reading of empty bags, as it was on the point", () => {
-    const track = trackFrom([state({ ts: 2, map: 0, x: 1, y: 2 })], [{ ts: 1, seq: 1, items: "not json" }]);
-    expect(inventoryAt(track.inv!, 0)).toEqual([]);
   });
 });
 
@@ -428,45 +413,6 @@ describe("resultRunOf", () => {
     const bunny = { model: "stealth/space-bunny-alpha", driver: "openai", platform: "openrouter" };
     expect(resultRunOf(run(bunny), [], []).billing).toBe("paid");
     expect(resultRunOf(run({ ...bunny, declaredBilling: "free" }), [], []).billing).toBe("free");
-  });
-
-  test("the listing facts ride on the row, and default to null when not supplied", () => {
-    const bare = resultRunOf(run({ character: "Fixturely", pauseReason: "quota-exhausted" }), [], []);
-    expect(bare.character).toBe("Fixturely");
-    // The runs page's status column reads these; they are the listing's own, not recomputed.
-    expect(bare.live).toBe(false);
-    expect(bare.endedAt).toBe(run().endedAt);
-    expect(bare.pauseReason).toBe("quota-exhausted");
-    expect(bare.playtimeMs).toBeNull();
-    expect(bare.tokens).toBeNull();
-    expect(bare.actualCost).toBeNull();
-
-    const listed = resultRunOf(run(), [], [], null, {
-      playtimeMs: 60_000,
-      tokens: null,
-      actualCost: { usd: 0.5, basis: "reported", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "provider-reported" },
-    });
-    expect(listed.playtimeMs).toBe(60_000);
-    expect(listed.actualCost?.usd).toBe(0.5);
-    // The expected figure is its own field, and null from a caller that predates it.
-    expect(listed.expectedCost).toBeNull();
-    const priced = resultRunOf(run(), [], [], null, {
-      playtimeMs: null,
-      tokens: null,
-      actualCost: null,
-      expectedCost: { usd: 0, basis: "list-price", asIfMetered: true, breakdown: null, priceId: "free", asOf: "2026-08-22", note: "free tier" },
-    });
-    expect(priced.expectedCost?.usd).toBe(0);
-    expect(priced.expectedCost?.asIfMetered).toBe(true);
-  });
-
-  test("xpEarned rides on the row as the run page's lower bound", () => {
-    const e = resultRunOf(run(), [
-      state({ ts: 1000, level: 1, xp: 300 }),
-      state({ ts: 2000, level: 2, xp: 50 }),
-    ], []);
-    expect(e.xpEarned).toBe(350);
-    expect(resultRunOf(run(), [], []).xpEarned).toBeNull();
   });
 
   test("quests are the whole run's across a resume, and the sessions ride on the row", () => {

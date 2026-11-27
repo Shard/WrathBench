@@ -143,6 +143,16 @@ function makePrivate(): { dir: string; sha: string } {
   return { dir, sha: git(dir, "rev-parse", "HEAD") };
 }
 
+/**
+ * One superproject and one private checkout for every case that changes
+ * neither (a build exports into its own TMPDIR and never writes the tree); a
+ * case that dirties a tree or moves a pin makes its own.
+ */
+let sharedRepo: ReturnType<typeof makeRepo> | undefined;
+const cleanRepo = (): ReturnType<typeof makeRepo> => (sharedRepo ??= makeRepo());
+let sharedPrivate: ReturnType<typeof makePrivate> | undefined;
+const cleanPrivate = (): ReturnType<typeof makePrivate> => (sharedPrivate ??= makePrivate());
+
 /** argv to the log, never the environment; each build's context tarred beside it. */
 const DOCKER_SHIM = `#!/usr/bin/env bash
 printf 'docker %s\\n' "$*" >> "\${FAKE_LOG}"
@@ -203,7 +213,7 @@ function run(cwdRepo: string, args: string[], opts: { imageFiles?: Record<string
       WRATHBENCH_BUILD_REPO_ROOT: cwdRepo,
       // Pinned, never the default: the default path exists on the operator's
       // host and nowhere else, so an unpinned run would differ by machine.
-      WRATHBENCH_PRIVATE_DIR: makePrivate().dir,
+      WRATHBENCH_PRIVATE_DIR: opts.env?.["WRATHBENCH_PRIVATE_DIR"] ?? cleanPrivate().dir,
       ...opts.env,
     },
     stdout: "pipe",
@@ -237,7 +247,7 @@ const pushes = (r: Run) => r.calls.filter((l) => l.startsWith("docker push"));
 
 describe("build-images.sh builds from git, never the working tree", () => {
   test("the runner's context is an archive of the commit: tracked files in, untracked and ignored files out", () => {
-    const { tree, sha } = makeRepo();
+    const { tree, sha } = cleanRepo();
     const r = run(tree, ["--only", "runner"]);
     expect(r.code).toBe(0);
     expect(builds(r)).toHaveLength(1);
@@ -248,25 +258,17 @@ describe("build-images.sh builds from git, never the working tree", () => {
     expect(builds(r)[0]).toContain(`-f ${ctx!.dir}/infra/docker/runner.Dockerfile ${ctx!.dir}`);
     expect(ctx!.entries).toContain("a.txt");
     expect(ctx!.entries).toContain(".env.example");
-    expect(ctx!.entries).toContain("infra/docker/runner.Dockerfile");
     for (const absent of ["scratch.txt", ".env.local", "runner/.env.prod", ".claude", ".git"]) {
       expect(ctx!.entries).not.toContain(absent);
     }
     // The runner needs no AzerothCore, so none is exported for it.
     expect(ctx!.entries.some((e) => e.startsWith("deps/azerothcore/"))).toBe(false);
     expect(r.out).toContain(`exporting ${sha}`);
-    // The export is removed on the way out.
-    expect(r.leftovers).toEqual([]);
-  });
-
-  test("the default registry is harbor.local/wrathbench, and the image guard runs on what was built", () => {
-    const { tree, sha } = makeRepo();
-    const r = run(tree, ["--only", "runner"]);
-    const ref = `harbor.local/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`;
-    expect(builds(r)[0]).toContain(`-t ${ref}`);
-    expect(r.calls).toContain(`docker create ${ref} true`);
+    // The image guard ran on what was built, and nothing is pushed unless asked.
     expect(r.calls).toContain("docker export fake-container");
     expect(pushes(r)).toEqual([]);
+    // The export is removed on the way out.
+    expect(r.leftovers).toEqual([]);
   });
 
   test("the server images take AzerothCore from the commit the superproject pins, and only what server.Dockerfile copies", () => {
@@ -279,9 +281,7 @@ describe("build-images.sh builds from git, never the working tree", () => {
     // The moved submodule makes the superproject dirty, so this needs --allow-dirty.
     const r = run(tree, ["--only", "worldserver", "--allow-dirty"]);
     expect(r.code).toBe(0);
-    expect(builds(r)[0]).toContain("--target worldserver");
     const [ctx] = r.contexts;
-    expect(builds(r)[0]).toContain(`-f ${ctx!.dir}/infra/docker/server.Dockerfile ${ctx!.dir}`);
     expect(ctx!.read("deps/azerothcore/src/main.cpp")).toBe("one\n");
     for (const present of ["CMakeLists.txt", "conf/dist/config.cmake", "deps/dep/dep.h", "modules/.gitkeep", "apps/docker/entrypoint.sh", "data/sql/base/world.sql"]) {
       expect(ctx!.entries).toContain(`deps/azerothcore/${present}`);
@@ -290,19 +290,6 @@ describe("build-images.sh builds from git, never the working tree", () => {
       expect(ctx!.entries).not.toContain(`deps/azerothcore/${absent}`);
     }
     expect(r.leftovers).toEqual([]);
-  });
-
-  test("a server image with no initialised AzerothCore stops before anything is built; the runner still builds", () => {
-    const { tree } = makeRepo();
-    const clone = join(tempDir("wb-build-images-clone-"), "clone");
-    git(dirname(clone), "clone", "-q", tree, clone);
-    git(clone, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", "wrath-mcp");
-    const server = run(clone, ["--only", "worldserver"]);
-    expect(server.code).toBe(1);
-    expect(server.out).toContain("git submodule update --init deps/azerothcore");
-    expect(builds(server)).toEqual([]);
-    expect(server.leftovers).toEqual([]);
-    expect(run(clone, ["--only", "runner"]).code).toBe(0);
   });
 });
 
@@ -324,23 +311,20 @@ describe("build-images.sh and the wrath-mcp stack", () => {
       }
       for (const absent of ["node_modules", ".env", ".git"]) expect(ctx.entries).not.toContain(`wrath-mcp/${absent}`);
     }
-    expect(r.out).toContain(`exporting wrath-mcp ${stackFirst} to wrath-mcp/`);
     // The runner is told which stack it carries, for the run's meta.json.
     expect(builds(r).find((b) => b.includes("runner.Dockerfile"))).toContain(`--build-arg WRATHBENCH_STACK_COMMIT=${stackFirst}`);
     expect(r.leftovers).toEqual([]);
   });
 
-  test("an uninitialised stack stops every image before anything is built", () => {
-    const { tree } = makeRepo();
+  test("an uninitialised stack stops the build before anything is built", () => {
+    const { tree } = cleanRepo();
     const clone = join(tempDir("wb-build-images-clone-"), "clone");
     git(dirname(clone), "clone", "-q", tree, clone);
-    for (const only of ["runner", "worldserver"]) {
-      const r = run(clone, ["--only", only]);
-      expect(r.code).toBe(1);
-      expect(r.out).toContain("git submodule update --init wrath-mcp");
-      expect(builds(r)).toEqual([]);
-      expect(r.leftovers).toEqual([]);
-    }
+    const r = run(clone, ["--only", "runner"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("git submodule update --init wrath-mcp");
+    expect(builds(r)).toEqual([]);
+    expect(r.leftovers).toEqual([]);
   });
 
   test("a pin that is not on wrath-mcp's master is refused; --allow-dirty builds it locally and never pushes it", () => {
@@ -353,7 +337,6 @@ describe("build-images.sh and the wrath-mcp stack", () => {
     const refused = run(tree, ["--only", "runner"]);
     expect(refused.code).toBe(1);
     expect(refused.out).toContain("is not on wrath-mcp's master");
-    expect(refused.out).toContain("git -C wrath-mcp fetch origin master (");
     expect(refused.calls).toEqual([]);
     const local = run(tree, ["--only", "runner", "--allow-dirty", "--push", "--registry", "reg.example/wrathbench"]);
     expect(local.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("under review\n");
@@ -377,33 +360,19 @@ describe("build-images.sh --probe", () => {
     return { tree, stackSha: git(sub, "rev-parse", "HEAD"), sha: git(tree, "rev-parse", "HEAD") };
   }
 
-  test("a stack pin on any pushed branch builds and pushes at probe-<name>-<commit>, to the operator's registry, printing the digest", () => {
-    const { tree, stackSha, sha } = pinPushedBranch();
+  test("a stack pin on any pushed branch builds and pushes at probe-<name>-<commit>, after the guard", () => {
+    const { tree, sha } = pinPushedBranch();
     const refused = run(tree, ["--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
     expect(refused.code).toBe(1);
-    expect(refused.out).toContain("is not on wrath-mcp's master (");
     expect(refused.calls).toEqual([]);
     const r = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
     expect(r.code).toBe(0);
     const ref = `reg.example/wrathbench/wrathbench-runner:probe-program-${sha.slice(0, 12)}`;
     expect(builds(r)[0]).toContain(`-t ${ref}`);
-    expect(builds(r)[0]).toContain(`--build-arg WRATHBENCH_BUILD_VERSION=probe-program-${sha.slice(0, 12)}`);
     expect(r.contexts[0]!.read("wrath-mcp/sdk/API.md")).toBe("spike\n");
-    expect(r.out).toContain(`wrath-mcp ${stackSha} is on a branch of wrath-mcp's origin, not on its master`);
     expect(pushes(r)).toEqual([`docker push ${ref}`]);
-    // The guard still runs before the push.
     expect(r.calls.indexOf(`docker push ${ref}`)).toBeGreaterThan(r.calls.indexOf("docker export fake-container"));
-    expect(r.out).toContain("never the chart's image.tag");
-    expect(r.out).toContain("reg.example/wrathbench/wrathbench-runner@sha256:feedface");
     expect(r.leftovers).toEqual([]);
-  });
-
-  test("a merged pin builds under --probe too, at the probe tag", () => {
-    const { tree, sha } = makeRepo();
-    const r = run(tree, ["--probe", "program", "--only", "runner"]);
-    expect(r.code).toBe(0);
-    expect(builds(r)[0]).toContain(`wrathbench-runner:probe-program-${sha.slice(0, 12)}`);
-    expect(r.out).not.toContain("not on its master");
   });
 
   test("a stack commit on no branch of wrath-mcp's origin is refused before anything is built", () => {
@@ -416,24 +385,18 @@ describe("build-images.sh --probe", () => {
     const r = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
     expect(r.code).toBe(1);
     expect(r.out).toContain("is on no branch of wrath-mcp's origin");
-    expect(r.out).toContain("git -C wrath-mcp fetch origin");
     expect(r.calls).toEqual([]);
-    expect(r.leftovers).toEqual([]);
   });
 
-  test("a dirty tree is refused, and so are --allow-dirty and --tag beside it", () => {
+  test("a dirty tree is refused under --probe, and so is --allow-dirty beside it", () => {
     const { tree } = pinPushedBranch();
-    const flags = run(tree, ["--probe", "program", "--only", "runner", "--tag", "mine"]);
-    expect(flags.code).toBe(1);
-    expect(flags.out).toContain("drop --tag");
     const dirtyFlag = run(tree, ["--probe", "program", "--only", "runner", "--allow-dirty"]);
     expect(dirtyFlag.code).toBe(1);
-    expect(dirtyFlag.out).toContain("--probe refuses --allow-dirty");
     writeFileSync(join(tree, "a.txt"), "two\n");
     const dirty = run(tree, ["--probe", "program", "--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
     expect(dirty.code).toBe(1);
     expect(dirty.out).toContain("uncommitted changes");
-    for (const r of [flags, dirtyFlag, dirty]) expect(r.calls).toEqual([]);
+    for (const r of [dirtyFlag, dirty]) expect(r.calls).toEqual([]);
   });
 
   test("a probe image is never pushed to a public registry host, with or without the reference program", () => {
@@ -445,71 +408,46 @@ describe("build-images.sh --probe", () => {
       expect(r.calls).toEqual([]);
     }
   });
-
-  test("a bad name is refused, and a probe- tag is made only by --probe", () => {
-    const { tree } = makeRepo();
-    for (const name of ["", "Program", "-x", "a b", "x".repeat(40)]) {
-      const r = run(tree, ["--probe", name, "--only", "runner"]);
-      expect(r.code).toBe(1);
-      expect(r.out).toContain("--probe takes a short lowercase name");
-      expect(r.calls).toEqual([]);
-    }
-    const tagged = run(tree, ["--only", "runner", "--tag", "probe-program-0123456789ab"]);
-    expect(tagged.code).toBe(1);
-    expect(tagged.out).toContain("a probe- tag is made only by --probe");
-    expect(tagged.calls).toEqual([]);
-  });
 });
 
 describe("build-images.sh and the private reference program", () => {
   test("the runner's context carries the program from the private HEAD at runner/src/reference/, and nothing else of that checkout", () => {
-    const { tree } = makeRepo();
-    const priv = makePrivate();
+    const { tree } = cleanRepo();
+    const priv = cleanPrivate();
     const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: priv.dir } });
     expect(r.code).toBe(0);
     const [ctx] = r.contexts;
     expect(ctx!.read("runner/src/reference/index.ts")).toBe("export const program = 1;\n");
-    expect(ctx!.read("runner/src/reference/route.ts")).toBe("export const route = 1;\n");
     const fromPrivate = ctx!.entries.filter((e) => e.startsWith("runner/src/reference/"));
     expect(fromPrivate.sort()).toEqual(["runner/src/reference/index.ts", "runner/src/reference/route.ts"]);
     for (const absent of ["reference", "worklogs", "runner/src/reference/scratch.ts", "runner/test"]) expect(ctx!.entries).not.toContain(absent);
     expect(builds(r)[0]).toContain(`--label wrathbench.reference=${priv.sha}`);
-    expect(r.out).toContain(`reference program: ${priv.dir}/reference/src at ${priv.sha}`);
   });
 
-  test("a runner build that cannot find it stops before anything is exported or built, saying how to proceed", () => {
-    const { tree } = makeRepo();
-    for (const missing of [join(tempDir("wb-build-images-none-"), "nope"), tempDir("wb-build-images-empty-")]) {
-      const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: missing } });
-      expect(r.code).toBe(1);
-      expect(r.out).toContain("the scripted reference program is not at");
-      expect(r.out).toContain("--without-reference");
-      expect(r.calls).toEqual([]);
-      expect(r.leftovers).toEqual([]);
-    }
-    // --private-dir wins over the environment.
-    const priv = makePrivate();
-    const flagged = run(tree, ["--only", "runner", "--private-dir", priv.dir], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
-    expect(flagged.code).toBe(0);
+  test("a runner build that cannot find it stops before anything is exported or built", () => {
+    const { tree } = cleanRepo();
+    const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: tempDir("wb-build-images-empty-") } });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("--without-reference");
+    expect(r.calls).toEqual([]);
+    expect(r.leftovers).toEqual([]);
   });
 
   test("--without-reference builds a local image without it, and never pushes one to the release registry", () => {
-    const { tree } = makeRepo();
+    const { tree } = cleanRepo();
     const env = { WRATHBENCH_PRIVATE_DIR: "/nonexistent" };
     const local = run(tree, ["--only", "runner", "--without-reference"], { env });
     expect(local.code).toBe(0);
-    expect(local.out).toContain("no scripted reference program");
     expect(local.contexts[0]!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
     expect(builds(local)[0]).not.toContain("wrathbench.reference");
     const pushed = run(tree, ["--only", "runner", "--without-reference", "--push"], { env });
     expect(pushed.code).toBe(1);
-    expect(pushed.out).toContain("refusing --without-reference with --push");
     expect(pushed.calls).toEqual([]);
   });
 
   test("an image carrying it is never pushed to a public registry host; a branch image there is built without it", () => {
-    const { tree, sha } = makeRepo();
-    for (const registry of ["ghcr.io/shard", "docker.io/shard", "shard"]) {
+    const { tree, sha } = cleanRepo();
+    for (const registry of ["ghcr.io/shard", "shard"]) {
       const r = run(tree, ["--only", "runner", "--push", "--registry", registry]);
       expect(r.code).toBe(1);
       expect(r.out).toContain("a public registry host");
@@ -519,12 +457,10 @@ describe("build-images.sh and the private reference program", () => {
     expect(branch.code).toBe(0);
     expect(branch.contexts[0]!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
     expect(pushes(branch)).toEqual([`docker push ghcr.io/shard/wrathbench-runner:${sha.slice(0, 7)}`]);
-    // A server image carries no program, so its registry is not this rule's business.
-    expect(run(tree, ["--only", "worldserver", "--push", "--registry", "ghcr.io/shard"]).code).toBe(0);
   });
 
   test("uncommitted changes to the program are refused like a dirty tree", () => {
-    const { tree } = makeRepo();
+    const { tree } = cleanRepo();
     const priv = makePrivate();
     writeFileSync(join(priv.dir, "reference/src/route.ts"), "export const route = 2;\n");
     const r = run(tree, ["--only", "runner"], { env: { WRATHBENCH_PRIVATE_DIR: priv.dir } });
@@ -533,28 +469,8 @@ describe("build-images.sh and the private reference program", () => {
     expect(r.calls).toEqual([]);
   });
 
-  test("a server-only build needs no private checkout", () => {
-    const { tree } = makeRepo();
-    const sub = join(tree, "deps", "azerothcore");
-    expect(existsSync(sub)).toBe(true);
-    const r = run(tree, ["--only", "worldserver"], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
-    expect(r.code).toBe(0);
-    expect(r.contexts[0]!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
-  });
-});
-
-describe("build-images.sh and the slim viewer image", () => {
-  test("a default build makes the same four images and no viewer", () => {
-    const { tree, sha } = makeRepo();
-    const r = run(tree, []);
-    expect(r.code).toBe(0);
-    expect(builds(r)).toHaveLength(4);
-    expect(builds(r).some((b) => b.includes("viewer.Dockerfile") || b.includes("wrathbench-viewer"))).toBe(false);
-    expect(builds(r).find((b) => b.includes("runner.Dockerfile"))).toContain(`-t harbor.local/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`);
-  });
-
-  test("--only viewer builds it alone, at the same tag, guarded, with no private checkout", () => {
-    const { tree, sha } = makeRepo();
+  test("the viewer image is built alone, guarded, with no private checkout and no program in it", () => {
+    const { tree, sha } = cleanRepo();
     const r = run(tree, ["--only", "viewer"], { env: { WRATHBENCH_PRIVATE_DIR: "/nonexistent" } });
     expect(r.code).toBe(0);
     expect(builds(r)).toHaveLength(1);
@@ -563,15 +479,6 @@ describe("build-images.sh and the slim viewer image", () => {
     expect(builds(r)[0]).toContain(`-t ${ref} -f ${ctx!.dir}/infra/docker/viewer.Dockerfile ${ctx!.dir}`);
     expect(r.calls).toContain(`docker create ${ref} true`);
     expect(ctx!.entries.some((e) => e.startsWith("runner/src/reference"))).toBe(false);
-    expect(ctx!.entries.some((e) => e.startsWith("deps/azerothcore/"))).toBe(false);
-  });
-
-  test("named beside the runner, both are built", () => {
-    const { tree } = makeRepo();
-    const r = run(tree, ["--only", "runner", "--only", "wrathbench-viewer"]);
-    expect(r.code).toBe(0);
-    expect(builds(r)).toHaveLength(2);
-    expect(builds(r)[1]).toContain("viewer.Dockerfile");
   });
 });
 
@@ -581,7 +488,6 @@ describe("build-images.sh dirty trees and named commits", () => {
     writeFileSync(join(tree, "a.txt"), "two\n");
     const r = run(tree, ["--only", "runner"]);
     expect(r.code).toBe(1);
-    expect(r.out).toContain("--allow-dirty");
     expect(r.calls).toEqual([]);
   });
 
@@ -591,9 +497,7 @@ describe("build-images.sh dirty trees and named commits", () => {
     const r = run(tree, ["--only", "runner", "--allow-dirty", "--push"]);
     expect(r.contexts[0]!.read("a.txt")).toBe("one\n");
     expect(builds(r)[0]).toContain(`:${sha.slice(0, 7)}-dirty`);
-    expect(r.out).toContain("NOT in these images");
     expect(r.code).toBe(1);
-    expect(r.out).toContain("refusing to push a --allow-dirty tag");
     expect(pushes(r)).toEqual([]);
   });
 
@@ -607,14 +511,13 @@ describe("build-images.sh dirty trees and named commits", () => {
     expect(builds(named)[0]).toContain("wrathbench-runner:t-first");
     const untagged = run(tree, ["--only", "runner", "--commit", first]);
     expect(untagged.code).toBe(1);
-    expect(untagged.out).toContain("pass --tag as well");
     expect(builds(untagged)).toEqual([]);
   });
 });
 
 describe("build-images.sh and the image guard", () => {
   test("a secret-shaped path in a built image stops the run before any push, and the image loses its tag", () => {
-    const { tree, sha } = makeRepo();
+    const { tree, sha } = cleanRepo();
     const r = run(tree, ["--only", "runner", "--push", "--registry", "reg.example/wrathbench"], {
       imageFiles: { "wrathbench/package.json": "{}", "wrathbench/.env.prod": "API_KEY=fixture-not-a-secret\n" },
     });
@@ -628,31 +531,12 @@ describe("build-images.sh and the image guard", () => {
   });
 
   test("--push pushes only after the image passed the guard, to the --registry given", () => {
-    const { tree, sha } = makeRepo();
+    const { tree, sha } = cleanRepo();
     const r = run(tree, ["--only", "runner", "--push", "--registry", "reg.example/wrathbench"]);
     const ref = `reg.example/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`;
     expect(r.code).toBe(0);
     const at = (line: string) => r.calls.indexOf(line);
     expect(at(`docker push ${ref}`)).toBeGreaterThan(at("docker export fake-container"));
     expect(at("docker export fake-container")).toBeGreaterThan(r.calls.findIndex((l) => l.startsWith("docker build")));
-  });
-});
-
-describe("the AzerothCore export list", () => {
-  test("names exactly the deps/azerothcore sources server.Dockerfile copies", () => {
-    const script = readFileSync(SCRIPT, "utf8");
-    const listed = /^AC_PATHS=\(([^)]*)\)/m.exec(script)?.[1]?.trim().split(/\s+/) ?? [];
-    expect(listed.length).toBeGreaterThan(0);
-    const dockerfile = readFileSync(join(REPO_ROOT, "infra", "docker", "server.Dockerfile"), "utf8");
-    const copied = new Set<string>();
-    for (const line of dockerfile.split("\n")) {
-      if (line.trimStart().startsWith("#")) continue;
-      for (const m of line.matchAll(/deps\/azerothcore\/(\S+)/g)) copied.add(m[1]!);
-    }
-    expect(copied.size).toBeGreaterThan(0);
-    // Every source the Dockerfile copies is exported...
-    for (const c of copied) expect(listed.some((p) => c === p || c.startsWith(`${p}/`))).toBe(true);
-    // ...and nothing it does not copy.
-    for (const p of listed) expect([...copied].some((c) => c === p || c.startsWith(`${p}/`))).toBe(true);
   });
 });

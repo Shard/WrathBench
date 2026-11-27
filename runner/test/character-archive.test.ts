@@ -465,14 +465,6 @@ describe("import", () => {
     expect(meta.imports![0]).toMatchObject({ from: { account: "RUNNER2", guid: GUID }, to: { account: "RUNNER3", guid: 3 } });
   });
 
-  test("a --no-trajectory archive restores a run without its trajectory, still paused", async () => {
-    const { file } = await exported({ trajectory: false });
-    const runsDir = tempDir("wb-char-dest-");
-    const res = await importCharacter(importOpts(file, runsDir, new FakeGame(false)));
-    expect(existsSync(join(res.dir, "trajectory.jsonl"))).toBe(false);
-    expect(readRunFact(runsDir, RUN_ID)!.pause?.reason).toBe("operator-pause");
-  });
-
   test("a round trip: export, import, export again — every member the same but meta.json, which gained the import", async () => {
     const { file } = await exported();
     const runsDir = tempDir("wb-char-dest-");

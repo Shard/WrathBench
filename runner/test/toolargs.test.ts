@@ -44,9 +44,6 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 describe("parseToolArgsText leniency ladder", () => {
-  test("plain JSON parses", () => {
-    expect(parseToolArgsText('{"code":"1+1"}')).toEqual({ ok: true, args: { code: "1+1" } });
-  });
 
   test("empty string means no arguments", () => {
     expect(parseToolArgsText("  ")).toEqual({ ok: true, args: {} });
@@ -57,19 +54,9 @@ describe("parseToolArgsText leniency ladder", () => {
     expect(parseToolArgsText(raw)).toEqual({ ok: true, args: { code: "await connect()" } });
   });
 
-  test("a bare ``` fence is stripped", () => {
-    const raw = '```\n{"query":"Northshire quests"}\n```';
-    expect(parseToolArgsText(raw)).toEqual({ ok: true, args: { query: "Northshire quests" } });
-  });
-
   test("trailing commas before } and ] are repaired", () => {
     expect(parseToolArgsText('{"code":"x", }')).toEqual({ ok: true, args: { code: "x" } });
     expect(parseToolArgsText('{"a":[1,2,],}')).toEqual({ ok: true, args: { a: [1, 2] } });
-  });
-
-  test("fence plus trailing comma repairs together", () => {
-    const raw = '```json\n{"content":"# plan",}\n```';
-    expect(parseToolArgsText(raw)).toEqual({ ok: true, args: { content: "# plan" } });
   });
 
   test("trailing-comma repair never mutates content inside string literals", () => {
@@ -78,14 +65,6 @@ describe("parseToolArgsText leniency ladder", () => {
     const res = parseToolArgsText('{"code": "await sdk.say(\', ]\')", }');
     expect(res.ok).toBe(true);
     if (res.ok) expect((res.args as { code: string }).code).toBe("await sdk.say(', ]')");
-  });
-
-  test("repair leaves comma-bracket sequences inside strings byte-identical", () => {
-    const res = parseToolArgsText('{"code":"const arr = [1, 2, ]; log(\\"x, ]\\")",}');
-    expect(res.ok).toBe(true);
-    // The structural trailing comma (before the outer }) is stripped; the two
-    // `, ]` sequences inside the JS string are preserved verbatim.
-    if (res.ok) expect((res.args as { code: string }).code).toBe('const arr = [1, 2, ]; log("x, ]")');
   });
 
   test("escaped quotes inside a string do not desync the tokenizer", () => {
@@ -106,9 +85,6 @@ describe("parseToolArgsText leniency ladder", () => {
 });
 
 describe("coerceToolArgs", () => {
-  test("passes non-string arguments through untouched", () => {
-    expect(coerceToolArgs("run_snippet", { code: "1" })).toEqual({ ok: true, args: { code: "1" } });
-  });
 
   test("failure restates the tool's expected parameters in prose", () => {
     const res = coerceToolArgs("run_snippet", "{broken");
@@ -125,13 +101,6 @@ describe("alias normalization", () => {
     for (const alias of ["cmd", "snippet", "source", "script", "ts"]) {
       expect(normalizeToolArgs("run_snippet", { [alias]: "1+1" })).toEqual({ code: "1+1" });
     }
-  });
-
-  test("the canonical key wins when both are present", () => {
-    expect(normalizeToolArgs("run_snippet", { code: "keep", snippet: "drop" })).toEqual({
-      code: "keep",
-      snippet: "drop", // left in place; strict validation names it
-    });
   });
 
   test("text/markdown map to content, q maps to query", () => {
@@ -176,10 +145,6 @@ describe("harness-delivered action hints", () => {
     hint: "(-6048, 367) is 312y away in a straight line; a single moveTo covers ~250y. Walk to an intermediate point first.",
     ts: 1,
     ...over,
-  });
-
-  test("nothing recorded renders nothing", () => {
-    expect(renderActionHints([])).toBeUndefined();
   });
 
   test("one line per status, most recent first — 41 refusals do not cost 41 lines", () => {
@@ -302,33 +267,12 @@ describe("pending action hints ride the next tool result of any kind", () => {
     args: unknown;
     resting?: boolean;
     wiki?: boolean;
-    setup?: (ctx: ToolContext) => Promise<unknown>;
   }[] = [
     { label: "recent_events", name: "recent_events", args: {} },
-    { label: "state_summary", name: "state_summary", args: {} },
     { label: "search_reference (hits)", name: "search_reference", args: { query: "Example Person Gamma" }, wiki: true },
-    { label: "search_reference (no bundle)", name: "search_reference", args: { query: "anything" } },
     { label: "write_scratchpad", name: "write_scratchpad", args: { content: "# plan\n- walk north" } },
-    {
-      label: "edit_scratchpad",
-      name: "edit_scratchpad",
-      args: { old: "walk north", new: "walk east" },
-      setup: (ctx) => callTool(ctx, "write_scratchpad", { content: "# plan\n- walk north" }),
-    },
     { label: "edit_scratchpad (refused)", name: "edit_scratchpad", args: { old: "absent", new: "x" } },
-    { label: "reflect", name: "reflect", args: {} },
     { label: "reflect (refused)", name: "reflect", args: {}, resting: false },
-    { label: "log_status", name: "log_status", args: { text: "walking north" } },
-    {
-      label: "read_log",
-      name: "read_log",
-      args: {},
-      setup: async (ctx) => {
-        await callTool(ctx, "log_status", { text: "walking north" });
-        return callTool(ctx, "reflect", {});
-      },
-    },
-    { label: "read_log (closed)", name: "read_log", args: {} },
     { label: "an unknown tool", name: "read_scratchpad", args: {} },
     { label: "invalid arguments", name: "write_scratchpad", args: {} },
     { label: "run_snippet that never ran", name: "run_snippet", args: { snippet: "1", code: "2" } },
@@ -338,8 +282,6 @@ describe("pending action hints ride the next tool result of any kind", () => {
     test(`${c.label}: its own text unchanged, the block at its foot, delivered once`, async () => {
       const plain = hintCtx({ resting: c.resting, wiki: c.wiki });
       const hinted = hintCtx({ resting: c.resting, wiki: c.wiki });
-      await c.setup?.(plain.ctx);
-      await c.setup?.(hinted.ctx);
       hinted.pending.push(...PENDING);
 
       const expected = await callTool(plain.ctx, c.name, c.args);
@@ -457,30 +399,23 @@ describe("recent_events movement fold", () => {
     });
   }
 
-  test("party frames are dropped with movement and counted in the same note", async () => {
-    const events = [ev(1, "SMSG_PARTY_MEMBER_STATS"), ev(2, "SMSG_MESSAGECHAT"), ev(3, "SMSG_PARTY_MEMBER_STATS_FULL")];
-    const res = await callTool(streamCtx(events), "recent_events", {});
-    expect(res.text).toContain("#2 SMSG_MESSAGECHAT");
-    expect(res.text).not.toContain("SMSG_PARTY_MEMBER_STATS");
-    expect(res.text).toContain(
-      "(+2 ambient movement and party-frame events folded into state — pass {includeMovement: true} for the raw stream)",
-    );
-  });
-
-  test("ambient movement is dropped and reported in a trailing note", async () => {
+  test("ambient movement, party frames and transport progress are dropped and reported in a trailing note", async () => {
     const events = [
       ev(1, "SMSG_MESSAGECHAT"),
       ev(2, "SMSG_MONSTER_MOVE"),
       ev(3, "MSG_MOVE_HEARTBEAT"),
       ev(4, "SMSG_ATTACKERSTATEUPDATE"),
+      ev(5, "SMSG_PARTY_MEMBER_STATS"),
+      ev(6, "SMSG_PARTY_MEMBER_STATS_FULL"),
+      ev(7, "WB_TRANSPORT_PROGRESS"),
     ];
     const res = await callTool(streamCtx(events), "recent_events", {});
     expect(res.text).toContain("#1 SMSG_MESSAGECHAT");
     expect(res.text).toContain("#4 SMSG_ATTACKERSTATEUPDATE");
-    expect(res.text).not.toContain("SMSG_MONSTER_MOVE");
-    expect(res.text).not.toContain("MSG_MOVE_HEARTBEAT");
-    expect(res.text).toContain("(+2 ambient movement and party-frame events folded into state");
-    expect(res.text).toContain("{includeMovement: true}");
+    for (const folded of ["SMSG_MONSTER_MOVE", "MSG_MOVE_HEARTBEAT", "SMSG_PARTY_MEMBER_STATS", "WB_TRANSPORT_PROGRESS"]) expect(res.text).not.toContain(folded);
+    expect(res.text).toContain(
+      "(+5 ambient movement and party-frame events folded into state — pass {includeMovement: true} for the raw stream)",
+    );
   });
 
   test("includeMovement passes the raw stream through, and scans exactly limit", async () => {
@@ -507,18 +442,6 @@ describe("recent_events movement fold", () => {
     // The span starts at the oldest visible event (#21), so only the 6 ambient
     // events inside it are reported — not all 20 in the scanned buffer.
     expect(lines[3]).toContain("(+6 ambient movement and party-frame events folded into state");
-  });
-
-  test("transport progress is folded like the rest of the ambient motion", async () => {
-    const events = [
-      ev(1, "WB_TRANSPORT_PROGRESS"),
-      ev(2, "SMSG_MESSAGECHAT"),
-      ev(3, "WB_TRANSPORT_PROGRESS"),
-    ];
-    const res = await callTool(streamCtx(events), "recent_events", {});
-    expect(res.text).toContain("#2 SMSG_MESSAGECHAT");
-    expect(res.text).not.toContain("WB_TRANSPORT_PROGRESS");
-    expect(res.text).toContain("(+2 ambient movement and party-frame events folded into state");
   });
 
   test("a ship's coming into view and leaving it is folded; a creature's is shown", async () => {

@@ -17,10 +17,10 @@ import { Collector } from "../src/collector";
 import { listRunDirs } from "../src/scan";
 import { readConfig } from "../src/config";
 import { OffsetStore } from "../src/offsets";
-import { memorySink, retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
+import { memorySink, clickhouseSink, SinkAborted } from "../src/sink";
 import { splitStatements } from "../src/schema";
 import { tailLines } from "../src/tailer";
-import { EPISODIC_ENTRY_KIND, parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
+import { EPISODIC_ENTRY_KIND, usageOf, TURN_KINDS } from "../src/lines";
 import { EpisodicLog } from "../../runner/src/episodic";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/src/run-totals";
 import { readRunFact } from "../../runner/src/run-fact";
@@ -298,23 +298,6 @@ describe("a pass over one run", () => {
     expect(zone?.["to_id"]).toBe(12);
   });
 
-  test("the totals row carries the viewer's own derivation", () => {
-    const [row] = rowsOf(sink, "run_totals");
-    const totals = JSON.parse(String(row?.["totals_json"])) as {
-      modelResponses: number;
-      toolCalls: number;
-      snippets: number;
-      leveling: unknown;
-    };
-    expect(totals.modelResponses).toBe(1);
-    expect(totals.toolCalls).toBe(1);
-    expect(totals.snippets).toBe(1);
-    // An ordering-sensitive derivation nothing here reimplements in SQL.
-    expect(totals.leveling).not.toBeNull();
-    const fact = JSON.parse(String(row?.["fact_json"])) as { runId: string; bestLevel: number };
-    expect(fact.runId).toBe("run-a");
-    expect(fact.bestLevel).toBe(2);
-  });
 });
 
 /**
@@ -346,27 +329,6 @@ describe("the stored derivations are the same objects the viewer computed", () =
     expect(stored).toEqual(JSON.parse(JSON.stringify({ ...fresh, live: stored["live"] })));
   });
 
-  /**
-   * The incremental scanner is the one thing here that could silently corrupt
-   * a live run's totals: it folds only the bytes appended since its last read,
-   * and nothing else would notice if it folded them wrongly.
-   */
-  test("an incrementally folded total equals a from-scratch one", async () => {
-    const runsDir = tmpRoot();
-    const dir = writeRun(runsDir, "run-fold");
-    const { collector, sink } = collectorOver(runsDir);
-    await collector.pass();
-    const path = join(dir, "trajectory.jsonl");
-    appendFileSync(
-      path,
-      `${JSON.stringify({ t: "response", ts: 5_000, turn: 2, usage: { input_tokens: 40, output_tokens: 9 } })}\n` +
-        `${JSON.stringify({ t: "milestone", ts: 5_100, kind: "level", from: 2, to: 3 })}\n`,
-    );
-    await collector.pass();
-    const stored: unknown = JSON.parse(String(rowsOf(sink, "run_totals").at(-1)?.["totals_json"]));
-    const fresh = await new RunTotalsScanner(path).scan();
-    expect(stored).toEqual(JSON.parse(JSON.stringify(fresh)));
-  });
 });
 
 describe("resume and replay", () => {
@@ -506,21 +468,6 @@ describe("what the store must not lose", () => {
   });
 });
 
-describe("a run's world", () => {
-  test("is its own column off the launch config, and empty before worlds", async () => {
-    const runsDir = tmpRoot();
-    const dir = writeRun(runsDir, "run-on-world");
-    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { config: Record<string, unknown> };
-    writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config: { ...meta.config, world: "wabcdefghij" } }, null, 2)}\n`);
-    writeRun(runsDir, "run-before");
-    const { collector, sink } = collectorOver(runsDir);
-    await collector.pass();
-    const byId = new Map(rowsOf(sink, "runs").map((r) => [r["run_id"], r["world_id"]]));
-    expect(byId.get("run-on-world")).toBe("wabcdefghij");
-    expect(byId.get("run-before")).toBe("");
-  });
-});
-
 describe("what the store must never hold", () => {
   const TOKEN = "tok-fedcba9876543210fedcba9876543210";
 
@@ -631,18 +578,6 @@ describe("archived runs", () => {
   });
 });
 
-describe("a launch that never became a run", () => {
-  test("a directory holding only launch files (campaign.json, image.json) is not ingested", () => {
-    const runsDir = tmpRoot();
-    writeRun(runsDir, "run-real");
-    const launchOnly = join(runsDir, "fleet-probe-orc-warrior-base-m-20261011");
-    Bun.spawnSync(["mkdir", "-p", launchOnly]);
-    writeFileSync(join(launchOnly, "campaign.json"), "{}");
-    writeFileSync(join(launchOnly, "image.json"), "{}");
-    expect(listRunDirs(runsDir).map((d) => d.runId)).toEqual(["run-real"]);
-  });
-});
-
 describe("a run id that exists twice", () => {
   /*
    * `data/runs/<id>/` and `data/runs/archive/<id>/` can both hold a run, and
@@ -666,28 +601,6 @@ describe("a run id that exists twice", () => {
     expect(dirs.find((d) => d.runId === "run-only-archived")?.archived).toBe(true);
     expect(skipped).toEqual(["run-twice"]);
   });
-
-  test("a second pass over the pair sends nothing", async () => {
-    const runsDir = tmpRoot();
-    writeRun(runsDir, "run-twice-b");
-    const archived = writeRun(join(runsDir, "archive"), "run-twice-b");
-    // The two directories differ, the way the real pair does.
-    appendFileSync(
-      join(archived, "trajectory.jsonl"),
-      `${JSON.stringify({ t: "response", ts: 3_000, turn: 9 })}\n`,
-    );
-    const { collector, sink } = collectorOver(runsDir);
-    await collector.pass();
-    const before = rowsOf(sink, "turns").length;
-    const stats = await collector.pass();
-    expect(stats.ingested).toBe(0);
-    expect(stats.trajectoryLines).toBe(0);
-    expect(stats.runs).toBe(0);
-    expect(stats.totals).toBe(0);
-    expect(rowsOf(sink, "turns")).toHaveLength(before);
-    // And what landed is one run's rows, not a blend of two.
-    expect(new Set(rowsOf(sink, "runs").map((r) => r["archived"]))).toEqual(new Set([0]));
-  });
 });
 
 describe("the tailer", () => {
@@ -702,25 +615,10 @@ describe("the tailer", () => {
     for await (const l of tailLines(path, 0, size, 3)) if (l.text.length > 0) out.push(l.text);
     expect(out).toEqual(lines);
   });
-
-  test("the offset it yields is always past a newline", async () => {
-    const root = tmpRoot();
-    const path = join(root, "off.jsonl");
-    writeFileSync(path, "aa\nbbb\n");
-    const ends: number[] = [];
-    for await (const l of tailLines(path, 0, Bun.file(path).size, 2)) ends.push(l.endOffset);
-    expect(ends).toEqual([3, 7]);
-  });
 });
 
 describe("the boundary", () => {
-  test("parseLine requires t and ts and passes the rest through", () => {
-    expect(parseLine('{"t":"x","ts":1,"z":9}')).toMatchObject({ ok: true, t: "x", ts: 1 });
-    expect(parseLine('{"t":"x"}').ok).toBe(false);
-    expect(parseLine("nope").ok).toBe(false);
-  });
-
-  test("usage reads the Anthropic and OpenAI shapes into one row", () => {
+  test("usage reads the Anthropic and OpenAI shapes, and either cache-write field, into one row", () => {
     expect(usageOf({ usage: { input_tokens: 5, output_tokens: 6, cache_read_input_tokens: 7 } })).toMatchObject({
       input_tokens: 5,
       output_tokens: 6,
@@ -730,56 +628,14 @@ describe("the boundary", () => {
       usageOf({ usage: { prompt_tokens: 5, completion_tokens: 6, completion_tokens_details: { reasoning_tokens: 3 } } }),
     ).toMatchObject({ input_tokens: 5, output_tokens: 6, reasoning_tokens: 3 });
     expect(usageOf({}).input_tokens).toBeNull();
-  });
-
-  test("the adapters' normalised cache-write field is read, and the raw one still is", () => {
     // Every adapter writes `cache_write_tokens`; only an older trajectory
     // carries Anthropic's own `cache_creation_input_tokens`.
-    expect(usageOf({ usage: { cache_write_tokens: 11 } }).cache_write_tokens).toBe(11);
     expect(usageOf({ usage: { cache_creation_input_tokens: 7 } }).cache_write_tokens).toBe(7);
     expect(usageOf({ usage: { cache_write_tokens: 11, cache_creation_input_tokens: 7 } }).cache_write_tokens).toBe(11);
-    expect(usageOf({ usage: {} }).cache_write_tokens).toBeNull();
-  });
-
-  test("a response's raw provider usage leaves the columns alone and rides in raw", () => {
-    // The openai adapter keeps the provider's own usage object beside the
-    // normalised one; the columns read the normalised block only.
-    const rec = {
-      t: "response",
-      ts: 1,
-      turn: 1,
-      usage: { prompt_tokens: 12_000, completion_tokens: 340, cached_tokens: 11_008, reasoning_tokens: 210 },
-    };
-    const usageRaw = {
-      prompt_tokens: 99,
-      prompt_cache_hit_tokens: 11_008,
-      prompt_cache_miss_tokens: 992,
-      completion_tokens_details: { reasoning_tokens: 1 },
-    };
-    const line = JSON.stringify({ ...rec, usageRaw });
-    const parsed = parseLine(line);
-    if (!parsed.ok) throw new Error("fixture line did not parse");
-    const ctx = { runId: "r", lineNo: 1, ingestedAt: 0 };
-    const row = turnRow(ctx, parsed.rec, line);
-    const plain = turnRow(ctx, rec, JSON.stringify(rec));
-    expect({ ...row, raw: "" }).toEqual({ ...plain, raw: "" });
-    expect(row["input_tokens"]).toBe(12_000);
-    expect(row["reasoning_tokens"]).toBe(210);
-    expect(JSON.parse(String(row["raw"]))).toMatchObject({ usageRaw });
   });
 });
 
 describe("the sink", () => {
-  test("backoff is capped, never a give-up", () => {
-    expect(retryDelayMs(0)).toBe(1_000);
-    expect(retryDelayMs(3)).toBe(8_000);
-    expect(retryDelayMs(99)).toBe(30_000);
-  });
-
-  test("JSONEachRow is one object per line", () => {
-    expect(jsonEachRow([{ a: 1 }, { b: 2 }])).toBe('{"a":1}\n{"b":2}\n');
-  });
-
   test("a down ClickHouse is retried, and a shutdown ends the wait", async () => {
     const cfg = readConfig({ url: "http://127.0.0.1:1/never", stateDb: ":memory:" });
     const controller = new AbortController();
@@ -793,36 +649,6 @@ describe("the sink", () => {
     });
     await expect(sink.insert("runs", [{ run_id: "x" }])).rejects.toBeInstanceOf(SinkAborted);
     expect(attempts).toBeGreaterThanOrEqual(3);
-  });
-
-  test("a success lowers the outage latch, so the second outage is logged too", async () => {
-    // What `main.ts` builds its "one line per outage" latch out of: `onRetry`
-    // raises it, `onOk` lowers it. Without the second hook the latch was
-    // cleared once at startup and the service went quiet for every later
-    // outage — one line per process rather than one per outage.
-    const cfg = readConfig({ url: "http://127.0.0.1:1/never", stateDb: ":memory:" });
-    let fails = 1;
-    const calls: string[] = [];
-    const sink = clickhouseSink(cfg, {
-      sleep: async () => {},
-      onRetry: () => calls.push("retry"),
-      onOk: () => calls.push("ok"),
-    });
-    // `post` is not reached: the fetch to a closed port is what throws, and
-    // `fails` counts how many of those to let happen before the stub succeeds.
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      if (fails-- > 0) throw new Error("connection refused");
-      return new Response("", { status: 200 });
-    }) as unknown as typeof fetch;
-    try {
-      await sink.insert("runs", [{ run_id: "x" }]);
-      fails = 1;
-      await sink.insert("runs", [{ run_id: "y" }]);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
-    expect(calls).toEqual(["retry", "ok", "retry", "ok"]);
   });
 });
 

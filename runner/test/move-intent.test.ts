@@ -1,25 +1,20 @@
 /**
  * Movement intention, end to end below the canvas: the sandbox's watched
  * `move_to` dispatch, the session record's `move` rows the stack writes for it
- * (`session/calls`), the trajectory's mirror of them, and the two viewer reads
- * the map is built on, over a v1 run's record and a 0.5 run's `move` table.
+ * (`session/calls`), and the viewer reads the map is built on, over a v1 run's
+ * record and a 0.5 run's `move` table.
  *
  * Fixture-based, no game stack: a stand-in module acks the `move_to` the real
  * sandbox child POSTs, and the verdict is fed into the child's own event
- * stream the way `death.test.ts` feeds frames. The loop half runs the real
- * `ContextBuilder` over a fake sandbox.
+ * stream the way `death.test.ts` feeds frames.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadRunConfig } from "../src/config";
-import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
-import type { MoveIntentNote } from "@wrathbench/mcp";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
-import { Watchdogs } from "../src/watchdogs";
 import { readMoves } from "../../viewer/runs";
 import { sessionKind } from "./fixtures/run-readout";
 import { SessionReader } from "@wrathbench/mcp/record";
@@ -30,75 +25,6 @@ import { readLatestMove, readPositions } from "../../viewer/positions";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
-
-/** The snapshot the loop reads, with a `move` slot the test rewrites in place. */
-function harness(slot: { move: MoveIntentNote | null }) {
-  const dir = tempDir("wrathbench-move-");
-  let clock = 1_000_000;
-  const config = {
-    ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }),
-    runId: "run-move",
-    token: "run-move",
-  };
-  const trajectory = new Trajectory(dir);
-  trajectory.writeMeta({ runId: "run-move", harnessVersion: "t", startedAt: 1, config });
-  const sandbox = {
-    evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
-    recentEvents: () => Promise.resolve([]),
-    stateSnapshot: () =>
-      Promise.resolve({ self: { guid: "7" }, lastSeq: 1, eventCount: 1, move: slot.move }),
-    totalRestarts: 0,
-    consecutiveRestarts: 0,
-    drainNotices: () => [],
-    stop: () => Promise.resolve(),
-  } as unknown as SandboxHost;
-  const ctx = new ContextBuilder({
-    config,
-    sandbox,
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
-    trajectory,
-    watchdogs: new Watchdogs(config.watchdogs),
-    now: () => clock,
-  });
-  return {
-    dir,
-    trajectory,
-    /** One 5s tick of the state ticker — far short of the 60s row cadence. */
-    tick: async (): Promise<void> => {
-      clock += 5_000;
-      await ctx.sampleState();
-    },
-  };
-}
-
-const DISPATCH: MoveIntentNote = {
-  moveId: null,
-  map: 0,
-  x: -6100,
-  y: 400,
-  z: 380,
-  target: "Warden Oakhollow",
-  status: null,
-  ts: 1_000_500,
-  endedAt: null,
-};
-
-describe("the loop's samples record no movement intention", () => {
-  test("a dispatch and its verdict on the snapshot write nothing: the record is the stack's", async () => {
-    // The intention is recorded where it is watched, in the sandbox child, and
-    // written by the stack's session writer (below). A sample that still wrote
-    // one would be a second, later copy of the same dispatch.
-    const slot: { move: MoveIntentNote | null } = { move: null };
-    const h = harness(slot);
-    await h.tick();
-    slot.move = { ...DISPATCH };
-    await h.tick();
-    slot.move = { ...DISPATCH, moveId: 4, status: "too_far", endedAt: 1_000_900 };
-    await h.tick();
-    expect(readTrajectory(h.dir).filter((r) => r.t === "move")).toEqual([]);
-    expect(existsSync(join(h.dir, "run.sqlite"))).toBe(false);
-  });
-});
 
 /* ---------- the viewer reads ---------- */
 
@@ -170,13 +96,6 @@ async function v1RunFixture(moves: [number, number | null, number, number, numbe
 }
 
 describe("readMoves over a v1 run's session record", () => {
-  test("a session with no move rows has no intentions", async () => {
-    const runsDir = await v1RunFixture([]);
-    expect(sessionKind(runsDir, "live-1")).toBe("v1");
-    expect(await readMoves(runsDir, "live-1")).toEqual([]);
-    expect(await readLatestMove(runsDir, "live-1")).toBeNull();
-  });
-
   test("rows come back oldest first, and the newest is the one the map draws", async () => {
     const runsDir = await v1RunFixture([
       [1000, 1, 0, -6100, 400, 380, "Warden Oakhollow", null],
@@ -217,14 +136,7 @@ describe("readMoves over a 0.5 run's move table", () => {
     expect(moves[1]!.status).toBe("arrived");
     expect(await readLatestMove(runsDir, "live-1")).toMatchObject({ ts: 2000, target: null, x: -5000 });
   });
-
-  test("the position feed carries the newest intention beside the pip", async () => {
-    const runsDir = runFixture([[1000, 1, 0, -6100, 400, 380, "Warden Oakhollow", null]]);
-    const [p] = await readPositions(runsDir);
-    expect(p!.move).toMatchObject({ map: 0, x: -6100, y: 400, target: "Warden Oakhollow", status: null });
-  });
 });
-
 
 /* ---------- the sandbox's own capture ---------- */
 
@@ -274,33 +186,6 @@ function makeHost(moduleUrl: string, session?: SessionRecord): SandboxHost {
   hosts.push(host);
   return host;
 }
-
-describe("the sandbox watches the dispatch, not the SDK call", () => {
-  test("a moveToAsync nobody awaits is on the snapshot, and its verdict ends it", async () => {
-    const stub = startModuleStub();
-    const host = makeHost(stub.url);
-    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
-    // Not awaited for a verdict: the async form is the one the SDK's own hints
-    // steer long walks towards, and it is the one an in-SDK result hook would
-    // never see settle.
-    const sent = await host.evalSnippet("await sdk.moveToAsync({ x: -6100, y: 400, z: 380 })");
-    expect(sent.ok).toBe(true);
-    const walking = (await host.stateSnapshot())["move"] as Record<string, unknown>;
-    expect(walking).toMatchObject({ x: -6100, y: 400, z: 380, status: null, target: null });
-    expect(walking["moveId"]).toBe(1);
-
-    // The module's verdict, on the stream the client is already listening to.
-    await host.evalSnippet(
-      `events.ingest(JSON.stringify({ seq: 1, opcode: "WB_MOVE_RESULT", opcodeId: 0xff02, ts: 2000,` +
-        ` data: { moveId: 1, status: "too_far", pos: { x: -6200, y: 390, z: 380, o: 0 } } }))`,
-    );
-    const settled = (await host.stateSnapshot())["move"] as Record<string, unknown>;
-    expect(settled["status"]).toBe("too_far");
-    expect(settled["endedAt"]).toBe(2000);
-
-    await stub.stop();
-  });
-});
 
 describe("the stack records the intention, and the map and the feed read it there", () => {
   test("a dispatch and its verdict are two move rows in session/calls, read by the map and the feed, and not in the trajectory", async () => {

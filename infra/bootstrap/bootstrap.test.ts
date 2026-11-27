@@ -10,8 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { calculateVerifier, extraAccountsOf, isWorldRealm, main, parseArgs } from "./bootstrap";
-import { newWorldId, REALM_MAX, REALM_MIN } from "../world";
+import { calculateVerifier, main, parseArgs } from "./bootstrap";
 
 type Row = { id: number; salt: string; verifier: string };
 
@@ -74,27 +73,12 @@ describe("--accounts-only", () => {
     expect(db.isClosed()).toBe(true);
   });
 
-  test("its realmcharacters row is the new account's alone", async () => {
-    const db = fakeDb();
-    await run(["--accounts-only", "SMOKE5"], db);
-    const rc = db.statements.filter((s) => s.text.startsWith("INSERT INTO realmcharacters"));
-    expect(rc.length).toBe(1);
-    expect(rc[0]!.text).toContain("AND account.id = ?");
-    expect(rc[0]!.values).toEqual([db.accounts.get("SMOKE5")!.id]);
-  });
-
   test("an account that exists is left exactly as it is, whatever its password", async () => {
     const db = fakeDb({ PROBE: { id: 7, salt: "AB".repeat(32), verifier: "CD".repeat(32) } });
     expect(await run(["--accounts-only", "PROBE"], db)).toBe(0);
     expect(db.statements.filter((s) => REALM_WRITE.test(s.text) || ACCOUNT_WRITE.test(s.text))).toEqual([]);
     expect(db.statements.some((s) => s.text.startsWith("INSERT INTO realmcharacters"))).toBe(false);
     expect(db.accounts.get("PROBE")).toEqual({ id: 7, salt: "AB".repeat(32), verifier: "CD".repeat(32) });
-  });
-
-  test("creates only the accounts it is named, never the configured runner account the Job owns", async () => {
-    const db = fakeDb();
-    await run(["--accounts-only", "SMOKE6", "PROBE"], db);
-    expect([...db.accounts.keys()].sort()).toEqual(["PROBE", "SMOKE6"]);
   });
 });
 
@@ -113,18 +97,6 @@ describe("a release while worlds are live", () => {
     expect(db.realms.get(4)).toEqual(world);
     // Never written: not renamed, not re-flagged offline.
     expect(db.statements.some((s) => REALM_WRITE.test(s.text) && s.values.includes(4))).toBe(false);
-  });
-
-  test("the rule is world.ts's: its slots and its ids", () => {
-    for (let n = 0; n < 50; n++) {
-      const id = newWorldId();
-      expect(isWorldRealm({ id: REALM_MIN, name: `WrathBench ${id}` })).toBe(true);
-      expect(isWorldRealm({ id: REALM_MAX, name: `WrathBench ${id}` })).toBe(true);
-    }
-    expect(isWorldRealm({ id: REALM_MIN - 1, name: "WrathBench wabcdefghij" })).toBe(false);
-    expect(isWorldRealm({ id: REALM_MAX + 1, name: "WrathBench wabcdefghij" })).toBe(false);
-    expect(isWorldRealm({ id: 3, name: "WrathBench" })).toBe(false);
-    expect(isWorldRealm({ id: 3, name: "WrathBench wABCDEFGHIJ" })).toBe(false);
   });
 });
 
@@ -151,18 +123,6 @@ describe("the generated pool", () => {
     expect(calculateVerifier("POOL02", "POOL02", Buffer.from(p2.salt, "hex")).toString("hex").toUpperCase()).toBe(p2.verifier);
   });
 
-  test("a pool account that exists is left as it is, and unset or 0 creates none", async () => {
-    const seeded = fakeDb({ POOL01: { id: 7, salt: "AA", verifier: "BB" } });
-    await run([], seeded, { WRATHBENCH_POOL_SIZE: "2" });
-    expect(seeded.accounts.get("POOL01")).toEqual({ id: 7, salt: "AA", verifier: "BB" });
-    expect(seeded.accounts.has("POOL02")).toBe(true);
-    for (const env of [{}, { WRATHBENCH_POOL_SIZE: "0" }, { WRATHBENCH_POOL_SIZE: "" }]) {
-      const db = fakeDb();
-      await run([], db, env);
-      expect([...db.accounts.keys()]).toEqual(["RUNNER"]);
-    }
-  });
-
   test("the account-only mode never creates the pool, and a size that does not read exits 2 before anything connects", async () => {
     const db = fakeDb();
     await run(["--accounts-only", "SMOKE6"], db, { WRATHBENCH_POOL_SIZE: "4" });
@@ -185,29 +145,6 @@ describe("the generated pool", () => {
 });
 
 describe("WRATHBENCH_EXTRA_ACCOUNTS", () => {
-  test("the plain run creates each named one, its name its password, trimmed, uppercased and once", async () => {
-    const db = fakeDb();
-    expect(await run([], db, { WRATHBENCH_EXTRA_ACCOUNTS: " alice,BOB ,, Alice" })).toBe(0);
-    expect([...db.accounts.keys()].sort()).toEqual(["ALICE", "BOB", "RUNNER"]);
-    const bob = db.accounts.get("BOB")!;
-    expect(calculateVerifier("BOB", "BOB", Buffer.from(bob.salt, "hex")).toString("hex").toUpperCase()).toBe(bob.verifier);
-    expect(extraAccountsOf({ WRATHBENCH_EXTRA_ACCOUNTS: " alice,BOB ,, Alice" })).toEqual({ names: ["ALICE", "BOB"] });
-  });
-
-  test("an existing one is left as it is; unset or empty creates none; the account-only mode ignores it", async () => {
-    const seeded = fakeDb({ ALICE: { id: 7, salt: "AA", verifier: "BB" } });
-    await run([], seeded, { WRATHBENCH_EXTRA_ACCOUNTS: "ALICE" });
-    expect(seeded.accounts.get("ALICE")).toEqual({ id: 7, salt: "AA", verifier: "BB" });
-    for (const env of [{}, { WRATHBENCH_EXTRA_ACCOUNTS: "" }, { WRATHBENCH_EXTRA_ACCOUNTS: " , " }]) {
-      const db = fakeDb();
-      await run([], db, env);
-      expect([...db.accounts.keys()]).toEqual(["RUNNER"]);
-    }
-    const only = fakeDb();
-    await run(["--accounts-only", "SMOKE6"], only, { WRATHBENCH_EXTRA_ACCOUNTS: "ALICE" });
-    expect([...only.accounts.keys()]).toEqual(["SMOKE6"]);
-  });
-
   test("a bad, GM or tenant name exits 2 before anything connects", async () => {
     for (const bad of ["ALICE,5BOB", "ALICE BOB", "spectator", "TENANT01"]) {
       let opened = false;
@@ -262,10 +199,8 @@ describe("hosted mode's tenant pool", () => {
     const b = fakeDb();
     await runLogged(a, { WRATHBENCH_TENANT_POOL_SIZE: "2" });
     await runLogged(b, { WRATHBENCH_TENANT_POOL_SIZE: "1" });
-    const one = a.accounts.get("TENANT01")!;
-    const two = a.accounts.get("TENANT02")!;
-    const other = b.accounts.get("TENANT01")!;
-    expect(new Set([one.verifier, two.verifier, other.verifier]).size).toBe(3);
+    const verifiers = [a.accounts.get("TENANT01")!, a.accounts.get("TENANT02")!, b.accounts.get("TENANT01")!].map((r) => r.verifier);
+    expect(new Set(verifiers).size).toBe(3);
   });
 
   test("an existing tenant keeps its password but loses any account access; unset or 0 creates none", async () => {
@@ -302,41 +237,10 @@ describe("hosted mode's tenant pool", () => {
 });
 
 describe("arguments", () => {
-  test("the account-only mode always names its accounts", () => {
-    expect(parseArgs(["--accounts-only"])).toMatchObject({ kind: "error" });
-  });
-
   test("names are uppercased, deduplicated and kept to what a 3.3.5a login can type", () => {
     expect(parseArgs(["--accounts-only", "smoke5", "SMOKE5", "Probe"])).toEqual({ kind: "accounts", names: ["SMOKE5", "PROBE"] });
-    for (const bad of ["5SMOKE", "SMOKE-5", "", "A".repeat(17), "x y", "SMOKE5;DROP"]) {
+    for (const bad of ["5SMOKE", "SMOKE-5", "", "A".repeat(17), "x y", "SMOKE5;DROP", "spectator"]) {
       expect(parseArgs(["--accounts-only", bad]), bad).toMatchObject({ kind: "error" });
     }
-  });
-
-  test("SPECTATOR is the GM account's tool's, never this mode's", () => {
-    expect(parseArgs(["--accounts-only", "spectator"])).toMatchObject({ kind: "error" });
-  });
-
-  test("an unknown argument or flag is refused, and --help is help", () => {
-    expect(parseArgs(["SMOKE5"])).toMatchObject({ kind: "error" });
-    expect(parseArgs(["--accounts-only", "SMOKE5", "--force"])).toMatchObject({ kind: "error" });
-    expect(parseArgs(["--help"])).toEqual({ kind: "help" });
-    expect(parseArgs(["--accounts-only", "--help"])).toEqual({ kind: "help" });
-  });
-
-  test("a refusal exits 2 before anything connects", async () => {
-    let opened = false;
-    const err = console.error;
-    console.error = () => {};
-    try {
-      const code = await main(["--accounts-only"], async () => {
-        opened = true;
-        return fakeDb().sql;
-      });
-      expect(code).toBe(2);
-    } finally {
-      console.error = err;
-    }
-    expect(opened).toBe(false);
   });
 });

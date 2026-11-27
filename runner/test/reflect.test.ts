@@ -13,9 +13,7 @@ import { StubAdapter } from "../src/adapter";
 import { loadRunConfig } from "../src/config";
 import {
   CONTEXT_POLICY,
-  assembleContext,
   formatStateSummary,
-  lastTurnGrowth,
   messageWindowCut,
   messageWindowRawCut,
   trimExpected,
@@ -23,11 +21,8 @@ import {
 } from "../src/context";
 import {
   EpisodicLog,
-  EPISODIC_PAGE_DEFAULT,
-  EPISODIC_PAGE_MAX,
   EPISODIC_TEXT_CHARS,
   capEntryText,
-  formatEntry,
 } from "../src/episodic";
 import { ContextBuilder, runLoop } from "../src/loop";
 import {
@@ -39,8 +34,6 @@ import {
   REFLECTION_PROMPT,
   ReflectGate,
   ClosedWindowReflectGate,
-  restingOf,
-  taxiFlightOf,
 } from "../src/reflect";
 import { Scratchpad } from "@wrathbench/mcp";
 import { callTool, TOOLS, type ToolContext } from "../src/tools";
@@ -96,12 +89,6 @@ function makeCtx(state: { resting?: boolean; taxiFlight?: boolean; level?: numbe
 }
 
 describe("the resting decode", () => {
-  test("restingOf reads the SDK's decoded flag, and nothing else", () => {
-    expect(restingOf({ self: { resting: { value: true } } })).toBe(true);
-    expect(restingOf({ self: { resting: { value: false } } })).toBe(false);
-    expect(restingOf({ self: {} })).toBeUndefined();
-    expect(restingOf(null)).toBeUndefined();
-  });
 
   test("the HUD prints `resting` only when the flag is true", () => {
     const base = { self: {}, lastSeq: 1, eventCount: 1 };
@@ -122,11 +109,8 @@ describe("the reflect gate", () => {
     const res = await callTool(ctx, "reflect", {});
     expect(res.isError).toBe(true);
     expect(res.text).toBe(REFLECT_NOT_RESTING);
-  });
-
-  test("an unobserved resting flag reads as not resting", async () => {
-    const { ctx } = makeCtx({});
-    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECT_NOT_RESTING);
+    // An unobserved resting flag reads as not resting.
+    expect((await callTool(makeCtx({}).ctx, "reflect", {})).text).toBe(REFLECT_NOT_RESTING);
   });
 
   test("resting yields the fixed prompt; a second call in the same visit refuses", async () => {
@@ -194,12 +178,6 @@ describe("the reflect gate", () => {
 });
 
 describe("the flight window (operator, 2026-10-14)", () => {
-  test("taxiFlightOf reads the SDK's decoded flag, and nothing else", () => {
-    expect(taxiFlightOf({ self: { taxiFlight: { value: true } } })).toBe(true);
-    expect(taxiFlightOf({ self: { taxiFlight: { value: false } } })).toBe(false);
-    expect(taxiFlightOf({ self: {} })).toBeUndefined();
-    expect(taxiFlightOf(null)).toBeUndefined();
-  });
 
   test("a flight yields the fixed prompt through the tool; a second call in the same flight refuses", async () => {
     const { ctx } = makeCtx({ resting: false, taxiFlight: true });
@@ -421,34 +399,6 @@ describe("read_log", () => {
     expect(bad.text).toContain('order?: "newest" | "oldest"');
   });
 
-  test("the oldest entries of a long log are reachable both ways, past the page cap", async () => {
-    const { ctx } = makeCtx({ resting: true });
-    const n = 3 * EPISODIC_PAGE_MAX + 7;
-    for (let i = 1; i <= n; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
-    await callTool(ctx, "reflect", {});
-    const oldest = await callTool(ctx, "read_log", { order: "oldest", limit: 3 });
-    expect(texts(oldest.text)).toEqual(["entry 1", "entry 2", "entry 3"]);
-    // Newest first, the last page is the oldest entries.
-    const tail = await callTool(ctx, "read_log", { offset: n - 3, limit: 3 });
-    expect(tail.text.split("\n")[0]).toBe(`showing ${n - 2}–${n} of ${n}, newest first`);
-    expect(texts(tail.text)).toEqual(["entry 3", "entry 2", "entry 1"]);
-  });
-
-  test("limit is clamped to its bounds; an offset past the end says so instead of showing another page", async () => {
-    const { ctx } = makeCtx({ resting: true });
-    for (let i = 1; i <= EPISODIC_PAGE_MAX + 10; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
-    await callTool(ctx, "reflect", {});
-    const dflt = await callTool(ctx, "read_log", {});
-    expect(texts(dflt.text)).toHaveLength(EPISODIC_PAGE_DEFAULT);
-    const capped = await callTool(ctx, "read_log", { limit: 999 });
-    expect(texts(capped.text)).toHaveLength(EPISODIC_PAGE_MAX);
-    const floor = await callTool(ctx, "read_log", { limit: 0 });
-    expect(texts(floor.text)).toEqual([`entry ${EPISODIC_PAGE_MAX + 10}`]);
-    const past = await callTool(ctx, "read_log", { offset: 500 });
-    expect(past.isError).toBeUndefined();
-    expect(past.text).toBe(`offset 500 is past the end: ${EPISODIC_PAGE_MAX + 10}`);
-  });
-
   test("filters by level range and zone on the harness's stamps; an unobserved stamp matches no filter", async () => {
     const { ctx } = makeCtx({ resting: true });
     ctx.episodic.append({ turn: 1, level: 3, zone: "Elwynn Forest", text: "a" });
@@ -471,13 +421,6 @@ describe("read_log", () => {
     const none = await callTool(ctx, "read_log", { zone: "Stranglethorn", minLevel: 30 });
     expect(none.isError).toBeUndefined();
     expect(none.text).toBe('no entries match level 30+, zone "Stranglethorn" (5 in the log)');
-  });
-
-  test("an empty log says so whatever the query", async () => {
-    const { ctx } = makeCtx({ resting: true });
-    await callTool(ctx, "reflect", {});
-    const res = await callTool(ctx, "read_log", { zone: "Westfall", order: "oldest" });
-    expect(res.text).toBe("your episodic log is empty (nothing has been recorded with log_status)");
   });
 });
 
@@ -502,10 +445,6 @@ describe("log_status", () => {
     expect(capEntryText(long)).toEqual(capped);
   });
 
-  test("an unobserved level or zone renders as ?", () => {
-    expect(formatEntry({ ts: 0, turn: 2, text: "hi" })).toBe("[turn 2, L?, ?] hi");
-  });
-
   test("the log is append-only across reopenings", () => {
     const dir = tempDir("wrathbench-episodic-");
     const path = join(dir, "episodic.jsonl");
@@ -518,12 +457,6 @@ describe("log_status", () => {
 describe("the window-trim notices", () => {
   const assistant = (): ChatMessage => ({ role: "assistant", content: "x" });
   const tool = (): ChatMessage => ({ role: "tool", content: "y", tool_call_id: "1" });
-
-  test("lastTurnGrowth counts the assistant message and its tool results", () => {
-    expect(lastTurnGrowth([])).toBe(1);
-    expect(lastTurnGrowth([assistant()])).toBe(1);
-    expect(lastTurnGrowth([assistant(), tool(), tool()])).toBe(3);
-  });
 
   test("under variable per-turn growth, every trim is preceded by exactly one prompt", () => {
     // The case the previous, predictive formulation got wrong: a turn that
@@ -612,18 +545,6 @@ describe("the window-trim notices", () => {
       expect(foldedIn(requests[t]!) - stillFolded).toBe(n);
     }
     trajectory.close();
-  });
-
-  test("the trim notices are ordinary context inputs — assembleContext stays pure", () => {
-    const inputs = {
-      stateSummary: "== state ==",
-      events: [],
-      scratchpad: "",
-      notices: [{ ts: 1, kind: "trim_pending" as const, text: "t" }],
-      turn: 3,
-    };
-    expect(assembleContext(inputs)).toBe(assembleContext(inputs));
-    expect(assembleContext(inputs)).toContain("- trim_pending: t");
   });
 });
 

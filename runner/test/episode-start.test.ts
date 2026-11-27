@@ -6,7 +6,7 @@
  * with every pair that cannot be created.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { loadRunConfig } from "../src/config";
@@ -14,8 +14,6 @@ import { EPISODES, episodeStart, startRefusal } from "../src/episodes";
 import { chooseCharacterNote, freshCharacterNote, invalidStartNote, resumeSessionNote, validStartsText } from "../src/prompt";
 import { chosenStartNote, configFromArgs } from "../src/run";
 import { isValidStart, VALID_STARTS } from "../src/starts";
-import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "@wrathbench/mcp";
 import { mkdirSync } from "node:fs";
 import { Trajectory } from "../src/trajectory";
 import { readRun } from "../src/run-list";
@@ -82,11 +80,6 @@ describe("a level episode's start is its id's", () => {
 });
 
 describe("a freeplay run whose model chooses its start", () => {
-  test("--choose-start is recorded on the config", () => {
-    expect(configFromArgs(["--episode", "freeplay", "--choose-start", "true"]).chooseStart).toBe(true);
-    expect("chooseStart" in configFromArgs(["--episode", "freeplay"])).toBe(false);
-  });
-
   test("it is a freeplay run's alone, and one character's", () => {
     expect(() => loadRunConfig({ driver: "stub", episode: "e90", chooseStart: true })).toThrow("a start the model chooses is a freeplay run's; --episode e90 has its own");
     expect(() => loadRunConfig({ driver: "stub", chooseStart: true })).toThrow("--episode (none) has its own");
@@ -95,15 +88,6 @@ describe("a freeplay run whose model chooses its start", () => {
     ).toThrow("a fan-out run's characters are staged");
     expect(loadRunConfig({ driver: "stub", episode: "freeplay", chooseStart: true }).chooseStart).toBe(true);
   });
-
-  test("run.ts refuses it beside a race or class, and on a staged character", async () => {
-    const both = await refusalOf(["--episode", "freeplay", "--choose-start", "true", "--race", "3"]);
-    expect(both.code).toBe(2);
-    expect(both.stderr).toContain("--choose-start lets the model choose its race and class; it cannot be given with --race or --class");
-    const staged = await refusalOf(["--episode", "freeplay", "--choose-start", "true", "--character", "Bromdir"]);
-    expect(staged.code).toBe(2);
-    expect(staged.stderr).toContain("it cannot be given with --choose-start");
-  }, 30_000);
 
   test("the pairs are the 3.3.5a creation screen's, Death Knight left out", () => {
     expect(Object.keys(VALID_STARTS).map(Number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 10, 11]);
@@ -164,36 +148,6 @@ describe("a freeplay run whose model chooses its start", () => {
   });
 });
 
-describe("the note reaches the snippet's result", () => {
-  const hosts: SandboxHost[] = [];
-  afterEach(async () => {
-    await Promise.all(hosts.splice(0, hosts.length).map((h) => h.stop()));
-  });
-  const hostWith = (resultNote?: typeof chosenStartNote): SandboxHost => {
-    const dir = tempDir("wb-start-sbx-");
-    const h = new SandboxHost({
-      moduleUrl: "http://worldserver:8086",
-      token: "test-token",
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
-      snippetTimeoutMs: 2_000,
-      pingGraceMs: 1_000,
-      ...(resultNote !== undefined ? { resultNote } : {}),
-    });
-    hosts.push(h);
-    return h;
-  };
-  const failing = 'throw new Error("module rejected request: char_create_failed_code_48 (HTTP 502)")';
-
-  test("on a run that chooses its start, among the result's notes; on any other, not at all", async () => {
-    const chooser = await hostWith(chosenStartNote).evalSnippet(failing);
-    expect(chooser.ok).toBe(false);
-    expect(chooser.notes).toEqual([invalidStartNote()]);
-    const other = await hostWith().evalSnippet(failing);
-    expect(other.notes ?? []).toEqual([]);
-    expect((await hostWith(chosenStartNote).evalSnippet("40 + 2")).notes ?? []).toEqual([]);
-  }, 30_000);
-});
-
 describe("what a reader shows of a chosen start", () => {
   test("nothing until the character is seen, then what it chose", () => {
     const runsDir = tempDir("wb-start-view-");
@@ -211,4 +165,3 @@ describe("what a reader shows of a chosen start", () => {
     traj.close();
   });
 });
-

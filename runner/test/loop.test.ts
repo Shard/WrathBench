@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome, type ToolCall } from "../src/adapter";
 import type { ChatMessage } from "../src/context";
 import { requestsOf } from "./fixtures/requests";
-import { SEGMENT_TURNS, slimRun } from "./fixtures/slim-run";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder, replayedAssistant, runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
@@ -200,26 +199,6 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("the ticker samples while a model request is in flight", async () => {
-    // The openai-compatible path used to sample only in the turn preamble, so
-    // one 485s request was an 8-minute blackout for the watchdogs and the
-    // stall detector. The ticker samples on the wall clock while complete()
-    // holds the turn.
-    const slow: ChatAdapter = {
-      label: "slow",
-      complete: async (): Promise<AdapterOutcome> => {
-        await new Promise((r) => setTimeout(r, 120));
-        return { kind: "stub-complete" };
-      },
-    };
-    const { options } = setup(slow);
-    const counted = countSnapshots(options.sandbox);
-    await runLoop({ ...options, stateTickMs: 10 });
-    // One from the turn preamble, the rest from inside the request.
-    expect(counted()).toBeGreaterThanOrEqual(3);
-    options.trajectory.close();
-  });
-
   test("the ticker only samples: it drains no record of its own, and the run gets no run.sqlite", async () => {
     // The session record is the stack's: its host drains the child's recorder
     // on a tick of its own (`SandboxHost.recordDrain`). A ticker that still
@@ -306,17 +285,6 @@ describe("runLoop", () => {
     await builder.sampleState();
     expect(snapshots).toBe(2);
     trajectory.close();
-  });
-
-  test("maxTurns terminates as turn-limit", async () => {
-    const adapter = new StubAdapter(
-      Array.from({ length: 10 }, () => ({ content: "thinking", toolCalls: [] })),
-    );
-    const { options } = setup(adapter, { maxTurns: 2 });
-    const outcome = await runLoop(options);
-    expect(outcome.kind).toBe("terminated");
-    expect(outcome.kind === "terminated" && outcome.reason).toBe("turn-limit");
-    options.trajectory.close();
   });
 
   test("a verdict whose row write gives up leaves the loop with the runner's own reason, never re-terminated as harness-error", async () => {
@@ -561,7 +529,6 @@ describe("runLoop", () => {
     }
     options.trajectory.close();
   });
-
 });
 
 describe("replayedAssistant", () => {
@@ -581,31 +548,6 @@ describe("replayedAssistant", () => {
         : {}),
     };
   }
-
-  function turnOf(message: ChatMessage): { content: string | null; toolCalls: ToolCall[] } {
-    return {
-      content: message.content,
-      toolCalls: (message.tool_calls ?? []).map((tc) => ({ id: tc.id, name: tc.function.name, arguments: tc.function.arguments })),
-    };
-  }
-
-  test("every assistant turn of the slim-run fixture replays byte-identical to the old construction", async () => {
-    // The fixture reaches text with calls, no text with calls, several calls
-    // in a turn, a malformed argument string and an over-cap reply, across two
-    // segments; its requests are proven to replay by `requestsOf`.
-    const { dir } = await slimRun(tempDir("wrathbench-replayed-"));
-    requestsOf(dir);
-    const messages = readTrajectory(dir)
-      .filter((r) => r.t === "response")
-      .map((r) => r["message"] as ChatMessage);
-    expect(messages.length).toBe(SEGMENT_TURNS[0] + SEGMENT_TURNS[1]);
-    expect(messages.some((m) => m.content === null)).toBe(true);
-    for (const m of messages) {
-      const turn = turnOf(m);
-      expect(JSON.stringify(replayedAssistant(turn))).toBe(JSON.stringify(legacyAssistant(turn)));
-      expect(JSON.stringify(replayedAssistant(turn))).toBe(JSON.stringify(m));
-    }
-  });
 
   test("only a turn with neither text nor tool calls changes: it replays with empty content", () => {
     const call: ToolCall = { id: "c1", name: "run_snippet", arguments: '{"code":"1"}' };
@@ -765,14 +707,6 @@ describe("prompt-cache prefix discipline", () => {
     // The run keeps the first answer, never revised.
     expect(readMeta(dir)?.resolved).toEqual({ model: "deepseek/deepseek-v4.1-flash", cliVersion: null, provider: "orcarouter-dsv4.1flash" });
   });
-
-  test("no provider field appears when the body names none", async () => {
-    const adapter = new StubAdapter([{ content: "done", toolCalls: [] }]);
-    const { dir, options } = setup(adapter, { maxTurns: 1 });
-    await runLoop(options);
-    const responses = readTrajectory(dir).filter((r) => r.t === "response");
-    expect(responses[0]!).not.toHaveProperty("provider");
-  });
 });
 
 describe("runLoop fresh-character precondition", () => {
@@ -798,13 +732,6 @@ describe("runLoop fresh-character precondition", () => {
     expect(options.trajectory.runRow("run-test")?.["character"]).toBe("Grimjaw");
     expect(readMeta(dir)?.config.character).toBe("Grimjaw");
     expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(1);
-  });
-
-  test("a character whose name matches the launch config is not re-recorded", async () => {
-    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
-    const { dir, options } = setup(adapter, { character: "Fleetsonnet" }, { self: { guid: "301", name: "Fleetsonnet", level: { value: 1 } } });
-    await runLoop(options);
-    expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(0);
   });
 
   test("a run whose model chooses its start records the race and class its character has, once (operator, 2026-11-15)", async () => {

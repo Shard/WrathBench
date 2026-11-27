@@ -42,7 +42,7 @@
  * the way the Codex CLI does (`gpt-6-astra`), and the catalogue carries it
  * under the vendor prefix (`openai/gpt-6-astra`). `catalogueIds` asks for the
  * prefixed id and *not* the bare one — the catalogue has no bare row, so
- * wanting it would report a miss every sync — and `codexPrice` in
+ * wanting it would report a miss every sync — and `vendorPrice` in
  * `viewer/pricing.ts` reads it back the same way.
  *
  * Units: the catalogue quotes dollars per token as strings; the file holds

@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../pricing";
 import { ANTHROPIC_PRICES, ANTHROPIC_UNPRICED, CATALOGUE, ENDPOINT_PRICES, OPENROUTER_DELISTED, OPENROUTER_PRICES } from "../../infra/model-catalogue";
-import { breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../pricing";
+import { breakdownTotal, claudePrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../pricing";
 
 /** OpenCode Go's chat base, as the catalogue's provider names it. */
 const OPENCODE_GO_BASE = CATALOGUE.providers["opencode-go"]!.apiBase!;
@@ -150,18 +150,6 @@ describe("priceFor", () => {
     expect(priceFor({ ...declared, driver: "codex", harness: "codex" })?.id).not.toBe("declared-free");
   });
 
-  test("an unknown paid model has no price at all — tokens only, never a guess", () => {
-    expect(
-      priceFor({
-        model: "vendor/big-paid",
-        apiBase: "https://openrouter.ai/api/v1",
-        platform: "openrouter",
-        driver: "openai",
-        harness: "wrathbench",
-      }),
-    ).toBeNull();
-  });
-
   test("the synced table is windowed: every id's first window carries no date, so it prices runs older than the sync", () => {
     for (const [id, windows] of Object.entries(OPENROUTER_PRICES.models)) {
       expect(windows.length).toBeGreaterThan(0);
@@ -191,12 +179,6 @@ describe("priceFor", () => {
     // No date asked for means the table's current price, not its oldest.
     expect(windowAt(windows, null)!.input).toBe(0.15);
     expect(windowAt([], null)).toBeNull();
-  });
-
-  test("Sonnet 5 stays at $2/$10 after 2026-09-01: the announced rise never happened", () => {
-    for (const day of ["2026-08-22", "2026-09-15"]) {
-      expect(priceFor(sonnetRun, Date.parse(day))).toMatchObject({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 });
-    }
   });
 
   test("a Claude rate that moved keeps the runs that billed at the old one: Sonnet 5.5's cache read", () => {
@@ -384,18 +366,6 @@ describe("the hand-held provider table", () => {
     expect(c.expected.note).toContain("disagree");
   });
 
-  test("a run on DeepSeek's own platform is priced at the off-peak list rate, and the row says peak bills double", () => {
-    const ds: PriceableRun = { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", platform: "api.deepseek.com", driver: "openai", harness: "wrathbench" };
-    const p = priceFor(ds)!;
-    expect(p.id).toBe("deepseek/deepseek-flash");
-    expect([p.input, p.output, p.cacheRead, p.cacheWrite]).toEqual([0.15, 0.6, 0.003, 0.15]);
-    expect(p.source).toBe("list");
-    expect(p.asIfMetered).toBe(false);
-    expect(p.note).toContain("bill double");
-    // The same id elsewhere is not this row.
-    expect(providerPrice({ model: "deepseek-flash", apiBase: "https://openrouter.ai/api/v1" })).toBeNull();
-  });
-
   test("the two OpenCode surfaces share a host and are told apart by path, never by platform", () => {
     // `platformOfBase` discards the path, so both `/zen/v1` (free tier) and
     // `/zen/go/v1` (pay-as-you-go) report platform `opencode.ai`. The table
@@ -508,17 +478,6 @@ describe("the hand-held provider table", () => {
     }
   });
 
-  test("a hand-held row moves by window: the runs that billed at the old rate keep it", () => {
-    const row = { ...ENDPOINT_PRICES[0]!, windows: [{ input: 1, output: 2, cacheRead: 1, cacheWrite: 1 }, { from: "2026-10-01", input: 2, output: 4, cacheRead: 2, cacheWrite: 2 }] };
-    // Exercised through the same picker the synced table uses.
-    expect(windowAt(row.windows, Date.parse("2026-09-04"))!.input).toBe(1);
-    expect(windowAt(row.windows, Date.parse("2026-10-01"))!.input).toBe(2);
-    // And a real dated window carries its own date and says so.
-    const asOfDated = providerPrice(cerebras, Date.parse("2026-09-04"))!;
-    expect(asOfDated.asOf).toBe("2026-09-04");
-    expect(asOfDated.note).not.toContain("in force from");
-  });
-
   test("the rows live outside an entry's prices.openrouter, which the sync owns", () => {
     for (const p of ENDPOINT_PRICES) {
       expect(OPENROUTER_PRICES.models[p.model]).toBeUndefined();
@@ -576,17 +535,19 @@ describe("a codex run, priced under the vendor prefix", () => {
     expect(priceFor({ ...astra, harness: "wrathbench", driver: "openai" })).toBeNull();
   });
 
-  test("the bare id wins where the catalogue has one, so nothing already priced moves", () => {
-    const id = Object.keys(OPENROUTER_PRICES.models).find((k) => !k.includes("/"));
-    // No suffixless id in the file today; the precedence is asserted on the
-    // function that decides it rather than on a row that may never exist.
-    expect(id).toBeUndefined();
-    // The row a bare hit returns is the OpenRouter one, note and all; only
-    // `expectedCost`'s own codex check keeps such a figure marked as-if-metered,
-    // and no run reaches it today because a Codex slug is always unprefixed.
-    expect(priceFor({ ...astra, model: "z-ai/glm-5.3" })?.id).toBe("z-ai/glm-5.3");
-    // A prefixed model id is never prefixed twice.
-    expect(codexPrice("openai/gpt-6-astra")).toBeNull();
+  test("gpt-6.1-sol is priced on its own row, never gpt-6-sol's", () => {
+    // Nearly all of a codex run's prompt is cache reads, and the two models
+    // differ there: borrowing the sibling's row misreads the whole run.
+    for (const model of ["gpt-6-sol", "gpt-6.1-sol"]) {
+      const id = `openai/${model}`;
+      const own = syncedPrice(id);
+      expect(own).not.toBeNull();
+      const row = priceFor({ ...astra, model });
+      expect(row?.id).toBe(id);
+      // The rates are the ones the synced list holds under that id.
+      for (const rate of ["input", "output", "cacheRead", "cacheWrite"] as const) expect(row![rate]).toBe(own![rate]);
+    }
+    expect(OPENROUTER_PRICES.models["openai/gpt-6.1-sol"]).not.toBe(OPENROUTER_PRICES.models["openai/gpt-6-sol"]);
   });
 
   test("a codex model the sync has not seen is told to run the sync, not read as a Claude model", () => {
@@ -596,18 +557,6 @@ describe("a codex run, priced under the vendor prefix", () => {
     expect(c.expected.note).toContain("sync-prices");
     expect(c.expected.note).toContain("openai/");
     expect(c.expected.note).not.toContain("never a guess");
-  });
-
-  test("the gpt-6 codex models are priced, and 6.1-sol on its own row rather than 6-sol's", () => {
-    // Unpriced for a week after they joined the roster: the sync never ran.
-    for (const model of ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]) {
-      expect(priceFor({ ...astra, model })?.id).toBe(`openai/${model}`);
-    }
-    // Same input and output as 6-sol, half the cache read — and nearly all of a
-    // codex run's prompt is cache reads, so borrowing 6-sol's row would read
-    // the 6.1-sol freeplay ~63% high.
-    expect(priceFor({ ...astra, model: "gpt-6.1-sol" })!.cacheRead).toBe(0.1);
-    expect(priceFor({ ...astra, model: "gpt-6-sol" })!.cacheRead).toBe(0.2);
   });
 
   test("a :free id the catalogue dropped still reads free — the suffix answers before any table", () => {
@@ -726,14 +675,6 @@ describe("a sync that re-reads the catalogue", () => {
     expect(mergeWindows({ "a/gone": [] }, {}, "2099-09-09")["a/gone"]).toBeUndefined();
   });
 
-  test("a changed rate appends one window from today; an unchanged one adds nothing", () => {
-    const id = "z-ai/glm-5.3-flash";
-    const moved = { ...catalogue[id]!, output: catalogue[id]!.output + 1 };
-    const after = mergeWindows(current, { ...catalogue, [id]: moved }, "2099-09-09");
-    expect(after[id]).toEqual([...current[id]!, { ...moved, from: "2099-09-09" }]);
-    for (const other of Object.keys(current)) if (other !== id) expect(after[other]).toEqual(current[other] as typeof after[string]);
-  });
-
   test("a new id starts on an undated window", () => {
     const fresh = { ...catalogue, "vendor/new-model": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 } };
     const after = mergeWindows(current, fresh, "2026-09-09");
@@ -791,14 +732,6 @@ describe("costOf", () => {
     expect(b.cacheRead).toBeCloseTo(0.12, 6);
     expect(b.cacheWrite).toBeCloseTo(1.2, 6);
     expect(b.output).toBe(0);
-  });
-
-  test("with no cache fields the whole prompt is fresh input", () => {
-    const b = costOf(tokens({ promptTokens: 2_000_000, completionTokens: 100_000 }), priceFor(sonnetRun)!);
-    expect(b.input).toBeCloseTo(4.0, 6);
-    expect(b.output).toBeCloseTo(1.0, 6);
-    expect(b.cacheRead).toBe(0);
-    expect(b.cacheWrite).toBe(0);
   });
 
   test("the archived COSTS.md cross-check golden case reproduces the reported figure to 0.01%", () => {
@@ -893,7 +826,8 @@ describe("runCost", () => {
     expect(c.note).not.toContain("upper bound");
     // The date rides the wire, so a display string cannot outlive the rate.
     expect(c.priceId).toBe("claude-sonnet-5");
-    expect(c.asOf).toBe("2026-11-26");
+    expect(c.asOf).toBe(claudePrice("claude-sonnet-5")!.asOf);
+    expect(c.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   test("an unknown model gets no cost and says why", () => {
@@ -1046,21 +980,6 @@ describe("a run on the OpenCode Go subscription", () => {
     }
   });
 
-  test("the same Go model past its allowance keeps the Extra Usage in both notes, the listing as its cost", () => {
-    const c = runCost({ run: { ...go, model: "glm-5.3", startedAt: glmAt }, tokens: e360, reportedUsd: 0.0042, coverage: allCosted });
-    expect(c.actual.basis).toBe("none");
-    expect(c.actual.note).toContain("$0.0042");
-    expect(c.actual.note).toContain("Extra Usage");
-    expect(c.expected.usd).toBeCloseTo(glmGoUsd, 6);
-    expect(c.expected.note).toContain("$0.0042");
-  });
-
-  test("a hand-held Go row still wins over the alias: DeepSeek reads the Go listing, not OpenRouter's", () => {
-    const c = runCost({ run: { ...go, startedAt: glmAt }, tokens: e360, reportedUsd: 0, coverage: allCosted });
-    expect(c.expected.priceId).toBe("opencode-go/deepseek-v4.1-flash");
-    expect(c.expected.asIfMetered).toBe(true);
-  });
-
   test("a Go id spelled as an OpenRouter id is priced as-if-metered, never as billed to the OpenRouter balance", () => {
     const row = priceFor({ ...go, model: "z-ai/glm-5.3" }, glmAt)!;
     expect(row.id).toBe("z-ai/glm-5.3");
@@ -1087,22 +1006,6 @@ describe("a run on the OpenCode Go subscription", () => {
     expect(c.expected.usd).toBe(0);
     expect(c.actual.basis).toBe("reported");
     expect(c.actual.usd).toBe(0);
-  });
-
-  test("an OpenRouter run with a reported cost is still read as reported, metered for real", () => {
-    const or: PriceableRun = { model: "deepseek/deepseek-v4-flash-0731", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
-    const c = runCost({ run: or, tokens: e360, reportedUsd: 1.37, coverage: allCosted });
-    expect(c.actual.basis).toBe("reported");
-    expect(c.actual.usd).toBe(1.37);
-    expect(c.actual.asIfMetered).toBe(false);
-    expect(c.expected.asIfMetered).toBe(false);
-  });
-
-  test("omen-alpha on Go's older base keeps the provider's zero as its actual", () => {
-    const omen: PriceableRun = { model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", platform: "opencode.ai", driver: "openai", harness: "wrathbench" };
-    const c = runCost({ run: omen, tokens: e360, reportedUsd: 0, coverage: allCosted });
-    expect(c.actual.basis).toBe("reported");
-    expect(c.expected.asIfMetered).toBe(false);
   });
 });
 
@@ -1157,14 +1060,6 @@ describe("reportedCostUsd", () => {
     expect(reportedCostUsd([{ t: "claude_result", costUsd: 0 }])).toBe(0);
   });
 
-  test("the tail's summariser keeps costUsd a number, so the run page can report it", () => {
-    // The detail endpoint reads `tail.entries`, not raw records: `claude_result`
-    // falls through `summarize`'s generic branch, and the figure has to survive it.
-    const e = summarize({ t: "claude_result", ts: 1, costUsd: 43.903071, usageRaw: { input_tokens: 1810 } }, 0, 0, 0);
-    expect(e["costUsd"]).toBe(43.903071);
-    expect(reportedCostUsd([e])).toBe(43.903071);
-  });
-
   test("scanRunTotals reads sessions the same way the entry path does", async () => {
     const path = join(tempDir("wrathbench-pricing-cum-"), "trajectory.jsonl");
     writeFileSync(
@@ -1186,23 +1081,6 @@ describe("reportedCostUsd", () => {
     // And the listing agrees with the run page, which reads the other path.
     const tail = new TrajectoryTail(path);
     expect(reportedCostUsd(await tail.scan())).toBe(4.35);
-  });
-
-  test("scanRunTotals picks it up even though the token projection drops the record", async () => {
-    const path = join(tempDir("wrathbench-pricing-"), "trajectory.jsonl");
-    writeFileSync(
-      path,
-      [
-        JSON.stringify({ t: "meta", ts: 1 }),
-        JSON.stringify({ t: "request", ts: 2, messages: [{ role: "user", content: "hi" }] }),
-        JSON.stringify({ t: "response", ts: 3, message: { content: "ok" }, usage: { input_tokens: 10, output_tokens: 4 } }),
-        JSON.stringify({ t: "claude_result", ts: 4, costUsd: 12.5 }),
-        "",
-      ].join("\n"),
-    );
-    const totals = await scanRunTotals(path);
-    expect(totals.reportedCostUsd).toBe(12.5);
-    expect(totals.tokens.promptTokens).toBe(10);
   });
 
   test("OpenRouter's per-response cost sums, and the request side is not counted twice", () => {

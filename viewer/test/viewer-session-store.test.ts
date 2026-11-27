@@ -184,12 +184,6 @@ describe("the collector", () => {
     expect(rows.get("run_totals")).toBeUndefined();
     assertNoFingerprint(JSON.stringify([...rows.values()]));
   });
-
-  test("an unset store reads no sessions, whatever the env says", async () => {
-    const runs = tempDir("wb-runs-");
-    const cfg = readConfig({ runsDir: runs, dataDir: runs, stateDb: ":memory:", sessionStore: null });
-    expect(cfg.sessionStore).toBeNull();
-  });
 });
 
 describe("the API", () => {

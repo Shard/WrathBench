@@ -54,10 +54,6 @@ function readCache(): SiteCache | null {
 /** Read once: the name the wordmark shows until `/api/info` has answered. */
 const cached = readCache();
 
-export function siteOf(info: Pick<ApiInfoResponse, "site"> | undefined): ApiSiteInfo | undefined {
-  return info?.site;
-}
-
 /** The wordmark's and the tab's name: the site's, the cached one while `/api/info` is in flight, else WrathBench. */
 export function siteName(info: Pick<ApiInfoResponse, "site"> | undefined, fallback: SiteCache | null = cached): string {
   if (info === undefined) return typeof fallback?.name === "string" ? fallback.name : DEFAULT_NAME;

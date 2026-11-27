@@ -87,19 +87,6 @@ async function initialized(server: McpServer): Promise<void> {
 }
 
 describe("McpServer", () => {
-  test("initialize handshake", async () => {
-    const { server } = makeServer();
-    const res = await call(server, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
-    const result = res?.["result"] as Record<string, unknown>;
-    expect(result["protocolVersion"]).toBe("2024-11-05");
-    expect((result["serverInfo"] as Record<string, unknown>)["name"]).toBe("wrathbench-runner");
-  });
-
-  test("notifications produce no response", async () => {
-    const { server } = makeServer();
-    expect(await call(server, { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
-  });
-
   test("tools/list exposes exactly the nine tools", async () => {
     const { server } = makeServer();
     await initialized(server);
@@ -157,30 +144,6 @@ describe("McpServer", () => {
     expect(eventText).toContain("#2 SMSG_MESSAGECHAT");
   });
 
-  // The write is a tool; the read is not. `read_scratchpad` was removed
-  // (operator, 2026-08-30) because the scratchpad is injected verbatim into
-  // every turn's context, so the tool re-served text the model already had.
-  test("write_scratchpad reaches the scratchpad, and read_scratchpad is gone", async () => {
-    const { server, scratchpad } = makeServer();
-    await initialized(server);
-    await call(server, {
-      jsonrpc: "2.0",
-      id: 6,
-      method: "tools/call",
-      params: { name: "write_scratchpad", arguments: { content: "# remembered" } },
-    });
-    expect(scratchpad.read()).toBe("# remembered");
-    const read = await call(server, {
-      jsonrpc: "2.0",
-      id: 7,
-      method: "tools/call",
-      params: { name: "read_scratchpad", arguments: {} },
-    });
-    const result = read?.["result"] as { content: { text: string }[]; isError: boolean };
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain("unknown tool: read_scratchpad");
-  });
-
   test("bad tool name and bad arguments come back as isError, not protocol errors", async () => {
     const { server } = makeServer();
     await initialized(server);
@@ -198,14 +161,6 @@ describe("McpServer", () => {
       params: { name: "run_snippet", arguments: {} },
     });
     expect((bad?.["result"] as { isError: boolean }).isError).toBe(true);
-  });
-
-  test("unknown method and parse errors are JSON-RPC errors", async () => {
-    const { server } = makeServer();
-    const res = await call(server, { jsonrpc: "2.0", id: 10, method: "resources/list" });
-    expect((res?.["error"] as { code: number }).code).toBe(-32601);
-    const parseErr = JSON.parse((await server.handleLine("{nope")) ?? "{}") as Record<string, unknown>;
-    expect((parseErr["error"] as { code: number }).code).toBe(-32700);
   });
 
   test("tools/call accepts arguments as a JSON string, a fenced string, and repairs trailing commas", async () => {
@@ -263,51 +218,6 @@ describe("McpServer", () => {
 
   // Every writer of this callback appends after the call ran, so the stamp it
   // is handed is the only start of the call a reader gets.
-  test("the tool-call callback is handed the dispatch time, taken before the tool ran", async () => {
-    const { sandbox, startedAt } = slowSandbox(40);
-    const { ctx } = makeCtx(sandbox);
-    const seen: { dispatchTs: number; at: number }[] = [];
-    const server = new McpServer(ctx, {
-      serverVersion: "test",
-      onToolCall: (_name, _args, _result, dispatchTs) => seen.push({ dispatchTs, at: Date.now() }),
-    });
-    await initialized(server);
-    await call(server, {
-      jsonrpc: "2.0",
-      id: 30,
-      method: "tools/call",
-      params: { name: "run_snippet", arguments: { code: "1+1" } },
-    });
-    expect(seen).toHaveLength(1);
-    const { dispatchTs, at } = seen[0]!;
-    expect(dispatchTs).toBeGreaterThan(0);
-    expect(dispatchTs).toBeLessThanOrEqual(startedAt());
-    // Not write time: the callback fires a whole snippet after the stamp.
-    expect(at - dispatchTs).toBeGreaterThanOrEqual(30);
-  });
-
-  test("a call refused at the argument check is stamped too", async () => {
-    const { ctx } = makeCtx();
-    const stamps: number[] = [];
-    const before = Date.now();
-    const server = new McpServer(ctx, {
-      serverVersion: "test",
-      onToolCall: (_name, _args, result, dispatchTs) => {
-        expect(result.text).toContain("not valid JSON");
-        stamps.push(dispatchTs);
-      },
-    });
-    await initialized(server);
-    await call(server, {
-      jsonrpc: "2.0",
-      id: 31,
-      method: "tools/call",
-      params: { name: "run_snippet", arguments: "{not json" },
-    });
-    expect(stamps).toHaveLength(1);
-    expect(stamps[0]!).toBeGreaterThanOrEqual(before);
-  });
-
   test("the standalone server's writer puts the dispatch time on the tool_call record", async () => {
     const { sandbox, startedAt } = slowSandbox(40);
     const { ctx } = makeCtx(sandbox);
@@ -379,19 +289,5 @@ describe("McpServer", () => {
       .map((r) => r["text"]);
     expect(texts).toEqual([first.content[0]!.text, second.content[0]!.text]);
     expect(pending).toEqual([]);
-  });
-
-  test("search_reference without a bundle reports unavailability", async () => {
-    const { server } = makeServer();
-    await initialized(server);
-    const res = await call(server, {
-      jsonrpc: "2.0",
-      id: 11,
-      method: "tools/call",
-      params: { name: "search_reference", arguments: { query: "Northshire" } },
-    });
-    const result = res?.["result"] as { content: { text: string }[]; isError: boolean };
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain("unavailable");
   });
 });

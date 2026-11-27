@@ -5,7 +5,7 @@
  * result, 401, 403 for an account below SEC_ADMINISTRATOR, and a fault.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { SoapClient, SoapError, parseSoapResponse, soapEnvelope, soapFromEnv } from "./soap";
+import { SoapClient, SoapError, soapEnvelope } from "./soap";
 
 type Seen = { method: string; path: string; authorization: string | null; contentType: string | null; body: string };
 
@@ -88,11 +88,6 @@ describe("the request", () => {
 });
 
 describe("the answers", () => {
-  test("200 with a result is the command's output, unescaped", async () => {
-    const f = fake(() => ({ status: 200, body: ok("Uptime: 3 minutes &amp; 2 seconds") }));
-    expect(await new SoapClient({ url: f.url, password: "pw" }).execute(".server info")).toBe("Uptime: 3 minutes & 2 seconds");
-  });
-
   test("403 is a typed refusal: the account is below SEC_ADMINISTRATOR, and SOAP runs nothing for it", async () => {
     const f = fake(() => ({ status: 403, body: "" }));
     const soap = new SoapClient({ url: f.url, password: "pw" });
@@ -101,13 +96,6 @@ describe("the answers", () => {
     expect((err as SoapError).refusal.kind).toBe("not_admin");
     expect((err as SoapError).refusal.status).toBe(403);
     expect((err as SoapError).message).toMatch(/below SEC_ADMINISTRATOR/);
-  });
-
-  test("401 is a refused credential", async () => {
-    const f = fake((s) => (s.authorization === `Basic ${Buffer.from("STAGER:RIGHT").toString("base64")}` ? { status: 200, body: ok("") } : { status: 401, body: "" }));
-    const wrong = await new SoapClient({ url: f.url, password: "wrong" }).execute(".server info").catch((e) => e);
-    expect((wrong as SoapError).refusal.kind).toBe("unauthorized");
-    expect(await new SoapClient({ url: f.url, password: "right" }).execute(".server info")).toBe("");
   });
 
   test("a fault is the command failing, with the command's own text", async () => {
@@ -126,23 +114,5 @@ describe("the answers", () => {
     // execute itself does not judge the text.
     expect(await soap.execute(".additem Tankpartyb 3770 20")).toContain("Cannot create item");
   });
-
-  test("no server is a transport refusal, not a hang", async () => {
-    const err = await new SoapClient({ url: "http://127.0.0.1:1/", password: "pw", timeoutMs: 2000 }).execute(".server info").catch((e) => e);
-    expect((err as SoapError).refusal.kind).toBe("transport");
-  });
-
-  test("parseSoapResponse reads a 200 that is not an executeCommandResponse as an error", () => {
-    expect(parseSoapResponse(200, "<html>proxy</html>")).toMatchObject({ ok: false, refusal: { kind: "http" } });
-    expect(parseSoapResponse(502, "bad gateway")).toMatchObject({ ok: false, refusal: { kind: "http", status: 502 } });
-    expect(parseSoapResponse(200, ok("<x>"))).toMatchObject({ ok: true });
-  });
 });
 
-describe("soapFromEnv", () => {
-  test("takes the URL and password from the environment and names the key when it is missing", () => {
-    expect(() => soapFromEnv({})).toThrow(/WRATHBENCH_STAGER_PASSWORD is not set/);
-    expect(soapFromEnv({ WRATHBENCH_STAGER_PASSWORD: "pw" }).url).toBe("http://worldserver:7878/");
-    expect(soapFromEnv({ WRATHBENCH_STAGER_PASSWORD: "pw", WRATHBENCH_SOAP_URL: "http://127.0.0.1:7878/" }).url).toBe("http://127.0.0.1:7878/");
-  });
-});

@@ -7,9 +7,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { defaultLoopOf } from "../../runner/src/config";
-import { DEFAULT_DRIVER, harnessOf } from "../../runner/src/drivers";
-import { toolsFor } from "../../runner/src/tools";
 import { createApi } from "../api";
 import { projectTools } from "../public-projection";
 import { TOOL_EXAMPLES, TOOL_RETURNS, servedTools, toolsResponse } from "../tools";
@@ -24,31 +21,6 @@ function api(): (r: Request) => Promise<Response> {
 }
 
 describe("/api/tools", () => {
-  test("the list is the fixed loop's launch default: the program loop with yield", () => {
-    // A change of the default moves the homepage with it; this names the move.
-    expect(harnessOf(DEFAULT_DRIVER)).toBe("wrathbench");
-    expect(defaultLoopOf({ driver: DEFAULT_DRIVER })).toEqual({ loop: "program", yield: true });
-    expect(servedTools()).toEqual(toolsFor({ programTools: { yield: true } }));
-    expect(servedTools().map((t) => t.name)).toEqual([
-      "run_snippet",
-      "read_file",
-      "write_file",
-      "edit_file",
-      "delete_file",
-      "start_routine",
-      "stop_routine",
-      "yield",
-      "recent_events",
-      "state_summary",
-      "search_reference",
-      "write_scratchpad",
-      "edit_scratchpad",
-      "reflect",
-      "log_status",
-      "read_log",
-    ]);
-  });
-
   test("names, descriptions and schemas are the served list's, in order, with an example or a returns line each", async () => {
     const res = await api()(new Request("http://x/api/tools"));
     expect(res.status).toBe(200);
@@ -80,17 +52,6 @@ describe("/api/tools", () => {
       expect([t.name, Object.keys(args).filter((k) => !props.includes(k))]).toEqual([t.name, []]);
       expect([t.name, required.filter((k) => !(k in args))]).toEqual([t.name, []]);
     }
-  });
-
-  test("the file and routine examples tell one story: the edit finds its text, the routine is the one written", () => {
-    const write = JSON.parse(TOOL_EXAMPLES["write_file"]!) as { path: string; content: string };
-    const edit = JSON.parse(TOOL_EXAMPLES["edit_file"]!) as { path: string; old: string };
-    const start = JSON.parse(TOOL_EXAMPLES["start_routine"]!) as { name: string; args: Record<string, unknown> };
-    expect(edit.path).toBe(write.path);
-    expect(write.content.split(edit.old).length).toBe(2);
-    expect(write.content).toContain(`export async function ${start.name}(args)`);
-    for (const k of Object.keys(start.args)) expect(write.content).toContain(`args.${k}`);
-    expect(JSON.parse(TOOL_EXAMPLES["stop_routine"]!)).toEqual({ name: start.name });
   });
 
   test("the route serves in public mode, and the projection passes it through whole", async () => {

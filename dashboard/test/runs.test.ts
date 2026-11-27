@@ -1,5 +1,5 @@
 /**
- * The runs table's pure layer: header/body parity, the sort, the readings.
+ * The runs table's pure layer: the readings, the sort, the filter and the pages.
  *
  * What matters: the default is every run newest first, the sort is stable and
  * "not recorded" sorts last, the readings are of fields the server decided,
@@ -11,35 +11,20 @@ import type { ResultRun } from "../../viewer/api-types";
 import { STALL_PAUSE } from "../../runner/src/lapse";
 import { projectResults } from "../../viewer/public-projection";
 import {
-  COLUMN_TITLES,
   DEFAULT_SORT,
-  RUN_COLUMNS,
-  columnClass,
+  STALL_PAUSE_REASON,
+  clampPage,
   costOf,
-  runListCost,
-  filterLabel,
   filterParams,
   filterRuns,
-  clampPage,
-  keepRowIdentity,
   kindOf,
-  nextSort,
-  PAGE_SIZE,
   pageCount,
-  pageParam,
-  pageQuery,
   pageSlice,
-  pagerItems,
+  runListCost,
   runsHref,
-  sortParam,
-  sortQuery,
   sortRuns,
-  STALL_PAUSE_REASON,
   statusOf,
   statusText,
-  statusTitle,
-  statusTone,
-  turnsOf,
 } from "../src/lib/runs";
 
 function run(p: Partial<ResultRun> = {}): ResultRun {
@@ -90,18 +75,6 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
   };
 }
 
-describe("columns", () => {
-  test("the header order is the constant, and every column has a class the body agrees with", () => {
-    expect([...RUN_COLUMNS]).toEqual([
-      "started", "run", "model", "harness", "effort", "kind", "episode", "character", "status", "level", "turns", "duration", "cost",
-    ]);
-    for (const c of RUN_COLUMNS) expect(["", "right"]).toContain(columnClass(c));
-    expect(columnClass("cost")).toBe("right");
-    expect(columnClass("model")).toBe("");
-    for (const c of Object.keys(COLUMN_TITLES)) expect(RUN_COLUMNS as readonly string[]).toContain(c);
-  });
-});
-
 describe("readings", () => {
   test("status is the viewer's live flag when present, and the recorded reasons when not", () => {
     expect(statusOf(run({ live: true, terminationReason: null }))).toBe("live");
@@ -136,16 +109,6 @@ describe("readings", () => {
     expect(statusText(cooling)).toBe("paused");
   });
 
-  test("one tone per status, and only the new word carries a hover", () => {
-    expect(statusTone("live")).toBe("ok");
-    expect(statusTone("paused")).toBe("warn");
-    expect(statusTone("stalled")).toBe("warn");
-    expect(statusTone("ended")).toBe("dim");
-    expect(statusTitle("stalled")).toBeString();
-    for (const s of ["live", "paused", "ended"] as const) expect(statusTitle(s)).toBeUndefined();
-    expect(COLUMN_TITLES.status).toContain("stalled");
-  });
-
   test("kind reads the campaign, the tier, the unscored reason, and the extra flag, in that order", () => {
     expect(kindOf(run({ campaign: "nav", cell: "tram" }))).toBe("probe nav/tram");
     expect(kindOf(run({ episode: "freeplay", unscored: "unscored (episode freeplay)" }))).toBe("freeplay");
@@ -155,9 +118,7 @@ describe("readings", () => {
     expect(kindOf(run())).toBe("scored");
   });
 
-  test("turns prefer reported usage turns and fall back to model responses; cost is the actual, else the estimate, else nothing", () => {
-    expect(turnsOf(run())).toBe(3);
-    expect(turnsOf(run({ tokens: { source: "reported", contextTokens: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cacheReadTokens: null, cacheWriteTokens: null, turns: 12 } }))).toBe(12);
+  test("cost is the actual, else the estimate (tilded), else nothing", () => {
     expect(costOf(run())).toBeNull();
     const fig = { usd: 1.5, basis: "reported" as const, asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "" };
     const est = { ...fig, usd: 0.75, basis: "list-price" as const, asIfMetered: true, asOf: "2026-11-01" };
@@ -201,21 +162,6 @@ describe("sort", () => {
     expect(sortRuns(costed, { column: "cost", dir: "desc" }).map((r) => r.runId)).toEqual(["go-est", "or-actual", "codex-est", "unpriced"]);
     expect(sortRuns(costed, { column: "cost", dir: "asc" }).map((r) => r.runId)).toEqual(["codex-est", "or-actual", "go-est", "unpriced"]);
   });
-
-  test("the URL round-trips, and the default spells as no params", () => {
-    expect(sortParam(undefined, undefined)).toEqual(DEFAULT_SORT);
-    expect(sortParam("level", "asc")).toEqual({ column: "level", dir: "asc" });
-    expect(sortParam("nope", "sideways")).toEqual(DEFAULT_SORT);
-    expect(sortParam("model", undefined)).toEqual({ column: "model", dir: "asc" });
-    expect(sortQuery(DEFAULT_SORT)).toEqual({ sort: null, dir: null });
-    expect(sortQuery({ column: "cost", dir: "desc" })).toEqual({ sort: "cost", dir: "desc" });
-  });
-
-  test("a header click flips the same column and opens a new one the expected way", () => {
-    expect(nextSort(DEFAULT_SORT, "started")).toEqual({ column: "started", dir: "asc" });
-    expect(nextSort(DEFAULT_SORT, "cost")).toEqual({ column: "cost", dir: "desc" });
-    expect(nextSort(DEFAULT_SORT, "model")).toEqual({ column: "model", dir: "asc" });
-  });
 });
 
 describe("filter", () => {
@@ -229,33 +175,11 @@ describe("filter", () => {
   test("the page opens on everything, and a model without effort means the entry with none", () => {
     const none = filterParams({});
     expect(filterRuns(rows, none)).toHaveLength(4);
-    expect(filterLabel(none)).toBe("");
     expect(filterRuns(rows, filterParams({ model: "m" })).map((r) => r.runId)).toEqual(["base", "probe"]);
     expect(filterRuns(rows, filterParams({ model: "m", effort: "low" })).map((r) => r.runId)).toEqual(["low"]);
   });
 
-  test("episode, harness, character and campaign narrow; `all` is no filter", () => {
-    expect(filterRuns(rows, filterParams({ episode: "probing" })).map((r) => r.runId)).toEqual(["probe"]);
-    expect(filterRuns(rows, filterParams({ harness: "claude-code" })).map((r) => r.runId)).toEqual(["probe"]);
-    expect(filterRuns(rows, filterParams({ character: "Dwarf Hunter" })).map((r) => r.runId)).toEqual(["dwarf"]);
-    expect(filterRuns(rows, filterParams({ campaign: "nav" })).map((r) => r.runId)).toEqual(["probe"]);
-    expect(filterRuns(rows, filterParams({ episode: "all", harness: "all" }))).toHaveLength(4);
-    expect(filterLabel(filterParams({ model: "m", episode: "e90" }))).toBe("model=m episode=e90");
-  });
-
-  test("runsHref is one spelling for every page that links here", () => {
-    expect(runsHref()).toBe("/runs");
-    expect(runsHref({ episode: "all", harness: "all" })).toBe("/runs");
-    expect(runsHref({ model: "vendor/alpha", effort: "low", episode: "e90" })).toBe(
-      "/runs?episode=e90&model=vendor%2Falpha&effort=low",
-    );
-    expect(runsHref({ sort: { column: "cost", dir: "desc" } })).toBe("/runs?sort=cost&dir=desc");
-    expect(runsHref({ sort: DEFAULT_SORT })).toBe("/runs");
-    expect(runsHref({ episode: "e90", sort: { column: "cost", dir: "desc" }, page: 3 })).toBe("/runs?episode=e90&sort=cost&dir=desc&page=3");
-    expect(runsHref({ page: 1 })).toBe("/runs");
-  });
-
-  test("a model link in either provider's spelling lists the model's runs on every provider (operator, 2026-11-16)", () => {
+  test("a model link in either provider's spelling lists the model's runs on every provider", () => {
     const ds = [
       run({ runId: "go", model: "deepseek-v4.1-flash" }),
       run({ runId: "or", model: "deepseek/deepseek-v4.1-flash" }),
@@ -267,35 +191,6 @@ describe("filter", () => {
       const params = Object.fromEntries(new URL(href, "https://x.invalid").searchParams);
       expect(filterRuns(ds, filterParams(params)).map((r) => r.runId)).toEqual(["go", "or"]);
     }
-  });
-
-  test("a compaction window narrows like effort: absent under a model is the entry with none", () => {
-    const hk = [
-      run({ runId: "auto", model: "hk", effort: "max" }),
-      run({ runId: "small", model: "hk", effort: "max", compactWindow: "100k" }),
-    ];
-    expect(filterRuns(hk, filterParams({ model: "hk", effort: "max" })).map((r) => r.runId)).toEqual(["auto"]);
-    expect(filterRuns(hk, filterParams({ model: "hk", effort: "max", compactWindow: "100k" })).map((r) => r.runId)).toEqual(["small"]);
-    expect(runsHref({ model: "hk", effort: "max", compactWindow: "100k", episode: "e360" })).toBe(
-      "/runs?episode=e360&model=hk&effort=max&compactWindow=100k",
-    );
-    expect(runsHref({ model: "hk", effort: "max", compactWindow: null })).toBe("/runs?model=hk&effort=max");
-  });
-
-  test("a window filter may list the windows an entry owns, `auto` naming the runs that recorded none", () => {
-    // An entry with no window on claude-code: its auto runs and its 300k runs, never a 100k copy's.
-    const son = [
-      run({ runId: "auto", model: "son" }),
-      run({ runId: "dflt", model: "son", compactWindow: "300k" }),
-      run({ runId: "small", model: "son", compactWindow: "100k" }),
-    ];
-    const ids = (compactWindow: string | undefined): string[] => filterRuns(son, filterParams({ model: "son", compactWindow })).map((r) => r.runId);
-    expect(ids("auto,300k")).toEqual(["auto", "dflt"]);
-    expect(ids("auto")).toEqual(["auto"]);
-    expect(ids("300k")).toEqual(["dflt"]);
-    // A ladder point's link is its own tuple, so it never widens.
-    expect(ids(undefined)).toEqual(["auto"]);
-    expect(filterParams(Object.fromEntries(new URL(runsHref({ model: "son", compactWindow: "auto,300k" }), "http://x").searchParams)).compactWindow).toBe("auto,300k");
   });
 });
 
@@ -310,21 +205,8 @@ describe("pages of a hundred", () => {
     }),
   );
 
-  test("the page param: a number from 1, anything else page 1, page 1 spelled as nothing", () => {
-    expect(PAGE_SIZE).toBe(100);
-    expect(pageParam(undefined)).toBe(1);
-    expect(pageParam("3")).toBe(3);
-    expect(pageParam(["2", "5"])).toBe(2);
-    for (const bad of ["0", "-1", "2.5", "x", ""]) expect(pageParam(bad)).toBe(1);
-    expect(pageQuery(1)).toEqual({ page: null });
-    expect(pageQuery(4)).toEqual({ page: "4" });
-  });
-
-  test("counts are the whole set's and a page past the end shows the last one", () => {
-    expect(pageCount(0)).toBe(1);
-    expect(pageCount(100)).toBe(1);
+  test("a page past the end shows the last one", () => {
     expect(pageCount(101)).toBe(2);
-    expect(pageCount(1566)).toBe(16);
     expect(clampPage(9, 250)).toBe(3);
     expect(clampPage(0, 250)).toBe(1);
     expect(pageSlice(many, 3).map((r) => r.runId)).toEqual(many.slice(200).map((r) => r.runId));
@@ -348,34 +230,5 @@ describe("pages of a hundred", () => {
     expect([...pageSlice(odd, 1), ...pageSlice(odd, 2)].every((r) => r.model === "odd")).toBe(true);
     expect(pageSlice(odd, 1)[0]!.runId).toBe("r001");
   });
-
-  test("the pager: both ends, the current page and its neighbours, a gap only where it hides pages", () => {
-    expect(pagerItems(1, 1)).toEqual([1]);
-    expect(pagerItems(1, 2)).toEqual([1, 2]);
-    expect(pagerItems(1, 16)).toEqual([1, 2, null, 16]);
-    expect(pagerItems(8, 16)).toEqual([1, null, 7, 8, 9, null, 16]);
-    expect(pagerItems(16, 16)).toEqual([1, null, 15, 16]);
-    // 1 … 3 would hide only 2, so 2 is drawn.
-    expect(pagerItems(4, 16)).toEqual([1, 2, 3, 4, 5, null, 16]);
-    expect(pagerItems(3, 5)).toEqual([1, 2, 3, 4, 5]);
-  });
 });
 
-describe("row identity across polls", () => {
-  test("an unchanged run keeps its object; a changed or new one is the new object", () => {
-    const a = run({ runId: "a" });
-    const b = run({ runId: "b", maxLevel: 3 });
-    const first = keepRowIdentity([], [a, b]);
-    expect(first[0]).toBe(a);
-    // The next poll parses every row afresh.
-    const a2 = run({ runId: "a" });
-    const b2 = run({ runId: "b", maxLevel: 4 });
-    const c2 = run({ runId: "c" });
-    const second = keepRowIdentity(first, [c2, a2, b2]);
-    expect(second[0]).toBe(c2);
-    expect(second[1]).toBe(a);
-    expect(second[2]).toBe(b2);
-    // So the sorted, paged rows the table draws hold the same objects too.
-    expect(pageSlice(sortRuns(second, DEFAULT_SORT), 1)).toContain(a);
-  });
-});

@@ -9,7 +9,6 @@ import { describe, expect, test } from "bun:test";
 import { campaignDefinitionSchema, campaignHash, cellDimensions } from "../src/campaign-def";
 import { watchdogConfigSchema } from "../src/config";
 import {
-  creatureEntryOfGuid,
   endConditionsOf,
   endFromMilestones,
   isEndReason,
@@ -20,7 +19,7 @@ import {
 import { isCounted } from "../src/models";
 import type { RunFact } from "../src/run-fact";
 import { Watchdogs } from "../src/watchdogs";
-import { checkedIn, definition, partyDefinition } from "./fixtures/campaigns";
+import { definition, partyDefinition } from "./fixtures/campaigns";
 
 const cfg = watchdogConfigSchema.parse({ idleMs: 600_000, noXpMs: null, episodeMs: 3_600_000, maxSandboxRestarts: 3 });
 /** A creature guid carrying entry 639. */
@@ -49,18 +48,6 @@ describe("the definition's end", () => {
     expect(campaignDefinitionSchema.safeParse({ ...definition(), stopAtLevel: null, end: [] }).success).toBe(false);
     expect(campaignDefinitionSchema.safeParse({ ...definition(), stopAtLevel: null, end: [{ kill: { entry: 0 } }] }).success).toBe(false);
     expect(levelTargetOf(endConditionsOf({ stopAtLevel: null, end: [{ level: 12 }, { kill: { entry: 639 } }] }))).toBe(12);
-  });
-
-  test("deadmines@4 is @3 with VanCleef's kill as its end", () => {
-    const v3 = checkedIn("deadmines@3");
-    const v4 = checkedIn("deadmines@4");
-    expect(v4.version).toBe(4);
-    expect(v4.end).toEqual([{ kill: { entry: 639 } }]);
-    expect(v3.end).toBeUndefined();
-    const { version: _a, note: _b, end: _c, ...rest4 } = v4;
-    const { version: _d, note: _e, ...rest3 } = v3;
-    expect(rest4).toEqual(rest3);
-    expect(v4.note).toStartWith(v3.note!);
   });
 });
 
@@ -100,12 +87,6 @@ describe("the watchdog", () => {
 });
 
 describe("reading a recorded trajectory", () => {
-  test("a creature guid names its entry; other guids name none", () => {
-    expect(creatureEntryOfGuid(VANCLEEF)).toBe(639);
-    expect(creatureEntryOfGuid("980")).toBeUndefined();
-    expect(creatureEntryOfGuid("not a guid")).toBeUndefined();
-  });
-
   test("an ended run's milestones say whether it reached its end, folding the group for a record from before `member`", () => {
     const ends = [{ kill: { entry: 639 } }];
     const ms: EndMilestone[] = [

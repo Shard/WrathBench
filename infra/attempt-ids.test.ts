@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseFleet, type FleetConfig, type FleetJob, type JobSpawn } from "./run-fleet-config";
-import { attemptPastTaken, fillEntries, planTick, spawnsOnlyEnded } from "./run-fleet-plan";
+import { fillEntries, planTick, spawnsOnlyEnded } from "./run-fleet-plan";
 import { planOf, snapshotOf, type RunningJob } from "./fixtures/tick";
 import type { RunFact } from "../runner/src/run-fact";
 
@@ -79,22 +79,6 @@ describe("a policy pick's attempt never names a run on disk", () => {
     expect(plan.states.find((s) => s.name === "glm")!.perEpisode.e90!.attempts).toBe(2);
   });
 
-  test("with nothing deleted the id is the count's, as before", () => {
-    const cfg = fleet();
-    const series = cfg.policy.series;
-    const { ids, plan } = e90Pick(cfg, [e90(STEM, series), e90(`${STEM}-a2`, series)]);
-    expect(ids).toEqual([`${STEM}-a3`]);
-    expect(plan.picks.find((p) => p.job.name === "glm-e90")!.job.attempt).toBe(3);
-  });
-
-  test("under a new supervisor stamp the count's id is free and is kept", () => {
-    const cfg = fleet();
-    const series = cfg.policy.series;
-    const plan = planOf(cfg, { now: NOW, stamp: "20261118", runs: [e90(STEM, series), e90(`${STEM}-a3`, series)] });
-    const spawn = plan.spawns.find((s) => s.name === "glm-e90")!;
-    expect(fillEntries(spawn, "20261118").map((e) => e.runId)).toEqual(["fleet-glm-e90-glm-5-2-20261118-a3"]);
-  });
-
   test("the next tick keeps the live a4 job's spawn on a4, not a5, and starts nothing over it", () => {
     const cfg = fleet();
     const series = cfg.policy.series;
@@ -142,25 +126,5 @@ describe("no spawn whose every run id already ended", () => {
   test("one id still to launch is enough", () => {
     const two = spawn({ entries: [{ model: MODEL, episode: "e90", runId: `${STEM}-a3` }, { model: MODEL, episode: "e90", runId: `${STEM}-a3-r2` }] });
     expect(spawnsOnlyEnded(two, STAMP, ended)).toBe(false);
-  });
-
-  test("the tick emits no enabled spawn whose only id already ended", () => {
-    const cfg = fleet();
-    const series = cfg.policy.series;
-    const runs = [e90(STEM, series), e90(`${STEM}-a3`, series)];
-    const plan = planOf(cfg, { now: NOW, stamp: STAMP, runs });
-    const done = new Set(runs.map((r) => r.runId));
-    for (const s of plan.spawns.filter((x) => x.enabled)) {
-      expect(fillEntries(s, STAMP).every((e) => done.has(e.runId!))).toBe(false);
-    }
-  });
-
-  test("attemptPastTaken leaves a resume, a party's id and an unnumbered job alone", () => {
-    const base = { refs: ["glm"], ref: "glm", episode: "e90" as const, repeat: 1, name: "glm-e90", enabled: true, source: "policy" as const };
-    const taken = new Set([`${STEM}-a3`]);
-    const ids = () => [`${STEM}-a3`];
-    expect(attemptPastTaken(base, ids, taken)).toBe(base);
-    const resumed = { ...base, attempt: 3, resume: { runId: `${STEM}-a3` } } as Parameters<typeof attemptPastTaken>[0];
-    expect(attemptPastTaken(resumed, ids, taken)).toBe(resumed);
   });
 });

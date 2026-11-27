@@ -1,110 +1,44 @@
 /**
- * The inventory lists the run page and map popout print:
- * a dash for a run that never recorded items, "none" for a recorded empty
- * side, and counts only past one.
+ * The shared formatters, where a wrong answer changes what a reader takes a
+ * figure to mean: a reading that was never recorded is a dash and a recorded
+ * zero is a value; a cost says whose figure it is, and an estimate is marked as
+ * one; a free endpoint reads as free.
  */
 
 import { describe, expect, test } from "bun:test";
-import { backfilledTitle, costMark, effortLabel, expectedLine, fmtEstimate, listCost, titleOf, windowNote, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins, paneText } from "../src/lib/format";
+import { costMark, fmtCost, fmtItems, fmtUsd, listCost, modelDisplay, moneyCoins, num } from "../src/lib/format";
 
-describe("fmtItems", () => {
-  const items = [
-    { name: "Worn Mace", count: 1, equipped: true },
-    { name: "Hearthstone", count: 1, equipped: false },
-    { name: "Tough Jerky", count: 5, equipped: false },
-  ];
-
-  test("splits worn from carried and shows counts past one", () => {
-    expect(fmtItems(items, false)).toBe("Hearthstone, Tough Jerky ×5");
-    expect(fmtItems(items, true)).toBe("Worn Mace");
-  });
-
-  test("null is unrecorded, an empty side is none", () => {
+describe("not recorded is a dash; a recorded zero is a reading", () => {
+  test("across every figure that can be either", () => {
+    expect(fmtUsd(null)).toBe("—");
+    expect(fmtUsd(Number.NaN)).toBe("—");
+    expect(fmtUsd(0)).toBe("$0.00");
+    expect(num(undefined)).toBe("—");
+    expect(num(0)).toBe("0");
     expect(fmtItems(null, false)).toBe("—");
     expect(fmtItems([], true)).toBe("none");
-  });
-});
-
-/**
- * The feed's latency figure: sub-second in ms, sub-minute with one decimal,
- * m:ss past that — and empty (not a dash) when there is nothing to say, since
- * it renders inline in an already crowded header.
- */
-describe("fmtLatency", () => {
-  test("scales through its three forms", () => {
-    expect(fmtLatency(840)).toBe("840ms");
-    expect(fmtLatency(12_340)).toBe("12.3s");
-    expect(fmtLatency(124_000)).toBe("2m04s");
-  });
-
-  test("the seconds form never rounds up to a fake 60.0s", () => {
-    expect(fmtLatency(59_960)).toBe("1m00s");
-    expect(fmtLatency(59_900)).toBe("59.9s");
-  });
-
-  test("unknown and negative are empty, zero is a reading", () => {
-    expect(fmtLatency(null)).toBe("");
-    expect(fmtLatency(-5)).toBe("");
-    expect(fmtLatency(0)).toBe("0ms");
-  });
-});
-
-describe("fmtUsd", () => {
-  test("missing is a dash, a recorded zero is a priced $0.00", () => {
-    expect(fmtUsd(null)).toBe("—");
-    expect(fmtUsd(undefined)).toBe("—");
-    expect(fmtUsd(0)).toBe("$0.00");
-  });
-
-  test("three decimals under a dollar, two at or above", () => {
-    expect(fmtUsd(0.0041)).toBe("$0.004");
-    expect(fmtUsd(0.999)).toBe("$0.999");
-    expect(fmtUsd(1)).toBe("$1.00");
-    expect(fmtUsd(12.345)).toBe("$12.35");
-  });
-
-  test("non-finite is unrecorded", () => {
-    expect(fmtUsd(Number.NaN)).toBe("—");
-    expect(fmtUsd(Number.POSITIVE_INFINITY)).toBe("—");
+    // An empty purse is an observation, so zero copper is the one zero kept.
+    expect(moneyCoins(null)).toBeNull();
+    expect(moneyCoins(0)).toEqual([{ kind: "copper", value: 0 }]);
   });
 });
 
 describe("fmtCost", () => {
-  test("no cost at all falls back to the caller's blank", () => {
+  test("no cost, basis none or a null usd is the caller's blank, even with other fields set", () => {
     expect(fmtCost(null)).toBe("— (unpriced model)");
-    expect(fmtCost(undefined)).toBe("— (unpriced model)");
     expect(fmtCost(null, "n/a")).toBe("n/a");
-  });
-
-  test("basis none or a null usd is also blank, even with other fields set", () => {
     expect(fmtCost({ usd: 1, basis: "none", asIfMetered: false, asOf: null })).toBe("— (unpriced model)");
     expect(fmtCost({ usd: null, basis: "reported", asIfMetered: false, asOf: null })).toBe("— (unpriced model)");
   });
 
-  test("reported basis names itself, as-if-metered or not", () => {
+  test("the basis names itself; a backfilled claude-code actual wears a *", () => {
     expect(fmtCost({ usd: 2.5, basis: "reported", asIfMetered: false, asOf: null })).toBe("$2.50 reported");
     expect(fmtCost({ usd: 2.5, basis: "reported", asIfMetered: true, asOf: null })).toBe("$2.50 as-if-metered (reported)");
-  });
-
-  test("a backfilled claude-code actual wears a * — the explanation is its note, in the title", () => {
+    expect(fmtCost({ usd: 0.5, basis: "list", asIfMetered: false, asOf: "2026-08-24" })).toBe("$0.500 (list price, 2026-08)");
     const backfill = { reportedUsd: 839.38, usd: 748.7, turns: 2 };
     expect(fmtCost({ usd: 1588.08, basis: "reported", asIfMetered: true, asOf: null, backfill })).toBe("$1588.08* as-if-metered (reported)");
     // Marked even where nothing could be added: the figure still reads low.
     expect(costMark({ backfill: { ...backfill, usd: null } })).toBe("*");
-    expect(costMark({})).toBe("");
-    expect(costMark(null)).toBe("");
-    expect(backfilledTitle(0)).toBe("");
-    expect(backfilledTitle(undefined)).toBe("");
-    expect(backfilledTitle(2)).toContain("2 attempts");
-  });
-
-  test("list-price basis carries the server's date, or says undated", () => {
-    expect(fmtCost({ usd: 0.5, basis: "list", asIfMetered: false, asOf: "2026-08-24" })).toBe(
-      "$0.500 (list price, 2026-08)",
-    );
-    expect(fmtCost({ usd: 0.5, basis: "list", asIfMetered: true, asOf: null })).toBe(
-      "$0.500 as-if-metered (list price, undated)",
-    );
   });
 });
 
@@ -116,8 +50,6 @@ describe("listCost: one run's cost cell on a listing (operator, 2026-11-18)", ()
 
   test("an actual shows as it always has, whatever the estimate says", () => {
     expect(listCost(reported, listed, "blank")).toEqual({ usd: 1.25, figure: reported, estimate: false, text: "$1.25", title: "the provider's own charge" });
-    // A backfilled actual keeps its `*`.
-    expect(listCost({ ...reported, backfill: { reportedUsd: 1, usd: 0.25, turns: 2 } }, listed, "blank").text).toBe("$1.25*");
   });
 
   test("a claude-code run's own as-if-metered figure is nobody's charge: the tilde, and a hover naming the CLI's figure", () => {
@@ -129,13 +61,9 @@ describe("listCost: one run's cost cell on a listing (operator, 2026-11-18)", ()
       text: "~$0.031",
       title: "as-if-metered, the CLI's own total_cost_usd · no charge\nthe Claude Agent SDK's own total_cost_usd for this session",
     });
-    // Backfilled, it wears both marks.
-    expect(listCost({ ...cli, backfill: { reportedUsd: 0.02, usd: 0.011, turns: 1 } }, listed, "blank").text).toBe("~$0.031*");
-    // An older row that does not say whether it was metered reads as a charge, as it always did.
-    expect(listCost({ usd: 0.031, basis: "reported", note: "n" }, listed, "blank")).toMatchObject({ estimate: false, text: "$0.031" });
   });
 
-  test("no actual: the estimate, with the tilde and the run page's line in the hover, then why there is no actual", () => {
+  test("no actual: the estimate, marked, then why there is no actual; no price either is a dash", () => {
     expect(listCost(none, listed, "blank")).toEqual({
       usd: 0.42,
       figure: listed,
@@ -143,306 +71,20 @@ describe("listCost: one run's cost cell on a listing (operator, 2026-11-18)", ()
       text: "~$0.420",
       title: "expected, as-if-metered, 2026-11 prices · no actual\na subscription endpoint, so no actual",
     });
-    // A metered estimate (a provider that reports no charge) is not called as-if-metered.
-    expect(listCost(null, { ...listed, asIfMetered: false }, "blank").title).toBe("expected, 2026-11 prices · no actual");
     // A $0 list price (a free tier) is still a figure, and still marked.
     expect(listCost(none, { ...listed, usd: 0 }, "blank").text).toBe("~$0.00");
-  });
-
-  test("no price either: a dash, whose hover is the actual's note or the caller's blank", () => {
     expect(listCost(none, unpriced, "blank")).toEqual({ usd: null, figure: null, estimate: false, text: "—", title: "a subscription endpoint, so no actual" });
-    expect(listCost(undefined, undefined, "blank")).toMatchObject({ usd: null, text: "—", title: "blank" });
-  });
-
-  test("the run page's own line: the month, or undated, or nothing where the listing has no date", () => {
-    expect(expectedLine({ asIfMetered: false, asOf: null })).toBe("expected, undated prices · no actual");
-    expect(expectedLine({ asIfMetered: true })).toBe("expected, as-if-metered · no actual");
-    expect(fmtEstimate(null)).toBe("—");
-  });
-});
-
-describe("fmtTokens", () => {
-  test("missing is a dash, small counts print exactly", () => {
-    expect(fmtTokens(null)).toBe("—");
-    expect(fmtTokens(undefined)).toBe("—");
-    expect(fmtTokens(0)).toBe("0");
-    expect(fmtTokens(999)).toBe("999");
-  });
-
-  test("thousands and millions round at the thresholds", () => {
-    expect(fmtTokens(1000)).toBe("1.0k");
-    expect(fmtTokens(9999)).toBe("10.0k");
-    expect(fmtTokens(10_000)).toBe("10k");
-    expect(fmtTokens(999_999)).toBe("1000k");
-    expect(fmtTokens(1_000_000)).toBe("1.00M");
-    expect(fmtTokens(2_500_000)).toBe("2.50M");
-  });
-});
-
-describe("fmtWhen", () => {
-  const now = 1_000_000_000;
-
-  test("missing is a dash, and the future reads as just now", () => {
-    expect(fmtWhen(null, now)).toBe("—");
-    expect(fmtWhen(now + 5000, now)).toBe("just now");
-  });
-
-  test("steps from just now through days", () => {
-    expect(fmtWhen(now - 30_000, now)).toBe("just now");
-    expect(fmtWhen(now - 5 * 60_000, now)).toBe("5m ago");
-    expect(fmtWhen(now - 3 * 3_600_000, now)).toBe("3h ago");
-    expect(fmtWhen(now - 24 * 3_600_000, now)).toBe("yesterday");
-    expect(fmtWhen(now - 3 * 24 * 3_600_000, now)).toBe("3d ago");
-  });
-});
-
-describe("num", () => {
-  test("missing is a dash, a recorded zero prints as 0", () => {
-    expect(num(null)).toBe("—");
-    expect(num(undefined)).toBe("—");
-    expect(num(0)).toBe("0");
-    expect(num(42)).toBe("42");
-  });
-});
-
-describe("windowNote and titleOf: the window as a setting, in a tooltip (operator, 2026-11-16)", () => {
-  test("a set window is said; none, empty or the CLI's own auto is not", () => {
-    expect(windowNote("300k")).toBe("compaction window 300k");
-    expect(windowNote("auto")).toBeNull();
-    expect(windowNote("")).toBeNull();
-    expect(windowNote(null)).toBeNull();
-    expect(windowNote(undefined)).toBeNull();
-  });
-  test("titleOf joins the parts there are", () => {
-    expect(titleOf("claude-sonnet-5-5", windowNote("300k"))).toBe("claude-sonnet-5-5 · compaction window 300k");
-    expect(titleOf("claude-sonnet-5-5", windowNote(null))).toBe("claude-sonnet-5-5");
-    expect(titleOf(null, undefined)).toBeUndefined();
-  });
-});
-
-describe("effortLabel", () => {
-  test("effort, then a set compaction window; nothing for the defaults", () => {
-    expect(effortLabel("max", "100k")).toBe("max · 100k");
-    expect(effortLabel("max", null)).toBe("max");
-    expect(effortLabel("max")).toBe("max");
-    expect(effortLabel(null, "1M")).toBe("1M");
-    expect(effortLabel(null, undefined)).toBeNull();
-    expect(effortLabel(undefined, "")).toBeNull();
-  });
-});
-
-describe("shortHarness", () => {
-  test("missing or empty is a dash", () => {
-    expect(shortHarness(null)).toBe("—");
-    expect(shortHarness(undefined)).toBe("—");
-    expect(shortHarness("")).toBe("—");
-  });
-
-  test("strips the harness- prefix and leaves the rest alone", () => {
-    expect(shortHarness("harness-0.5-1-gabc")).toBe("0.5-1-gabc");
-    expect(shortHarness("0.5-1-gabc")).toBe("0.5-1-gabc");
-  });
-});
-
-describe("fmtDuration", () => {
-  test("null, non-finite and negative are all unrecorded", () => {
-    expect(fmtDuration(null)).toBe("—");
-    expect(fmtDuration(Number.NaN)).toBe("—");
-    expect(fmtDuration(-1)).toBe("—");
-  });
-
-  test("minutes and seconds under an hour, hours and minutes at and past it", () => {
-    expect(fmtDuration(0)).toBe("0m00s");
-    expect(fmtDuration(65_000)).toBe("1m05s");
-    expect(fmtDuration(3_600_000)).toBe("1h00m");
-    expect(fmtDuration(3_600_000 + 90_000)).toBe("1h01m");
-  });
-});
-
-describe("fmtTps", () => {
-  test("no rate is a dash, never a zero", () => {
-    expect(fmtTps(null)).toBe("—");
-    expect(fmtTps(undefined)).toBe("—");
-    expect(fmtTps(Number.NaN)).toBe("—");
-  });
-
-  test("a decimal where it reads, none where it does not", () => {
-    expect(fmtTps(0)).toBe("0.0");
-    expect(fmtTps(12.44)).toBe("12.4");
-    expect(fmtTps(99.94)).toBe("99.9");
-    expect(fmtTps(340.2)).toBe("340");
-  });
-});
-
-describe("fmtToolCallBudget", () => {
-  test("null reads as unlimited, a number keeps the label it always had", () => {
-    // The run page's episode-budget line already spells a null `maxTurns`
-    // "unlimited turns"; the ceiling now has the same two states and reads the
-    // same way, so the policy freeplay lane is legible on its own page.
-    expect(fmtToolCallBudget(null)).toBe("unlimited tool calls");
-    expect(fmtToolCallBudget(500)).toBe("500 tool calls");
-    expect(fmtToolCallBudget(3000)).toBe("3000 tool calls");
-  });
-});
-
-describe("resolvedLabel", () => {
-  test("says the served id only when it differs from what was asked for", () => {
-    // The case it exists for: an alias the CLI resolved at launch.
-    expect(resolvedLabel("sonnet", "claude-sonnet-5")).toBe("claude-sonnet-5");
-    // A slug served as itself is already printed; saying it twice is noise.
-    expect(resolvedLabel("z-ai/glm-5.2", "z-ai/glm-5.2")).toBeNull();
-    // Not recorded stays silent rather than echoing the config string.
-    expect(resolvedLabel("sonnet", null)).toBeNull();
-    expect(resolvedLabel("sonnet", undefined)).toBeNull();
-    expect(resolvedLabel(null, "claude-sonnet-5")).toBe("claude-sonnet-5");
-  });
-});
-
-describe("fmtElapsed", () => {
-  test("m:ss before an hour, h:mm:ss after it", () => {
-    expect(fmtElapsed(0)).toBe("0:00");
-    expect(fmtElapsed(9_000)).toBe("0:09");
-    expect(fmtElapsed(754_000)).toBe("12:34");
-    expect(fmtElapsed(3_599_000)).toBe("59:59");
-    expect(fmtElapsed(3_600_000)).toBe("1:00:00");
-    expect(fmtElapsed(3_922_000)).toBe("1:05:22");
-    expect(fmtElapsed(36_000_000)).toBe("10:00:00");
-  });
-
-  test("truncated, never rounded: an entry 59.9s in belongs to 0:59", () => {
-    expect(fmtElapsed(59_900)).toBe("0:59");
-    expect(fmtElapsed(999)).toBe("0:00");
-  });
-
-  test("a span before the run's own start clamps to zero rather than printing a minus", () => {
-    expect(fmtElapsed(-1)).toBe("0:00");
-    expect(fmtElapsed(-90_000)).toBe("0:00");
-  });
-
-  test("nothing to measure is the dash, as everywhere else in this file", () => {
-    expect(fmtElapsed(null)).toBe("—");
-    expect(fmtElapsed(Number.NaN)).toBe("—");
-    expect(fmtElapsed(Number.POSITIVE_INFINITY)).toBe("—");
-  });
-});
-
-describe("COST_BASIS_NOTE", () => {
-  test("says a claude-code cost is reported and as-if-metered, and never calls it list price", () => {
-    expect(COST_BASIS_NOTE).toContain("as-if-metered");
-    expect(COST_BASIS_NOTE).toContain("Claude SDK reports");
-    expect(COST_BASIS_NOTE).not.toContain("list price");
   });
 });
 
 describe("modelDisplay", () => {
-  test("drops the provider prefix and keeps the model's own version", () => {
+  test("drops the provider prefix; a free endpoint reads as a billing fact; anything else stays verbatim", () => {
     expect(modelDisplay("stealth/ox-alpha")).toBe("ox-alpha");
-    expect(modelDisplay("z-ai/glm-4.7-flash")).toBe("glm-4.7-flash");
-    expect(modelDisplay("deepseek/deepseek-v4-pro-0813")).toBe("deepseek-v4-pro-0813");
-  });
-
-  test("a :free tag reads as a billing fact, not part of the name", () => {
     expect(modelDisplay("nvidia/nemotron-3-ultra-550b-a55b:free")).toBe("nemotron-3-ultra-550b-a55b (free)");
-    expect(modelDisplay("poolside/laguna-s-2.1:free")).toBe("laguna-s-2.1 (free)");
-  });
-
-  test("any other tag stays verbatim — we do not know what it means", () => {
+    expect(modelDisplay("poolside/laguna-s-2.1-free")).toBe("laguna-s-2.1 (free)");
     expect(modelDisplay("some/model:beta")).toBe("model:beta");
-  });
-
-  test("a name with no prefix is already short, version stamps and all", () => {
-    expect(modelDisplay("claude-opus-4-6")).toBe("claude-opus-4-6");
-    expect(modelDisplay("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5-20251001");
-    expect(modelDisplay("sonnet")).toBe("sonnet");
-    expect(modelDisplay("hy3-free")).toBe("hy3 (free)");
-  });
-
-  test("never returns empty: a string that is all prefix comes back as it came", () => {
-    expect(modelDisplay("openai/")).toBe("openai/");
+    // Never empty: a string that is all prefix comes back as it came.
     expect(modelDisplay(":free")).toBe(":free");
-    expect(modelDisplay("foo/:free")).toBe("foo/:free");
-    expect(modelDisplay("")).toBe("");
-  });
-
-  test("only the last slash counts", () => {
-    expect(modelDisplay("a/b/c-1")).toBe("c-1");
-  });
-});
-
-test("modelDisplay: a baked-in -free suffix reads the same as :free", () => {
-  expect(modelDisplay("hy3-free")).toBe("hy3 (free)");
-  expect(modelDisplay("poolside/laguna-s-2.1-free")).toBe("laguna-s-2.1 (free)");
-  expect(modelDisplay("-free")).toBe("-free");
-});
-
-describe("shortRunId", () => {
-  test("a fleet-minted id is its date and attempt tail", () => {
-    expect(shortRunId("fleet-nemotron-super-freeplay-nemotron-3-super-120b-a12b-20260830-a6")).toBe("20260830-a6");
-  });
-  test("an id of another shape is shown whole", () => {
-    expect(shortRunId("fleet-nemotron-super-class-probe-human-warrior-nemotron-3-super-120b-a12b-20260827")).toBe("20260827");
-    expect(shortRunId("fleet-sonnet-e90-sonnet-20260822-a3-r2")).toBe("20260822-a3-r2");
-    expect(shortRunId("smoke-death-recovery")).toBe("smoke-death-recovery");
-    expect(shortRunId("fleet-odd-shape")).toBe("odd-shape");
-    expect(shortRunId("run-20260830")).toBe("20260830");
-  });
-});
-
-describe("money as coins, for the line that draws them", () => {
-  test("only the denominations a reader would say out loud", () => {
-    expect(moneyCoins(112)).toEqual([
-      { kind: "silver", value: 1 },
-      { kind: "copper", value: 12 },
-    ]);
-    // A round gold is one coin, not three: the middle zeroes are `fmtMoney`'s
-    // padding, which exists so a column of figures lines up, and this is a line.
-    expect(moneyCoins(10000)).toEqual([{ kind: "gold", value: 1 }]);
-    expect(moneyCoins(10012)).toEqual([
-      { kind: "gold", value: 1 },
-      { kind: "copper", value: 12 },
-    ]);
-  });
-
-  test("an empty purse is an observation, so zero copper is the one zero kept", () => {
-    expect(moneyCoins(0)).toEqual([{ kind: "copper", value: 0 }]);
-  });
-
-  test("unobserved is null, and the caller draws its own dash", () => {
-    expect(moneyCoins(null)).toBeNull();
-    expect(moneyCoins(undefined)).toBeNull();
-  });
-
-  test("the text form is untouched, because a table still wants the padding", () => {
-    expect(fmtMoney(10000)).toBe("1g 0s 0c");
-    expect(fmtMoney(112)).toBe("1s 12c");
-  });
-
-  test("a negative or fractional reading does not invent a denomination", () => {
-    expect(moneyCoins(-5)).toEqual([{ kind: "copper", value: 0 }]);
-    expect(moneyCoins(112.7)).toEqual([
-      { kind: "silver", value: 1 },
-      { kind: "copper", value: 12 },
-    ]);
-  });
-});
-
-
-describe("paneText", () => {
-  test("drops the blank lines a reply opens with and the newline it ends on", () => {
-    expect(paneText("\n\nHeading to the mill.\n")).toBe("Heading to the mill.");
-  });
-
-  test("keeps the blank lines inside the text and the first line's indentation", () => {
-    expect(paneText(" \t\n\n  first\n\n\nsecond  \n  \n")).toBe("  first\n\n\nsecond");
-    expect(paneText("a\r\n\r\nb\r\n")).toBe("a\r\n\r\nb");
-  });
-
-  test("text with nothing at either end is returned as it is", () => {
-    expect(paneText("one\ntwo")).toBe("one\ntwo");
-    expect(paneText("")).toBe("");
-  });
-
-  test("text that is only whitespace is empty", () => {
-    expect(paneText("\n\n \t\n")).toBe("");
+    expect(modelDisplay("openai/")).toBe("openai/");
   });
 });

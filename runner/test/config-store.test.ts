@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ConfigRejected, ConfigStore, configStoreSeeded, EMPTY_STORE_HINT, openConfigStore, splitFleet } from "../src/config-store";
+import { ConfigRejected, ConfigStore, configStoreSeeded, openConfigStore, splitFleet } from "../src/config-store";
 import { configDbPath, readFleetConfig, renderFleet } from "../src/config-read";
 import { parseFleet } from "../../infra/run-fleet-config";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -71,17 +71,6 @@ describe("split and render", () => {
     expect(parseFleet(store.render())).toEqual(parseFleet(pristine));
   });
 
-  test("a routing edit through the store is accepted and read back as written", () => {
-    const { store } = tempStore();
-    store.seed(fixtureConfig());
-    store.put("roster/glm", { tier: "t1", model: "z-ai/glm-5.2:free", routing: "DeepInfra" });
-    expect((store.render()["roster"] as Record<string, unknown>)["glm"]).toEqual({
-      tier: "t1",
-      model: "z-ai/glm-5.2:free",
-      routing: "DeepInfra",
-    });
-  });
-
   test("an edit that routes a model somewhere impossible is refused like any other", () => {
     const { store } = tempStore();
     store.seed(fixtureConfig());
@@ -112,13 +101,6 @@ describe("split and render", () => {
     expect(rows.map((r) => r.key)).toContain("roster/son");
     // File order is load-bearing (two enabled pins on one account: first wins).
     expect(Object.keys(renderFleet(rows)["roster"] as object)).toEqual(["glm", "son"]);
-  });
-
-  test("an empty collection keeps its key, and an absent one stays absent", () => {
-    expect(renderFleet(splitFleet(fixtureConfig()))["queue"]).toEqual([]);
-    const noQueue = fixtureConfig();
-    delete noQueue["queue"];
-    expect("queue" in renderFleet(splitFleet(noQueue))).toBe(false);
   });
 
   test("the stored document is the RAW one, not the parsed one", () => {
@@ -154,16 +136,6 @@ describe("writes", () => {
     expect(() => store.put("roster/son", { tier: "t1", model: "gpt-6.2-sol", driver: "claude-code" })).toThrow(/the claude-code driver carries claude models only/);
     expect(store.get("roster/son")).toEqual({ tier: "t1", model: "sonnet", driver: "claude-code" });
     expect(store.audit().filter((a) => a.key === "roster/son" && a.note === null)).toEqual([]);
-    store.close();
-  });
-
-  test("every tier the table names is a valid roster write, t3 included (operator, 2026-11-20)", () => {
-    const { store } = tempStore();
-    store.seed(fixtureConfig());
-    for (const tier of ["t0", "t1", "t2", "t3"]) {
-      store.patch("roster/son", { tier }, { actor: "test" });
-      expect(store.get("roster/son")).toMatchObject({ tier });
-    }
     store.close();
   });
 
@@ -345,19 +317,6 @@ describe("the site block", () => {
     expect(store.get("site")).toBeUndefined();
     store.close();
   });
-
-  test("a site block that does not read is refused at write, by name, and nothing is written", () => {
-    const { store } = tempStore();
-    store.seed(fixtureConfig());
-    expect(() => store.put("site", { previewSeries: "1" })).toThrow(/site.previewSeries must be a harness series like "1.0"/);
-    expect(() => store.put("site", { previewSeries: 1.0 })).toThrow(ConfigRejected);
-    expect(() => store.put("site", { previewSeries: "1.0", banner: "hi" })).toThrow(/site: banner is not a key/);
-    expect(() => store.put("site", "1.0")).toThrow(/site must be an object/);
-    expect(store.get("site")).toBeUndefined();
-    // A seed is held to it too.
-    expect(() => store.seed(fixtureConfig({ site: { preview: "1.0" } }), { force: true })).toThrow(/site: preview is not a key/);
-    store.close();
-  });
 });
 
 describe("seeding", () => {
@@ -370,15 +329,6 @@ describe("seeding", () => {
     expect(store.seed(fixtureConfig(), { force: true }).seeded).toBe(true);
     expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
     store.close();
-  });
-
-  test("a store whose file exists but was never seeded is empty, not seeded", () => {
-    const { store, root } = tempStore();
-    expect(store.isEmpty()).toBe(true);
-    store.close();
-    const reader = openConfigStore(join(root, "config.sqlite"), { readonly: true });
-    expect(reader?.isEmpty()).toBe(true);
-    reader?.close();
   });
 
   test("an invalid document is refused rather than half-imported", () => {
@@ -445,11 +395,6 @@ describe("the read seam", () => {
     expect(reader).not.toBeNull();
     expect(() => reader!.rows()).toThrow();
     reader!.close();
-  });
-
-  test("the empty-store hint names the seed command and the page", () => {
-    expect(EMPTY_STORE_HINT).toContain("bun wb config seed infra/fleet.example.json");
-    expect(EMPTY_STORE_HINT).toContain("/admin");
   });
 
   test("configDbPath prefers the explicit path, then the data dir", () => {

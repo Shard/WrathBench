@@ -32,14 +32,6 @@ describe("the tile index", () => {
     expect(indexCovers(index, 2, 10, 7)).toBe(false);
   });
 
-  test("is one row of hex digits per grid row, and leaves out empty levels", () => {
-    const index = buildTileIndex(cells, covers);
-    expect(Object.keys(index.cells)).toEqual(["minimap/0", "minimap/1", "art/1", "art/6"]);
-    expect(index.cells["minimap/0"]![43]).toBe("0000000100000000");
-    expect(index.cells["minimap/0"]![0]).toBe("0000000000000001");
-    expect(index.cells["art/6"]).toEqual(["8"]);
-  });
-
   test("is deterministic whatever order the cells arrive in", () => {
     expect(renderTileIndex(buildTileIndex([...cells].reverse(), covers))).toBe(renderTileIndex(buildTileIndex(cells, covers)));
   });

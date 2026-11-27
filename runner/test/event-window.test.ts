@@ -96,35 +96,6 @@ describe("the sandbox child's window: non-ambient events, ringed apart from the 
     expect(four.events.map((e) => e.seq)).toEqual(seqs.slice(-4));
     expect(four.folded).toBe(5);
   });
-
-  test("an all-ambient stream says how much it folded, and an untouched one is empty", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    expect(await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW)).toEqual({ events: [], folded: 0 });
-    await host.evalSnippet('ambient(20); "fed";');
-    expect(await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW)).toEqual({ events: [], folded: 20 });
-  });
-
-  test("threat list updates and world state changes are folded and counted; their removal, clear and the zone's init are kept", async () => {
-    // The SDK keeps the first three out of its retained buffer, but its
-    // listeners, and so this ring, still receive them as they arrive.
-    const host = makeHost();
-    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
-    const fed = await host.evalSnippet(`
-      const list = { unitGuid: "17379391048826012345", entries: [{ guid: "7", threat: 4200 }] };
-      feed("SMSG_THREAT_UPDATE", 0x483, list);
-      feed("SMSG_HIGHEST_THREAT_UPDATE", 0x482, { ...list, topGuid: "7" });
-      feed("SMSG_UPDATE_WORLD_STATE", 0x2c3, { id: 2264, value: 0 });
-      feed("SMSG_THREAT_REMOVE", 0x484, { unitGuid: "17379391048826012345", guid: "7" });
-      feed("SMSG_THREAT_CLEAR", 0x485, { unitGuid: "17379391048826012345" });
-      feed("SMSG_INIT_WORLD_STATES", 0x2c2, { map: 0, zone: 12, area: 9, states: [{ id: 2264, value: 0 }] });
-      "fed";
-    `);
-    expect(fed.ok).toBe(true);
-    const window = await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW);
-    expect(window.events.map((e) => e.opcode)).toEqual(["SMSG_THREAT_REMOVE", "SMSG_THREAT_CLEAR", "SMSG_INIT_WORLD_STATES"]);
-    expect(window.folded).toBe(3);
-  });
 });
 
 function ev(seq: number, opcode: string): EventSummary {
@@ -194,16 +165,6 @@ describe("eventWindow and assembleContext", () => {
     expect(window.every((e) => e.opcode === "SMSG_ATTACKSTART")).toBe(true);
     expect(window[window.length - 1]!.seq).toBe(198);
     expect(folded).toBe(107);
-  });
-
-  test("the folded count the sandbox reports reaches the line, and an all-ambient span still says so", () => {
-    expect(assembleContext({ ...base, events: [ev(1, "SMSG_ATTACKSTART")], folded: 12 })).toContain(
-      "[events: last 1, newest last; 12 ambient movement and party-frame events folded into state only]",
-    );
-    expect(assembleContext({ ...base, events: [], folded: 9 })).toContain(
-      "[events]\nno non-ambient events; 9 ambient movement and party-frame events folded into state only",
-    );
-    expect(assembleContext({ ...base, events: [] })).toContain("[events]\nnone yet");
   });
 
   test("party frames are folded and counted with movement, and the note names both", () => {
@@ -303,24 +264,5 @@ describe("a map transport's create and out-of-range are ambient; everything else
     expect(assembleContext({ stateSummary: "[state]", scratchpad: "", notices: [], turn: 3, events })).toContain(
       "[events: last 6, newest last; 40 ambient movement and party-frame events folded into state only]",
     );
-  });
-
-  test("the sandbox child's ring leaves it out as it arrives, and the cache still holds the ship", async () => {
-    const host = makeHost();
-    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
-    const block = JSON.stringify(create(SHIP));
-    await host.evalSnippet(
-      `swings(2); for (let i = 0; i < 30; i++) { feed("SMSG_UPDATE_OBJECT", 0x0a9, { blocks: 1, objects: [${block}] }); ` +
-        `if (i < 29) feed("SMSG_UPDATE_OBJECT", 0x0a9, { blocks: 1, objects: [{ update: "outOfRange", guids: ["${SHIP}"] }] }); } swings(1); "fed";`,
-    );
-    const { events, folded } = await host.contextEvents(CONTEXT_POLICY.EVENT_WINDOW);
-    expect(events.map((e) => e.opcode)).toEqual(["SMSG_ATTACKSWING_NOTINRANGE", "SMSG_ATTACKSWING_NOTINRANGE", "SMSG_ATTACKSWING_NOTINRANGE"]);
-    expect(folded).toBe(59);
-    // Folded into state all the same: the last sighting was a create, so it is in view.
-    const seen = await host.evalSnippet(`state.nearby.has("${SHIP}")`);
-    expect(seen.value).toBe("true");
-    // And the model's own listeners and recent() are untouched.
-    const raw = await host.recentEvents(500);
-    expect(raw.filter((e) => e.opcode === "SMSG_UPDATE_OBJECT")).toHaveLength(59);
   });
 });

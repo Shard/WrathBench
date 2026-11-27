@@ -3,8 +3,8 @@
  * message, the driver's and the sandbox's, go in the yield's result after the
  * wake block, in the turn message's `[harness notices]` form, and that
  * message does not repeat them. Pure on `ProgramWake.yieldAnswer`, then
- * through the fixed loop and the claude-code driver's fake CLI over a real
- * sandbox, whose notice is queued while the model sleeps in a `yield`.
+ * through the fixed loop over a real sandbox, whose notice is queued while
+ * the model sleeps in a `yield`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";

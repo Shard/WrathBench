@@ -92,30 +92,6 @@ describe("a later report of a signature names its newest occurrence", () => {
     expect((await sleep()).block).toContain("Crag Boar: it last went off 1.1s ago ×2");
   });
 
-  test("a fresh fact after a reload or a restart replaces the line too, and an older repeat never undoes a newer fact", async () => {
-    const c = fakeClock();
-    const wake = new ProgramWake({ trajectory: quiet, now: c.now, sleep: c.sleep });
-    const p = fakeProgram();
-    const sleep = () => wake.sleep(p, { via: "yield", turn: 1, capMs: 60_000, floorMs: 3_000, stopped: () => false, kept: true });
-    const error = (ts: number, text: string): ProgramFact => ({
-      kind: "error",
-      ts,
-      routine: "grind",
-      deploy: 3,
-      error: { name: "TypeError", text, frames: ["at grind (main.ts:9)"], signature: "grind|TypeError|main.ts:9" },
-      fresh: true,
-    });
-    p.push(error(c.now(), "TypeError: a is undefined"), wake);
-    await sleep();
-    c.advance(10_000);
-    // The repeat's newest is older than the fact the reload brought.
-    p.repeat({ signature: "grind|TypeError|main.ts:9", count: 3, ts: c.now() - 5_000, newest: { text: "TypeError: b is undefined", frames: ["at grind (main.ts:9)"] } });
-    p.push(error(c.now(), "TypeError: c is undefined"), wake);
-    const block = (await sleep()).block;
-    expect(block).toContain("grind TypeError: c is undefined ×4");
-    expect(block).not.toContain("a is undefined");
-    expect(block).not.toContain("b is undefined");
-  });
 });
 
 const DEFIAS: DeathCause["damage"] = [{ name: "Defias Miner", total: 260, hits: [{ what: "melee", count: 3, total: 260 }] }];

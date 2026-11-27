@@ -43,7 +43,7 @@
  *   roster's alias.
  * - **OpenRouter** (`OPENROUTER_PRICES`) — its catalogue, by script, matched
  *   on the id; a codex run matches under `openai/<slug>`, since the Codex CLI's
- *   own slug carries no vendor prefix (`codexPrice`).
+ *   own slug carries no vendor prefix (`vendorPrice`).
  * - **Endpoints** (`ENDPOINT_PRICES`) — paid providers that are not
  *   OpenRouter, matched on the run's `apiBase` *and* id (operator's decision,
  *   2026-09-04, on its trigger: a second such provider): by hand, or by script
@@ -230,7 +230,7 @@ export const LOCAL_PRICE: PriceRow = {
  * balance, so `asIfMetered` is false: the figure is a list-price estimate of a
  * real bill. The one exception is a codex run reading an `openai/` row: the
  * rates are the same, but that lane bills a ChatGPT subscription, so the same
- * figure is a comparison and `codexPrice` says so. OpenRouter has no cache-write tier for most models — the sync
+ * figure is a comparison and `expectedCost` marks it as-if-metered. OpenRouter has no cache-write tier for most models — the sync
  * falls back to the input rate, per its own quoting.
  *
  * A free slug never reaches here: `priceFor` answers it with `FREE_PRICE`
@@ -320,7 +320,8 @@ export function syncedPrice(model: string, at: number | null = null): PriceRow |
 }
 
 /**
- * The synced row for a codex model, looked up under the vendor prefix.
+ * The synced row for a bare slug under a catalogue vendor's prefix (`DriverCost.vendor`):
+ * a codex model's, looked up under `openai/`.
  *
  * A Codex catalogue slug never carries one — the CLI calls the model
  * `gpt-6-astra` where OpenRouter calls it `openai/gpt-6-astra` — and nothing in
@@ -335,11 +336,6 @@ export function syncedPrice(model: string, at: number | null = null): PriceRow |
  * *is* in the catalogue unprefixed keeps reading its own row and nothing that
  * prices today changes.
  */
-export function codexPrice(model: string, at: number | null = null): PriceRow | null {
-  return vendorPrice(model, "openai", at);
-}
-
-/** The synced row for a bare slug under a catalogue vendor's prefix (`DriverCost.vendor`). */
 function vendorPrice(model: string, vendor: string, at: number | null): PriceRow | null {
   if (model.includes("/")) return null;
   return syncedRow(`${vendor}/${model}`, at, "vendor");

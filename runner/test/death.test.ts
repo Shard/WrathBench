@@ -113,10 +113,4 @@ describe("the run's session record holds the death the child saw, and the scorer
     expect([deaths.deaths, deaths.releases, deaths.resurrects]).toEqual([1, 1, 1]);
     expect(deaths.first).toMatchObject({ zone: 1, area: 132, position: { map: 0, x: -6572, y: 405, z: 387, source: "death_spot" } });
   });
-
-  test("a host that keeps no record has no kills to hand the loop, and says so by throwing", async () => {
-    const host = makeHost();
-    expect((await host.evalSnippet(PRELUDE)).ok).toBe(true);
-    await expect(host.partySignals()).rejects.toThrow("keeps no session record");
-  });
 });

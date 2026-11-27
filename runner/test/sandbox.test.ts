@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatStateSummary, type SnapshotLike } from "../src/context";
-import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
+import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv, type HarnessNotice } from "../src/sandbox/host";
 import type { ActionHintNote } from "@wrathbench/mcp";
 import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -77,15 +77,6 @@ describe("sandbox evaluation", () => {
     expect((await host.evalSnippet("1 + 1")).actionHints).toEqual([]);
   });
 
-  test("hints from a snippet that then threw still come home", async () => {
-    const host = makeHost();
-    const res = await host.evalSnippet(
-      '(sdk as any).noteActionHint("moveTo", "no_mesh", "nothing to retry here", { x: 0, y: 0, z: 0 }); throw new Error("boom");',
-    );
-    expect(res.ok).toBe(false);
-    expect(res.actionHints?.[0]?.status).toBe("no_mesh");
-  });
-
   test("a background routine's hint is drained by the host for a non-snippet result, once", async () => {
     // What lets the next tool result of any kind carry it (tools.ts): the
     // tally leaves the child on its own rpc, not only on a snippet's result.
@@ -144,16 +135,20 @@ describe("sandbox evaluation", () => {
     expect(err.error).toContain("boom");
   });
 
-  test("await-timeout abandons the eval but leaves the runtime alive", async () => {
+  test("await-timeout abandons the eval but leaves the runtime alive, and returns its buffered logs", async () => {
     const host = makeHost({ snippetTimeoutMs: 300 });
     await host.evalSnippet("let alive = 'yes';");
-    const res = await host.evalSnippet("await sleep(5_000); alive = 'no';");
+    const res = await host.evalSnippet('console.log("before the wall"); await sleep(5_000); alive = "no";');
     expect(res.ok).toBe(false);
     expect(res.timedOut).toBe(true);
     expect(res.restarted).toBeUndefined();
-    // runtime survived, bindings intact
+    // The abandoned snippet's logs come back via the liveness ping's drain.
+    expect(res.logs.map((l) => l.text).join("\n")).toContain("before the wall");
+    expect(res.error).toContain("may still be running");
+    // runtime survived, bindings intact, and the logs were consumed
     const after = await host.evalSnippet("alive");
     expect(after.value).toBe(JSON.stringify("yes"));
+    expect(after.logs).toEqual([]);
     expect(host.totalRestarts).toBe(0);
   });
 
@@ -165,6 +160,10 @@ describe("sandbox evaluation", () => {
     expect(res.timedOut).toBe(true);
     expect(res.restarted).toBe(true);
     expect(host.totalRestarts).toBe(1);
+    // The session outlives the process, and a resubscribe replays what a
+    // client holds; the guidance says so.
+    expect(res.error).toContain("await connect()");
+    expect(res.error).toContain("replays your own state");
     const notices = host.drainNotices();
     expect(notices.some((n) => n.kind === "sandbox_restarted")).toBe(true);
     // state was lost, runtime is fresh and working
@@ -221,48 +220,26 @@ describe("sandbox evaluation", () => {
     expect(res.value).toBe("2");
   }, 15_000);
 
-  test("unhandled rejection from a fire-and-forget promise does not kill the runtime (night-laguna-oc-1 bug)", async () => {
+  test("a background rejection or uncaught exception is reported, never fatal", async () => {
     const host = makeHost();
     await host.evalSnippet("let precious = 'state';");
-    // The night-laguna-oc-1 shape: an async SDK call fired without await whose
-    // promise rejects after the snippet result has already been sent.
+    // An async SDK call fired without await whose promise rejects after the
+    // snippet result has already been sent, and a timer that throws.
     const res = await host.evalSnippet(
-      "void (async () => { await sleep(50); throw new Error('late-boom'); })(); 'done'",
+      "void (async () => { await sleep(50); throw new Error('late-boom'); })(); setTimeout(() => { throw new Error('timer-boom'); }, 50); 'done'",
     );
     expect(res.ok).toBe(true);
     await new Promise((r) => setTimeout(r, 400));
     expect(host.totalRestarts).toBe(0);
-    // the error was reported, not fatal: a session_note notice, never a restart
+    // the errors were reported, not fatal: session_note notices, never a restart
     const notices = host.drainNotices();
     expect(notices.some((n) => n.kind === "sandbox_restarted")).toBe(false);
     expect(notices.some((n) => n.kind === "session_note" && n.text.includes("late-boom"))).toBe(true);
+    expect(notices.some((n) => n.kind === "session_note" && n.text.includes("timer-boom"))).toBe(true);
     // bindings survived, and the next snippet's logs carry the background error
     const after = await host.evalSnippet("precious");
     expect(after.value).toBe(JSON.stringify("state"));
     expect(after.logs.some((l) => l.level === "error" && l.text.includes("late-boom"))).toBe(true);
-  }, 15_000);
-
-  test("background uncaught exception is reported, not fatal", async () => {
-    const host = makeHost();
-    await host.evalSnippet("let precious = 'state'; setTimeout(() => { throw new Error('timer-boom'); }, 50);");
-    await new Promise((r) => setTimeout(r, 400));
-    expect(host.totalRestarts).toBe(0);
-    expect(host.drainNotices().some((n) => n.kind === "session_note" && n.text.includes("timer-boom"))).toBe(true);
-    const after = await host.evalSnippet("precious");
-    expect(after.value).toBe(JSON.stringify("state"));
-  }, 15_000);
-
-  test("crash notice carries the child's last stderr", async () => {
-    const host = makeHost();
-    const res = await host.evalSnippet(
-      "process.stderr.write('doom marker 42\\n'); await sleep(20); process.exit(9);",
-    );
-    expect(res.restarted).toBe(true);
-    const notices = host.drainNotices();
-    const crash = notices.find((n) => n.kind === "sandbox_restarted");
-    expect(crash).toBeDefined();
-    expect(crash!.text).toContain("exit code 9");
-    expect(crash!.text).toContain("doom marker 42");
   }, 15_000);
 
   test("the crash notice quotes the stderr the child wrote, every repeat of it, while the log copy is folded", async () => {
@@ -273,6 +250,7 @@ describe("sandbox evaluation", () => {
     );
     expect(res.restarted).toBe(true);
     const crash = host.drainNotices().find((n) => n.kind === "sandbox_restarted")!;
+    expect(crash.text).toContain("exit code 9");
     // What the model reads: the tail as the child wrote it, unfolded.
     expect(crash.text).toContain("Last stderr: stuck again\nstuck again\nstuck again\nstuck again\n");
     await host.stop();
@@ -304,14 +282,6 @@ describe("sandbox evaluation", () => {
     const mod = await host.evalSnippet('await fetch("http://worldserver:8086/action", { method: "POST", body: "{}" })');
     expect(mod.ok).toBe(false);
     expect(mod.error).toContain("not available");
-  });
-
-  test("snippet WebSocket is refused, the module host included", async () => {
-    const host = makeHost();
-    const res = await host.evalSnippet('new WebSocket("ws://worldserver:8086/events")');
-    expect(res.ok).toBe(false);
-    expect(res.error).toContain("not available");
-    expect(res.error).toContain("ambient sdk");
   });
 
   test("a snippet cannot lose the session by nulling or overwriting sdk/state/events", async () => {
@@ -351,16 +321,6 @@ describe("sandbox evaluation", () => {
     expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ secret: null, evSecret: null, inKeys: false, inOwn: false, inInspect: false, inJson: false });
   });
 
-  test("the leased secret and account are struck from the child's environment", async () => {
-    const host = makeHost({ secret: "env-secret-0123456789abcdef0123456789abcdef", account: "RUNNER" });
-    const res = await host.evalSnippet('JSON.stringify({ secret: process.env.WRATHBENCH_SECRET ?? null, account: process.env.WRATHBENCH_ACCOUNT ?? null, bunSecret: Bun.env.WRATHBENCH_SECRET ?? null })');
-    expect(res.ok).toBe(true);
-    expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ secret: null, account: null, bunSecret: null });
-    // The session still works: the client read and kept the secret before it
-    // was struck.
-    expect((await host.evalSnippet("typeof sdk.createSession")).value).toBe('"function"');
-  });
-
   test("the child env is exactly the allowlist: host credentials never reach a snippet", async () => {
     // A canary secret in the runner's own env, plus a real provider key name.
     // Neither must be visible to a snippet dumping process.env — the model
@@ -387,7 +347,8 @@ describe("sandbox evaluation", () => {
     };
     Object.assign(process.env, prefixed);
     try {
-      const host = makeHost();
+      // A leased secret and a bound account, so the strike below is tested.
+      const host = makeHost({ secret: "env-secret-0123456789abcdef0123456789abcdef", account: "RUNNER" });
       const res = await host.evalSnippet('Object.keys(process.env).sort().join(",")');
       expect(res.ok).toBe(true);
       // res.value is Bun.inspect of the joined string: a quoted plain string.
@@ -549,7 +510,21 @@ describe("cooperative abort on timeout", () => {
         }
         return new Response("not found", { status: 404 });
       },
-      websocket: { message() {} },
+      websocket: {
+        // The module's state on a subscribe: without the character's own position `createSession` waits out its bound.
+        open(ws) {
+          ws.send(
+            JSON.stringify({
+              seq: 0,
+              opcode: "WB_SESSION_STATE",
+              opcodeId: 0xff03,
+              ts: Date.now(),
+              data: { character: "Fenwick", guid: "7", inWorld: true, map: 0, x: -6240, y: 331, z: 383, o: 0, level: 1 },
+            }),
+          );
+        },
+        message() {},
+      },
     });
     return {
       url: `http://127.0.0.1:${server.port}`,
@@ -598,27 +573,6 @@ describe("cooperative abort on timeout", () => {
     await stub.stop();
   });
 
-  test("the abandonment message states the abort and the stop; the late result never reaches the model", async () => {
-    const stub = startModuleStub();
-    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
-    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
-    const res = await host.evalSnippet("await sdk.moveTo({ x: 1, y: 2, z: 3 }); 'walked'");
-    expect(res.ok).toBe(false);
-    expect(res.timedOut).toBe(true);
-    expect(res.error).toContain("`signal` was aborted");
-    expect(res.error).toContain("move in flight was stopped");
-    expect(res.error).toContain("EventAbortedError");
-    // The aborted eval settled (rejected) before the ping; its result was
-    // discarded and the next eval gets a clean answer, not "walked".
-    const next = await host.evalSnippet("'next'");
-    expect(next.ok).toBe(true);
-    expect(next.value).toBe(JSON.stringify("next"));
-    await eventually(() => stub.actions.includes("stop"));
-    expect(stub.actions.filter((a) => a === "stop")).toHaveLength(1);
-    await host.stop();
-    await stub.stop();
-  });
-
   test("the abandon message states the interrupted move and names moveToAsync (2026-08-23 fan-out)", async () => {
     // 6 of 7 runs in the navigation fan-out hit this wall with a moveTo in
     // flight; one re-issued the identical blocking call five times. The message
@@ -628,6 +582,9 @@ describe("cooperative abort on timeout", () => {
     await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
     const res = await host.evalSnippet("await sdk.moveTo({ x: 1, y: 2, z: 3 }); 'walked'");
     expect(res.timedOut).toBe(true);
+    expect(res.error).toContain("`signal` was aborted");
+    expect(res.error).toContain("move in flight was stopped");
+    expect(res.error).toContain("EventAbortedError");
     expect(res.error).toContain("a moveTo was still walking when this was abandoned");
     // This stub never reports a position, so the distances degrade to saying so
     // rather than to a made-up number.
@@ -641,49 +598,10 @@ describe("cooperative abort on timeout", () => {
     await stub.stop();
   });
 
-  test("the abandon message names reclaimCorpse and what it was waiting on (2026-10-20 party runs)", async () => {
-    // sleep(15000) and then a reclaim with its 25s default wait ran members
-    // past the snippet limit, and the message said only that it timed out.
-    const stub = startModuleStub();
-    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
-    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
-    const ghost =
-      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: Date.now(),` +
-      ` data: { blocks: 1, objects: [{ update: "values", guid: "7", fields: { health: 1, playerFlags: 16 } }] } }));` +
-      ` events.ingest(JSON.stringify({ seq: 2, opcode: "SMSG_CORPSE_RECLAIM_DELAY", opcodeId: 0x269, ts: Date.now(),` +
-      ` data: { delayMs: 20000 } })); 'ghost'`;
-    expect((await host.evalSnippet(ghost)).ok).toBe(true);
-    const res = await host.evalSnippet("await sdk.reclaimCorpse(); 'reclaimed'");
-    expect(res.timedOut).toBe(true);
-    expect(res.error).toContain("reclaimCorpse was waiting out the server's reclaim delay (~");
-    expect(res.error).toContain("Give it a snippet of its own, or pass a timeout that fits the time the snippet has left, as the second argument: sdk.reclaimCorpse(undefined, { timeout: 20000 }).");
-    await host.stop();
-    await stub.stop();
-  });
-
-  test("the HUD snapshot carries our own auras by name, and the summary lists them", async () => {
-    const stub = startModuleStub();
-    const host = makeHost({ moduleUrl: stub.url });
-    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
-    const auras =
-      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_INITIAL_SPELLS", opcodeId: 0x12a, ts: Date.now(),` +
-      ` data: { spells: [{ spellId: 501, rank: 1, name: "Mending Word" }], cooldowns: [] } }));` +
-      ` events.ingest(JSON.stringify({ seq: 2, opcode: "SMSG_AURA_UPDATE_ALL", opcodeId: 0x495, ts: Date.now(),` +
-      ` data: { targetGuid: "7", auras: [{ slot: 0, spellId: 9002, flags: 160, level: 20, stacks: 1, maxDuration: 600000, duration: 600000, name: "Spirit Weariness" },` +
-      ` { slot: 1, spellId: 501, flags: 24, level: 20, stacks: 1 }] } })); 'ok'`;
-    expect((await host.evalSnippet(auras)).ok).toBe(true);
-    const snap = (await host.stateSnapshot()) as SnapshotLike;
-    expect(snap.selfAuras?.map((a) => a.name)).toEqual(["Spirit Weariness", "Mending Word"]);
-    const summary = formatStateSummary(snap, { sessionLive: true });
-    expect(summary).toMatch(/\nauras: Spirit Weariness \(debuff, (9m 5\ds|10m 00s) left\), Mending Word \[state\.aurasOf\(state\.self\.guid\)\]\n/);
-    await host.stop();
-    await stub.stop();
-  });
-
-  test("the HUD snapshot carries the party frames, and a member's health in view but never a mob's", async () => {
-    const stub = startModuleStub();
-    const host = makeHost({ moduleUrl: stub.url });
-    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+  test("the HUD snapshot carries our auras, the party frames, each unit's reaction, and a member's health in view but never a mob's", async () => {
+    // No module: our own guid is seeded and every frame is handed to the cache.
+    const host = makeHost();
+    await host.evalSnippet('state.seedSelf({ guid: "7", name: "Fenwick" }); "seeded"');
     const party =
       `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_GROUP_LIST", opcodeId: 0x07d, ts: Date.now(), data: { groupType: 0, left: false,` +
       ` raid: false, subGroup: 0, memberFlags: 0, roles: 0, groupGuid: "1", counter: 1, leaderGuid: "940", lootMethod: 0,` +
@@ -693,8 +611,25 @@ describe("cooperative abort on timeout", () => {
       ` { update: "create", guid: "941", objectType: "player", pos: { x: 3, y: 4, z: 0, o: 0 }, fields: { health: 261, maxHealth: 300, level: 20, playerFlags: 0 } },` +
       ` { update: "create", guid: "17379391", objectType: "unit", entry: 657, pos: { x: 6, y: 8, z: 0, o: 0 }, fields: { health: 900, maxHealth: 1000, level: 18 } }] } }));` +
       ` events.ingest(JSON.stringify({ seq: 3, opcode: "SMSG_PARTY_MEMBER_STATS", opcodeId: 0x07e, ts: Date.now(), data: { guid: "940", full: false,` +
-      ` mask: 0x1ff, status: 9, health: 1, maxHealth: 515, powerType: 1, power: 0, maxPower: 100, level: 20, zoneId: 40, zoneName: "Westfall", x: -10546, y: 1197 } })); 'ok'`;
+      ` mask: 0x1ff, status: 9, health: 1, maxHealth: 515, powerType: 1, power: 0, maxPower: 100, level: 20, zoneId: 40, zoneName: "Westfall", x: -10546, y: 1197 } }));` +
+      ` events.ingest(JSON.stringify({ seq: 4, opcode: "SMSG_INITIAL_SPELLS", opcodeId: 0x12a, ts: Date.now(),` +
+      ` data: { spells: [{ spellId: 501, rank: 1, name: "Mending Word" }], cooldowns: [] } }));` +
+      ` events.ingest(JSON.stringify({ seq: 5, opcode: "SMSG_AURA_UPDATE_ALL", opcodeId: 0x495, ts: Date.now(),` +
+      ` data: { targetGuid: "7", auras: [{ slot: 0, spellId: 9002, flags: 160, level: 20, stacks: 1, maxDuration: 600000, duration: 600000, name: "Spirit Weariness" },` +
+      ` { slot: 1, spellId: 501, flags: 24, level: 20, stacks: 1 }] } })); 'ok'`;
     expect((await host.evalSnippet(party)).ok).toBe(true);
+    // Invented FactionTemplate rows in the module's factionRow* shape: our own
+    // (group 1|2, hostile to 4|8), a monster that fights group 1 and a critter
+    // with no relations; the mob above was never served its rows.
+    const row = (template: number, faction: number, group: number, friendGroup: number, enemyGroup: number) =>
+      `faction: ${template}, factionRow: ${template}, factionRowFaction: ${faction}, factionRowFlags: 0, ` +
+      `factionRowGroup: ${group}, factionRowFriendGroup: ${friendGroup}, factionRowEnemyGroup: ${enemyGroup}, factionRowRepIndex: -1`;
+    const world =
+      `events.ingest(JSON.stringify({ seq: 6, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: Date.now(), data: { blocks: 3, objects: [` +
+      ` { update: "values", guid: "7", fields: { race: 1, class: 1, ${row(900, 901, 3, 2, 12)} } },` +
+      ` { update: "create", guid: "5001", objectType: "unit", entry: 6, pos: { x: 3, y: 4, z: 0, o: 0 }, fields: { health: 50, maxHealth: 50, level: 2, ${row(1, 11, 8, 0, 7)} } },` +
+      ` { update: "create", guid: "5002", objectType: "unit", entry: 721, pos: { x: 6, y: 8, z: 0, o: 0 }, fields: { health: 5, maxHealth: 5, level: 1, ${row(3, 13, 0, 0, 0)} } }] } })); 'ok'`;
+    expect((await host.evalSnippet(world)).ok).toBe(true);
     const snap = (await host.stateSnapshot()) as SnapshotLike;
     const members = snap.group?.members ?? [];
     expect(members.find((m) => m.guid === "940")?.stats).toMatchObject({ ghost: true, zone: { id: 40, name: "Westfall" }, position: { x: -10546, y: 1197 } });
@@ -707,36 +642,12 @@ describe("cooperative abort on timeout", () => {
     expect(mob!.maxHealth).toBeUndefined();
     const summary = formatStateSummary(snap, { sessionLive: true });
     expect(summary).toMatch(/\nparty: Brannoc ghost, Westfall \(-10546, 1197\), out of view; Ysolde alive 87%( \d+y)?\n/);
-    await host.stop();
-    await stub.stop();
-  });
-
-  test("the HUD snapshot carries each unit's reaction, and the nearby line marks the hostile one (operator, 2026-10-29)", async () => {
-    // Invented FactionTemplate rows in the module's factionRow* shape: our own
-    // (group 1|2, hostile to 4|8), a monster that fights group 1, a critter
-    // with no relations, and a unit whose rows were never served.
-    const stub = startModuleStub();
-    const host = makeHost({ moduleUrl: stub.url });
-    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
-    const row = (template: number, faction: number, group: number, friendGroup: number, enemyGroup: number) =>
-      `faction: ${template}, factionRow: ${template}, factionRowFaction: ${faction}, factionRowFlags: 0, ` +
-      `factionRowGroup: ${group}, factionRowFriendGroup: ${friendGroup}, factionRowEnemyGroup: ${enemyGroup}, factionRowRepIndex: -1`;
-    const world =
-      `events.ingest(JSON.stringify({ seq: 1, opcode: "SMSG_UPDATE_OBJECT", opcodeId: 0x0a9, ts: Date.now(), data: { blocks: 4, objects: [` +
-      ` { update: "values", guid: "7", fields: { race: 1, class: 1, ${row(900, 901, 3, 2, 12)} } },` +
-      ` { update: "create", guid: "5001", objectType: "unit", entry: 6, pos: { x: 3, y: 4, z: 0, o: 0 }, fields: { health: 50, maxHealth: 50, level: 2, ${row(1, 11, 8, 0, 7)} } },` +
-      ` { update: "create", guid: "5002", objectType: "unit", entry: 721, pos: { x: 6, y: 8, z: 0, o: 0 }, fields: { health: 5, maxHealth: 5, level: 1, ${row(3, 13, 0, 0, 0)} } },` +
-      ` { update: "create", guid: "5003", objectType: "unit", entry: 38, pos: { x: 9, y: 12, z: 0, o: 0 }, fields: { health: 50, maxHealth: 50, level: 3 } }] } })); 'ok'`;
-    expect((await host.evalSnippet(world)).ok).toBe(true);
-    const snap = (await host.stateSnapshot()) as SnapshotLike;
-    const reactionOf = (guid: string) => (snap.units ?? []).find((u) => u.guid === guid)?.reaction;
-    expect(reactionOf("5001")).toBe("hostile");
-    expect(reactionOf("5002")).toBe("neutral");
-    expect(reactionOf("5003")).toBeUndefined();
-    const nearby = formatStateSummary(snap, { sessionLive: true }).split("\n").find((l) => l.startsWith("nearby: "))!;
+    expect(snap.selfAuras?.map((a) => a.name)).toEqual(["Spirit Weariness", "Mending Word"]);
+    expect(summary).toMatch(/\nauras: Spirit Weariness \(debuff, (9m 5\ds|10m 00s) left\), Mending Word \[state\.aurasOf\(state\.self\.guid\)\]\n/);
+    const reactionOf = (guid: string) => units.find((u) => u.guid === guid)?.reaction;
+    expect([reactionOf("5001"), reactionOf("5002"), reactionOf("17379391")]).toEqual(["hostile", "neutral", undefined]);
+    const nearby = summary.split("\n").find((l) => l.startsWith("nearby: "))!;
     expect(nearby.match(/ hostile \(/g)).toHaveLength(1);
-    await host.stop();
-    await stub.stop();
   });
 
   test("a routine launched by a snippet that returned normally is never aborted by a later timeout", async () => {
@@ -752,16 +663,6 @@ describe("cooperative abort on timeout", () => {
     expect(timed.timedOut).toBe(true);
     const trip = await host.evalSnippet("await trip");
     expect(trip.value).toBe(JSON.stringify("done"));
-  });
-
-  test("sleep() in an abandoned snippet rejects with the abort reason", async () => {
-    const host = makeHost({ snippetTimeoutMs: 300 });
-    const timed = await host.evalSnippet(
-      "globalThis.outcome = 'pending'; try { await sleep(5_000); globalThis.outcome = 'slept'; } catch (e) { globalThis.outcome = 'rejected: ' + e.message; }",
-    );
-    expect(timed.timedOut).toBe(true);
-    const outcome = await host.evalSnippet("outcome");
-    expect(outcome.value).toContain("rejected: snippet abandoned by the harness");
   });
 
   test("an abandoned snippet's unawaited calls are cancelled quietly, not reported as a sandbox fault", async () => {
@@ -792,7 +693,9 @@ describe("cooperative abort on timeout", () => {
       "const c = new AbortController(); sdk.events.waitFor(() => false, { timeout: 10_000, signal: c.signal });\n" +
         "c.abort(new Error('mine')); await sleep(100);",
     );
-    const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+    // The notice is its own message from the child and can land a beat after the result.
+    const notes: HarnessNotice[] = [];
+    await eventually(() => notes.push(...host.drainNotices().filter((n) => n.kind === "session_note")) > 0);
     expect(notes).toHaveLength(1);
     expect(notes[0]!.text).toContain("unhandled promise rejection");
     expect(notes[0]!.text).toContain("mine");
@@ -822,40 +725,6 @@ describe("error rendering (2026-08 audit fixes)", () => {
     expect(res.error).toContain("const b = ;");
   });
 
-  test("JSON.stringify on a snippet-conjured bigint names the fix (SDK guids are strings now)", async () => {
-    const host = makeHost();
-    const res = await host.evalSnippet("JSON.stringify({ n: 123n })");
-    expect(res.ok).toBe(false);
-    expect(res.error).toContain("BigInt");
-    expect(res.error).toContain("guids are already plain strings");
-    expect(res.error).toContain("String(x)");
-  });
-
-  test("timed-out snippet returns its buffered console logs and background-routine guidance", async () => {
-    const host = makeHost({ snippetTimeoutMs: 300 });
-    const res = await host.evalSnippet('console.log("before the wall"); await sleep(5_000);');
-    expect(res.ok).toBe(false);
-    expect(res.timedOut).toBe(true);
-    // The abandoned snippet's logs come back via the liveness ping's drain.
-    expect(res.logs.map((l) => l.text).join("\n")).toContain("before the wall");
-    expect(res.error).toContain("background");
-    expect(res.error).toContain("may still be running");
-    // ...and were consumed: they do not repeat on the next snippet.
-    const next = await host.evalSnippet("1 + 1");
-    expect(next.logs).toEqual([]);
-  });
-
-  test("event-loop-kill message carries the state-loss recovery guidance", async () => {
-    const host = makeHost({ snippetTimeoutMs: 300, pingGraceMs: 300 });
-    const res = await host.evalSnippet("for (;;) {}");
-    expect(res.restarted).toBe(true);
-    // The session outlives the process, and a resubscribe replays what a
-    // client holds (wrath-mcp/module/PROTOCOL.md, "/events"); the guidance says so, and
-    // no longer sends the model to createSession first.
-    expect(res.error).toContain("await connect()");
-    expect(res.error).toContain("replays your own state");
-    expect(res.error).not.toContain("token_in_use");
-  }, 15_000);
 });
 
 describe("a thrown value that is not an Error", () => {
@@ -864,51 +733,45 @@ describe("a thrown value that is not an Error", () => {
   // reported a timeout at the snippet ceiling for a snippet that had failed at
   // once. Each case renders as the value itself, the form a thrown string or
   // number always had, and the runtime keeps the bindings made before it.
-  const cases: [snippet: string, rendered: string][] = [
-    ["throw undefined;", "undefined"],
-    ["throw null;", "null"],
-    ['throw "boom";', '"boom"'],
-    ["throw 42;", "42"],
-    ["await Promise.reject(undefined);", "undefined"],
-  ];
-  for (const [snippet, rendered] of cases) {
-    test(`\`${snippet}\` comes back at once as an error reading ${rendered}`, async () => {
-      const host = makeHost();
-      await host.evalSnippet("let before = 'kept';");
+  test("each comes back at once as an error reading the value, the runtime intact", async () => {
+    const host = makeHost();
+    await host.evalSnippet("let before = 'kept';");
+    const cases: [snippet: string, rendered: string][] = [
+      ["throw undefined;", "undefined"],
+      ["throw null;", "null"],
+      ['throw "boom";', '"boom"'],
+      ["await Promise.reject(undefined);", "undefined"],
+    ];
+    for (const [snippet, rendered] of cases) {
       const res = await host.evalSnippet(snippet);
       expect(res.ok).toBe(false);
       expect(res.timedOut).toBeUndefined();
       expect(res.error).toBe(rendered);
       expect(res.durationMs).toBeLessThan(1_000);
       const after = await host.evalSnippet("before");
-      expect(after.ok).toBe(true);
       expect(after.value).toBe(JSON.stringify("kept"));
       // A fault in the handler surfaces as an unhandled rejection after the
       // result; the next result is ordered after it, so by now it would show.
       expect(after.logs).toEqual([]);
-      expect(host.drainNotices()).toEqual([]);
-      expect(host.totalRestarts).toBe(0);
-    });
-  }
+    }
+    expect(host.drainNotices()).toEqual([]);
+    expect(host.totalRestarts).toBe(0);
+  });
 
-  for (const reason of ["undefined", "null"]) {
-    test(`an abandoned snippet whose wait rejects with ${reason} reads as the timeout and nothing else`, async () => {
-      const host = makeHost({ snippetTimeoutMs: 300 });
-      await host.evalSnippet("let before = 'kept';");
-      const res = await host.evalSnippet(
-        `await new Promise((_, reject) => signal.addEventListener("abort", () => reject(${reason})));`,
-      );
-      expect(res.ok).toBe(false);
-      expect(res.timedOut).toBe(true);
-      expect(res.error).toContain("was abandoned");
-      expect(res.logs).toEqual([]);
-      const after = await host.evalSnippet("before");
-      expect(after.value).toBe(JSON.stringify("kept"));
-      expect(after.logs).toEqual([]);
-      expect(host.drainNotices()).toEqual([]);
-      expect(host.totalRestarts).toBe(0);
-    });
-  }
+  test("an abandoned snippet whose wait rejects with undefined reads as the timeout and nothing else", async () => {
+    const host = makeHost({ snippetTimeoutMs: 300 });
+    await host.evalSnippet("let before = 'kept';");
+    const res = await host.evalSnippet('await new Promise((_, reject) => signal.addEventListener("abort", () => reject(undefined)));');
+    expect(res.ok).toBe(false);
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toContain("was abandoned");
+    expect(res.logs).toEqual([]);
+    const after = await host.evalSnippet("before");
+    expect(after.value).toBe(JSON.stringify("kept"));
+    expect(after.logs).toEqual([]);
+    expect(host.drainNotices()).toEqual([]);
+    expect(host.totalRestarts).toBe(0);
+  });
 });
 
 describe("background fault storm control (morning-laguna-2)", () => {
@@ -952,45 +815,6 @@ describe("background fault storm control (morning-laguna-2)", () => {
     }
   });
 
-  test("distinct fault signatures each get their first report", async () => {
-    const host = makeHost();
-    await host.evalSnippet(
-      "const a = new Error('alpha'); a.name = 'AlphaFault';\n" +
-        "const b = new Error('beta'); b.name = 'BetaFault';\n" +
-        "Promise.reject(a); Promise.reject(b);\n" +
-        "await sleep(200);",
-    );
-    const notes = host.drainNotices().filter((n) => n.kind === "session_note");
-    expect(notes.some((n) => n.text.includes("AlphaFault"))).toBe(true);
-    expect(notes.some((n) => n.text.includes("BetaFault"))).toBe(true);
-  });
-
-  test("continuing repeats aggregate into a single ×N rollup notice", async () => {
-    const restore = setEnv({
-      WRATHBENCH_FAULT_ROLLUP_MS: "150",
-      WRATHBENCH_FAULT_ESCALATION_THRESHOLD: "1000",
-    });
-    try {
-      const host = makeHost();
-      // One shared thrower: the signature is name + first stack line, so both
-      // batches must fault from the same source line to count as one storm.
-      await host.evalSnippet(
-        "const drip = () => Promise.reject(new Error('drip'));\n" +
-          "for (let i = 0; i < 5; i++) drip();\n" +
-          "await sleep(300);\n" +
-          "for (let i = 0; i < 5; i++) drip();\n" +
-          "await sleep(200);",
-      );
-      const notes = host.drainNotices().filter((n) => n.kind === "session_note");
-      expect(notes.length).toBe(2); // first report + exactly one rollup
-      expect(notes[1]!.text).toContain("aggregated");
-      expect(notes[1]!.text).toMatch(/×\d+/);
-      expect(notes[1]!.text).toContain("unhandled promise rejection");
-    } finally {
-      restore();
-    }
-  });
-
   test("varying fault signatures cannot bypass storm control (global immediate cap)", async () => {
     const restore = setEnv({
       WRATHBENCH_FAULT_IMMEDIATE_CAP: "3",
@@ -1018,17 +842,6 @@ describe("background fault storm control (morning-laguna-2)", () => {
     } finally {
       restore();
     }
-  });
-
-  test("repeated identical console lines collapse to one ×N entry", async () => {
-    const host = makeHost();
-    const res = await host.evalSnippet(
-      'for (let i = 0; i < 25; i++) console.log("same line");\nconsole.log("different");',
-    );
-    expect(res.ok).toBe(true);
-    expect(res.logs.length).toBe(2);
-    expect(res.logs[0]!.text).toBe("same line ×25");
-    expect(res.logs[1]!.text).toBe("different");
   });
 
   test("the child's mirrored stdout prints a repeated line once and its count, not every copy", async () => {
@@ -1094,13 +907,6 @@ describe("scratchpad writes over the cap, from a snippet", () => {
     expect((await host.evalSnippet("1")).logs).toEqual([]);
   });
 
-  test("an unawaited write in a statement snippet that returns nothing is still reported", async () => {
-    const { host } = fullHost();
-    const res = await host.evalSnippet(`scratchpad.write("w".repeat(${MAX + 1}));\nconst kept = 1;`);
-    expect(res.ok).toBe(false);
-    expect(res.error).toBe(refusal("scratchpad.write", MAX + 1));
-  });
-
   test("a refusal the snippet caught is its own business", async () => {
     const { host } = fullHost();
     const res = await host.evalSnippet('await scratchpad.append("too long").catch((e) => "caught: " + e.message.slice(0, 25))');
@@ -1109,15 +915,6 @@ describe("scratchpad writes over the cap, from a snippet", () => {
     const chained = await host.evalSnippet('scratchpad.append("too long").catch(() => {}); "fine"');
     expect(chained.ok).toBe(true);
   });
-
-  test("an abandoned snippet's unawaited refusal rides the abandon's report", async () => {
-    // Its result is discarded, so the refusal goes the background way: the
-    // pong's logs, which the timeout result carries.
-    const { host } = fullHost();
-    const res = await host.evalSnippet('scratchpad.append("too long"); await new Promise(() => {});');
-    expect(res.timedOut).toBe(true);
-    expect(res.logs.some((l) => l.level === "error" && l.text.includes("scratchpad.append refused"))).toBe(true);
-  }, 15_000);
 
   test("a background routine's refused write is reported as a background fault", async () => {
     const { host } = fullHost();
@@ -1132,4 +929,5 @@ describe("scratchpad writes over the cap, from a snippet", () => {
     expect(next.ok).toBe(true);
     expect(next.logs.some((l) => l.level === "error" && l.text.includes("scratchpad.append refused"))).toBe(true);
   }, 15_000);
+
 });

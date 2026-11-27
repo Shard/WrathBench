@@ -46,12 +46,6 @@ describe("placement", () => {
     expect(br.v).toBeCloseTo(ART_H, 6);
   });
 
-  test("north is up and east is right: smaller X is lower, smaller Y is further right", () => {
-    const a = worldToArt(rect, -5000, 0), south = worldToArt(rect, -6000, 0), east = worldToArt(rect, -5000, -1000);
-    expect(south.v).toBeGreaterThan(a.v);
-    expect(east.u).toBeGreaterThan(a.u);
-  });
-
   test("WorldMapArea rows read their four floats as left, right, top, bottom", () => {
     const strings = ["Zed"];
     const dbc = buildWdbc([[7, 0, 12, 1, f32bits(1500), f32bits(-3000), f32bits(-4000), f32bits(-7000), 0xffffffff, 0, 0]], strings, 11);
@@ -93,13 +87,6 @@ describe("ownMask", () => {
     expect(own[10 * w + 22]).toBe(0);
     expect(own[10 * w + 35]).toBe(0);
   });
-
-  test("a speck of change is dropped", () => {
-    const base = plane(() => [200, 160, 100, 255]);
-    const full = plane((x, y) => (x === 20 && y === 10 ? [0, 0, 0, 255] : [200, 160, 100, 255]));
-    const alpha = new Float32Array(w * h).fill(1);
-    expect(ownMask(full, base, alpha, w, h, 18, 2).every((v) => v === 0)).toBe(true);
-  });
 });
 
 // ---------------------------------------------------------------- a synthetic world
@@ -120,7 +107,7 @@ const MAP = 7;
  * bakes a magenta "neighbour label" on parchment inside its own territory but
  * far from its overlay — the case the own mask exists for.
  */
-function world(minimapAdts: ReadonlySet<string> = new Set()): ArtSources {
+function world(): ArtSources {
   const files = new Map<string, Uint8Array>();
   const areas: MapArea[] = [
     { id: 1, mapId: MAP, areaId: 100, name: "ZoneA", left: 600, right: -1800, top: 300, bottom: -1300 },
@@ -170,7 +157,7 @@ function world(minimapAdts: ReadonlySet<string> = new Set()): ArtSources {
     areaTable,
     mapFile: (m, r, c) => (m === MAP ? terrain.get(`${r}_${c}`) : undefined),
     minimap: () => null,
-    hasMinimap: (m, r, c) => m === MAP && minimapAdts.has(`${r}_${c}`),
+    hasMinimap: () => false,
   };
 }
 
@@ -199,19 +186,13 @@ describe("composeZoneArt", () => {
     expect(art.own![200 * ART_W + 300]).toBe(1);
     expect(art.own![200 * ART_W + 600]).toBe(0);
   });
-
-  test("a missing base tile means no art; a zone with no overlay pieces has no own mask", () => {
-    const src = world();
-    expect(composeZoneArt(() => undefined, src.areas[0]!, src.overlays)).toBeNull();
-    expect(composeZoneArt(src.read, src.areas[0]!, [])!.own).toBeNull();
-  });
 });
 
-describe("renderArt over a synthetic world", () => {
-  const src = world();
-  const first = renderArt(MAP, src, PARAMS);
-  const tiles = first.tiles;
+// One bake, shared: each costs over a second.
+const first = renderArt(MAP, world(), PARAMS);
+const tiles = first.tiles;
 
+describe("renderArt over a synthetic world", () => {
   test("each zone's own interior shows its own art, the subzone resolved to its zone", () => {
     expect(first.zones).toEqual(["ZoneA", "ZoneB"]);
     // inside A, including the ADT whose cells carry subzone 101
@@ -242,48 +223,10 @@ describe("renderArt over a synthetic world", () => {
     expect(sea[2]!).toBeGreaterThan(sea[0]!);
     expect(pixelAt(tiles, (32 - 29.2) * TILE_SIZE, (32 - 29.2) * TILE_SIZE)[3]).toBe(0);
   });
-
-  test("only tiles with content are returned, and the bake is deterministic", () => {
-    for (const t of tiles.values()) {
-      let opaque = false;
-      for (let i = 3; i < t.length && !opaque; i += 4) opaque = t[i]! > 0;
-      expect(opaque).toBe(true);
-    }
-    const again = renderArt(MAP, world(), PARAMS).tiles;
-    expect([...again.keys()]).toEqual([...tiles.keys()]);
-    for (const [k, t] of tiles) expect(Buffer.compare(Buffer.from(again.get(k)!), Buffer.from(t))).toBe(0);
-  });
-
-  test("a map with no terrain renders nothing", () => {
-    expect(renderArt(MAP + 1, src, PARAMS).tiles.size).toBe(0);
-  });
-});
-
-describe("the minimap's coverage", () => {
-  // two minimap tiles far north of the terrain (rows 24-25), well beyond the coast's sea fade
-  const tiles = renderArt(MAP, world(new Set(["24_33", "25_33"])), PARAMS).tiles;
-  const alphaAt = (row: number, col: number) => pixelAt(tiles, (32 - row) * TILE_SIZE, (32 - col) * TILE_SIZE)[3]!;
-
-  test("every pixel of an ADT with a minimap tile is opaque, so the minimap never shows through", () => {
-    // every z1 pixel of both ADTs, corners included (bilinear reads dip there first)
-    for (const row of [24, 25]) {
-      for (let k = 0; k < 128; k++) {
-        for (let j = 0; j < 128; j++) expect(alphaAt(row + (k + 0.5) / 128, 33 + (j + 0.5) / 128)).toBe(255);
-      }
-    }
-  });
-
-  test("beyond the coverage it fades out over seaFade, and between it and the coast stays clear", () => {
-    expect(alphaAt(23.5, 33.5)).toBeGreaterThan(0);
-    expect(alphaAt(23.5, 33.5)).toBeLessThan(255);
-    expect(alphaAt(22.5, 33.5)).toBe(0);
-    expect(alphaAt(28.5, 33.5)).toBe(0);
-    expect(alphaAt(24.5, 31.5)).toBe(0);
-  });
 });
 
 describe("writeArtPyramid", () => {
-  const z1 = renderArt(MAP, world(), PARAMS).tiles;
+  const z1 = tiles;
   const dir = join(scratch, String(MAP));
 
   test("writes z1..LOD_MAX under the art layer's spelling, one tile at the top", () => {

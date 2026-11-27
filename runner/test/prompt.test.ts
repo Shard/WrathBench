@@ -17,102 +17,57 @@ import {
  * says what the runs got wrong that made it worth a sentence.
  */
 describe("system prompt: the shapes and seams runs proved models get wrong", () => {
-  test("state.closest is documented as taking the same criteria object as units()", () => {
-    // 4 of 5 models in one review called closest({entry}) by
-    // analogy with units(filter); the SDK now agrees, and so must the prompt.
-    expect(SYSTEM_PROMPT).toContain("state.closest(filter) for the nearest match by distance");
-    expect(SYSTEM_PROMPT).toContain("the same criteria object state.units() takes, or a predicate");
-  });
-
-  test("the no-match shapes of units() and closest() are stated", () => {
-    // Models chained `.distance`/`.guid` off a miss and read the bare V8
-    // TypeError as a harness fault (a closing fan-out).
-    expect(SYSTEM_PROMPT).toContain("state.units(...) returns an empty array");
-    expect(SYSTEM_PROMPT).toContain("state.closest(...) returns undefined");
-  });
-
-  test("self vs units() shapes are spelled out, including the missing maxHealth", () => {
-    // qwen read state.self.maxHealth.value, crashed, and ran the rest of the
-    // episode blind on its own max HP.
-    expect(SYSTEM_PROMPT).toContain("state.self.health.value.current");
-    expect(SYSTEM_PROMPT).toContain("there is no state.self.maxHealth");
-    expect(SYSTEM_PROMPT).toContain("u.maxHealth, not u.maxHealth.value");
-  });
-
-  test("questLog is documented as a plain array, not an observed wrapper", () => {
-    // hy3 lost a turn to `state.questLog.value` after the prompt's old
-    // "every observed field is { value, seq, ts }" universal.
-    expect(SYSTEM_PROMPT).toContain("questLog is a plain array of plain entries");
-    expect(SYSTEM_PROMPT).not.toContain("Every observed field on state objects is wrapped");
-  });
-
-  test("raw-action ok is documented as dispatched, not succeeded", () => {
-    // qwen lost 5 turns to questComplete/questChooseReward answering
-    // {"ok":true} while the server silently dropped both.
-    expect(SYSTEM_PROMPT).toContain("means the opcode was dispatched, not that it worked");
-    expect(SYSTEM_PROMPT).toContain("turnInQuest/acceptQuestFrom over the raw quest actions");
-  });
-
-  test("every duration option names its unit, and killTarget's default is not in seconds", () => {
-    // Recent 90-minute runs passed seconds-sized values (4-40) to
-    // killTarget's timeout, which is milliseconds, and got status "timeout"
-    // at once; the prompt said "default 25s" and never named the unit.
-    expect(SYSTEM_PROMPT).toContain("sdk.killTarget(guid, { timeout: ms, disengage, abortBelowHealthPct })");
-    expect(SYSTEM_PROMPT).toContain("the timeout (default 25000 = 25s,");
-    expect(SYSTEM_PROMPT).toContain("sdk.waitForChat(textOrPredicate, { timeout: ms })");
-    expect(SYSTEM_PROMPT).toContain("sdk.waitForQuestObjective(questId, { timeout: ms })");
-    expect(SYSTEM_PROMPT).toContain("waitForOpcode(opcode, { timeout: ms })");
-    expect(SYSTEM_PROMPT).not.toContain("{ timeout }");
-    expect(SYSTEM_PROMPT).not.toContain("default 25s");
-  });
-
-  test("the events surface names off(), the removal models reach for", () => {
-    // ox-alpha took 21 uncaught `events.off is not a function` exceptions in
-    // one run, each one killing a background routine.
-    expect(SYSTEM_PROMPT).toContain("off(opcode, fn)");
-  });
-
-  test("questGiver: true is documented as the any-marker shorthand", () => {
+  /** Each row: what the runs got wrong that made it worth a sentence, what the prompt must say, and what it must no longer say. */
+  const FACTS: [why: string, has: string[], hasNot?: string[]][] = [
+    // 4 of 5 models in one review called closest({entry}) by analogy with units(filter).
+    ["closest takes units()'s criteria", ["state.closest(filter) for the nearest match by distance", "the same criteria object state.units() takes, or a predicate"]],
+    // Models chained `.distance`/`.guid` off a miss and read the bare TypeError as a harness fault.
+    ["the no-match shapes", ["state.units(...) returns an empty array", "state.closest(...) returns undefined"]],
+    // qwen read state.self.maxHealth.value, crashed, and ran the episode blind on its own max HP.
+    ["self vs units() shapes", ["state.self.health.value.current", "there is no state.self.maxHealth", "u.maxHealth, not u.maxHealth.value"]],
+    // hy3 lost a turn to `state.questLog.value` after an "every observed field is { value, seq, ts }" universal.
+    ["questLog is a plain array", ["questLog is a plain array of plain entries"], ["Every observed field on state objects is wrapped"]],
+    // qwen lost 5 turns to quest actions answering {"ok":true} while the server dropped both.
+    ["raw-action ok is dispatched, not succeeded", ["means the opcode was dispatched, not that it worked", "turnInQuest/acceptQuestFrom over the raw quest actions"]],
+    // 90-minute runs passed seconds (4-40) to killTarget's millisecond timeout and timed out at once.
+    [
+      "every duration names its unit",
+      [
+        "sdk.killTarget(guid, { timeout: ms, disengage, abortBelowHealthPct })",
+        "the timeout (default 25000 = 25s,",
+        "sdk.waitForChat(textOrPredicate, { timeout: ms })",
+        "sdk.waitForQuestObjective(questId, { timeout: ms })",
+        "waitForOpcode(opcode, { timeout: ms })",
+      ],
+      ["{ timeout }", "default 25s"],
+    ],
+    // ox-alpha took 21 uncaught `events.off is not a function`, each killing a routine.
+    ["events names off()", ["off(opcode, fn)"]],
     // hy3 passed the boolean spelling six times in one run.
-    expect(SYSTEM_PROMPT).toContain('questGiver: true means any marker but "none"');
-  });
+    ["questGiver: true is the any-marker shorthand", ['questGiver: true means any marker but "none"']],
+    // 6 of 7 navigation runs hit the 30s abandon with a moveTo in flight. The operator's wording:
+    // a rough on-foot figure, no speed (moveTo's note judges by the module's walk time).
+    [
+      "long moves do not fit one snippet",
+      ["A long walk is the usual way to hit that limit (on foot roughly 200y; less swimming, more mounted), so dispatch those with await sdk.moveToAsync(target)"],
+      ["7yd/s"],
+    ],
+    // 4 of 7 runs threw reading .x off a unit lookup that found nothing.
+    ["moveTo takes a unit or guid, with a typed miss", ["moveTo and moveToAsync take a unit, a guid or a name as well as a point", 'status: "unknown_target"']],
+    // laguna and hy3 called write_scratchpad(...) / search_reference(...) as bare globals inside snippets.
+    ["tools are not ambient objects", ["Tools and ambient objects are different things", "is a ReferenceError"]],
+    // Two freeplay runs wrote "cannot leave Coldridge Valley" into the pad as fact; the extent of the
+    // world is a world fact and belongs in the prompt (operator decision 2026-08-29).
+    ["the world is whole and unwalled", ["This is the complete, unmodified 3.3.5a world", "nothing has been walled off for the benchmark"]],
+    // The SDK had these and no run had ever used them; the prompt never named them (operator, 2026-10-14).
+    ["bank and mail are on the helper surface", ["sdk.openBank(", "sdk.bankDeposit(", "sdk.bankWithdraw(", "state.bank()", "sdk.openMailbox(", "sdk.sendMail(", "sdk.mailList()"]],
+  ];
 
-  test("long moves are named as the thing that does not fit one snippet", () => {
-    // A navigation fan-out: 6 of 7 runs hit the 30s abandon with a moveTo in
-    // flight, and one re-issued the identical blocking call to one coordinate
-    // five times.
-    // The operator's wording (2026-10-20): a rough on-foot figure, with the
-    // direction a swim or a mount moves it; moveTo's note judges by the
-    // module's walk time, so the prompt states no speed.
-    expect(SYSTEM_PROMPT).toContain(
-      "A long walk is the usual way to hit that limit (on foot roughly 200y; less swimming, more mounted), so dispatch those with await sdk.moveToAsync(target)",
-    );
-    expect(SYSTEM_PROMPT).not.toContain("7yd/s");
-    expect(SYSTEM_PROMPT).toContain("await sdk.moveToAsync(target)");
-  });
-
-  test("moveTo is documented as taking a unit or guid, with a typed miss", () => {
-    // 4 of 7 runs in the same fan-out threw a raw TypeError reading .x off a
-    // unit lookup that found nothing.
-    expect(SYSTEM_PROMPT).toContain("moveTo and moveToAsync take a unit, a guid or a name as well as a point");
-    expect(SYSTEM_PROMPT).toContain('status: "unknown_target"');
-  });
-
-  test("tools are distinguished from ambient snippet objects", () => {
-    // laguna and hy3 called write_scratchpad(...) / search_reference(...) as
-    // bare globals inside snippets.
-    expect(SYSTEM_PROMPT).toContain("Tools and ambient objects are different things");
-    expect(SYSTEM_PROMPT).toContain("is a ReferenceError");
-  });
-
-  test("the world is stated to be the whole, unwalled 3.3.5a world", () => {
-    // Two opus-low freeplay runs (e360 2026-08-26, a11 2026-08-29) wrote
-    // "cannot leave Coldridge Valley" into the scratchpad as a hard fact after
-    // local pathing failures, and ground out the rest of the episode inside
-    // the starter valley. Operator decision 2026-08-29: the extent of the
-    // world is a world fact and belongs in the prompt.
-    expect(SYSTEM_PROMPT).toContain("This is the complete, unmodified 3.3.5a world");
-    expect(SYSTEM_PROMPT).toContain("nothing has been walled off for the benchmark");
+  test("each fact is stated, and the wording it replaced is gone", () => {
+    for (const [why, has, hasNot = []] of FACTS) {
+      for (const text of has) expect([why, text, SYSTEM_PROMPT.includes(text)]).toEqual([why, text, true]);
+      for (const text of hasNot) expect([why, text, SYSTEM_PROMPT.includes(text)]).toEqual([why, text, false]);
+    }
   });
 
   test("the scratchpad cap is stated, with the refusal, at the number the pad enforces", () => {
@@ -121,14 +76,6 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     const { SCRATCHPAD_MAX_CHARS } = require("@wrathbench/mcp");
     expect(SYSTEM_PROMPT).toContain(`The scratchpad holds at most ${SCRATCHPAD_MAX_CHARS.toLocaleString("en-US")} characters`);
     expect(SYSTEM_PROMPT).toContain("is refused and saves nothing (in a snippet, the call rejects)");
-  });
-
-  test("bank and mail are on the helper surface", () => {
-    // openBank, bankDeposit and sendMail existed in the SDK and no run had
-    // ever used them; the prompt never named them (operator, 2026-10-14).
-    for (const call of ["sdk.openBank(", "sdk.bankDeposit(", "sdk.bankWithdraw(", "state.bank()", "sdk.openMailbox(", "sdk.sendMail(", "sdk.mailList()"]) {
-      expect(SYSTEM_PROMPT).toContain(call);
-    }
   });
 });
 
@@ -362,20 +309,23 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
 describe("the fresh-launch session note (the model names its character)", () => {
   const note = (taken: string[] = []) => freshCharacterNote({ race: 1, class: 2, taken });
 
-  test("invites the model to name the character, in the game's own naming rules", () => {
+  test("invites the model to name the character, in the game's own rules, with a taken name a retry it names in advance", () => {
     expect(note()).toContain("name your character");
     expect(note()).toContain("2-12 letters, no spaces, no three identical letters in a row");
     expect(note()).toContain("it is yours for the episode");
     expect(note()).toContain("pick something you like and be creative");
+    expect(note()).toContain("char_create_failed_code_50");
+    expect(note()).toContain("pick a different one");
+    // The model is still never told the account.
+    expect(note()).toContain("do not pass an account");
   });
 
   test("no name travels with the launch — not as an assignment and not as a suggestion", () => {
     // A suggestion is a name the harness has to invent, keep valid and keep
-    // unique; an invalid one took a whole fleet config down (2026-08-25).
+    // unique; an invalid one took a whole fleet config down.
     expect(note()).not.toContain("suggestion");
     expect(note()).not.toContain("your assigned character");
     expect(note()).not.toContain("Use exactly these values");
-    expect(note()).toContain("be creative");
   });
 
   test("the note names the race and class when they are known, in place of an example", () => {
@@ -391,18 +341,9 @@ describe("the fresh-launch session note (the model names its character)", () => 
     expect(note()).toContain('createSession({ character: "<your name>", race: 1, class: 2 })');
   });
 
-  test("a taken name is a retry the note names in advance", () => {
-    expect(note()).toContain("char_create_failed_code_50");
-    expect(note()).toContain("pick a different one");
-  });
-
   test("survivors episode hygiene could not clear are named, because createSession reuses them", () => {
     expect(note(["Grimjaw", "Zeliana"])).toContain("already taken on this account and must not be used: Grimjaw, Zeliana");
     expect(note()).not.toContain("must not be used");
-  });
-
-  test("the model is still never told the account", () => {
-    expect(note()).toContain("do not pass an account");
   });
 });
 

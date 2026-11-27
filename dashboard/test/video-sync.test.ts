@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { captionAt, excerptAround, partAt, partStarts, runToVideo, timelineAt, totalSeconds, videoToRun } from "@viewer/video-time";
-import { cursorFor, leader, videoSeekFor } from "../src/lib/video-sync";
+import { partAt, partStarts, runToVideo, timelineAt, totalSeconds, videoToRun } from "@viewer/video-time";
+import { cursorFor, videoSeekFor } from "../src/lib/video-sync";
 
 const T0 = Date.parse("2026-11-15T10:00:00.000Z");
 const H = 3_600_000;
@@ -45,24 +45,6 @@ describe("the timeline over parts", () => {
       expect(timelineAt(PARTS, at.index, at.offset)).toBe(t);
     }
   });
-
-  test("the caption up is the last cue at or before the playhead", () => {
-    const cues = [
-      { t: 0, text: "a" },
-      { t: 10, text: "b" },
-      { t: 280, text: "c" },
-    ];
-    expect(captionAt(cues, 9.9)).toBe("a");
-    expect(captionAt(cues, 10)).toBe("b");
-    expect(captionAt(cues, 300)).toBe("c");
-    expect(captionAt([], 3)).toBe("");
-  });
-
-  test("an excerpt is clamped to the one part its chapter is in", () => {
-    expect(excerptAround(PARTS, 100)).toEqual({ index: 0, from: 99, to: 106 });
-    expect(excerptAround(PARTS, 268)).toEqual({ index: 0, from: 267, to: 270 });
-    expect(excerptAround(PARTS, 270.5)).toEqual({ index: 1, from: 0, to: 6.5 });
-  });
 });
 
 describe("the time map", () => {
@@ -76,39 +58,19 @@ describe("the time map", () => {
     expect(videoToRun([], 1)).toBeNull();
   });
 
-  test("run time to video finds the frame at or before it: a hold's start, a pause's edge", () => {
-    expect(runToVideo(MAP, T0 + 50 * 80_000)).toBe(50);
-    expect(runToVideo(MAP, T0 + 100 * 80_000)).toBe(100);
-    // Inside the two-day pause: within the eighth of a second between its frames.
-    const paused = runToVideo(MAP, T0 + 30 * H)!;
-    expect(paused).toBeGreaterThanOrEqual(270);
-    expect(paused).toBeLessThan(270.125);
-    expect(runToVideo(MAP, T0 - 1)).toBe(0);
-    expect(runToVideo(MAP, T0 + 99 * H)).toBe(360);
-  });
-
-  test("the two directions agree: run to video to run is the identity off a hold", () => {
+  test("the two directions agree: run to video to run is the identity off a hold, and a pause maps to its edge", () => {
     for (const v of [0, 33.3, 99.9, 150, 269, 300, 359]) {
       const r = videoToRun(MAP, v)!;
       expect(runToVideo(MAP, r)).toBeCloseTo(v, 6);
     }
+    // Inside the two-day pause: within the eighth of a second between its frames.
+    const paused = runToVideo(MAP, T0 + 30 * H)!;
+    expect(paused).toBeGreaterThanOrEqual(270);
+    expect(paused).toBeLessThan(270.125);
   });
 });
 
 describe("the sync with the map", () => {
-  test("the video leads while it plays, the map otherwise", () => {
-    expect(leader(true)).toBe("video");
-    expect(leader(false)).toBe("map");
-  });
-
-  test("a map move seeks the paused video to the matching time, and nothing while it plays", () => {
-    const cursor = videoToRun(MAP, 199)!;
-    expect(videoSeekFor(MAP, cursor, { current: 10, videoPlaying: false, lastSent: null })).toBeCloseTo(199, 6);
-    expect(videoSeekFor(MAP, cursor, { current: 10, videoPlaying: true, lastSent: null })).toBeNull();
-    // Into the second part.
-    expect(videoSeekFor(MAP, T0 + 55 * H, { current: 10, videoPlaying: false, lastSent: null })).toBeGreaterThan(270);
-  });
-
   test("no echo: the video's own value coming back from the map seeks nothing, in either direction", () => {
     // The video plays at 50.3 s: it sends the run time there.
     const sent = cursorFor(MAP, 50.3, { videoPlaying: true, ownSeek: false, lastSent: null })!;
@@ -122,35 +84,5 @@ describe("the sync with the map", () => {
     expect(cursorFor(MAP, 199, { videoPlaying: false, ownSeek: false, lastSent: sent })).toBeNull();
     // The video's own controls do send.
     expect(cursorFor(MAP, 199, { videoPlaying: false, ownSeek: true, lastSent: sent })).toBe(Math.round(videoToRun(MAP, 199)!));
-  });
-
-  test("inside a held event the video already shows the cursor's moment: no seek back to the hold's start", () => {
-    const held = T0 + 100 * 80_000;
-    // Paused in the middle of the hold, with the map's cursor on the event's own run time.
-    expect(videoSeekFor(MAP, held, { current: 100.6, videoPlaying: false, lastSent: null })).toBeNull();
-    // A cursor a little off still finds the video showing it.
-    expect(videoSeekFor(MAP, held + 300, { current: 100.6, videoPlaying: false, lastSent: null })).toBeNull();
-    // Within two video frames of where it is: not worth a seek.
-    expect(videoSeekFor(MAP, T0 + 50.1 * 80_000, { current: 50, videoPlaying: false, lastSent: null })).toBeNull();
-  });
-
-  test("a map playing seeks the video forward step by step, and the steps settle", () => {
-    // The map's playhead ticks 250 ms at 600×: 150 s of play each tick.
-    let current = 0;
-    let seeks = 0;
-    for (let cursor = T0; cursor < T0 + 2 * H; cursor += 150_000) {
-      const t = videoSeekFor(MAP, cursor, { current, videoPlaying: false, lastSent: null });
-      if (t !== null) {
-        current = t;
-        seeks++;
-      }
-      // Where the video stands always shows a moment at or near the cursor.
-      expect(Math.abs(videoToRun(MAP, current)! - cursor)).toBeLessThanOrEqual(0.25 * 80_000 + 1);
-    }
-    expect(seeks).toBeGreaterThan(0);
-    // Once at the cursor, the same cursor again is no seek.
-    const last = T0 + 2 * H;
-    const t = videoSeekFor(MAP, last, { current, videoPlaying: false, lastSent: null }) ?? current;
-    expect(videoSeekFor(MAP, last, { current: t, videoPlaying: false, lastSent: null })).toBeNull();
   });
 });

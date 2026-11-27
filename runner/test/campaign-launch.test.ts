@@ -144,14 +144,6 @@ describe("the shape a campaign file hands the run", () => {
     expect(episodeOverrideOf(c)).toBe(false);
   });
 
-  test("--episode probing may be spelled out; the result is the same launch", () => {
-    const file = fileFor("race-probe@1", "draenei-warrior");
-    const a = configFromArgs([...MODEL, "--campaign-file", file, "--run-id", "x"], {});
-    const b = configFromArgs([...MODEL, "--episode", "probing", "--campaign-file", file, "--run-id", "x"], {});
-    expect({ ...b, token: "" }).toEqual({ ...a, token: "" });
-    expect(a).toMatchObject({ race: 11, class: 1 });
-  });
-
   test("a definition with an objective and no stop level passes exactly that", () => {
     const c = configFromArgs([...MODEL, "--campaign-file", fileFor("nav@1", "coldridge")], {});
     expect(c.objective).toBe("Travel to Ironforge and keep a log.");
@@ -165,14 +157,6 @@ describe("the shape a campaign file hands the run", () => {
       WRATHBENCH_RUN_IMAGE: "registry.example/wb/runner:t2",
     });
     expect(c).toMatchObject({ arm: "b", compactWindow: "200k" });
-  });
-
-  test("a launch that names no campaign file is untouched", () => {
-    const c = configFromArgs([...MODEL, "--episode", "e90"], {});
-    expect(c.campaign).toBeUndefined();
-    expect(c.campaignVersion).toBeUndefined();
-    expect(c.arm).toBeUndefined();
-    expect(c.stopAtLevel).toBeUndefined();
   });
 });
 

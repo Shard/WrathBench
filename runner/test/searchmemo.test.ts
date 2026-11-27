@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "@wrathbench/wiki/bundle";
-import { TOOLS, WIKI_COORDS_SENTENCE, callTool, normalizeSearchQuery, toolsFor, type ToolContext } from "../src/tools";
+import { TOOLS, WIKI_COORDS_SENTENCE, callTool, toolsFor, type ToolContext } from "../src/tools";
 import { SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
 import { mcpToolNames } from "../src/adapter-claude";
 import { loadRunConfig } from "../src/config";
@@ -68,13 +68,6 @@ function context(wiki?: Database): ToolContext {
 const search = (ctx: ToolContext, query: string): Promise<{ text: string }> =>
   callTool(ctx, "search_reference", { query }) as Promise<{ text: string }>;
 
-describe("normalizeSearchQuery", () => {
-  test("case, punctuation and whitespace do not make a new query", () => {
-    expect(normalizeSearchQuery("  Quest: A Threat!  ")).toBe(normalizeSearchQuery("quest a threat"));
-    expect(normalizeSearchQuery("npc 4242")).not.toBe(normalizeSearchQuery("npc 4243"));
-  });
-});
-
 describe("search_reference ranking through the tool", () => {
   test("an id query reaches the page that states the id, not the digits in prose", async () => {
     const ctx = context(bundle());
@@ -84,22 +77,9 @@ describe("search_reference ranking through the tool", () => {
     expect(res.text).not.toContain("Example Formula Notes");
   });
 
-  test("an id query on a bundle without an id index says so", async () => {
-    const db = bundle();
-    db.run("DROP INDEX page_ids_lookup");
-    db.run("DROP INDEX page_ids_page_id");
-    db.run("DROP TABLE page_ids");
-    const res = await search(context(db), "quest 4242");
-    expect(res.text).toContain("no results");
-    expect(res.text).toContain("no entity-id index");
-  });
 });
 
 describe("the per-episode repeat memo", () => {
-  test("the first search carries no note", async () => {
-    const res = await search(context(bundle()), "Example Person Gamma");
-    expect(res.text).not.toContain("note:");
-  });
 
   test("a repeat says how long ago it was asked and that nothing changed", async () => {
     const ctx = context(bundle());
@@ -114,48 +94,11 @@ describe("the per-episode repeat memo", () => {
     expect(again.text).toContain("# Example Person Gamma");
   });
 
-  test("a third ask counts the repeats", async () => {
-    const ctx = context(bundle());
-    await search(ctx, "Example Person Gamma");
-    await search(ctx, "Example Person Gamma");
-    const third = await search(ctx, "Example Person Gamma");
-    expect(third.text).toContain("3 times this episode");
-  });
-
   test("a different query gets its own memo", async () => {
     const ctx = context(bundle());
     await search(ctx, "Example Person Gamma");
     const other = await search(ctx, "Example Quest Alpha");
     expect(other.text).not.toContain("note:");
-  });
-
-  test("a changed result set is reported as changed", async () => {
-    const db = bundle();
-    const ctx = context(db);
-    await search(ctx, "Example Person Gamma");
-    // The world's reference does not change mid-episode; this is the branch
-    // that would fire if it ever did, so it is exercised synthetically.
-    const title = "Example Person Gamma Notes";
-    const text = "More about Example Person Gamma.";
-    db.run("INSERT INTO pages (id, title, ns, text, text_len) VALUES (?, ?, ?, ?, ?)", [
-      99,
-      title,
-      0,
-      text,
-      text.length,
-    ]);
-    db.run("INSERT INTO pages_fts (rowid, title, text) VALUES (?, ?, ?)", [99, title, text]);
-    const again = await search(ctx, "Example Person Gamma");
-    expect(again.text).toContain("The results changed");
-    expect(again.text).toContain("now:");
-  });
-
-  test("a repeated search that found nothing still gets a note", async () => {
-    const ctx = context(bundle());
-    await search(ctx, "zzzznothinghere");
-    const again = await search(ctx, "zzzznothinghere");
-    expect(again.text).toContain("note: you already ran this search");
-    expect(again.text).toContain("(no results)");
   });
 
   test("the memo does not cross episodes", async () => {

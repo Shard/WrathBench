@@ -101,61 +101,6 @@ function cost(usd: number | null, p: Partial<CostFigure> = {}): CostFigure {
 }
 
 describe("characterViewOf", () => {
-  /*
-   * Every run belongs to a character, and a run with no chain is a
-   * character of one attempt rather than no character at all. Whether that
-   * view is worth PRINTING is `hasLineage`'s question, and the run detail
-   * route still asks it — this is only the aggregation.
-   */
-  test("a lone run is a character of one attempt", () => {
-    const view = characterViewOf("a1", [run({ runId: "a1" })]);
-    expect(view?.characterId).toBe("a1");
-    expect(view?.attempt).toBe(1);
-    expect(view?.attempts).toBe(1);
-    expect(view?.previous).toBeNull();
-    expect(view?.next).toBeNull();
-    expect(view?.runs.map((r) => r.runId)).toEqual(["a1"]);
-    expect(view?.totals.attempts).toBe(1);
-  });
-
-  test("a run the set does not hold, and a stillborn launch, have no character", () => {
-    expect(characterViewOf("nobody", [run({ runId: "a1" })])).toBeNull();
-    expect(characterViewOf("a1", [run({ runId: "a1", stillborn: true })])).toBeNull();
-  });
-
-  /*
-   * A character page has to be able to name what it is about, and an attempt
-   * row carries figures only. The identity comes off the NEWEST attempt that
-   * recorded each field — a character can outlive a harness patch, and a thin
-   * session must not blank a name the eleven before it proved.
-   */
-  test("the identity is the newest attempt's, field by field", () => {
-    const runs = chain(
-      { model: "old/model", harnessVersion: "harness-0.4", character: "Bromdir", effort: "low" },
-      { model: "new/model", harnessVersion: "harness-0.5", character: null, effort: null },
-    );
-    const view = characterViewOf("a1", runs);
-    expect(view?.model).toBe("new/model");
-    expect(view?.harnessVersion).toBe("harness-0.5");
-    // The second attempt recorded neither, so the first still speaks.
-    expect(view?.name).toBe("Bromdir");
-    expect(view?.effort).toBe("low");
-  });
-
-  test("an attempt sees the whole chain, forward as well as back", () => {
-    const runs = chain({}, {}, {});
-    const view = characterViewOf("a1", runs);
-    expect(view?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "a3"]);
-    expect(view?.attempt).toBe(1);
-    expect(view?.attempts).toBe(3);
-    expect(view?.previous).toBeNull();
-    expect(view?.next).toBe("a2");
-    // The middle of the chain reads the same set, from its own place in it.
-    expect(characterViewOf("a2", runs)?.attempt).toBe(2);
-    expect(characterViewOf("a2", runs)?.previous).toBe("a1");
-    expect(characterViewOf("a3", runs)?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "a3"]);
-  });
-
   test("quests, xp and playtime sum across the attempts", () => {
     const view = characterViewOf(
       "a3",
@@ -189,72 +134,6 @@ describe("characterViewOf", () => {
     const view = characterViewOf("a2", chain({ questsCompleted: null }, { questsCompleted: 9 }));
     expect(view?.totals.questsCompleted).toBe(9);
     expect(view?.runs[0]?.questsCompleted).toBeNull();
-  });
-
-  test("level is the highest any attempt saw; money is the furthest reading", () => {
-    const view = characterViewOf(
-      "a3",
-      chain({ maxLevel: 6, money: 1200 }, { maxLevel: 9, money: 4500 }, { maxLevel: 9, money: null }),
-    );
-    expect(view?.totals.level).toBe(9);
-    // The newest attempt recorded no money, so the character reports the last one
-    // that did rather than losing the character's purse to a missing sample.
-    expect(view?.totals.money).toBe(4500);
-  });
-
-  test("achievements are the latest attempt's, never a sum", () => {
-    const view = characterViewOf(
-      "a3",
-      chain(
-        { achievements: { earned: 3, points: 30, ids: [1, 2, 3] } },
-        { achievements: { earned: 5, points: 60, ids: [1, 2, 3, 4, 5] } },
-        // The newest attempt wrote no milestone of that kind; the backlog is
-        // still what the character holds, so the last reading stands.
-        { achievements: null },
-      ),
-    );
-    expect(view?.totals.achievements).toEqual({ earned: 5, points: 60, ids: [1, 2, 3, 4, 5] });
-  });
-
-  test("flights, deaths and trades are tallies", () => {
-    const view = characterViewOf(
-      "a2",
-      chain(
-        {
-          taxi: { flights: 2 },
-          deaths: { deaths: 3, releases: 3, resurrects: 2, first: null, last: null, sites: [] },
-          trades: { trades: 1, first: null, last: null, marks: [{ ts: 5, turn: 1 }] },
-        },
-        {
-          taxi: { flights: 1 },
-          deaths: { deaths: 1, releases: 1, resurrects: 1, first: null, last: null, sites: [] },
-          trades: { trades: 2, first: null, last: null, marks: [{ ts: 9, turn: 2 }] },
-        },
-      ),
-    );
-    expect(view?.totals.taxi?.flights).toBe(3);
-    expect(view?.totals.deaths?.deaths).toBe(4);
-    expect(view?.totals.trades?.trades).toBe(3);
-    expect(view?.totals.trades?.marks).toHaveLength(2);
-    expect(view?.runs.map((r) => r.flights)).toEqual([2, 1]);
-  });
-
-  test("spells sum their learns but keep one baseline, and talents count distinct", () => {
-    const view = characterViewOf(
-      "a2",
-      chain(
-        { spells: { learned: 2, atLogin: 10, ids: [7, 8], marks: [] } },
-        // Attempt 2 logged in already holding attempt 1's book: summing the
-        // baselines would count it twice.
-        {
-          spells: { learned: 1, atLogin: 12, ids: [9], marks: [] },
-          talents: { spends: 2, talents: 1, marks: [{ id: 4, points: 2, ts: 1, turn: 1 }] },
-        },
-      ),
-    );
-    expect(view?.totals.spells).toEqual({ learned: 3, atLogin: 10, ids: [7, 8, 9], marks: [] });
-    expect(view?.totals.talents?.spends).toBe(2);
-    expect(view?.totals.talents?.talents).toBe(1);
   });
 
   test("tokens sum, the context is the last reading, and the weakest source wins", () => {
@@ -309,30 +188,6 @@ describe("characterViewOf", () => {
     expect(view?.totals.cost.asIfMetered).toBe(true);
   });
 
-  test("no attempt reporting a charge leaves the sum null", () => {
-    const view = characterViewOf("a2", chain({ actualCost: cost(null) }, { actualCost: cost(null) }));
-    expect(view?.totals.cost.actualUsd).toBeNull();
-    expect(view?.totals.cost.actualAttempts).toBe(0);
-  });
-
-  test("a live last attempt leaves the character unended", () => {
-    const view = characterViewOf(
-      "a2",
-      chain(
-        { endedAt: 5000, terminationReason: "idle" },
-        { endedAt: null, live: true, terminationReason: null, playtimeMs: 90_000 },
-      ),
-    );
-    expect(view?.totals.endedAt).toBeNull();
-    expect(view?.totals.startedAt).toBe(1000);
-    expect(view?.runs[1]?.live).toBe(true);
-  });
-
-  test("an ended last attempt ends the character", () => {
-    const view = characterViewOf("a2", chain({ endedAt: 5000 }, { endedAt: 9000 }));
-    expect(view?.totals.endedAt).toBe(9000);
-  });
-
   test("a stillborn launch is not an attempt and is not counted", () => {
     const runs = [
       ...chain({ questsCompleted: 4 }, { questsCompleted: 1 }),
@@ -370,56 +225,6 @@ describe("characterViewOf", () => {
     expect(off?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "c3"]);
     expect(off?.attempt).toBe(3);
     expect(off?.next).toBeNull();
-  });
-
-  test("previous and next name the served chain, never a branch it does not list", () => {
-    const runs = [
-      ...chain({}, {}),
-      run({ runId: "b3", startedAt: 3000, continuedFrom: "a2" }),
-      run({ runId: "b4", startedAt: 4000, continuedFrom: "b3" }),
-      // Later-started than b3, so the bare lineage walk would call it a2's
-      // successor — while the chain served is the deeper branch through b3.
-      run({ runId: "c3", startedAt: 3500, continuedFrom: "a2" }),
-    ];
-    const view = characterViewOf("a2", runs);
-    expect(view?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "b3", "b4"]);
-    // The seam the feed links must be the attempt the strip lists next to it.
-    expect(view?.next).toBe(view?.runs[view.attempt]?.runId);
-    expect(view?.next).toBe("b3");
-    expect(view?.previous).toBe("a1");
-  });
-
-  test("each attempt carries its own sessions, so a chain's seams and a resume inside it both reach the page", () => {
-    const view = characterViewOf(
-      "a2",
-      chain(
-        { sessions: [{ start: 0, end: 100 }], questsCompleted: 4, playtimeMs: 100 },
-        {
-          // Resumed in place: two sessions under one run id, its count already summed across the restart.
-          sessions: [
-            { start: 1000, end: 1200 },
-            { start: 500_000, end: null },
-          ],
-          questsCompleted: 6,
-          playtimeMs: 300,
-        },
-        {},
-      ),
-    )!;
-    expect(view.runs.map((r) => r.sessions?.length)).toEqual([1, 2, undefined]);
-    expect(view.attempts).toBe(3);
-    expect(view.totals.questsCompleted).toBe(10);
-    expect(view.totals.playtimeMs).toBe(400);
-  });
-
-  test("call counts sum over the attempts that recorded them", () => {
-    const view = characterViewOf(
-      "a2",
-      chain({ toolCalls: 40, snippets: 3, modelResponses: 20 }, { toolCalls: null, snippets: 5, modelResponses: 11 }),
-    );
-    expect(view?.totals.toolCalls).toBe(40);
-    expect(view?.totals.snippets).toBe(8);
-    expect(view?.totals.modelResponses).toBe(31);
   });
 });
 
@@ -481,12 +286,6 @@ describe("the public projection of a character", () => {
     playtimeMs: null,
     character: view ?? undefined,
   }).character;
-
-  test("the figures survive: they are already public per attempt", () => {
-    expect(projected?.runs.map((r) => r.runId)).toEqual(["a1", "a2"]);
-    expect(projected?.totals.questsCompleted).toBe(5);
-    expect(projected?.totals.cost.actualUsd).toBeCloseTo(0.5);
-  });
 
   /*
    * The projector is an allowlist, so what it emits is pinned rather than

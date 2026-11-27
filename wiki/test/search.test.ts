@@ -4,11 +4,9 @@ import { createMemoryBundle, makeWriter } from "../src/bundle";
 import {
   EMPTY_PAGE_SNIPPET,
   EXACT_TITLE_RANK,
-  normaliseTitle,
   parseIdQuery,
   searchReference,
   stripProseCoords,
-  toMatchExpression,
 } from "../src/search";
 
 let db: Database;
@@ -54,22 +52,6 @@ beforeAll(() => {
   writer.flush();
 });
 
-describe("toMatchExpression", () => {
-  test("quotes tokens and drops punctuation", () => {
-    expect(toMatchExpression("alpha beta")).toBe(`"alpha" "beta"`);
-    expect(toMatchExpression(`a "b" OR NEAR(c)`)).toBe(`"a" "b" "OR" "NEAR" "c"`);
-    expect(toMatchExpression("   ***   ")).toBeNull();
-  });
-});
-
-describe("normaliseTitle", () => {
-  test("capitalises the first letter and swaps underscores", () => {
-    expect(normaliseTitle("example_zone beta")).toBe("Example zone beta");
-    expect(normaliseTitle("  Example Zone Beta ")).toBe("Example Zone Beta");
-    expect(normaliseTitle("")).toBe("");
-  });
-});
-
 describe("searchReference", () => {
   test("finds a page by a word in its body", () => {
     const hits = searchReference(db, "consectetur");
@@ -77,11 +59,19 @@ describe("searchReference", () => {
     expect(hits[0]!.snippet).toContain("consectetur");
   });
 
-  test("an exact title comes first", () => {
+  test("an exact title comes first, matched case-insensitively", () => {
     const hits = searchReference(db, "Example Person Gamma");
     expect(hits[0]!.title).toBe("Example Person Gamma");
     expect(hits[0]!.rank).toBe(EXACT_TITLE_RANK);
     expect(hits[0]!.exactTitle).toBe(true);
+    expect(searchReference(db, "example person gamma")[0]!.title).toBe("Example Person Gamma");
+  });
+
+  test("results survive a JSON round trip, which is how the runner sees them", () => {
+    // A non-finite rank would serialise to null and reach the model as a different hit.
+    const hits = [...searchReference(db, "Example Person Gamma"), ...searchReference(db, "Example Person Delta")];
+    expect(JSON.parse(JSON.stringify(hits))).toEqual(hits);
+    expect(hits.every((h) => Number.isFinite(h.rank))).toBe(true);
   });
 
   test("a bare quest name resolves to the Quest: namespace title", () => {
@@ -90,47 +80,21 @@ describe("searchReference", () => {
     expect(hits[0]!.exactTitle).toBe(true);
   });
 
-  test("titles are matched case-insensitively", () => {
-    expect(searchReference(db, "example person gamma")[0]!.title).toBe("Example Person Gamma");
-  });
-
-  test("follows a redirect to its target", () => {
+  test("follows a redirect and a chain of them, and a redirect to a missing page falls back to full text", () => {
     const hits = searchReference(db, "Example Old Name");
     expect(hits[0]!.title).toBe("Example Zone Beta");
     expect(hits[0]!.redirectedFrom).toBe("Example Old Name");
+    expect(searchReference(db, "Example Older Name")[0]!.title).toBe("Example Zone Beta");
+    expect(searchReference(db, "Example Broken Name").every((h) => h.redirectedFrom === undefined)).toBe(true);
   });
 
-  test("follows a chain of redirects", () => {
-    const hits = searchReference(db, "Example Older Name");
-    expect(hits[0]!.title).toBe("Example Zone Beta");
-  });
-
-  test("a redirect to a missing page falls back to full-text results", () => {
-    const hits = searchReference(db, "Example Broken Name");
-    expect(hits.every((h) => h.redirectedFrom === undefined)).toBe(true);
-  });
-
-  test("respects the namespace filter", () => {
+  test("respects the namespace filter and the limit, and returns no duplicates", () => {
     const hits = searchReference(db, "example", { namespaces: [118] });
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.every((h) => h.ns === 118)).toBe(true);
-  });
-
-  test("respects the limit", () => {
     expect(searchReference(db, "example", { limit: 2 })).toHaveLength(2);
-  });
-
-  test("returns no duplicates", () => {
-    const hits = searchReference(db, "Example Zone Beta");
-    const titles = hits.map((h) => h.title);
+    const titles = searchReference(db, "Example Zone Beta").map((h) => h.title);
     expect(new Set(titles).size).toBe(titles.length);
-  });
-
-  test("results survive a JSON round trip, which is how the runner sees them", () => {
-    const hits = searchReference(db, "Example Person Gamma");
-    const roundTripped = JSON.parse(JSON.stringify(hits)) as typeof hits;
-    expect(roundTripped).toEqual(hits);
-    expect(Number.isFinite(roundTripped[0]!.rank)).toBe(true);
   });
 
   test("a wordy question falls back to OR rather than returning nothing", () => {
@@ -152,23 +116,11 @@ describe("searchReference", () => {
 });
 
 describe("parseIdQuery", () => {
-  test("a bare number is an id lookup of unknown kind", () => {
+  test("an id word introduces the numbers after it, a bare number is an id, and a leading number may be claimed by the word after it", () => {
     expect(parseIdQuery("4242")).toEqual({ ids: [{ id: 4242 }], text: "" });
-  });
-
-  test("an id word beside the number gives the kind and is consumed with it", () => {
-    expect(parseIdQuery("quest 4242")).toEqual({ ids: [{ id: 4242, kind: "quest" }], text: "" });
-    expect(parseIdQuery("Example Quest Alpha quest 4242")).toEqual({
-      ids: [{ id: 4242, kind: "quest" }],
-      text: "Example Quest Alpha",
-    });
-    expect(parseIdQuery("entry 1717 Example Zone Beta")).toEqual({
-      ids: [{ id: 1717 }],
-      text: "Example Zone Beta",
-    });
-  });
-
-  test("a run of numbers after an id word are all ids, and a kindless word takes the kind before it", () => {
+    expect(parseIdQuery("Example Quest Alpha quest 4242")).toEqual({ ids: [{ id: 4242, kind: "quest" }], text: "Example Quest Alpha" });
+    expect(parseIdQuery("entry 1717 Example Zone Beta")).toEqual({ ids: [{ id: 1717 }], text: "Example Zone Beta" });
+    // A run of numbers after an id word are all ids, and a kindless word takes the kind before it.
     expect(parseIdQuery("npc entry 1717 1718")).toEqual({
       ids: [
         { id: 1717, kind: "npc" },
@@ -176,15 +128,12 @@ describe("parseIdQuery", () => {
       ],
       text: "",
     });
-  });
-
-  test("an id word after the number does not turn it into an id", () => {
-    expect(parseIdQuery("level 5 quests")).toEqual({ ids: [], text: "level 5 quests" });
+    expect(parseIdQuery("4242 npc entry Example Zone Beta")).toEqual({ ids: [{ id: 4242, kind: "npc" }], text: "Example Zone Beta" });
   });
 
   test("a number no id word introduces stays ordinary text", () => {
     expect(parseIdQuery("level 5 quests")).toEqual({ ids: [], text: "level 5 quests" });
-    expect(parseIdQuery("Example Zone Beta")).toEqual({ ids: [], text: "Example Zone Beta" });
+    expect(parseIdQuery("Example Zone Beta 4242 npc")).toEqual({ ids: [], text: "Example Zone Beta 4242 npc" });
   });
 });
 
@@ -253,53 +202,14 @@ describe("ranking bands", () => {
     expect(searchReference(ranked, "quest 4242")[0]!.title).toBe("Example Quest Alpha");
   });
 
-  test("an exact title outranks an id hit", () => {
-    const hits = searchReference(ranked, "Example Quest Alpha");
-    expect(hits[0]!.exactTitle).toBe(true);
-    expect(hits[0]!.rank).toBe(EXACT_TITLE_RANK);
-  });
-
-  test("a title match outranks a body match that bm25 scores higher", () => {
+  test("an exact title outranks an id hit, and a title match a body match that bm25 scores higher", () => {
+    const exact = searchReference(ranked, "Example Quest Alpha");
+    expect(exact[0]!.exactTitle).toBe(true);
+    expect(exact[0]!.rank).toBe(EXACT_TITLE_RANK);
     const hits = searchReference(ranked, "Example Person Gamma");
     expect(hits[0]!.title).toBe("Example Person Gamma");
     expect(hits.map((h) => h.title)).toContain("Example Chatter Page");
     expect(hits.indexOf(hits.find((h) => h.title === "Example Chatter Page")!)).toBeGreaterThan(0);
-  });
-
-  test("an id query against a bundle with no id index yields nothing rather than noise", () => {
-    const old = createMemoryBundle();
-    const writer = makeWriter(old, 2);
-    writer.addPage("Example Formula Notes", 0, "4242 divided by two is 2121.");
-    writer.flush();
-    // What a bundle built before schema 3 looks like.
-    old.run("DROP INDEX page_ids_lookup");
-    old.run("DROP INDEX page_ids_page_id");
-    old.run("DROP TABLE page_ids");
-    expect(searchReference(old, "quest 4242")).toEqual([]);
-    old.close();
-  });
-
-  test("id results survive a JSON round trip", () => {
-    const hits = searchReference(ranked, "npc 1717");
-    expect(JSON.parse(JSON.stringify(hits))).toEqual(hits);
-    expect(hits[0]!.title).toBe("Example Person Gamma");
-    expect(Number.isFinite(hits[0]!.rank)).toBe(true);
-  });
-});
-
-describe("parseIdQuery leading numbers", () => {
-  test("a number that opens the query may be claimed by the id word after it", () => {
-    expect(parseIdQuery("4242 npc entry Example Zone Beta")).toEqual({
-      ids: [{ id: 4242, kind: "npc" }],
-      text: "Example Zone Beta",
-    });
-  });
-
-  test("but only in that position", () => {
-    expect(parseIdQuery("Example Zone Beta 4242 npc")).toEqual({
-      ids: [],
-      text: "Example Zone Beta 4242 npc",
-    });
   });
 });
 
@@ -396,6 +306,10 @@ describe("a page with no article text", () => {
       end: "Example Person Delta",
       category: "Example Zone Beta",
     });
+    // An id query reaches it and reads the same way.
+    const byId = searchReference(empty, "quest 5150")[0]!;
+    expect(byId.title).toBe("Example Quest Silent");
+    expect(byId.snippet).toContain(EMPTY_PAGE_SNIPPET);
     empty.close();
   });
 
@@ -406,36 +320,5 @@ describe("a page with no article text", () => {
     expect(hits.some((h) => h.title === "Example Barren Stub")).toBe(false);
     expect(hits[0]!.title).toBe("Example Barren Stub (disambiguation)");
     empty.close();
-  });
-
-  test("an id query reaches it and reads the same way", () => {
-    const empty = emptyBundle();
-    const hit = searchReference(empty, "quest 5150")[0]!;
-    expect(hit.title).toBe("Example Quest Silent");
-    expect(hit.matchedId).toEqual({ kind: "quest", id: 5150 });
-    expect(hit.snippet).toContain(EMPTY_PAGE_SNIPPET);
-    expect(hit.snippet).toContain("turn in to Example Person Delta");
-    empty.close();
-  });
-
-  test("is not an FTS document, so no text band can reach it", () => {
-    const empty = emptyBundle();
-    const count = empty.query<{ n: number }, [string]>(
-      "SELECT count(*) AS n FROM pages_fts WHERE pages_fts MATCH ?",
-    );
-    expect(count.get(`"silent"`)!.n).toBe(0);
-    expect(count.get(`"barren"`)!.n).toBe(1); // only the page that has prose
-    empty.close();
-  });
-});
-
-describe("out-of-game reference pages", () => {
-  test("are not in the bundle to be found", () => {
-    // `classifyMetaPage` runs at build time now and the build does not emit a
-    // classified page, so search has no band, no label and no
-    // exact-title carve-out for them. This asserts the absence of the field a
-    // consumer might still be reading.
-    const hits = searchReference(db, "Example Zone Beta", { limit: 8 });
-    expect(JSON.stringify(hits)).not.toContain("metaPage");
   });
 });

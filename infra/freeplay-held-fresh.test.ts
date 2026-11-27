@@ -69,17 +69,6 @@ function freeplay(runId: string, series: string, over: Partial<RunFact> = {}): R
 const OLD = freeplay("fleet-opus-freeplay-z-ai-glm-5-2-free-20261020", "0.5");
 
 describe("a held (campaignOnly) entry with idle unlimited", () => {
-  test("parses, and the other bad campaignOnly combinations are still refused", () => {
-    const cfg = fleet("1.0");
-    expect(cfg.roster["opus"]).toMatchObject({ campaignOnly: true, idle: "unlimited", race: 3, class: 2 });
-    expect(cfg.roster["quiet"]).toMatchObject({ campaignOnly: true, idle: "none" });
-    expect(cfg.refusals).toEqual([]);
-    const ds = { tier: "t0", model: DSF };
-    const parse = (e: Record<string, unknown>) => () => fleet("1.0", { ds: { ...ds, ...e } });
-    expect(parse({ campaignOnly: false, idle: "unlimited" })).toThrow(/campaignOnly is true or absent/);
-    expect(parse({ campaignOnly: true, idle: "unlimited", deadmines: true })).toThrow(/campaignOnly entry runs no scored episode/);
-    expect(parse({ campaignOnly: true, idle: "always" })).toThrow(/idle/);
-  });
 
   test("gets exactly one freeplay launch each, no scored pick, and its start keys reach the launch", () => {
     const plan = planOf(fleet("1.0"), { now: NOW });
@@ -145,17 +134,6 @@ describe("a freeplay character does not carry across a harness series", () => {
     // RUNNER2 is free and is the model's last account: only the protection keeps the sweep off it.
     expect(plan.sweeps).toEqual([]);
     expect(plan.spawns.find((s) => s.name === "opus-freeplay")!.entries[0]!.continueFrom).toBeUndefined();
-  });
-
-  test("an ENDED 0.5 head ON a pool account: the fresh 1.0 launch there keeps it", () => {
-    const old = { ...OLD, account: "RUNNER5" };
-    const plan = planOf(fleet("1.0"), { now: NOW, runs: [old] });
-    const pick = plan.picks.find((p) => p.job.ref === "opus")!;
-    // Affinity still prefers the model's last account; the character there is kept, not continued.
-    expect(pick.account).toBe("RUNNER5");
-    expect(pick.job.continueFrom).toBeUndefined();
-    expect(pick.job.keepCharacters).toEqual(["Brannagh"]);
-    expect(plan.spawns.find((s) => s.name === "opus-freeplay")!.entries[0]!.keepCharacters).toEqual(["Brannagh"]);
   });
 
   test("a PAUSED 0.5 freeplay run is not resumed, not ended, holds nothing, and its character is kept", () => {

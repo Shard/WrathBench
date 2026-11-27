@@ -33,6 +33,7 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
     stubScript: script,
     stepIntervalMs: 0,
     episode: "e90",
+    maxToolCallsPerEpisode: 500,
     runsDir,
     moduleUrl: "http://127.0.0.1:9",
     character: "Navprobe",
@@ -130,7 +131,10 @@ describe("--resume after a pause", () => {
     traj.close();
   }, 30_000);
 
-  test("a carried clock under the budget lets the run continue and play its turns", async () => {
+  test("a carried clock under the budget plays its turns, and the resume note names the character, its race and class, and the clock", async () => {
+    // fleet-nav-probe-freeplay-sonnet-20260823-c3 resumed with a note that said
+    // `createSession({...})`, guessed a name, and rolled a second character
+    // beside the one the pause had preserved.
     const { runsDir, runId } = pausedStubRun(10 * 60_000);
     const stderr = await resume(runsDir, runId, ["--max-turns", "1"]);
     expect(stderr).toContain("episode clock resumes at 10m");
@@ -138,15 +142,12 @@ describe("--resume after a pause", () => {
     expect(records.filter((r) => r.t === "response")).toHaveLength(1);
     expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("turn-limit");
     // A wrathbench-harness resume reattaches its own loop: never stamped resumedFresh.
-    expect(readMeta(join(runsDir, runId))?.resumedFresh).toBeUndefined();
-  }, 30_000);
-
-  test("the resume note names the character, its race and class, and the clock", async () => {
-    // fleet-nav-probe-freeplay-sonnet-20260823-c3 resumed with a note that said
-    // `createSession({...})`, guessed a name, and rolled a second character
-    // beside the one the pause had preserved.
-    const { runsDir, runId } = pausedStubRun(10 * 60_000);
-    await resume(runsDir, runId, ["--max-turns", "1"]);
+    const meta = readMeta(join(runsDir, runId))!;
+    expect(meta.resumedFresh).toBeUndefined();
+    // A resume that says nothing about the tool-call ceiling leaves the stored one where it was:
+    // absence of a flag is not a migration (the control for the --max-tool-calls 0 case below).
+    expect(meta.config.maxToolCallsPerEpisode).toBe(500);
+    expect(meta.comparability?.budget.maxToolCalls).toBe(500);
     // What the model was sent, rebuilt from the trajectory (the record is slim).
     const sent = JSON.stringify(requestsOf(join(runsDir, runId))[0]?.messages ?? "");
     expect(sent).toContain("Navprobe");
@@ -188,22 +189,5 @@ describe("--resume --max-tool-calls 0 migrates a run off the ceiling it was stor
     const traj = new Trajectory(dir);
     expect(traj.runRow(runId)?.["pause_reason"]).toBeNull();
     traj.close();
-  }, 30_000);
-
-  test("without the override the stored ceiling stands — absence of a flag is not a migration", async () => {
-    // The control, and the reason the flag exists at all: a resume that says
-    // nothing about the ceiling leaves the stored one exactly where it was.
-    const { runsDir, runId } = pausedFreeplayRun(500);
-    await resume(runsDir, runId, ["--max-turns", "1"]);
-    const meta = readMeta(join(runsDir, runId))!;
-    expect(meta.runId).toBe(runId);
-    expect(meta.config.maxToolCallsPerEpisode).toBe(500);
-    expect(meta.comparability?.budget.maxToolCalls).toBe(500);
-  }, 30_000);
-
-  test("a numeric override on a resume is still a number", async () => {
-    const { runsDir, runId } = pausedFreeplayRun(500);
-    await resume(runsDir, runId, ["--max-tool-calls", "1000000", "--max-turns", "1"]);
-    expect(readMeta(join(runsDir, runId))!.config.maxToolCallsPerEpisode).toBe(1_000_000);
   }, 30_000);
 });

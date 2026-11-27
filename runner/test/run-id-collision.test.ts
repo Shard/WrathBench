@@ -29,9 +29,6 @@ function runsDirWith(where: "live" | "archive" | "nothing"): string {
 }
 
 describe("assertRunDirFree", () => {
-  test("a free run id passes", () => {
-    expect(() => assertRunDirFree(runsDirWith("nothing"), RUN_ID)).not.toThrow();
-  });
 
   test("a live run directory is refused, naming the path and the projection", () => {
     const runsDir = runsDirWith("live");

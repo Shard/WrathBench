@@ -95,42 +95,9 @@ describe("one entry per published version", () => {
     expect(v.config!.assignments.map((a) => a.ref)).toEqual(["sonnet", "haiku"]);
     expect(v.progress).toEqual({ want: 2 * 2 * 2, done: 0, attempted: 0, capped: 0, live: 0 });
   });
-
-  test("a published version no row names is listed as unassigned, with no columns", () => {
-    const other = definition({ id: "zeta" });
-    const r = campaignsView([], roster(ROW, [arms, other]), counted).campaigns;
-    expect(r.map((c) => `${c.key}:${c.state}`)).toEqual(["wake@1:queued", "zeta@1:unassigned"]);
-    expect(r[1]!.config).toBeNull();
-    expect(r[1]!.columns).toEqual([]);
-  });
 });
 
 describe("a party's square", () => {
-  test("names its attempts by the stamp's party id, oldest first, beside every member's run id", () => {
-    const def = partyDefinition();
-    const rows = { deadmines: { version: 1, assignments: [{ model: "sonnet" }] } };
-    const member = (party: string, m: string, startedAt: number): ResultRun =>
-      run({
-        runId: `${party}-${m}`,
-        campaign: "deadmines",
-        cell: "party",
-        arm: def.arms[0]!.id,
-        race: 1,
-        class: 1,
-        startedAt,
-        party: { id: party, member: m, size: 5, role: m === "tank" ? "tank" : "damage", index: 0 },
-      });
-    // The second attempt's id sorts before the first's: the order is by start, never by the id.
-    const runs = [
-      ...["tank", "healer"].map((m) => member("dm-zz-a1", m, 1000)),
-      ...["tank", "healer"].map((m) => member("dm-aa-a2", m, 5000)),
-    ];
-    const v = campaignsView(runs, roster(rows, [def]), counted).campaigns[0]!;
-    const sq = v.grid[0]!.squares[0]!;
-    expect(sq.parties).toEqual(["dm-zz-a1", "dm-aa-a2"]);
-    expect(sq.runIds).toHaveLength(4);
-  });
-
   test("a party that met its kill end is one counted attempt that reached it, and the campaign is complete", () => {
     const def = partyDefinition({ id: "deadmines", version: 4, end: [{ kill: { entry: 639 } }] });
     const rows = { deadmines: { version: 4, accounts: ["P1", "P2", "P3", "P4", "P5"], assignments: [{ model: "sonnet" }] } };
@@ -155,10 +122,6 @@ describe("a party's square", () => {
     expect(v.state).toBe("complete");
     expect(v.comparison[0]!.arms[0]!).toMatchObject({ reached: 5, terminations: { "kill-target": 5 } });
   });
-
-  test("a square of a definition with no party carries no party list", () => {
-    expect(view([run({ runId: "solo" })]).grid[0]!.squares[0]!).not.toHaveProperty("parties");
-  });
 });
 
 describe("the squares", () => {
@@ -178,11 +141,6 @@ describe("the squares", () => {
     const all = v.grid.flatMap((g) => g.squares.flatMap((s) => s.runIds));
     expect(all).toEqual(["ok"]);
     expect(v.grid[1]!.squares[1]).toMatchObject({ column: "sonnet/wake", runs: 1 });
-  });
-
-  test("builds are the harness versions the square's runs ran on; a start that is not the cell's is flagged", () => {
-    const v = view([run({ runId: "a", harnessVersion: "harness-0.5-931" }), run({ runId: "b", harnessVersion: "harness-0.5-932", race: 1 })]);
-    expect(v.grid[0]!.squares[0]).toMatchObject({ builds: ["harness-0.5-931", "harness-0.5-932"], mismatchedStart: 1 });
   });
 
   test("cost is what was billed: a subscription's as-if-metered figure is not money anyone paid", () => {

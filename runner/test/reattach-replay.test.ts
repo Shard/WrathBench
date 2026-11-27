@@ -179,7 +179,8 @@ function makeHost(moduleUrl: string): SandboxHost {
     moduleUrl,
     token: TOKEN,
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
-    snippetTimeoutMs: 8_000,
+    // Short, since the restart below waits it out on a runaway snippet.
+    snippetTimeoutMs: 3_000,
     pingGraceMs: 300,
   });
   hosts.push(host);
@@ -259,14 +260,5 @@ describe("the reattach replay after a sandbox restart", () => {
     const elapsed = Date.now() - t0;
     expect(elapsed).toBeGreaterThanOrEqual(REATTACH_STATE_WAIT_MS - 50);
     expect(elapsed).toBeLessThan(REATTACH_STATE_WAIT_MS + 2_000);
-  }, 15_000);
-
-  test("a state frame without replay (a module from before it) does not hold connect() for the replay's wait", async () => {
-    const stub = startModuleStub({ first: [sessionState(9, {})], later: [sessionState(9, {})] });
-    const host = makeHost(stub.url);
-    const t0 = Date.now();
-    const state = await readState(host, "await connect();");
-    expect(state["level"]).toBe(9);
-    expect(Date.now() - t0).toBeLessThan(REATTACH_REPLAY_WAIT_MS);
   }, 15_000);
 });

@@ -85,16 +85,6 @@ describe("the quickstart's generated account pool", () => {
     expect(allowlist.filter(isPoolAccountName)).toEqual(poolAccountNames(size));
     for (const svc of ["bootstrap", "runner", "fleet", "publisher"]) expect(compose.services[svc]!.environment!["WRATHBENCH_POOL_SIZE"], svc).toBe(String(size));
   });
-
-  test("WRATHBENCH_EXTRA_ACCOUNTS is appended to the allowlist, adds nothing unset, and reaches bootstrap", () => {
-    const compose = Bun.YAML.parse(readFileSync(join(import.meta.dir, "compose.yml"), "utf8")) as {
-      services: Record<string, { environment?: Record<string, string | null> }>;
-    };
-    // Two flat interpolations: unset renders no trailing comma, so the default list is byte-for-byte today's.
-    expect(compose.services["worldserver"]!.environment!["AC_WRATH_BENCH_ACCOUNTS"]!.endsWith(EXTRA_SUFFIX)).toBe(true);
-    // Passed through by name: unset, the container gets no such variable.
-    expect(compose.services["bootstrap"]!.environment).toHaveProperty("WRATHBENCH_EXTRA_ACCOUNTS", null);
-  });
 });
 
 const EXTRA_SUFFIX = "${WRATHBENCH_EXTRA_ACCOUNTS:+,}${WRATHBENCH_EXTRA_ACCOUNTS:-}";

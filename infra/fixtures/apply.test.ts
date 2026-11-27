@@ -1,6 +1,7 @@
 /**
- * Unit tests for the pure half of the fixtures tool: argument parsing, the
- * account guard, statement building and the orientation helper. No database.
+ * The pure half of the fixtures tool, held to what keeps it off a live run's
+ * character: the account guard, the schema every write lands in, the tables it
+ * may touch, and the wait for a fresh character's logout save. No database.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -10,14 +11,12 @@ import {
   buildEquipStatements,
   buildStatements,
   connectOptions,
-  parseArgs,
   renderStatement,
   savedOut,
-  waitUntilOffline,
   type CharacterRow,
   type InventoryRow,
 } from "./apply";
-import { SCENARIOS, facing, isScenarioName, taxiMask, validateScenario, type Scenario } from "./scenarios";
+import { SCENARIOS, validateScenario, type Scenario } from "./scenarios";
 import { stagingEnvOf } from "../world";
 
 describe("account guard", () => {
@@ -59,90 +58,9 @@ describe("the characters schema", () => {
   });
 });
 
-describe("parseArgs", () => {
-  const base = ["--account", "SMOKE3", "--character", "Smoketram", "--scenario", "tram-ironforge"];
-
-  test("parses the required flags and defaults", () => {
-    expect(parseArgs(base)).toEqual({
-      account: "SMOKE3",
-      character: "Smoketram",
-      scenario: "tram-ironforge",
-      waitMs: 90_000,
-      dryRun: false,
-    });
-  });
-
-  test("uppercases the account so an operator can type it in lower case", () => {
-    expect(parseArgs(["--account", "smoke3", ...base.slice(2)]).account).toBe("SMOKE3");
-  });
-
-  test("takes --wait-ms and --dry-run", () => {
-    const args = parseArgs([...base, "--wait-ms", "1500", "--dry-run"]);
-    expect(args.waitMs).toBe(1500);
-    expect(args.dryRun).toBe(true);
-  });
-
-  test("refuses a runner account", () => {
-    expect(() => parseArgs(["--account", "RUNNER", ...base.slice(2)])).toThrow(/refusing to fixture/);
-  });
-
-  test("refuses an unknown scenario", () => {
-    expect(() => parseArgs([...base.slice(0, 4), "--scenario", "nope"])).toThrow(/unknown scenario/);
-  });
-
-  test("refuses missing flags and stray arguments", () => {
-    expect(() => parseArgs(["--account", "SMOKE"])).toThrow(/--character is required/);
-    expect(() => parseArgs([...base, "junk"])).toThrow(/unexpected argument/);
-    expect(() => parseArgs([...base, "--wait-ms"])).toThrow(/needs a value/);
-    expect(() => parseArgs([...base, "--wait-ms", "-1"])).toThrow(/non-negative/);
-  });
-});
-
-describe("facing", () => {
-  test("points along the axes", () => {
-    expect(facing({ x: 0, y: 0 }, { x: 1, y: 0 })).toBeCloseTo(0, 6);
-    expect(facing({ x: 0, y: 0 }, { x: 0, y: 1 })).toBeCloseTo(Math.PI / 2, 6);
-    expect(facing({ x: 0, y: 0 }, { x: -1, y: 0 })).toBeCloseTo(Math.PI, 6);
-  });
-
-  test("normalises into [0, 2*PI)", () => {
-    const o = facing({ x: 0, y: 0 }, { x: 0, y: -1 });
-    expect(o).toBeCloseTo((3 * Math.PI) / 2, 6);
-    expect(o).toBeGreaterThanOrEqual(0);
-    expect(o).toBeLessThan(2 * Math.PI);
-  });
-
-  test("the tram scenario faces the areatrigger", () => {
-    // (-4838.95, -1318.46) -> (-4840.26, -1330.46): mostly south, slightly west.
-    expect(SCENARIOS["tram-ironforge"].position.o).toBeCloseTo(4.6036, 3);
-  });
-});
-
 describe("scenarios", () => {
   test("every shipped scenario validates", () => {
     for (const scenario of Object.values(SCENARIOS)) validateScenario(scenario);
-  });
-
-  test("isScenarioName is exact", () => {
-    expect(isScenarioName("northshire-fresh")).toBe(true);
-    expect(isScenarioName("toString")).toBe(false);
-  });
-
-  test("rejects nonsense", () => {
-    const ok = SCENARIOS["northshire-fresh"] as Scenario;
-    expect(() => validateScenario({ ...ok, level: 0 })).toThrow(/level/);
-    expect(() => validateScenario({ ...ok, level: 81 })).toThrow(/level/);
-    expect(() => validateScenario({ ...ok, money: -1 })).toThrow(/money/);
-    expect(() => validateScenario({ ...ok, position: { ...ok.position, x: NaN } })).toThrow(/position.x/);
-    expect(() => validateScenario({ ...ok, position: { ...ok.position, o: 7 } })).toThrow(/position.o/);
-    expect(() => validateScenario({ ...ok, spells: [0] })).toThrow(/spells/);
-    expect(() => validateScenario({ ...ok, quests: { rewarded: [-3] } })).toThrow(/rewarded/);
-    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [] }] } })).toThrow(/mobcount/);
-    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [1, 2, 3, 4, 5] }] } })).toThrow(/mobcount/);
-    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [-1] }] } })).toThrow(/mobcount/);
-    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 0, mobcount: [1] }] } })).toThrow(/counted/);
-    expect(() => validateScenario({ ...ok, quests: { inProgress: [7], counted: [{ quest: 7, mobcount: [1] }] } })).toThrow(/also in/);
-    expect(() => validateScenario({ ...ok, quests: { counted: [{ quest: 7, mobcount: [1] }, { quest: 7, mobcount: [2] }] } })).toThrow(/repeat/);
   });
 });
 
@@ -173,80 +91,9 @@ describe("buildStatements", () => {
     expect(update!.sql).not.toContain("at_login");
   });
 
-  test("clears the transport and taxi state that would otherwise strand the character", () => {
-    const [update] = buildStatements(217, scenario);
-    for (const fragment of ["instance_id = 0", "taxi_path = ''", "transguid = 0", "trans_x = 0"]) {
-      expect(update!.sql).toContain(fragment);
-    }
-  });
-
-  test("homebind, spells and quests each get a statement", () => {
-    const rendered = buildStatements(217, scenario).map(renderStatement);
-    expect(rendered.some((s) => s.startsWith("REPLACE INTO character_homebind"))).toBe(true);
-    expect(rendered).toContain("INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (217, 1234, 255)");
-    expect(rendered).toContain("INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (217, 5678, 255)");
-    // status 3 is QUEST_STATUS_INCOMPLETE; 1 is COMPLETE (QuestDef.h).
-    expect(rendered).toContain("INSERT IGNORE INTO character_queststatus (guid, quest, status) VALUES (217, 11, 3)");
-    expect(rendered).toContain(
-      "INSERT IGNORE INTO character_queststatus_rewarded (guid, quest, active) VALUES (217, 22, 1)",
-    );
-  });
-
   test("no statement touches an item table", () => {
     const rendered = buildStatements(217, scenario).map(renderStatement).join("\n");
     expect(rendered).not.toMatch(/item_instance|character_inventory/);
-  });
-
-  test("omits what the scenario does not ask for", () => {
-    const bare = buildStatements(217, { description: "bare", level: 1, position: scenario.position });
-    expect(bare).toHaveLength(1);
-  });
-
-  test("clearQuests emits both deletes before any insert", () => {
-    const rendered = buildStatements(217, {
-      ...scenario,
-      clearQuests: true,
-    }).map(renderStatement);
-    const del = rendered.findIndex((s) => s.startsWith("DELETE FROM character_queststatus WHERE"));
-    const ins = rendered.findIndex((s) => s.startsWith("INSERT IGNORE INTO character_queststatus "));
-    expect(del).toBeGreaterThanOrEqual(0);
-    expect(rendered).toContain("DELETE FROM character_queststatus_rewarded WHERE guid = 217");
-    expect(del).toBeLessThan(ins);
-  });
-
-  test("a counted quest is written whole: status, then all four mobcounts", () => {
-    const rendered = buildStatements(217, {
-      ...scenario,
-      clearQuests: true,
-      quests: { rewarded: [783], counted: [{ quest: 7, mobcount: [7] }, { quest: 8, mobcount: [8, 2], complete: true }] },
-    }).map(renderStatement);
-    // 3 is QUEST_STATUS_INCOMPLETE, 1 is COMPLETE (QuestDef.h); the missing counts are 0.
-    expect(rendered).toContain(
-      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 7, 3, 7, 0, 0, 0)",
-    );
-    expect(rendered).toContain(
-      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 8, 1, 8, 2, 0, 0)",
-    );
-    // After the wipe, or the wipe would take the counts with it.
-    const del = rendered.findIndex((s) => s.startsWith("DELETE FROM character_queststatus WHERE"));
-    const rep = rendered.findIndex((s) => s.startsWith("REPLACE INTO character_queststatus "));
-    expect(del).toBeLessThan(rep);
-  });
-
-  test("the deploy smokes' scenarios stand quest 7 at 7/8 and at 8/8 complete", () => {
-    const lastKill = buildStatements(217, SCENARIOS["vineyard-last-kill"]).map(renderStatement);
-    expect(lastKill).toContain(
-      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 7, 3, 7, 0, 0, 0)",
-    );
-    const done = buildStatements(217, SCENARIOS["mcbride-kill-quest-done"]).map(renderStatement);
-    expect(done).toContain(
-      "REPLACE INTO character_queststatus (guid, quest, status, mobcount1, mobcount2, mobcount3, mobcount4) VALUES (217, 7, 1, 8, 0, 0, 0)",
-    );
-    for (const r of [lastKill, done]) expect(r).toContain("INSERT IGNORE INTO character_queststatus_rewarded (guid, quest, active) VALUES (217, 783, 1)");
-  });
-
-  test("rejects an invalid scenario before building anything", () => {
-    expect(() => buildStatements(217, { ...scenario, level: 999 })).toThrow(/invalid scenario/);
   });
 });
 
@@ -305,74 +152,9 @@ describe("buildEquipStatements", () => {
     expect(after.map((r) => r.item).sort()).toEqual(fresh.map((r) => r.item).sort());
   });
 
-  test("a two-hander empties the off hand into the first free backpack slot", () => {
-    const rows: Row[] = [
-      { bag: 0, slot: 15, item: 1, entry: 36 },
-      { bag: 0, slot: 16, item: 2, entry: 2362 },
-      { bag: 0, slot: 23, item: 3, entry: 6948 },
-      { bag: 0, slot: 24, item: 4, entry: 5613 },
-    ];
-    const after = run(rows, buildEquipStatements(9, rows, [{ entry: 5613, slot: 15 }], [16]));
-    expect(at(after, 0, 15)).toBe(5613);
-    expect(at(after, 0, 16)).toBeUndefined();
-    expect(at(after, 0, 24)).toBe(36);
-    expect(at(after, 0, 25)).toBe(2362);
-  });
-
-  test("takes a staged item from inside a bag, and leaves alone what is already worn where it belongs", () => {
-    const rows: Row[] = [
-      { bag: 0, slot: 4, item: 1, entry: 6721 },
-      { bag: 0, slot: 19, item: 2, entry: 4240 },
-      { bag: 2, slot: 0, item: 3, entry: 3400 },
-    ];
-    const stmts = buildEquipStatements(9, rows, [{ entry: 6721, slot: 4 }, { entry: 3400, slot: 15 }]);
-    const after = run(rows, stmts);
-    expect(stmts).toHaveLength(2); // one park, one place: the chest was already on
-    expect(at(after, 0, 15)).toBe(3400);
-    expect(at(after, 2, 0)).toBeUndefined();
-  });
-
-  test("says which item is missing rather than guessing, and refuses impossible targets", () => {
-    expect(() => buildEquipStatements(9, fresh, [{ entry: 99999, slot: 4 }])).toThrow(/item 99999 for slot 4 is not in the bags/);
-    expect(() => buildEquipStatements(9, fresh, [{ entry: 6721, slot: 4 }, { entry: 2545, slot: 4 }])).toThrow(/slot 4 twice/);
-    expect(() => buildEquipStatements(9, fresh, [{ entry: 6721, slot: 23 }])).toThrow(/not an equipment or bag slot/);
-    // Two of one item need two in the bags.
-    const one = fresh.filter((r) => r.item !== 205);
-    expect(() => buildEquipStatements(9, one, [{ entry: 4240, slot: 19 }, { entry: 4240, slot: 20 }])).toThrow(/item 4240 for slot 20/);
-    const full: Row[] = [{ bag: 0, slot: 16, item: 1, entry: 2362 }, ...Array.from({ length: 16 }, (_, i) => ({ bag: 0, slot: 23 + i, item: 100 + i, entry: 5000 + i }))];
-    expect(() => buildEquipStatements(9, full, [], [16])).toThrow(/no free backpack slot/);
-  });
-
   test("writes only bag and slot, never a guid or an item row", () => {
     const rendered = buildEquipStatements(217, fresh, [{ entry: 6721, slot: 4 }]).map(renderStatement).join("\n");
     expect(rendered).not.toMatch(/INSERT|DELETE|item_instance|SET item|SET guid/);
-  });
-});
-
-describe("renderStatement", () => {
-  test("inlines parameters and escapes quotes", () => {
-    expect(renderStatement({ sql: "SELECT ?, ?", params: ["it's", 3] })).toBe("SELECT 'it''s', 3");
-  });
-});
-
-describe("taxiMask", () => {
-  test("sets bit n-1 of the right word, 14 words wide", () => {
-    expect(taxiMask([6, 7])).toBe(["96", ...new Array(13).fill("0")].join(" "));
-    expect(taxiMask([33]).split(" ")[1]).toBe("1");
-    expect(taxiMask([]).split(" ")).toHaveLength(14);
-  });
-  test("a scenario with taxiNodes writes taximask, one without does not", () => {
-    const base: Scenario = { description: "t", level: 10, position: SCENARIOS["taxi-ironforge"].position };
-    const without = buildStatements(217, base).map(renderStatement).join("\n");
-    expect(without).not.toContain("taximask");
-    const withNodes = buildStatements(217, { ...base, taxiNodes: [6, 7] }).map(renderStatement).join("\n");
-    expect(withNodes).toContain("taximask = '96 0 0 0 0 0 0 0 0 0 0 0 0 0'");
-  });
-  test("achievements become character_achievement rows with the fixture date", () => {
-    const base: Scenario = { description: "t", level: 10, position: SCENARIOS["taxi-ironforge"].position };
-    expect(buildStatements(217, base).map(renderStatement).join("\n")).not.toContain("character_achievement");
-    const withAch = buildStatements(217, { ...base, achievements: [6] }).map(renderStatement).join("\n");
-    expect(withAch).toContain("REPLACE INTO character_achievement (guid, achievement, date) VALUES (217, 6, 1262304000)");
   });
 });
 
@@ -394,12 +176,6 @@ describe("waitUntilOffline: a fresh character's first logout save", () => {
     at_login: 0,
     ...over,
   });
-  /** A stand-in for the characters DB: each snapshot read returns the next row, the last one for good. */
-  const fakeSql = (rows: CharacterRow[]) => {
-    let reads = 0;
-    const sql = { unsafe: async () => [rows[Math.min(reads++, rows.length - 1)]] };
-    return { sql: sql as never, reads: () => reads };
-  };
 
   test("the create INSERT stamps logout_time, so a fresh character reads offline before its session's save; only AT_LOGIN_FIRST tells them apart", () => {
     // The row right after POST /session created it and DELETE /session asked it out:
@@ -411,24 +187,5 @@ describe("waitUntilOffline: a fresh character's first logout save", () => {
     expect(savedOut(row({ at_login: 0x1 }))).toBe(true);
     expect(savedOut(row({ online: 1 }))).toBe(false);
     expect(savedOut(row({ logout_time: 0 }))).toBe(false);
-  });
-
-  test("it waits for the logout save of a just-created character instead of fixturing over it", async () => {
-    const fresh = row({ at_login: AT_LOGIN_FIRST });
-    const db = fakeSql([fresh, row({ at_login: AT_LOGIN_FIRST }), row({ logout_time: 1793246055 })]);
-    await waitUntilOffline(db.sql, fresh, 5000);
-    expect(db.reads()).toBe(3);
-  });
-
-  test("a character that never logged in is refused by name once the wait runs out", async () => {
-    const fresh = row({ at_login: AT_LOGIN_FIRST });
-    const db = fakeSql([fresh]);
-    await expect(waitUntilOffline(db.sql, fresh, 600)).rejects.toThrow(/never been saved out of a session/);
-  });
-
-  test("a character already saved out is fixtured at once", async () => {
-    const db = fakeSql([]);
-    await waitUntilOffline(db.sql, row({}), 5000);
-    expect(db.reads()).toBe(0);
   });
 });

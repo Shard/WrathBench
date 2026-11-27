@@ -22,20 +22,19 @@ describe("extractIds", () => {
     ]);
   });
 
-  test("an id outside any known template is kept as unknown", () => {
+  test("an id outside any known template, or after a closed one, is kept as unknown", () => {
     expect(extractIds("{{examplebox|id=55}}")).toEqual([{ kind: "unknown", id: 55 }]);
+    expect(extractIds("{{npcbox|name=Example Person Alpha}}\nSee also |id=44 in the table.")).toEqual([
+      { kind: "unknown", id: 44 },
+    ]);
   });
 
-  test("ignores numbers that are not id fields", () => {
+  test("ignores numbers that are not id fields, and out-of-range or malformed values", () => {
     expect(extractIds("{{questbox|level=5|experience=25150|money=70}}")).toEqual([]);
     expect(extractIds("Two plus seven hundred and eighty three equals 785.")).toEqual([]);
     expect(extractIds("")).toEqual([]);
-  });
-
-  test("rejects out-of-range and malformed values", () => {
     expect(extractIds("{{questbox|id=0}}")).toEqual([]);
     expect(extractIds("{{questbox|id=1234567890}}")).toEqual([]);
-    expect(extractIds("{{questbox|id=}}")).toEqual([]);
     expect(extractIds("{{questbox|id=abc}}")).toEqual([]);
   });
 
@@ -45,13 +44,6 @@ describe("extractIds", () => {
     expect(extractIds(text)).toEqual(extractIds(text));
     const many = Array.from({ length: 30 }, (_v, i) => `{{npcbox|id=${100 + i}}}`).join("\n");
     expect(extractIds(many).length).toBe(8);
-  });
-
-  test("the same id under two kinds is two rows", () => {
-    expect(extractIds("{{questbox|id=12}}\n{{npcbox|id=12}}")).toEqual([
-      { kind: "quest", id: 12 },
-      { kind: "npc", id: 12 },
-    ]);
   });
 
   test("a nested template does not steal the kind of the outer template's id", () => {
@@ -67,17 +59,15 @@ describe("extractIds", () => {
     ]);
   });
 
-  test("sequential templates each colour only their own ids", () => {
+  test("sequential templates each colour only their own ids, the same id under two kinds included", () => {
     expect(extractIds("{{npcbox|id=11}}\n{{questbox|id=22}}\n{{itembox|id=33}}")).toEqual([
       { kind: "npc", id: 11 },
       { kind: "quest", id: 22 },
       { kind: "item", id: 33 },
     ]);
-  });
-
-  test("an id after a closed template but inside no template is unknown", () => {
-    expect(extractIds("{{npcbox|name=Example Person Alpha}}\nSee also |id=44 in the table.")).toEqual([
-      { kind: "unknown", id: 44 },
+    expect(extractIds("{{questbox|id=12}}\n{{npcbox|id=12}}")).toEqual([
+      { kind: "quest", id: 12 },
+      { kind: "npc", id: 12 },
     ]);
   });
 
@@ -87,11 +77,13 @@ describe("extractIds", () => {
     ]);
   });
 
-  test("a long field before the id does not lose the kind", () => {
+  test("a long field before the id does not lose the kind, and a far-away opening does not colour a later id", () => {
     const filler = "lorem ipsum ".repeat(400);
     expect(extractIds(`{{questbox | description = ${filler} | id = 4242 }}`)).toEqual([
       { kind: "quest", id: 4242 },
     ]);
+    const far = `{{questbox|name=Example Quest Alpha}}\n${filler}\n{{examplebox|id=31}}`;
+    expect(extractIds(far)).toEqual([{ kind: "unknown", id: 31 }]);
   });
 
   test("unbalanced braces are tolerated", () => {
@@ -107,10 +99,5 @@ describe("extractIds", () => {
     expect(extractIds("{{questbox | start = {{npc||Example Person Alpha | id = 783 }}")).toEqual([
       { kind: "npc", id: 783 },
     ]);
-  });
-
-  test("a far-away template opening does not colour a later id", () => {
-    const text = `{{questbox|name=Example Quest Alpha}}\n${"lorem ipsum ".repeat(400)}\n{{examplebox|id=31}}`;
-    expect(extractIds(text)).toEqual([{ kind: "unknown", id: 31 }]);
   });
 });

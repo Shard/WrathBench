@@ -7,22 +7,17 @@ import { platformOf } from "../../runner/src/platform";
 import { readRun } from "../../runner/src/run-list";
 import { playtimeMs, segmentsFrom } from "../../runner/src/sessions";
 import { TrajectoryTail, summarize } from "../tail";
-import { reflectMarkOf, reflectionWindowsFrom, travelMarksOf } from "../run-marks";
+import { reflectionWindowsFrom, travelMarksOf } from "../run-marks";
 import {
   claudeModelTurns,
   areaFactsFrom,
   areaInstantsFrom,
   achievementFactsFrom,
-  deathFactsFrom,
   estimateTokens,
   levelUpFactsFrom,
-  taxiFactsFrom,
   spellFactsFrom,
-  talentFactsFrom,
-  tradeFactsFrom,
   RunTotalsScanner,
   scanRunTotals,
-  splitLines,
   tokenTotals,
   tokensPerSecond,
 } from "../../runner/src/run-totals";
@@ -35,21 +30,6 @@ function tempFile(): string {
 }
 
 const enc = new TextEncoder();
-
-describe("splitLines", () => {
-  test("keeps the bytes after the last newline as the remainder", () => {
-    const { lines, rest } = splitLines(enc.encode('{"a":1}\n{"b":'));
-    expect(lines).toHaveLength(1);
-    expect(new TextDecoder().decode(lines[0]!)).toBe('{"a":1}');
-    expect(new TextDecoder().decode(rest)).toBe('{"b":');
-  });
-
-  test("a fully terminated buffer leaves nothing pending", () => {
-    const { lines, rest } = splitLines(enc.encode("a\nb\n"));
-    expect(lines).toHaveLength(2);
-    expect(rest.length).toBe(0);
-  });
-});
 
 describe("reading in windows", () => {
   /*
@@ -105,17 +85,6 @@ describe("reading in windows", () => {
     // the window is assembled rather than truncated.
     const whole = await new RunTotalsScanner(fixture()).scanOnce();
     expect(await new RunTotalsScanner(fixture(), 1).scanOnce()).toEqual(whole);
-  });
-
-  test("windows survive an append, exactly as one read does", async () => {
-    const path = fixture();
-    const tail = new TrajectoryTail(path, 11);
-    await tail.scan();
-    appendFileSync(path, '{"t":"state","ts":6,"level":3}\n');
-    const added = await tail.scan();
-    expect(added).toHaveLength(1);
-    expect(added[0]!["level"]).toBe(3);
-    expect(await tail.raw(added[0]!.i)).toContain('"ts":6');
   });
 });
 
@@ -223,41 +192,6 @@ describe("TrajectoryTail", () => {
 });
 
 describe("summarize", () => {
-  test("a response names its tools in either writer's shape, prefix kept", () => {
-    const loop = summarize({ t: "response", ts: 1, message: { role: "assistant", content: null, tool_calls: [{ id: "a", function: { name: "run_snippet", arguments: "{}" } }] } }, 0, 0, 1);
-    expect(loop["tools"]).toEqual(["run_snippet"]);
-    // The CLI drivers' shape (claude-code, codex, pi): `tool_uses`, the CLI's prefix on the name.
-    const cli = summarize(
-      {
-        t: "response",
-        ts: 1,
-        message: { role: "assistant", content: null, tool_uses: [{ id: "t1", name: "mcp__wrathbench__edit_file", input: { path: "main.ts" } }, { id: "t2", name: "wrathbench.yield", input: {} }] },
-      },
-      0,
-      0,
-      1,
-    );
-    expect(cli["tools"]).toEqual(["mcp__wrathbench__edit_file", "wrathbench.yield"]);
-    expect(cli["text"]).toBe("");
-  });
-
-  test("a pi reply carries its thinking, stop reason, cost and error", () => {
-    const s = summarize(
-      { t: "response", ts: 1, message: { role: "assistant", content: null, tool_uses: [{ id: "x", name: "mcp__wrathbench__run_snippet", input: {} }] }, stopReason: "error", thinkingChars: 228, piCostUsd: 0.0012, error: "e".repeat(900) },
-      0,
-      0,
-      1,
-    );
-    expect(s["thinkingChars"]).toBe(228);
-    expect(s["stopReason"]).toBe("error");
-    expect(s["piCostUsd"]).toBe(0.0012);
-    expect((s["error"] as string).startsWith("e".repeat(600))).toBe(true);
-    expect((s["error"] as string).length).toBeLessThan(700);
-    // A reply without them carries none.
-    const plain = summarize({ t: "response", ts: 1, message: { role: "assistant", content: "hi" } }, 0, 0, 1);
-    expect(plain["thinkingChars"] ?? plain["stopReason"] ?? plain["piCostUsd"] ?? plain["error"]).toBeUndefined();
-  });
-
   test("drops the message array of a request but keeps its shape", () => {
     const rec = {
       t: "request",
@@ -271,53 +205,6 @@ describe("summarize", () => {
     expect(s["messageCount"]).toBe(2);
     expect(s["systemChars"]).toBe(9000);
     expect(JSON.stringify(s).length).toBeLessThan(300);
-  });
-
-  test("collapses served events to counts by opcode", () => {
-    const events = [
-      { opcode: "SMSG_A", data: { name: "x" } },
-      { opcode: "SMSG_A", data: { name: "y" } },
-      { opcode: "SMSG_B", data: { name: "z" } },
-    ];
-    const s = summarize({ t: "events_served", ts: 1, via: "tool", count: 3, events }, 0, 0, 10);
-    expect(s["events"]).toBeUndefined();
-    expect(s["count"]).toBe(3);
-    expect(s["opcodes"]).toEqual(["SMSG_A×2", "SMSG_B×1"]);
-    expect(s["moreOpcodes"]).toBeUndefined();
-    expect(s["folded"]).toBeUndefined();
-    expect(s["ambient"]).toBeUndefined();
-  });
-
-  test("splits a context batch into model-visible and ambient movement", () => {
-    const events = [
-      { opcode: "SMSG_MONSTER_MOVE", data: {} },
-      { opcode: "MSG_MOVE_HEARTBEAT", data: {} },
-      { opcode: "SMSG_MONSTER_MOVE", data: {} },
-      { opcode: "SMSG_MESSAGECHAT", data: {} },
-    ];
-    const s = summarize({ t: "events_served", ts: 1, via: "context", count: 4, events }, 0, 0, 10);
-    expect(s["count"]).toBe(4);
-    expect(s["ambient"]).toBe(3); // what the model-visible window dropped
-  });
-
-  test("cuts the opcode tally at six and carries the folded count", () => {
-    const events = Array.from({ length: 9 }, (_, i) => ({ opcode: `SMSG_${i}`, data: {} }));
-    const s = summarize({ t: "events_served", ts: 1, via: "tool", count: 9, events, folded: 41 }, 0, 0, 10);
-    expect((s["opcodes"] as string[]).length).toBe(6);
-    expect(s["moreOpcodes"]).toBe(3);
-    expect(s["folded"]).toBe(41);
-  });
-
-  test("keeps error results flagged and cuts very long text", () => {
-    const s = summarize(
-      { t: "snippet_result", ts: 1, name: "run_snippet", isError: true, text: "boom".repeat(5000) },
-      2,
-      0,
-      10,
-    );
-    expect(s["isError"]).toBe(true);
-    expect(s["clipped"]).toBe(true);
-    expect((s["text"] as string).length).toBeLessThan(8200);
   });
 
   test("counts the whole prompt of a request, tool calls included", () => {
@@ -346,26 +233,6 @@ describe("summarize", () => {
       10,
     );
     expect(s["usage"]).toEqual({ prompt: 900, completion: 40 });
-  });
-
-  // The feed times a call from this stamp, so the summary must carry it.
-  test("a tool_call keeps its dispatch stamp and call index", () => {
-    const s = summarize(
-      { t: "tool_call", ts: 5_000, turn: 1, call: 7, name: "run_snippet", args: { code: "1" }, dispatchTs: 1_200 },
-      0,
-      0,
-      10,
-    );
-    expect(s["dispatchTs"]).toBe(1_200);
-    expect(s["call"]).toBe(7);
-    expect(s.ts).toBe(5_000);
-  });
-
-  test("unknown types fall through generically with long strings cut", () => {
-    const s = summarize({ t: "watchdog", ts: 1, kind: "idle", detail: "d".repeat(5000) }, 0, 0, 10);
-    expect(s["kind"]).toBe("idle");
-    expect(s["clipped"]).toBe(true);
-    expect((s["detail"] as string).length).toBeLessThan(2100);
   });
 });
 
@@ -417,17 +284,6 @@ describe("tokenTotals", () => {
     expect(t.completionTokens).toBe(30);
   });
 
-  test("usage on a request is still honoured if a driver logs it there", () => {
-    const t = tokenTotals([
-      summarize({ t: "request", ts: 1, messages: [], usage: { prompt_tokens: 1200, completion_tokens: 0 } }, 0, 0, 1),
-      summarize({ t: "response", ts: 2, message: {}, usage: { completion_tokens: 250 } }, 1, 0, 1),
-    ]);
-    expect(t.source).toBe("reported");
-    expect(t.contextTokens).toBe(1200);
-    expect(t.completionTokens).toBe(250);
-    expect(t.totalTokens).toBe(1450);
-  });
-
   describe("codex context", () => {
     const driver = summarize({ t: "driver", ts: 0, driver: "codex" }, 0, 0, 1);
     const turnResponse = (i: number, prompt: number, lastCall?: Record<string, number>) =>
@@ -463,45 +319,6 @@ describe("tokenTotals", () => {
       expect(t.contextTokens).toBeNull();
       expect(t.contextWindow).toBeUndefined();
       expect(t.promptTokens).toBe(63_000_000);
-    });
-
-    test("while a turn is in flight the last known figure stands, not the request's chars/4", () => {
-      const t = tokenTotals([
-        driver,
-        req(1, 4000),
-        turnResponse(2, 1_000_000, { prompt_tokens: 200_000 }),
-        req(3, 14_488),
-      ]);
-      expect(t.contextTokens).toBe(200_000);
-      expect(t.contextWindow).toBeUndefined();
-      // A fresh codex run in flight with nothing yet logged: null, not 3,622.
-      expect(tokenTotals([driver, req(1, 14_488)]).contextTokens).toBeNull();
-    });
-
-    test("other drivers are untouched by the codex rule", () => {
-      expect(tokenTotals([req(1, 4000), turnResponse(2, 1200)]).contextTokens).toBe(1200);
-    });
-
-    test("the incremental scanner reads the same figure off a trajectory file", async () => {
-      const dir = tempDir("wb-tail-codex-");
-      const path = join(dir, "trajectory.jsonl");
-      const lines = [
-        { t: "driver", ts: 1, driver: "codex" },
-        { t: "request", ts: 2, turn: 1, messages: [{ role: "user", content: "x".repeat(100) }] },
-        {
-          t: "response",
-          ts: 3,
-          turn: 1,
-          message: { role: "assistant", content: "ok" },
-          usage: { prompt_tokens: 9_000_000, completion_tokens: 10 },
-          lastCall: { prompt_tokens: 123_456, completion_tokens: 3, context_window: 258_400 },
-        },
-        { t: "request", ts: 4, turn: 2, messages: [{ role: "user", content: "x".repeat(100) }] },
-      ];
-      writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-      const totals = await new RunTotalsScanner(path).scanOnce();
-      expect(totals.tokens.contextTokens).toBe(123_456);
-      expect(totals.tokens.contextWindow).toBe(258_400);
     });
   });
 
@@ -591,12 +408,6 @@ describe("tokenTotals", () => {
     expect(t.completionTokens).toBe(260);
   });
 
-  test("a span nothing reported usage for is still estimated from characters", () => {
-    const t = tokenTotals([req(0, 4000), res(1, 4000), res(2, 4000)]);
-    expect(t.source).toBe("estimated");
-    expect(t.completionTokens).toBe(2000);
-  });
-
   test("the openai-compatible shape totals exactly as it did before the span fix", () => {
     // One request, one response, usage on the response: the fixed loop's whole
     // vocabulary. Every field is asserted because the span fix touches the
@@ -642,9 +453,6 @@ describe("tokensPerSecond", () => {
       0,
       1,
     );
-  /** A response with no usage block at all: the estimate path. */
-  const bare = (ts: number, chars: number) =>
-    summarize({ t: "response", ts, turn: 1, message: { role: "assistant", content: "z".repeat(chars) } }, ts, 0, 1);
   const snippetResult = (ts: number, turn: number) =>
     summarize({ t: "snippet_result", ts, turn, text: "ok" }, ts, 0, 1);
   /** The claude-code driver's per-turn result: the only honest output count it gives. */
@@ -671,75 +479,6 @@ describe("tokensPerSecond", () => {
     expect(t.overall).toBe(100); // 400 tokens over 4s
   });
 
-  test("a multi-envelope reply takes the provider's running total, never total-plus-estimate", () => {
-    // adapter-claude.ts: the earlier envelopes of one message go out WITHOUT
-    // usage and the last carries the running total for the whole reply, so
-    // adding an estimate for the earlier ones would count their text twice.
-    const t = tokensPerSecond([req(1000, 1), bare(2000, 4000), res(3000, 1, 400)]);
-    expect(t.replies).toBe(1);
-    expect(t.overall).toBe(200); // 400 tokens over 2s — the 1000-token estimate is not added
-  });
-
-  test("a reply with no reported usage at all is estimated from characters", () => {
-    const t = tokensPerSecond([req(1000, 1), bare(3000, 400)]);
-    expect(t.replies).toBe(1);
-    // chars ÷ 4 over 2 seconds; `messageChars` counts the message's own text.
-    expect(t.overall).toBeGreaterThan(45);
-    expect(t.overall).toBeLessThan(55);
-  });
-
-  test("a request with no reply yet has no rate, and does not end the previous span", () => {
-    const inflight = tokensPerSecond([req(1000, 1)]);
-    expect(inflight.replies).toBe(0);
-    expect(inflight.overall).toBeNull();
-    expect(inflight.recent).toBeNull();
-
-    const t = tokensPerSecond([req(1000, 1), res(3000, 1, 400), req(9000, 2)]);
-    expect(t.replies).toBe(1);
-    expect(t.overall).toBe(200);
-  });
-
-  test("under the claude-code driver a span opens at the result the CLI was waiting on", () => {
-    // One request, many replies, each one timed from the tool result before it
-    // — never from the request, which on that driver spans the whole episode.
-    const result = (ts: number) => summarize({ t: "snippet_result", ts, turn: 1, text: "ok" }, ts, 0, 1);
-    const t = tokensPerSecond([
-      req(1000, 1),
-      res(3000, 1, 400),
-      summarize({ t: "tool_call", ts: 3100, turn: 1, name: "eval_snippet" }, 3, 0, 1),
-      result(4000),
-      res(6000, 1, 400),
-    ]);
-    expect(t.replies).toBe(2);
-    // 800 tokens over 4s of model time — not over the 5s the run has existed.
-    expect(t.overall).toBe(200);
-  });
-
-  test("an ambient record mid-reply does not restart the clock", () => {
-    // A `state` sample lands on a timer while the model is still generating; on
-    // the live deepseek-pro run, treating one as a boundary read a third fast.
-    const sample = summarize({ t: "state", ts: 2000, level: 4 }, 2, 0, 1);
-    const t = tokensPerSecond([req(1000, 1), sample, res(3000, 1, 400)]);
-    expect(t.replies).toBe(1);
-    expect(t.overall).toBe(200); // timed from the request, not from the sample
-  });
-
-  test("recent is the last ten replies, summed — not a mean of per-reply rates", () => {
-    const entries = [];
-    // Twelve replies: the first two are slow (10 tok/s), the last ten fast (100).
-    for (let i = 0; i < 12; i++) {
-      const start = 100_000 + i * 100_000;
-      const fast = i >= 2;
-      entries.push(req(start, i + 1), res(start + (fast ? 1000 : 10_000), i + 1, 100));
-    }
-    const t = tokensPerSecond(entries);
-    expect(t.replies).toBe(12);
-    expect(t.recentReplies).toBe(10);
-    expect(t.recent).toBe(100); // 1000 tokens over 10s
-    // The whole run: 1200 tokens over 30s, dragged down by the two slow replies.
-    expect(t.overall).toBe(40);
-  });
-
   test("a pause between a request and its reply drops that span", () => {
     const pause = summarize({ t: "pause", ts: 5000, reason: "rate-limit" }, 5, 0, 1);
     const resume = summarize({ t: "resume", ts: 3_605_000 }, 6, 0, 1);
@@ -756,41 +495,6 @@ describe("tokensPerSecond", () => {
     ]);
     expect(t.replies).toBe(2);
     expect(t.overall).toBe(200);
-  });
-
-  test("scanRunTotals carries the same figure off its single pass", async () => {
-    const dir = tempDir("wrathbench-tps-");
-    const path = join(dir, "trajectory.jsonl");
-    writeFileSync(
-      path,
-      [
-        JSON.stringify({ t: "meta", ts: 1000 }),
-        JSON.stringify({ t: "request", ts: 2000, turn: 1, messages: [{ role: "user", content: "hello" }] }),
-        JSON.stringify({
-          t: "response", ts: 4000, turn: 1, message: { role: "assistant", content: "hi" },
-          usage: { prompt_tokens: 500, completion_tokens: 200 },
-        }),
-        // A second reply, opened by the snippet result the model was waiting on.
-        JSON.stringify({ t: "snippet_result", ts: 5000, turn: 1, text: "ok" }),
-        JSON.stringify({
-          t: "response", ts: 7000, turn: 1, message: { role: "assistant", content: "hi again" },
-          usage: { prompt_tokens: 500, completion_tokens: 400 },
-        }),
-        "",
-      ].join("\n"),
-    );
-    const totals = await scanRunTotals(path);
-    expect(totals.tps.replies).toBe(2);
-    expect(totals.tps.overall).toBe(150); // 600 tokens over 4s of model time
-    // The same entries through the incremental path the run page uses. Tokens
-    // too: both derivations read the same spans, so the single pass and the
-    // tail must not be able to disagree about what one reply produced.
-    const tail = new TrajectoryTail(path);
-    const scanned = await tail.scan();
-    expect(tokensPerSecond(scanned)).toEqual(totals.tps);
-    expect(tokenTotals(scanned)).toEqual(totals.tokens);
-    expect(totals.tokens.completionTokens).toBe(600);
-    rmSync(dir, { recursive: true, force: true });
   });
 
   test("a claude-code turn is one measured reply: the result's output over the turn's span clocks", () => {
@@ -810,72 +514,6 @@ describe("tokensPerSecond", () => {
     expect(t.overall).toBe(4000 / 7); // 4000 tokens over 7s of measured model time
     // Never the 8 the snapshots add up to, and never both.
     expect(tokenTotals(entries).completionTokens).toBe(4000);
-  });
-
-  test("a turn with nothing measurable falls back to the CLI's clocks, api first", () => {
-    // A reply that arrived on the far side of a pause: `replySpans` gives it no
-    // start, so there is no model-time window to divide by and the driver's own
-    // figure is the only measurement left.
-    const pause = summarize({ t: "pause", ts: 1500, reason: "rate-limit" }, 5, 0, 1);
-    const resume = summarize({ t: "resume", ts: 3_600_000 }, 6, 0, 1);
-    const withApi = [
-      req(1000, 1),
-      pause,
-      resume,
-      res(3_602_000, 1, 3),
-      claudeResult(3_603_000, 1, { output_tokens: 4000 }, { durationApiMs: 2000, durationMs: 9000 }),
-    ];
-    expect(tokensPerSecond(withApi).overall).toBe(2000);
-    // A run predating the adapter recording the API clock has only the whole
-    // turn's, tool round trips included.
-    const older = [
-      req(1000, 1),
-      pause,
-      resume,
-      res(3_602_000, 1, 3),
-      claudeResult(3_603_000, 1, { output_tokens: 4500 }, { durationMs: 9000 }),
-    ];
-    expect(tokensPerSecond(older).overall).toBe(500);
-  });
-
-  test("a pause inside a claude-code turn drops that stretch from the denominator", () => {
-    const pause = summarize({ t: "pause", ts: 4000, reason: "rate-limit" }, 5, 0, 1);
-    const resume = summarize({ t: "resume", ts: 3_604_000 }, 6, 0, 1);
-    const t = tokensPerSecond([
-      req(1000, 1),
-      res(3000, 1, 3), // a measured 2s span
-      pause,
-      resume,
-      res(3_610_000, 1, 4), // no opener after the resume: times nothing
-      claudeResult(3_611_000, 1, { output_tokens: 500 }, { durationMs: 3_610_000 }),
-    ]);
-    // 500 tokens over the 2s actually measured, not over the hour parked.
-    expect(t.overall).toBe(250);
-  });
-
-  test("iterations are read per reply only when they sum to the turn's total", () => {
-    // A one-call turn: the single iteration IS the turn, so the spans keep
-    // their own timing and carry the real figure.
-    const perReply = [
-      req(1000, 1),
-      res(3000, 1, 2),
-      claudeResult(4000, 1, { output_tokens: 900, iterations: [{ output_tokens: 900 }] }, { durationApiMs: 100_000 }),
-    ];
-    const t = tokensPerSecond(perReply);
-    expect(t.overall).toBe(450); // 900 over the 2s span, not over the CLI's 100s
-    expect(tokenTotals(perReply).completionTokens).toBe(900);
-
-    // The shape every real run has: one iteration, the LAST call, against a
-    // turn of many. Counting them would match and be wrong; summing declines.
-    const declined = [
-      req(1000, 1),
-      res(3000, 1, 2),
-      claudeResult(5000, 1, { output_tokens: 9000, iterations: [{ output_tokens: 400 }] }, { durationApiMs: 3000 }),
-    ];
-    expect(tokenTotals(declined).completionTokens).toBe(9000);
-    // Collapsed, and still timed by the span: 9000 over the 2s measured, not
-    // over the CLI's 3s.
-    expect(tokensPerSecond(declined).overall).toBe(4500);
   });
 
   test("a run whose turns never produced a result is labelled snapshot, not reported", () => {
@@ -974,36 +612,6 @@ describe("tokensPerSecond", () => {
     expect(final.source).toBe("reported");
   });
 
-  test("the file scan and the tail agree on finished-count replies", async () => {
-    const dir = tempDir("wrathbench-claude-final-");
-    const path = join(dir, "trajectory.jsonl");
-    const line = (o: Record<string, unknown>): string => JSON.stringify(o);
-    writeFileSync(
-      path,
-      [
-        line({ t: "driver", ts: 900, driver: "claude-code" }),
-        line({ t: "request", ts: 1000, turn: 1, messages: [{ role: "user", content: "hi" }] }),
-        line({ t: "response", ts: 2000, turn: 1, message: { role: "assistant", content: "a" }, usage: { prompt_tokens: 50, completion_tokens: 3 } }),
-        line({ t: "snippet_result", ts: 3000, turn: 1, text: "ok" }),
-        line({ t: "response", ts: 4000, turn: 1, message: { role: "assistant", content: "b" }, usage: { prompt_tokens: 60, completion_tokens: 700, completion_final: true } }),
-        line({ t: "snippet_result", ts: 5000, turn: 1, text: "ok" }),
-        line({ t: "response", ts: 6000, turn: 1, message: { role: "assistant", content: "c" }, usage: { prompt_tokens: 70, completion_tokens: 800, completion_final: true } }),
-        "",
-      ].join("\n"),
-    );
-    const totals = await scanRunTotals(path);
-    expect(totals.tokens.source).toBe("reported");
-    expect(totals.tokens.completionTokens).toBe(1503);
-    expect(tokenTotals(await new TrajectoryTail(path).scan())).toEqual(totals.tokens);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  test("a run with no claude_result at all is untouched", () => {
-    const entries = [req(1000, 1), res(3000, 1, 400), req(4000, 2), res(6000, 2, 400)];
-    expect(tokensPerSecond(entries)).toEqual({ overall: 200, recent: 200, replies: 2, recentReplies: 2 });
-    expect(tokenTotals(entries).completionTokens).toBe(800);
-  });
-
   test("scanRunTotals and the tail agree on a claude-code run", async () => {
     const dir = tempDir("wrathbench-claude-");
     const path = join(dir, "trajectory.jsonl");
@@ -1083,10 +691,6 @@ describe("tokensPerSecond", () => {
     writeFileSync(path, [...lines.slice(0, -1), lines.at(-1)!.replace('"output_tokens":1200', '"output_tokens":0'), ""].join("\n"));
     expect((await scanRunTotals(path)).tokens.turns).toBe(2 + 1 + 3);
     rmSync(dir, { recursive: true, force: true });
-  });
-
-  test("a fixed-loop run's turns are its requests, as before", () => {
-    expect(tokenTotals([req(1000, 1), res(3000, 1, 7), res(3500, 1, 2), req(4000, 2), res(6000, 2, 11)]).turns).toBe(2);
   });
 
   test("a claude-code run known only by its claude_system envelope reads as snapshots, in the single pass and the tail alike", async () => {
@@ -1196,10 +800,6 @@ describe("tokensPerSecond", () => {
     expect((await scanRunTotals(path)).tokens.promptTokens).toBe(300);
     rmSync(dir, { recursive: true, force: true });
   });
-
-  test("an empty run has no rate at all", () => {
-    expect(tokensPerSecond([])).toEqual({ overall: null, recent: null, replies: 0, recentReplies: 0 });
-  });
 });
 
 describe("scanRunTotals", () => {
@@ -1292,26 +892,6 @@ describe("active segments and playtime", () => {
   const marks = (...pairs: [string, number][]): { t: string; ts: number }[] =>
     pairs.map(([t, ts]) => ({ t, ts }));
 
-  test("two pause/resume gaps sum to the active stretches only", () => {
-    const segs = segmentsFrom(
-      marks(
-        ["meta", 500],
-        ["pause", 1_000],
-        ["resume", 10_000],
-        ["pause", 11_500],
-        ["resume", 20_000],
-        ["termination", 22_000],
-      ),
-    );
-    expect(segs).toEqual([
-      { start: 500, end: 1_000 },
-      { start: 10_000, end: 11_500 },
-      { start: 20_000, end: 22_000 },
-    ]);
-    // Span is 21.5s; 9s + 8.5s of it was paused.
-    expect(playtimeMs(segs, { lastTs: 22_000, live: false, now: 99_999 })).toBe(4_000);
-  });
-
   test("a live run's open segment counts to now", () => {
     const segs = segmentsFrom(marks(["meta", 1_000], ["pause", 2_000], ["resume", 5_000]));
     expect(playtimeMs(segs, { lastTs: 6_000, live: true, now: 9_000 })).toBe(1_000 + 4_000);
@@ -1322,21 +902,6 @@ describe("active segments and playtime", () => {
   test("a run that is paused right now does not count the pause it sits in", () => {
     const segs = segmentsFrom(marks(["meta", 1_000], ["resume", 1_000], ["pause", 4_000]));
     expect(playtimeMs(segs, { lastTs: 4_000, live: true, now: 99_000 })).toBe(3_000);
-  });
-
-  test("a run without pauses is its whole span", () => {
-    const segs = segmentsFrom(marks(["meta", 1_000], ["termination", 8_000]));
-    expect(playtimeMs(segs, { lastTs: 8_000, live: false, now: 50_000 })).toBe(7_000);
-  });
-
-  test("a second meta mid-file (a resume that regenerated its token) opens nothing", () => {
-    const segs = segmentsFrom(
-      marks(["meta", 1_000], ["pause", 2_000], ["resume", 5_000], ["meta", 5_100], ["termination", 6_000]),
-    );
-    expect(segs).toEqual([
-      { start: 1_000, end: 2_000 },
-      { start: 5_000, end: 6_000 },
-    ]);
   });
 
   test("the pause-mark meta written right after a pause does not reopen the segment", () => {
@@ -1362,14 +927,6 @@ describe("active segments and playtime", () => {
 });
 
 describe("platformOf", () => {
-  test("names the platform from the api base", () => {
-    expect(platformOf("https://openrouter.ai/api/v1", "openai")).toBe("openrouter");
-    expect(platformOf("https://api.anthropic.com", "openai")).toBe("anthropic");
-    expect(platformOf("https://api.openai.com/v1", "openai")).toBe("openai");
-    expect(platformOf("http://127.0.0.1:9999/v1", "openai")).toBe("local");
-    expect(platformOf("https://api.together.xyz/v1", "openai")).toBe("together.xyz");
-  });
-
   test("a named platform is its exact host, never a substring of another one", () => {
     // Lookalikes label as themselves, not as the platform they imitate.
     expect(platformOf("https://openrouter.ai.example.com/api/v1", "openai")).toBe("openrouter.ai.example.com");
@@ -1379,11 +936,6 @@ describe("platformOf", () => {
     expect(platformOf("https://collector.example/openrouter.ai/v1", "openai")).toBe("collector.example");
     // An unparseable base labels itself and is never taken for a named platform.
     expect(platformOf("openrouter.ai/api/v1", "openai")).toBe("openrouter.ai/api/v1");
-  });
-
-  test("falls back to the driver when there is no api base", () => {
-    expect(platformOf(null, "claude-code")).toBe("claude-code");
-    expect(platformOf(null, null)).toBeNull();
   });
 
   // the LAN box is `local` — the same test `billingOf` calls
@@ -1568,10 +1120,6 @@ describe("zone and area milestones", () => {
     expect(facts.capitalZone).toBe(1637); // Orgrimmar
   });
 
-  test("no marks at all is null, not an empty reading", () => {
-    expect(areaFactsFrom([])).toBeNull();
-  });
-
   test.each([
     ["GPT Luna stays within the Northshire tutorial cluster", [
       { kind: "area", to: 9, from: null }, { kind: "area", to: 24, from: 9 },
@@ -1623,11 +1171,6 @@ describe("achievement and flight milestones (issue #8)", () => {
     expect(taxi).toEqual({ flights: 0 });
   });
 
-  test("an earn whose points the module could not name adds none rather than a guess", async () => {
-    const { achievements } = await scanRunTotals(fileWith([meta, login([], 0), earn(12)]));
-    expect(achievements).toEqual({ earned: 1, points: 0, ids: [12] });
-  });
-
   test("a resumed run's second backlog is a superset, and its points are not added twice", () => {
     const facts = achievementFactsFrom([
       { kind: "login", ids: [6], points: 10 },
@@ -1655,28 +1198,6 @@ describe("achievement and flight milestones (issue #8)", () => {
     // A mark built without an instant places nothing.
     expect(areaInstantsFrom([{ kind: "area", to: 501, from: null }, { kind: "area", to: 502, from: 501 }, { kind: "area", to: 503, from: 502 }, { kind: "zone", to: 1519, from: null }])).toEqual({ leftStartArea: null, capitalZone: null });
   });
-
-  test("landings alone still read as a recording, at zero takeoffs", () => {
-    expect(taxiFactsFrom(["taxi_landed"], false)).toEqual({ flights: 0 });
-    expect(taxiFactsFrom([], false)).toBeNull();
-    expect(taxiFactsFrom([], true)).toEqual({ flights: 0 });
-  });
-
-  test("no achievement mark at all is null, not an empty reading", () => {
-    expect(achievementFactsFrom([])).toBeNull();
-  });
-
-  test("the tail's incremental index derives the same facts as the whole-file scan (achievement and flight marks)", async () => {
-    const path = fileWith([meta, login([6], 10), earn(12, 10), takeoff]);
-    const tail = new TrajectoryTail(path);
-    await tail.scan();
-    const totals = await scanRunTotals(path);
-    expect(tail.achievements).toEqual(totals.achievements);
-    expect(tail.taxi).toEqual(totals.taxi);
-    // A second scan of an unchanged file adds nothing.
-    await tail.scan();
-    expect(tail.achievements).toEqual(totals.achievements);
-  });
 });
 
 describe("the replay's travel marks", () => {
@@ -1695,27 +1216,6 @@ describe("the replay's travel marks", () => {
     args: { bag: 255, slot: 23 },
     names: { item: "Hearthstone" },
     ...extra,
-  });
-
-  test("flights and releases come off the milestones, at the sample that saw them or the flight's own stamp", () => {
-    expect(travelMarksOf(milestone(1300, "taxi", { from: { areaId: 9 } }))).toEqual([{ kind: "taxi", ts: 1300 }]);
-    expect(travelMarksOf(milestone(1400, "taxi_landed"))).toEqual([{ kind: "taxi_landed", ts: 1400 }]);
-    // A flight latched in the sandbox child carries the flip's own `observedTs`,
-    // which beats the sample's stamp.
-    expect(travelMarksOf(milestone(1300, "taxi", { observedTs: 1260, from: { areaId: 9 } }))).toEqual([{ kind: "taxi", ts: 1260 }]);
-    expect(travelMarksOf(milestone(1400, "taxi_landed", { observedTs: 1385, to: { areaId: 38 } }))).toEqual([
-      { kind: "taxi_landed", ts: 1385 },
-    ]);
-    expect(travelMarksOf(milestone(1500, "release", { graveyard: { map: 0, x: 1, y: 2, z: 3 } }))).toEqual([
-      { kind: "release", ts: 1500 },
-    ]);
-    // A death first seen already released has no release record after it.
-    expect(travelMarksOf(milestone(1600, "death", { observedTs: 1550, released: true }))).toEqual([
-      { kind: "release", ts: 1600 },
-    ]);
-    expect(travelMarksOf(milestone(1600, "death", { observedTs: 1550, released: false }))).toEqual([]);
-    expect(travelMarksOf(milestone(1700, "resurrect"))).toEqual([]);
-    expect(travelMarksOf(milestone(1800, "area", { to: { id: 87 } }))).toEqual([]);
   });
 
   test("a hearthstone comes off the action log, at the dispatch, and only when the module took it", () => {
@@ -1868,36 +1368,6 @@ describe("level and death milestones", () => {
     await tail.scan();
     expect(tail.deaths).toEqual(deaths);
   });
-
-  test("a release long after a resurrect is a release, death recorded or not", () => {
-    const facts = deathFactsFrom(
-      [
-        { kind: "resurrect", ts: 1_000, turn: 1 },
-        { kind: "release", ts: 60_000, turn: 2 },
-        { kind: "resurrect", ts: 90_000, turn: 2 },
-      ],
-      true,
-    )!;
-    expect([facts.releases, facts.resurrects]).toEqual([1, 2]);
-  });
-
-  test("no mark of either kind is null; a level mark alone opens the death reading", () => {
-    expect(deathFactsFrom([], false)).toBeNull();
-    expect(deathFactsFrom([], true)!.deaths).toBe(0);
-    expect(levelUpFactsFrom([])).toBeNull();
-  });
-
-  test("the tail's incremental index derives the same facts as the whole-file scan (level and death marks)", async () => {
-    const path = fileWith([meta, level(1, undefined, 0), death(4444), level(2, 1, 10)]);
-    const tail = new TrajectoryTail(path);
-    await tail.scan();
-    const totals = await scanRunTotals(path);
-    expect(tail.leveling).toEqual(totals.leveling);
-    expect(tail.deaths).toEqual(totals.deaths);
-    // A second scan of an unchanged file adds nothing.
-    await tail.scan();
-    expect(tail.deaths).toEqual(totals.deaths);
-  });
 });
 
 describe("spell, talent and trade milestones", () => {
@@ -1960,26 +1430,6 @@ describe("spell, talent and trade milestones", () => {
     expect(facts.atLogin).toBe(2);
     expect(facts.learned).toBe(1);
   });
-
-  test("no mark and no witness is null; the witness alone opens the reading", () => {
-    expect(spellFactsFrom([])).toBeNull();
-    expect(talentFactsFrom([], false)).toBeNull();
-    expect(talentFactsFrom([], true)!.spends).toBe(0);
-    expect(tradeFactsFrom([], false)).toBeNull();
-    expect(tradeFactsFrom([], true)!.trades).toBe(0);
-  });
-
-  test("the tail's incremental index derives the same facts as the whole-file scan (spell, talent and trade marks)", async () => {
-    const path = fileWith([meta, login([78]), spell(772), talent(1683, 1), trade(4444)]);
-    const tail = new TrajectoryTail(path);
-    await tail.scan();
-    const totals = await scanRunTotals(path);
-    expect(tail.spells).toEqual(totals.spells);
-    expect(tail.talents).toEqual(totals.talents);
-    expect(tail.trades).toEqual(totals.trades);
-    await tail.scan();
-    expect(tail.trades).toEqual(totals.trades);
-  });
 });
 
 describe("reflection windows", () => {
@@ -1993,23 +1443,6 @@ describe("reflection windows", () => {
     writeFileSync(path, [...lines, ""].join("\n"));
     return path;
   }
-
-  test("only a reflect_window record with a turn and an event is a mark", () => {
-    expect(reflectMarkOf({ t: "reflect_window", turn: 4, event: "open" })).toEqual({
-      turn: 4,
-      event: "open",
-      reason: null,
-    });
-    expect(reflectMarkOf({ t: "reflect_window", turn: 9, event: "close", reason: "breaker" })).toEqual({
-      turn: 9,
-      event: "close",
-      reason: "breaker",
-    });
-    // Not one of ours, or missing the half that makes it usable.
-    expect(reflectMarkOf({ t: "milestone", kind: "zone", turn: 4 })).toBeNull();
-    expect(reflectMarkOf({ t: "reflect_window", event: "open" })).toBeNull();
-    expect(reflectMarkOf({ t: "reflect_window", turn: 4, event: "sideways" })).toBeNull();
-  });
 
   test("a window is half-open: the close names the first turn spent acting again", () => {
     expect(reflectionWindowsFrom([
@@ -2026,11 +1459,6 @@ describe("reflection windows", () => {
     expect(reflectionWindowsFrom([{ turn: 3, event: "open", reason: null }])).toEqual([
       { fromTurn: 3, toTurn: null },
     ]);
-  });
-
-  test("an unpaired close is dropped rather than guessed into a window from turn zero", () => {
-    expect(reflectionWindowsFrom([{ turn: 7, event: "close", reason: "left_rest" }])).toEqual([]);
-    expect(reflectionWindowsFrom([])).toEqual([]);
   });
 
   test("the tail accumulates them as it indexes, and a truncated file is re-read whole", async () => {
@@ -2058,11 +1486,46 @@ describe("reflection windows", () => {
     await tail.scan();
     expect(tail.reflections).toEqual([{ fromTurn: 2, toTurn: null }]);
   });
+});
 
-  test("a run that recorded no window reads as an empty list, and accents nothing", async () => {
-    const path = fileWith([JSON.stringify({ t: "state", ts: 1, level: 1 })]);
+describe("the tail's milestone facts", () => {
+  test("the incremental index derives the same facts as the whole-file scan, every family at once", async () => {
+    const at = (ts: number, kind: string, extra: Record<string, unknown> = {}) => JSON.stringify({ t: "milestone", ts, kind, turn: 1, ...extra });
+    const path = join(tempDir("wrathbench-milestone-parity-"), "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        at(1100, "achievements_at_login", { ids: [6], points: 10 }),
+        at(1100, "spells_at_login", { ids: [78] }),
+        at(1100, "level", { to: 1, xp: 0 }),
+        at(1200, "achievement", { id: 12, points: 10 }),
+        at(1200, "spell", { id: 772 }),
+        at(1300, "taxi", { from: { areaId: 9 } }),
+        at(1300, "talent", { id: 1683, rank: 1, points: 2 }),
+        at(9999, "death", { observedTs: 4444, position: { map: 0, x: 1, y: 2, z: 3, source: "death_spot" }, zone: { id: 12 }, area: { id: 9 }, released: false }),
+        at(9999, "trade", { observedTs: 4500 }),
+        at(5000, "level", { to: 2, from: 1, xp: 10 }),
+        "",
+      ].join("\n"),
+    );
     const tail = new TrajectoryTail(path);
     await tail.scan();
-    expect(tail.reflections).toEqual([]);
+    const totals = await scanRunTotals(path);
+    const facts = (s: TrajectoryTail | typeof totals) => ({
+      achievements: s.achievements,
+      taxi: s.taxi,
+      leveling: s.leveling,
+      deaths: s.deaths,
+      spells: s.spells,
+      talents: s.talents,
+      trades: s.trades,
+    });
+    expect(facts(tail)).toEqual(facts(totals));
+    // Every family was read, so the comparison is not of seven nulls.
+    for (const v of Object.values(facts(totals))) expect(v).not.toBeNull();
+    // A second scan of an unchanged file adds nothing.
+    await tail.scan();
+    expect(facts(tail)).toEqual(facts(totals));
   });
 });

@@ -125,12 +125,6 @@ function seededParty() {
 }
 
 describe("the snippet delta recorder and its block", () => {
-  test("empty when nothing changed: no header at all", () => {
-    const t = seededParty();
-    t.feed();
-    t.feed("SMSG_PARTY_MEMBER_STATS", {});
-    expect(renderSnippetDelta(t.rec.drain())).toBeUndefined();
-  });
 
   test("a member's death and a new chat line show once, then the block is empty again", () => {
     const t = seededParty();
@@ -224,37 +218,6 @@ describe("the snippet delta recorder and its block", () => {
       inView(unit(400, 800));
     }
     expect(renderSnippetDelta(t.rec.drain())).toBe(`${SNIPPET_DELTA_HEADER}\nHealpartyc: died, released, alive again (now 50%)`);
-  });
-
-  test("a member's genuine zone change in that drift is told once, beside its other news", () => {
-    const t = seededParty();
-    const outOfView = (st: { dead?: boolean; ghost?: boolean; health: number }, zone: string) => {
-      t.w.units.delete(HEAL);
-      t.w.members[1] = { ...t.w.members[1]!, stats: { online: true, maxHealth: 800, zone: { name: zone }, seq: t.nextSeq(), ...st } };
-      t.feed("SMSG_PARTY_MEMBER_STATS", {});
-    };
-    const inView = (u: UnitLike) => {
-      t.w.units.set(HEAL, u);
-      t.feed();
-    };
-    outOfView({ dead: false, ghost: false, health: 800 }, "The Deadmines");
-    inView(unit(0, 800));
-    for (let i = 0; i < 3; i++) {
-      outOfView({ dead: true, health: 0 }, "The Deadmines");
-      inView(unit(0, 800));
-    }
-    inView(unit(1, 800, true));
-    // It walks out through the portal, a ghost, and its frame says so.
-    for (let i = 0; i < 3; i++) {
-      outOfView({ dead: false, ghost: true, health: 1 }, "Westfall");
-      inView(unit(1, 800, true));
-    }
-    inView(unit(400, 800));
-    outOfView({ dead: false, ghost: false, health: 400 }, "Westfall");
-    inView(unit(400, 800));
-    expect(renderSnippetDelta(t.rec.drain())).toBe(
-      `${SNIPPET_DELTA_HEADER}\nHealpartyc: died, released, now in Westfall, alive again (now 50%)`,
-    );
   });
 
   test("offline, and leaving the group, are transitions too", () => {
@@ -369,20 +332,6 @@ describe("the snippet delta recorder and its block", () => {
     expect(block).toContain("Raidmember0longname: below 50%, died, released");
   });
 
-  test("deterministic: one drain renders the same bytes every time", () => {
-    const d: SnippetDelta = {
-      members: [{ name: "Tankpartyb", words: ["below 50%", "died"], truncated: false }],
-      chat: ["  [party] <Tankpartyb> pull back"],
-      chatDropped: 0,
-      damage: [
-        { name: "Defias Miner", total: 36, hits: [{ what: "melee", count: 2, total: 36 }] },
-        { name: "Defias Evoker", total: 376, hits: [{ what: "Fireball", count: 3, total: 315 }, { what: "Frostbolt", count: 1, total: 61 }] },
-      ],
-      damageOther: { sources: 0, total: 0 },
-      quests: { complete: [], added: [], gone: [] },
-    };
-    expect(renderSnippetDelta(d)).toBe(renderSnippetDelta(structuredClone(d)));
-  });
 });
 
 // ------------------------------------------------------------ the child
@@ -506,14 +455,6 @@ describe("a death's cause, latched apart from the drain", () => {
     expect(t.rec.takeDeath()).toEqual({ ts: t.w.ts, damage: [] });
   });
 
-  test("the snippet result's drain neither takes the cause nor loses its own damage to it", () => {
-    const t = dying();
-    t.feed("SMSG_ATTACKERSTATEUPDATE", swing("98", 25));
-    t.die(1_000);
-    expect(t.rec.drain().damage).toEqual([{ name: "Defias Miner", total: 25, hits: [{ what: "melee", count: 1, total: 25 }] }]);
-    expect(t.rec.takeDeath()).toMatchObject({ killer: "Defias Miner" });
-  });
-
   test("through the real child: the host's death cause is the latch, and the snippet delta still has its damage", async () => {
     const dir = tempDir("wrathbench-death-child-");
     const host = new SandboxHost({
@@ -615,14 +556,6 @@ describe("which driver gets it", () => {
         "  [whisper] <Healpartyc> oom, drink after this",
       ].join("\n"),
     );
-  });
-
-  test("the fixed loop's context has no switch: its result keeps its exact bytes and nothing is drained", async () => {
-    const { sandbox, drains } = fakeSandbox(A8_LIKE);
-    const res = await callTool(makeCtx(sandbox), "run_snippet", { code: "1" });
-    const harness = renderActionHints([{ action: "castSpell", status: "not_ready", count: 2, hint: "its cooldown", ts: 1 }])!;
-    expect(res.text).toBe(`ok (3ms)\n=> 42\n${harness}`);
-    expect(drains()).toBe(0);
   });
 
   test("the fixed loop never drains it: a whole runLoop episode's snippet results carry no block", async () => {

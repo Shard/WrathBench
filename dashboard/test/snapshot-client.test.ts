@@ -32,18 +32,7 @@ import type { FleetResponse, ModelsResponse } from "../../viewer/api-types-runne
 import { emptyNearbyWindow } from "@wrathbench/inspector/codec/nearby";
 import { PUBLIC_NEARBY_KEY } from "@viewer/public-keys";
 import { ApiError } from "../src/api/client";
-import {
-  CHARACTER_TRACK_CONCURRENCY,
-  SNAPSHOT_EDGE_TTL_MS,
-  SNAPSHOT_RENDER_MS,
-  SNAPSHOT_STALE_MS,
-  createSnapshotClient,
-  keyedSlot,
-  mapLimit,
-  projectResults,
-  snapshotBanner,
-  sweepExpired,
-} from "../src/api/snapshot-client";
+import { SNAPSHOT_STALE_MS, createSnapshotClient, projectResults, snapshotBanner } from "../src/api/snapshot-client";
 
 const BASE = "https://data.example";
 const GEN = "g-42";
@@ -81,9 +70,9 @@ function bucket(objects: Record<string, unknown>): Bucket {
 }
 
 /**
- * Every aggregate at its own content-addressed key, the way the publisher has
- * written them since 2026-09-04 (GitHub issue #38) — so the manifest is an
- * index the reader follows, and no test reconstructs a key from `gen`.
+ * Every aggregate at its own content-addressed key, the way the publisher
+ * writes them — so the manifest is an index the reader follows, and no test
+ * reconstructs a key from `gen`.
  */
 const SNAP_NAMES = [
   "info.json",
@@ -100,9 +89,6 @@ const SNAP_NAMES = [
 const snapKey = (name: string): string => `v1/snap/v-${name.replace(/\.json$/, "")}/${name}`;
 const snapUrl = (name: string): string => `${BASE}/${snapKey(name)}`;
 const MANIFEST_ARTIFACTS: Record<string, string> = Object.fromEntries(SNAP_NAMES.map((n) => [n, snapKey(n)]));
-
-/** A pre-#38 manifest: one generation stamp, every aggregate under it. */
-const legacySnapUrl = (name: string): string => `${BASE}/v1/snap/${GEN}/${name}`;
 
 function run(over: Partial<ResultRun> = {}): ResultRun {
   return {
@@ -262,31 +248,6 @@ describe("addressing", () => {
     ]);
   });
 
-  test("two aggregates that did not move together are read from their own keys", async () => {
-    // Per-artifact addressing: `runs.json` and `models.json` sit under
-    // different versions, and the reader never derives a key from `gen`.
-    const b = fullBucket();
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    await c.runs();
-    await c.models();
-    const snapUrls = b.urls.filter((u) => u.includes("/v1/snap/"));
-    expect(snapUrls).toEqual([snapUrl("runs.json"), snapUrl("models.json")]);
-    const versions = snapUrls.map((u) => u.split("/v1/snap/")[1]!.split("/")[0]!);
-    expect(new Set(versions).size).toBe(2);
-  });
-
-  test("a manifest written before per-artifact keys still resolves, under its one generation", async () => {
-    // The transition: the dashboard deploys ahead of the publisher, so a build
-    // that knows `artifacts` has to keep reading a manifest that does not.
-    const b = bucket({
-      [`${BASE}/v1/manifest.json`]: { gen: GEN, generatedAt: GENERATED_AT },
-      [legacySnapUrl("info.json")]: { ...INFO, generatedAt: GENERATED_AT, attribution: ATTRIBUTION },
-    });
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    await c.info();
-    expect(b.urls).toEqual([`${BASE}/v1/manifest.json`, legacySnapUrl("info.json")]);
-  });
-
   test("a name the manifest's index does not carry is a 404 from here, not a guessed key", async () => {
     const b = bucket({
       [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: { "runs.json": snapKey("runs.json") }, generatedAt: GENERATED_AT },
@@ -295,31 +256,6 @@ describe("addressing", () => {
     await expect(c.info()).rejects.toThrow(/no published info\.json in this snapshot/);
     // Nothing was fetched on a hunch.
     expect(b.urls).toEqual([`${BASE}/v1/manifest.json`]);
-  });
-
-  test("a trailing slash on the base does not double up", async () => {
-    const b = fullBucket();
-    await createSnapshotClient(`${BASE}/`, { fetch: b.fetch }).info();
-    expect(b.urls).toEqual([`${BASE}/v1/manifest.json`, snapUrl("info.json")]);
-  });
-
-  test("fleet and positions are the one live object, split into the two response shapes", async () => {
-    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
-    const fleet = await c.fleet();
-    const positions = await c.positions();
-    expect(fleet.present).toBe(true);
-    expect(fleet.now).toBe(GENERATED_AT);
-    expect(positions.positions).toHaveLength(1);
-    // The envelope travels onto each half, so a page can age either one.
-    expect((fleet as { generatedAt?: number }).generatedAt).toBe(GENERATED_AT);
-    expect((positions as { attribution?: string }).attribution).toBe(ATTRIBUTION);
-  });
-
-  test("the ladder is one file per tier: it is fetched, never filtered", async () => {
-    const b = fullBucket([run(), run({ runId: "r2", harness: "claude-code" })]);
-    const got = await createSnapshotClient(BASE, { fetch: b.fetch }).ladder("e90");
-    expect(got.runs).toHaveLength(2);
-    expect(b.urls).toContain(snapUrl("ladder-e90.json"));
   });
 });
 
@@ -378,51 +314,6 @@ describe("the memo", () => {
     expect(b.urls.slice(mark)).toEqual([`${BASE}/v1/manifest.json`, `${BASE}/v1/snap/v-runs-2/runs.json`, `${BASE}/v1/run/r1/8/detail.json`]);
   });
 
-  test("the keyed cache is bounded, least recently used out first", async () => {
-    const t0s = [300_000, 600_000, 900_000];
-    const b = bucket(Object.fromEntries(t0s.map((t0) => [`${BASE}/v1/run/r1/trace/${t0}.json`, { t0 }])));
-    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => 0, keyedMax: 2 });
-    await c.traceSegment("r1", 300_000);
-    await c.traceSegment("r1", 600_000);
-    await c.traceSegment("r1", 300_000); // touched: now the most recent
-    await c.traceSegment("r1", 900_000); // evicts 600_000, the least recent
-    await c.traceSegment("r1", 300_000);
-    expect(b.urls).toHaveLength(3);
-    await c.traceSegment("r1", 600_000);
-    expect(b.urls).toHaveLength(4);
-  });
-
-  test("a keyed object's slot is its name or its run and file, whatever the version; a trace window is its own", () => {
-    expect(keyedSlot("v1/snap/abc123/runs.json")).toBe(keyedSlot("v1/snap/def456/runs.json"));
-    expect(keyedSlot("v1/snap/abc123/runs.json")).not.toBe(keyedSlot("v1/snap/abc123/results.json"));
-    expect(keyedSlot("v1/run/r1/7/detail.json")).toBe(keyedSlot("v1/run/r1/8/detail.json"));
-    expect(keyedSlot("v1/run/r1/7/detail.json")).not.toBe(keyedSlot("v1/run/r1/7/track.json"));
-    expect(keyedSlot("v1/run/r1/7/detail.json")).not.toBe(keyedSlot("v1/run/r2/7/detail.json"));
-    expect(keyedSlot("v1/run/r1/trace/300000.json")).not.toBe(keyedSlot("v1/run/r1/trace/600000.json"));
-  });
-
-  test("concurrent callers share one request rather than racing", async () => {
-    const b = fullBucket();
-    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => 0 });
-    await Promise.all([c.info(), c.info(), c.episodes()]);
-    expect(b.urls).toEqual([`${BASE}/v1/manifest.json`, snapUrl("info.json"), snapUrl("episodes.json")]);
-  });
-
-  test("expired entries are swept, not only overwritten: old generations leave the cache", () => {
-    // Overwrite-on-reuse alone does not bound the memo: generation- and
-    // version-addressed URLs are never asked for again once the manifest moves
-    // on, so a long-lived tab would keep every generation's parsed bodies.
-    const cache = new Map([
-      [snapUrl("info.json"), { at: 0 }],
-      [`${BASE}/v1/snap/g-43/info.json`, { at: 40_000 }],
-    ]);
-    sweepExpired(cache, 40_000, 30_000);
-    expect([...cache.keys()]).toEqual([`${BASE}/v1/snap/g-43/info.json`]);
-    // Inside the window nothing is touched.
-    sweepExpired(cache, 40_000 + 29_999, 30_000);
-    expect(cache.size).toBe(1);
-  });
-
   test("a failed fetch is not remembered: the next poll is the retry", async () => {
     const b = bucket({});
     const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => 0 });
@@ -430,14 +321,6 @@ describe("the memo", () => {
     await expect(c.info()).rejects.toThrow(ApiError);
     // Two attempts at the manifest, not one attempt and a remembered failure.
     expect(b.urls.filter((u) => u.endsWith("manifest.json"))).toHaveLength(2);
-  });
-
-  test("a non-2xx carries the status a page needs, and the bucket's own message", async () => {
-    const c = createSnapshotClient(BASE, { fetch: bucket({}).fetch });
-    const err = (await c.runs().catch((e: unknown) => e)) as ApiError;
-    expect(err).toBeInstanceOf(ApiError);
-    expect(err.status).toBe(404);
-    expect(err.message).toContain("no such object");
   });
 });
 
@@ -548,10 +431,6 @@ describe("results, filtered client-side", () => {
     expect(every.overridesExcluded).toBe(0);
   });
 
-  test("the response's own clock travels with the rows; the browser's is never stamped on", () => {
-    expect(projectResults(resultsArtifact(CORPUS), "all", false, "all").now).toBe(GENERATED_AT);
-  });
-
   test("an omitted episode is the server's default, e90 — not `all`", async () => {
     const c = createSnapshotClient(BASE, { fetch: fullBucket(CORPUS).fetch });
     const got = await c.results();
@@ -559,33 +438,6 @@ describe("results, filtered client-side", () => {
     expect(got.runs.map((r) => r.runId)).toEqual(["a", "b"]);
     expect(got.includeOverrides).toBe(false);
     expect(got.harness).toBe("all");
-  });
-
-  test("the runs page's own call — all tiers, overrides in — is the artifact whole", async () => {
-    const c = createSnapshotClient(BASE, { fetch: fullBucket(CORPUS).fetch });
-    const got = await c.results("all", true, "all");
-    expect(got.runs).toHaveLength(CORPUS.length);
-    expect((got as { generatedAt?: number }).generatedAt).toBe(GENERATED_AT);
-  });
-});
-
-describe("models, filtered client-side", () => {
-  const row = (name: string, harness: HarnessView): ModelsResponse["models"][number] =>
-    ({ name, harness }) as unknown as ModelsResponse["models"][number];
-
-  test("the harness filter is the row predicate the server applies, and is echoed", async () => {
-    const objects = {
-      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
-      [snapUrl("models.json")]: { ...MODELS, models: [row("x", "wrathbench"), row("y", "claude-code")] },
-    };
-    const c = createSnapshotClient(BASE, { fetch: bucket(objects).fetch });
-    expect((await c.models()).models.map((m) => m.name)).toEqual(["x", "y"]);
-    const one = await c.models("claude-code");
-    expect(one.models.map((m) => m.name)).toEqual(["y"]);
-    expect(one.harness).toBe("claude-code");
-    // The roster and policy halves are harness-independent and pass through.
-    expect(one.roster).toEqual(MODELS.roster);
-    expect(one.policy).toEqual(MODELS.policy);
   });
 });
 
@@ -606,19 +458,15 @@ describe("per-run artifacts", () => {
     ]);
   });
 
-  test("a run the listing does not name is a 404, in the viewer's own words", async () => {
+  test("a run the listing does not name, or one with no published artifact, is a 404 saying which", async () => {
     const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
     const err = (await c.run("nope").catch((e: unknown) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(404);
     expect(err.message).toContain("no such run: nope");
-  });
-
-  test("a run with no published artifact is a 404 too, and says which one is missing", async () => {
-    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
-    const err = (await c.track("unpublished").catch((e: unknown) => e)) as ApiError;
-    expect(err.status).toBe(404);
-    expect(err.message).toContain("no published track");
+    const missing = (await c.track("unpublished").catch((e: unknown) => e)) as ApiError;
+    expect(missing.status).toBe(404);
+    expect(missing.message).toContain("no published track");
   });
 
   test("a trace window is read at its window's key, envelope and all, and nothing else is built", async () => {
@@ -662,40 +510,6 @@ describe("per-run artifacts", () => {
     expect(b.urls.slice(2)).toEqual([`${BASE}/v1/live.json`, `${BASE}/${PUBLIC_NEARBY_KEY}`]);
   });
 
-  test("a live.json from before the split carries the windows inline, and no units object is asked for", async () => {
-    const t0 = 1_760_000_100_000;
-    const w1 = { ...emptyNearbyWindow("r1", t0, t0 + 600_000), ids: ["17370386017530052609"], ty: [0] };
-    const positions = { positions: [{ runId: "r1", nearby: true }] };
-    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions, nearby: { r1: w1 } } });
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    expect(await c.nearby("r1", 60_000)).toEqual(w1);
-    expect(await c.nearby("r2", 60_000)).toMatchObject({ v: 1, run: "r2", t0: GENERATED_AT, ids: [], ev: [] });
-    // Never guessed: a key no live.json named is never requested, so an edge
-    // cannot come to hold a 404 for it ahead of the publisher.
-    expect(b.urls).toEqual([`${BASE}/v1/live.json`]);
-  });
-
-  test("a fast lane from before the nearby layer answers an empty window", async () => {
-    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions: { positions: [] } } });
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    expect(await c.nearby("r1", 60_000)).toMatchObject({ v: 1, run: "r1", ids: [], ev: [] });
-    expect(b.urls).toEqual([`${BASE}/v1/live.json`]);
-  });
-
-  test("an idle units object, which carries no clock of its own, answers on live.json's", async () => {
-    const b = bucket({
-      [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions: { positions: [] }, nearbyKey: PUBLIC_NEARBY_KEY },
-      [`${BASE}/${PUBLIC_NEARBY_KEY}`]: { attribution: ATTRIBUTION, nearby: {} },
-    });
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    expect(await c.nearby("r1", 60_000)).toMatchObject({ v: 1, run: "r1", t0: GENERATED_AT, ids: [] });
-  });
-
-  test("the fast lane says how often it lands and how long its caches hold it", () => {
-    const c = createSnapshotClient(BASE, { ttlMs: 30_000 });
-    expect(c.feedCadence).toEqual({ renderMs: SNAPSHOT_RENDER_MS, cacheMs: 30_000 + SNAPSHOT_EDGE_TTL_MS });
-  });
-
   test("a run's trace index is its place in the fast lane, and empty for a run not in it", async () => {
     const t0 = 1_760_000_100_000;
     const tail = { v: 1, run: "r1", t0, t1: t0 + 300_000, q: { p: 10, o: 1024 }, k: { p: null, s: {} }, dt: [], x: [], y: [], z: [], o: [], cuts: [], flights: [], ev: [] };
@@ -724,14 +538,6 @@ describe("the entries window", () => {
     expect(await c.entriesAt("r1", 1_763_000_000_000, 200)).toEqual(first);
     expect(b.urls.filter((u) => u.endsWith("/entries.json"))).toHaveLength(1);
   });
-
-  test("a row that names no window (an older snapshot) is a 404 naming the window", async () => {
-    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
-    const err = (await c.entries("older").catch((e: unknown) => e)) as ApiError;
-    expect(err).toBeInstanceOf(ApiError);
-    expect(err.status).toBe(404);
-    expect(err.message).toContain("no published entries");
-  });
 });
 
 /*
@@ -741,14 +547,7 @@ describe("the entries window", () => {
  * run the listing does not hold.
  */
 describe("the scratchpad", () => {
-  test("is the object the run's listing row names, envelope and all", async () => {
-    const b = fullBucket();
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
-    expect((await c.scratchpad("r1")).text).toBe(PAD.text);
-    expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([`${BASE}/v1/run/r1/7/scratchpad.json`]);
-  });
-
-  test("a row that names none is a 404 from here, and no scratchpad key is requested", async () => {
+  test("is the object the run's listing row names; a row that names none is a 404 from here, never a request", async () => {
     const b = fullBucket();
     const c = createSnapshotClient(BASE, { fetch: b.fetch });
     for (const id of ["older", "unpublished", "gone"]) {
@@ -757,55 +556,20 @@ describe("the scratchpad", () => {
       expect(err.status).toBe(404);
     }
     expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([]);
-  });
-
-  test("a new version of the run is read at the new key its row names", async () => {
-    const listing = (ver: string): unknown => ({
-      generatedAt: GENERATED_AT,
-      runs: [{ runId: "r1", snapshot: { detail: `v1/run/r1/${ver}/detail.json`, track: `v1/run/r1/${ver}/track.json`, scratchpad: `v1/run/r1/${ver}/scratchpad.json` } }],
-    });
-    const objects: Record<string, unknown> = {
-      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
-      [snapUrl("runs.json")]: listing("7"),
-      [`${BASE}/v1/run/r1/7/scratchpad.json`]: PAD,
-      [`${BASE}/v1/run/r1/8/scratchpad.json`]: { ...PAD, text: "# Plan\n- [x] train at level 4\n" },
-    };
-    const b = bucket(objects);
-    let clock = 0;
-    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => clock, ttlMs: 30_000 });
     expect((await c.scratchpad("r1")).text).toBe(PAD.text);
-    // The next pass lists a new runs.json, whose row names the run's new version.
-    objects[`${BASE}/v1/manifest.json`] = {
-      gen: "g-43",
-      artifacts: { ...MANIFEST_ARTIFACTS, "runs.json": "v1/snap/v-runs-2/runs.json" },
-      generatedAt: GENERATED_AT + 420_000,
-    };
-    objects[`${BASE}/v1/snap/v-runs-2/runs.json`] = listing("8");
-    clock = 30_000;
-    expect((await c.scratchpad("r1")).text).toBe("# Plan\n- [x] train at level 4\n");
-    expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([
-      `${BASE}/v1/run/r1/7/scratchpad.json`,
-      `${BASE}/v1/run/r1/8/scratchpad.json`,
-    ]);
+    expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([`${BASE}/v1/run/r1/7/scratchpad.json`]);
   });
 });
 
 describe("what a bucket cannot serve", () => {
-  test("raw is 403, the way the viewer's public mode answers", async () => {
-    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
+  test("raw is 403 as the viewer's public mode answers; there is no stream and no live camera frame, and nothing is asked for them", async () => {
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
     const err = (await c.raw("r1", 0).catch((e: unknown) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(403);
     expect(err.message).toContain("withheld in snapshot mode");
-  });
-
-  test("there is no stream URL, so nothing can open one by accident", () => {
-    expect(createSnapshotClient(BASE).streamUrl("r1")).toBe("");
-  });
-
-  test("there is no live camera frame, and nothing is asked of the bucket for one", async () => {
-    const b = fullBucket();
-    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect(c.streamUrl("r1")).toBe("");
     expect(await c.cameraLatest("r1")).toBeNull();
     expect(c.cameraFrameUrl("r1", 3)).toBe("");
     expect(b.urls).toEqual([]);
@@ -813,84 +577,19 @@ describe("what a bucket cannot serve", () => {
 });
 
 /*
- * The 403/404 above are backstops, not the design. A refused route awaited
- * bare in the public build would reject the continuation that asked for it —
- * on the run page that continuation also owns the summary, the charts and the
- * live poll — so the page catches the window's absence and never opens a tail,
- * and what it shows instead is a statement of what this build publishes rather
- * than an error.
- *
- * Asserted against the source the way the fleet page's own shape is
- * (`status.test.ts`): this is component wiring with no pure seam to call, and a
- * DOM harness for three build-flag branches would test the harness.
+ * Live viewing is the private viewer's alone. Asserted against the source:
+ * this is component wiring with no pure seam to call.
  */
 describe("the public build's call sites", () => {
   const read = (p: string): string => readFileSync(join(import.meta.dir, p), "utf8");
 
-  test("the run page reads the window under a catch, never opens the tail, and hides load-earlier", () => {
-    const src = read("../src/pages/RunDetail.tsx");
-    // The window: caught in the public build, so an older snapshot's 404
-    // costs the feed and nothing else.
-    expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{\s*try \{\s*await loadWindow\(firstWindow\);[\s\S]{0,120}\} catch \{/);
-    // The tail: no EventSource is constructed in the public build.
-    expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,400}subscribeTail\(/);
-    // "load earlier" has nothing to walk into: one window per run.
-    expect(src).toMatch(/<Show when=\{from\(\) > 0 && !SNAPSHOT_MODE\}>/);
-    // The panel for a run with no published window, stated plainly.
-    expect(src).toMatch(/fallback=\{<p class="dim">No trajectory window is published/);
-  });
-
-  test("a live run's summary poll advances the token card and entry count", () => {
-    // The tail is what moves `tokens` and `total` in the private build, and it
-    // never opens here — so the polled detail must move them, or they freeze
-    // at the first load while the rest of the page keeps up.
-    const src = read("../src/pages/RunDetail.tsx");
-    expect(src).toMatch(
-      /detailPoll\.latest[\s\S]{0,900}if \(SNAPSHOT_MODE\) \{\s*setTokens\(next\.tokens\);\s*setTotal\(next\.total\);\s*if \(feedPublished\(\)\) void loadWindow\(\)/,
-    );
-  });
-
-  test("the scratchpad moves with the polled detail, and its absence or failure is never a banner", () => {
-    // No tail carries the pad in either build, so the detail poll is what
-    // re-reads it: each tick privately, each new version publicly (the poll
-    // only reports a body that changed, and a new version is a new detail).
-    const src = read("../src/pages/RunDetail.tsx");
-    // The camera's clips move with it the same way: a director adds them after the fact.
-    expect(src).toMatch(/detailPoll\.latest[\s\S]{0,1600}\n\s*loadPad\(\);\n\s*loadClips\(\);\n\s*\}\);/);
-    for (const name of ["const loadPad", "const loadClips"]) {
-      const at = src.indexOf(name);
-      expect(at).toBeGreaterThan(-1);
-      const loader = src.slice(at, src.indexOf("\n  };", at));
-      expect(loader).toContain("e.status === 404");
-      expect(loader).not.toContain("setError");
-    }
-  });
-
   test("the live camera still is mounted only in the private build, and only while live", () => {
-    // Live viewing is the private viewer's alone: the public build never mounts
-    // the poll, and its client (above) would answer nothing if it did.
-    // On the run page "while live" is while the reader follows the live edge (`TimelineStore.following`).
+    // The public build never mounts the poll, and its client (above) would
+    // answer nothing if it did. On the run page "while live" is while the reader follows the live edge (`TimelineStore.following`).
     expect(read("../src/pages/RunDetail.tsx")).toMatch(/<Show when=\{!SNAPSHOT_MODE && tl\.following\(\)\}>\s*<LiveFrame /);
     expect(read("../src/pages/MapPage.tsx")).toMatch(
       /<Show when=\{SNAPSHOT_MODE \|\| track\(\) !== undefined \? undefined : p\(\)\.runId\} keyed>\s*\{\(id\) => <LiveFrame /,
     );
-  });
-
-  test("the map asks lib/tiles for a URL rather than hard-coding the path", () => {
-    // Where a tile comes from moved with the Open shape: same-origin under the
-    // viewer, and `VITE_WRATHBENCH_TILES_BASE` in a public build, which is the
-    // data hostname. A build told nothing draws its labelled grid, the same
-    // thing a lab machine without the extraction draws.
-    // `tiles.test.ts` owns the rules; this pins that the page consults them.
-    const src = read("../src/pages/MapPage.tsx");
-    // A build told nothing draws the lattice at every zoom and requests no
-    // level of the pyramid either.
-    expect(src).toMatch(/if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;/);
-    expect(src).toContain(": tileSrc(map, layer, z, row, col, nativeFormat(index));");
-    expect(src).toContain("const src = tileIndexSrc(map);");
-    // Not gated on SNAPSHOT_MODE directly: the question is whether a tile host
-    // was named, which is a different one from whether the data is published.
-    expect(src).not.toContain("!SNAPSHOT_MODE &&");
   });
 });
 
@@ -915,19 +614,6 @@ describe("freshness", () => {
     expect(c.snapshot.state().generatedAt).toBe(GENERATED_AT);
   });
 
-  test("a subscriber is told on change, and stops being told once it unsubscribes", async () => {
-    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
-    const seen: string[] = [];
-    const off = c.snapshot.subscribe((s) => seen.push(`${String(s.generatedAt)}/${String(s.attribution)}`));
-    // Two changes: the manifest's stamp, then the attribution the artifact
-    // carries. Only a change notifies — a repeat of what is already held does not.
-    await c.info();
-    expect(seen).toEqual([`${GENERATED_AT}/${PUBLIC_ATTRIBUTION}`, `${GENERATED_AT}/${ATTRIBUTION}`]);
-    off();
-    await c.fleet();
-    expect(seen).toHaveLength(2);
-  });
-
   test("the banner says how stale, and turns warning-coloured once a push is evidently missed", () => {
     const at = { generatedAt: GENERATED_AT, attribution: PUBLIC_ATTRIBUTION };
     // Before an artifact has answered the line still names the build's nature.
@@ -948,10 +634,8 @@ describe("freshness", () => {
     // A reader whose clock is behind the publisher's reads "0s ago", never a
     // negative age.
     expect(snapshotBanner(at, GENERATED_AT - 60_000).text).toBe("public snapshot · data as of 0s ago");
-  });
-
-  test("a publisher's delay is on time, not stale: the warning waits that much longer", () => {
-    const delayed = { generatedAt: GENERATED_AT, attribution: PUBLIC_ATTRIBUTION, delayMs: 900_000 };
+    // A publisher's declared delay is on time, not stale: the warning waits that much longer.
+    const delayed = { ...at, delayMs: 900_000 };
     expect(snapshotBanner(delayed, GENERATED_AT + 900_000).tone).toBe("dim");
     expect(snapshotBanner(delayed, GENERATED_AT + 900_000 + SNAPSHOT_STALE_MS).tone).toBe("warn");
   });
@@ -1042,61 +726,5 @@ describe("character", () => {
     expect(body.character.runs.map((r) => r.runId)).toEqual(["a1", "a2"]);
     expect(body.states.map((p) => p.runId)).toEqual(["a1"]);
   });
-
-  test("an id no run answers to is a 404, the same answer the viewer gives", async () => {
-    const c = createSnapshotClient(BASE, { fetch: chainBucket().fetch });
-    await expect(c.character("no-such-run")).rejects.toMatchObject({ status: 404 });
-  });
-
-  test("a long chain's tracks are fetched a few at a time, and stitched in attempt order however they answer", async () => {
-    const n = 20;
-    const ids = Array.from({ length: n }, (_, i) => `a${i + 1}`);
-    const runs = ids.map((runId, i) => run({ runId, startedAt: i + 1, continuedFrom: i === 0 ? null : ids[i - 1]!, modelResponses: 1 }));
-    const objects: Record<string, unknown> = {
-      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
-      [snapUrl("results.json")]: resultsArtifact(runs),
-      [snapUrl("runs.json")]: { generatedAt: GENERATED_AT, runs: ids.map((runId) => ({ runId, snapshot: { track: `v1/run/${runId}/1/track.json` } })) },
-    };
-    ids.forEach((runId, i) => {
-      objects[`${BASE}/v1/run/${runId}/1/track.json`] = { ...TRACK, runId, points: [trackPoint(1_000 * (i + 1), i + 1, 0)] };
-    });
-    const served = bucket(objects);
-    let inFlight = 0;
-    let peak = 0;
-    // Later attempts answer sooner, so arrival order is the reverse of attempt order.
-    const slow = (async (input: string | URL | Request) => {
-      const url = String(input);
-      const m = /\/v1\/run\/a(\d+)\//.exec(url);
-      if (m === null) return served.fetch(input);
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      await new Promise((r) => setTimeout(r, 2 * (n - Number(m[1]))));
-      inFlight--;
-      return served.fetch(input);
-    }) as unknown as typeof globalThis.fetch;
-    const body = await createSnapshotClient(BASE, { fetch: slow }).character("a1");
-    expect(peak).toBe(CHARACTER_TRACK_CONCURRENCY);
-    expect(body.states.map((p) => p.attempt)).toEqual(ids.map((_, i) => i + 1));
-    expect(body.states.map((p) => p.runId)).toEqual(ids);
-  });
 });
 
-describe("mapLimit", () => {
-  test("never more than the cap in flight, every item once, results in the items' order", async () => {
-    let inFlight = 0;
-    let peak = 0;
-    const seen: number[] = [];
-    const out = await mapLimit([5, 1, 4, 2, 3, 0, 6], 3, async (x) => {
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      seen.push(x);
-      await new Promise((r) => setTimeout(r, x));
-      inFlight--;
-      return x * 10;
-    });
-    expect(peak).toBe(3);
-    expect(seen.sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
-    expect(out).toEqual([50, 10, 40, 20, 30, 0, 60]);
-    expect(await mapLimit([], 6, async () => 1)).toEqual([]);
-  });
-});

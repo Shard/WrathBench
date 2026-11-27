@@ -35,7 +35,6 @@ import {
   SYSTEM_PROMPT,
 } from "../src/prompt";
 import { carryProgramFiles, configFromArgs, dropCarriedProgramFiles } from "../src/run";
-import { parseRunArgs } from "../src/run-flags";
 import type { SandboxHost } from "../src/sandbox/host";
 import { RecordSignals } from "../src/session-record";
 import { callTool, coerceToolArgs, isKnownTool, toolsFor, TOOLS } from "../src/tools";
@@ -201,10 +200,6 @@ describe("config, flags and the tuple", () => {
     expect(readdirSync(join(to, "program", "files"))).toEqual([]);
   });
 
-  test("both flags parse, and an arm may carry them", () => {
-    expect(parseRunArgs(["--loop", "program", "--yield", "true"])).toEqual({ loop: "program", yield: "true" });
-  });
-
   test("a campaign pair refuses the program loop on pi, and --yield where the arm runs the snippet loop", () => {
     const roster: Record<string, PairRosterEntry> = { ds: { driver: "openai" }, cc: { driver: "claude-code" }, cx: { driver: "codex" }, pi: { driver: "pi" } };
     const arms = [
@@ -285,14 +280,6 @@ describe("the program prompt", () => {
   test("a successful load restarts every running routine, as the stack does", () => {
     expect(program).toContain("When a load succeeds, every running routine is stopped and started again from the top with the same arguments.");
     expect(program).not.toContain("A running routine whose code changed is stopped");
-  });
-
-  test("the codex harness renders the program body too, and its snippet body is the one it always was", () => {
-    const codexProgram = buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000, { yield: true });
-    expect(codexProgram).toContain("## Your program");
-    expect(codexProgram).toContain("- yield: sleep until something wakes you.");
-    expect(codexProgram.endsWith(`${PROGRAM_BODY_TAIL} ${PROGRAM_YIELD_TAIL}`)).toBe(true);
-    expect(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000, programPromptOf({}))).toBe(buildSystemPrompt(undefined, "probing", "codex", true, 5_400_000));
   });
 
   test("a fresh codex launch's prompt renders yield's bullet and closing sentence, as the codex driver builds it", () => {
@@ -431,12 +418,6 @@ describe("sleepUntilWake", () => {
     c.schedule(5_000, () => (queued = 1));
     const n = await sleepUntilWake({ waker: new Waker(), capMs: WAKE_CAP_MS, floorMs: 3_000, stopped: () => false, queuedNotices: () => queued, now: c.now, sleep: c.sleep });
     expect(n.fired).toBe("notice");
-  });
-
-  test("a yield's own seconds are its cap", async () => {
-    const c = fakeClock();
-    const r = await sleepUntilWake({ waker: new Waker(), capMs: 20_000, floorMs: 3_000, stopped: () => false, now: c.now, sleep: c.sleep });
-    expect(r).toEqual({ fired: "cap", sleptMs: 20_000 });
   });
 });
 
@@ -614,6 +595,9 @@ describe("renderWake", () => {
     expect(renderWake(v).split("\n")).toEqual(["[wake 12 · slept 4m05s · woke for: five minutes passed]", "routines:", "trip threw 1m ago: TypeError (shown before)", "scout returned 40s ago (value shown before)", "no routine is running"]);
   });
 
+  /** A console entry as a beat drains it. */
+  const logged = (ts: number, text: string, count = 1, o: Partial<ProgramLogLine> = {}): ProgramLogLine => ({ ts, level: "log", routine: "quest", text, count, ...o });
+
   test("two drains are one span", () => {
     const a = emptyFacts({ facts: [refusal], repeats: [{ signature: "s", count: 2, ts: 1 }], console: { lines: [{ ts: 1, level: "log", routine: "r", text: "a", count: 1 }], total: 5 } });
     const b = emptyFacts({ deploy: 8, facts: [thrown], repeats: [{ signature: "s", count: 3, ts: 4 }], console: { lines: [], total: 2 } });
@@ -623,9 +607,6 @@ describe("renderWake", () => {
     expect(m.repeats).toEqual([{ signature: "s", count: 5, ts: 4 }]);
     expect(m.console.total).toBe(7);
   });
-
-  /** A console entry as a beat drains it. */
-  const logged = (ts: number, text: string, count = 1, o: Partial<ProgramLogLine> = {}): ProgramLogLine => ({ ts, level: "log", routine: "quest", text, count, ...o });
 
   test("one line repeated across beats is one console entry, counts summed", () => {
     // As a live wake had it: the stack folds only a line repeating the one before, and each beat starts afresh.

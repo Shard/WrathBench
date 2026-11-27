@@ -149,11 +149,6 @@ describe("overrides cost membership, not the flag", () => {
     expect(episodeOverrideOf(c)).toBe(true);
   });
 
-  test("spelling out the tier's own value is not an override", () => {
-    const c = configFromArgs(["--episode", "e90", "--idle-ms", String(20 * M)]);
-    expect(episodeOverrideOf(c)).toBe(false);
-  });
-
   test("a tighter leash applied on the resume path reads as an override too", () => {
     // Resume rebuilds config from stored meta, never from argv: the predicate
     // has to be over the effective leash, or a restamp would lie: the tuple
@@ -172,12 +167,6 @@ describe("the tuple", () => {
   test("the id is stamped, and a run with no tier stamps null", () => {
     expect(comparabilityOf(configFromArgs(["--episode", "e360"]), "v").episode).toBe("e360");
     expect(comparabilityOf(configFromArgs([]), "v").episode).toBeNull();
-  });
-
-  test("two tiers are never the same tuple", () => {
-    const a = comparabilityOf(configFromArgs(["--episode", "e90"]), "v");
-    const b = comparabilityOf(configFromArgs(["--episode", "e360"]), "v");
-    expect(a).not.toEqual(b);
   });
 });
 

@@ -144,6 +144,23 @@ async function claudeProgramRun(o: ProgramRun) {
 }
 
 const UNCHANGED = "[scratchpad 0.0k/32k: unchanged since you last saw it in this conversation, so not repeated]";
+const PAD_WHOLE = "[scratchpad 0.0k/32k]\n# plan\nGoldshire";
+
+const T0 = Date.UTC(2030, 0, 2, 12, 0, 0);
+/** Chat events seq `from`..`to`. */
+const evs = (from: number, to: number): EventSummary[] =>
+  Array.from({ length: to - from + 1 }, (_, i) => ({ seq: from + i, ts: T0 + (from + i) * 1000, opcode: "SMSG_MESSAGECHAT", data: { text: `line ${from + i}` } }) as EventSummary);
+const fullWindow = (from: number, to: number): string => `[events: last ${to - from + 1}, newest last]\n${evs(from, to).map(formatEventLine).join("\n")}`;
+/** Each turn starts a trip whose end wakes the next; the last turn does nothing. The first also writes the pad. */
+const TRIPS = (turns: number): unknown[][] => [
+  [
+    { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
+    { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } },
+    { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
+  ],
+  ...Array.from({ length: turns - 2 }, (_, i) => [{ name: "start_routine", arguments: { name: "trip", args: { to: `stop ${i}` } } }]),
+  [],
+];
 
 describe("the program loop on the claude-code driver, through the fake CLI", () => {
   test("the turn-end pause sleeps until a wake, whose block opens the next turn; yield is served, granted and answers its wake", async () => {
@@ -159,6 +176,11 @@ describe("the program loop on the claude-code driver, through the fake CLI", () 
         ],
       ],
       maxTurns: 2,
+      // A ghost with broken gear: a yield's block says so, since no HUD follows it; the turn message's block, beside the HUD, does not.
+      sample: {
+        self: { name: "Thalvorn", level: { value: 3 }, health: { value: { current: 1, max: 90 } }, fields: { playerFlags: { value: 0x10 } } },
+        inventory: [{ slot: 15, name: "Rusted Cleaver", durability: { current: 0, max: 40 } }],
+      },
     });
     expect(r.outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
     // The program's prompt, as the tuple hashes it.
@@ -175,131 +197,85 @@ describe("the program loop on the claude-code driver, through the fake CLI", () 
     expect(r.messages[1]).toMatch(/^\[turn 2\]\n\n\[wake 1 · slept \d+s · woke for: routine ended \(trip, returned\)\]/);
     const results = r.records.filter((x) => x.t === "tool_result").map((x) => [x["name"], String(x["text"])]);
     expect(results.find(([n]) => n === "write_file")?.[1]).toContain("loaded: deploy 1 · routines: idle, trip");
-    expect(results.find(([n]) => n === "yield")?.[1]).toContain("[wake 2 · slept 1s · woke for: 1s passed]");
+    const yielded = results.find(([n]) => n === "yield")?.[1];
+    expect(yielded).toContain("[wake 2 · slept 1s · woke for: 1s passed]");
     expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([
       ["turn-end", "routine_ended"],
       ["yield", "cap"],
     ]);
-  }, 60_000);
-
-  test("a ghost with broken gear: a yield's block says so, since no HUD follows it; the turn message's block, beside the HUD, does not", async () => {
-    const r = await claudeProgramRun({
-      calls: [
-        [
-          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
-          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
-        ],
-        [{ name: "yield", arguments: { seconds: 1 } }],
-      ],
-      maxTurns: 2,
-      sample: {
-        self: { name: "Thalvorn", level: { value: 3 }, health: { value: { current: 1, max: 90 } }, fields: { playerFlags: { value: 0x10 } } },
-        inventory: [{ slot: 15, name: "Rusted Cleaver", durability: { current: 0, max: 40 } }],
-      },
-    });
     const durability = "durability: broken main hand Rusted Cleaver (0/40) — a broken item gives no stats";
-    const yielded = String(r.records.find((x) => x.t === "tool_result" && x["name"] === "yield")?.["text"]);
     expect(yielded).toContain(`\ncharacter: ghost\n${durability}`);
-    // The second turn's message: its wake block leaves it out, its HUD says it.
-    expect(r.messages[1]).toContain("[wake 1 ·");
     expect(r.messages[1]).not.toContain("character: ghost");
     expect(r.messages[1]).toContain("ui: ghost");
     expect(r.messages[1]!.split(durability)).toHaveLength(2);
   }, 60_000);
 
-  test("without --yield the turn-end sleep is the only one: yield is neither served nor granted", async () => {
+  test("the pad and the event window go whole only when the session does not hold them as they are", async () => {
+    const calls = TRIPS(4);
+    // Turn 3's snippet writes the pad behind the session's back.
+    calls[2] = [{ name: "run_snippet", arguments: { code: 'await scratchpad.write("# plan\\nfrom a snippet"); return 1' } }, ...calls[2]!];
+    const r = await claudeProgramRun({ calls, maxTurns: 4, events: (n) => (n < 3 ? evs(1, 5) : evs(1, 6)) });
+    expect(r.messages.length).toBe(4);
+    expect(r.messages[0]).toContain("[scratchpad]\n(empty");
+    expect(r.messages[0]).toContain(fullWindow(1, 5));
+    // The model wrote the pad itself, so the session holds it; the window it was shown is a line.
+    expect(r.messages[1]).toEndWith(UNCHANGED);
+    expect(r.messages[1]).not.toContain("# plan");
+    expect(r.messages[1]).toContain(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`);
+    expect(r.messages[1]).not.toContain("#5 SMSG_MESSAGECHAT");
+    expect(r.messages[2]).toEndWith(UNCHANGED);
+    expect(r.messages[2]).toContain(EVENTS_UNCHANGED_LINE);
+    // A snippet's write, which the session never saw, and a new event.
+    expect(r.messages[3]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nfrom a snippet");
+    expect(r.messages[3]).toContain(fullWindow(1, 6));
+    // What the model was shown, on the record: nothing, marked unchanged.
+    const served = r.records.filter((x) => x.t === "events_served" && x["via"] === "context");
+    expect(served.map((x) => [x["count"], x["unchanged"] ?? false])).toEqual([
+      [5, false],
+      [0, true],
+      [0, true],
+      [6, false],
+    ]);
+  }, 60_000);
+
+  test("an errored turn, a compaction and a session the CLI names anew each send the pad and the window whole in the next message", async () => {
+    // Turn 2 errors (it may not have kept its message), the CLI compacts inside
+    // turn 4 (after its message was sent) and names another session from turn 6;
+    // after each the session holds them again.
     const r = await claudeProgramRun({
-      calls: [[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }, { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } }], []],
-      maxTurns: 2,
-      yield: false,
+      calls: TRIPS(7),
+      maxTurns: 7,
+      events: () => evs(1, 5),
+      fake: { WB_FAKE_ERROR_TURN: "2", WB_FAKE_COMPACT_TURN: "4", WB_FAKE_SESSION_TURN: "6" },
     });
+    expect(r.records.some((x) => x.t === "harness" && x["kind"] === "compaction")).toBe(true);
+    const whole = r.messages.map((m) => m.includes(fullWindow(1, 5)) && m.endsWith(PAD_WHOLE));
+    const held = r.messages.map((m) => m.includes(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`) && m.endsWith(UNCHANGED));
+    // The first message's pad is the empty one: the model writes it during turn 1.
+    expect(held).toEqual([false, true, false, true, false, true, false]);
+    expect(whole).toEqual([false, false, true, false, true, false, true]);
+  }, 60_000);
+
+  test("a stop request ends the sleep at once, and time asleep is not idle; without --yield, yield is neither served nor granted", async () => {
+    const ac = new AbortController();
+    // Nothing runs, so the turn-end sleep would last five minutes; idle is far shorter than the sleep.
+    setTimeout(() => ac.abort(), 3_500);
+    const r = await claudeProgramRun({ calls: [[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }]], idleMs: 2_000, signal: ac.signal, yield: false });
+    expect(r.outcome).toEqual({ kind: "terminated", reason: "manual", detail: "aborted" });
+    expect(r.ms).toBeLessThan(15_000);
+    expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([["turn-end", "stopped"]]);
+    expect(r.records.some((x) => x.t === "watchdog")).toBe(false);
+    // The turn-end sleep is the only one.
     const served = r.rec["mcpTools"] as string[];
     expect(served).toContain("start_routine");
     expect(served).not.toContain("yield");
     expect(r.rec["allowedTools"]).toEqual(served.map((t) => `mcp__${MCP_SERVER_NAME}__${t}`));
     expect(r.rec["systemPrompt"]).toBe(buildSystemPrompt(undefined, "probing", "claude-code", true, r.config.watchdogs.episodeMs, { yield: false }));
-    expect(r.messages[1]).toMatch(/^\[turn 2\]\n\n\[wake 1 · slept \d+s · woke for: routine ended \(trip, returned\)\]/);
-  }, 60_000);
-
-  test("the pad goes whole only when the session does not hold it as it is: the first turn, and after a snippet changed it", async () => {
-    const r = await claudeProgramRun({
-      calls: [
-        [
-          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
-          { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } },
-          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
-        ],
-        [{ name: "start_routine", arguments: { name: "trip", args: { to: "Elwynn" } } }],
-        [
-          { name: "run_snippet", arguments: { code: 'await scratchpad.write("# plan\\nfrom a snippet"); return 1' } },
-          { name: "start_routine", arguments: { name: "trip", args: { to: "Westfall" } } },
-        ],
-        [],
-      ],
-      maxTurns: 4,
-    });
-    expect(r.messages.length).toBe(4);
-    expect(r.messages[0]).toContain("[scratchpad]\n(empty");
-    // The model wrote it itself, so the session holds it.
-    expect(r.messages[1]).toEndWith(UNCHANGED);
-    expect(r.messages[1]).not.toContain("# plan");
-    expect(r.messages[2]).toEndWith(UNCHANGED);
-    // A snippet's write, which the session never saw.
-    expect(r.messages[3]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nfrom a snippet");
-  }, 60_000);
-
-  test("a compaction, at its boundary, sends the pad whole in the next message", async () => {
-    const r = await claudeProgramRun({
-      calls: [
-        [
-          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
-          { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } },
-          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
-        ],
-        [{ name: "start_routine", arguments: { name: "trip", args: { to: "Elwynn" } } }],
-        [],
-      ],
-      maxTurns: 3,
-      // The CLI compacts inside turn 2, after its message was sent.
-      fake: { WB_FAKE_COMPACT_TURN: "2" },
-    });
-    expect(r.records.some((x) => x.t === "harness" && x["kind"] === "compaction")).toBe(true);
-    expect(r.messages[1]).toEndWith(UNCHANGED);
-    expect(r.messages[2]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nGoldshire");
-  }, 60_000);
-
-  test("a session the CLI names that is not the one before holds nothing: the pad goes whole", async () => {
-    const r = await claudeProgramRun({
-      calls: [
-        [
-          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
-          { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } },
-          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
-        ],
-        [{ name: "start_routine", arguments: { name: "trip", args: { to: "Elwynn" } } }],
-        [],
-      ],
-      maxTurns: 3,
-      fake: { WB_FAKE_SESSION_TURN: "2" },
-    });
-    expect(r.messages[1]).toEndWith(UNCHANGED);
-    expect(r.messages[2]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nGoldshire");
-  }, 60_000);
-
-  test("a stop request ends the sleep at once, and time asleep is not idle", async () => {
-    const ac = new AbortController();
-    // Nothing runs, so the turn-end sleep would last five minutes; idle is far shorter than the sleep.
-    setTimeout(() => ac.abort(), 6_000);
-    const r = await claudeProgramRun({ calls: [[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }]], idleMs: 3_000, signal: ac.signal });
-    expect(r.outcome).toEqual({ kind: "terminated", reason: "manual", detail: "aborted" });
-    expect(r.ms).toBeLessThan(15_000);
-    expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([["turn-end", "stopped"]]);
-    expect(r.records.some((x) => x.t === "watchdog")).toBe(false);
   }, 60_000);
 
   test("a stop request ends a held yield at once", async () => {
     const ac = new AbortController();
-    setTimeout(() => ac.abort(), 4_000);
+    setTimeout(() => ac.abort(), 3_500);
     const r = await claudeProgramRun({
       calls: [[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }, { name: "yield", arguments: {} }]],
       idleMs: 2_000,
@@ -312,67 +288,6 @@ describe("the program loop on the claude-code driver, through the fake CLI", () 
     for (let k = 0; k < 50 && (await wakes()).length === 0; k++) await Bun.sleep(100);
     expect(await wakes()).toEqual([["yield", "stopped"]]);
     expect(r.records.some((x) => x.t === "watchdog")).toBe(false);
-  }, 60_000);
-});
-
-// ------------------------------------------------- the event window's rule
-
-const T0 = Date.UTC(2030, 0, 2, 12, 0, 0);
-/** Chat events seq `from`..`to`. */
-const evs = (from: number, to: number): EventSummary[] =>
-  Array.from({ length: to - from + 1 }, (_, i) => ({ seq: from + i, ts: T0 + (from + i) * 1000, opcode: "SMSG_MESSAGECHAT", data: { text: `line ${from + i}` } }) as EventSummary);
-const fullWindow = (from: number, to: number): string => `[events: last ${to - from + 1}, newest last]\n${evs(from, to).map(formatEventLine).join("\n")}`;
-/** Each turn starts a trip whose end wakes the next; the last turn does nothing. */
-const TRIPS = (turns: number): unknown[][] => [
-  [
-    { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
-    { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
-  ],
-  ...Array.from({ length: turns - 2 }, (_, i) => [{ name: "start_routine", arguments: { name: "trip", args: { to: `stop ${i}` } } }]),
-  [],
-];
-
-describe("the event window on claude-code's program loop", () => {
-  test("a window the session already holds is a line; a new event sends it whole again", async () => {
-    const r = await claudeProgramRun({ calls: TRIPS(4), maxTurns: 4, events: (n) => (n < 3 ? evs(1, 5) : evs(1, 6)) });
-    expect(r.messages.length).toBe(4);
-    expect(r.messages[0]).toContain(fullWindow(1, 5));
-    expect(r.messages[1]).toContain(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`);
-    expect(r.messages[1]).not.toContain("#5 SMSG_MESSAGECHAT");
-    expect(r.messages[2]).toContain(EVENTS_UNCHANGED_LINE);
-    expect(r.messages[3]).toContain(fullWindow(1, 6));
-    // What the model was shown, on the record: nothing, marked unchanged.
-    const served = r.records.filter((x) => x.t === "events_served" && x["via"] === "context");
-    expect(served.map((x) => [x["count"], x["unchanged"] ?? false])).toEqual([
-      [5, false],
-      [0, true],
-      [0, true],
-      [6, false],
-    ]);
-  }, 60_000);
-
-  test("a compaction, at its boundary, sends the window whole in the next message", async () => {
-    const r = await claudeProgramRun({ calls: TRIPS(3), maxTurns: 3, events: () => evs(1, 5), fake: { WB_FAKE_COMPACT_TURN: "2" } });
-    expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
-    expect(r.messages[2]).toContain(fullWindow(1, 5));
-  }, 60_000);
-
-  test("a session the CLI names that is not the one before: the window goes whole", async () => {
-    const r = await claudeProgramRun({ calls: TRIPS(3), maxTurns: 3, events: () => evs(1, 5), fake: { WB_FAKE_SESSION_TURN: "2" } });
-    expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
-    expect(r.messages[2]).toContain(fullWindow(1, 5));
-  }, 60_000);
-
-  test("an errored turn may not have kept its message: the window and the pad go whole after it", async () => {
-    const calls = TRIPS(4);
-    calls[0] = [...calls[0]!, { name: "write_scratchpad", arguments: { content: "# plan\nGoldshire" } }];
-    const r = await claudeProgramRun({ calls, maxTurns: 4, events: () => evs(1, 5), fake: { WB_FAKE_ERROR_TURN: "2" } });
-    expect(r.messages[1]).toContain(EVENTS_UNCHANGED_LINE);
-    expect(r.messages[1]).toEndWith(UNCHANGED);
-    expect(r.messages[2]).toContain(fullWindow(1, 5));
-    expect(r.messages[2]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nGoldshire");
-    expect(r.messages[3]).toContain(EVENTS_UNCHANGED_LINE);
-    expect(r.messages[3]).toEndWith(UNCHANGED);
   }, 60_000);
 });
 

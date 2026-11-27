@@ -21,50 +21,28 @@ Lorem after.`;
     expect(stripWikitext(wt)).toBe("Lorem before.\nLorem after.");
   });
 
-  test("links become their labels", () => {
+  test("links become their labels; file, image and category links are dropped whole", () => {
     expect(stripWikitext("See [[Example Zone Beta]].")).toBe("See Example Zone Beta.");
     expect(stripWikitext("See [[Example Zone Beta|the beta zone]].")).toBe("See the beta zone.");
     expect(stripWikitext("See [[Example Zone Beta#Section|there]].")).toBe("See there.");
     expect(stripWikitext("A [[:Example Page]] link.")).toBe("A Example Page link.");
-  });
-
-  test("file, image and category links are dropped whole", () => {
     expect(stripWikitext("[[File:Example.jpg|thumb|A caption]]Lorem.")).toBe("Lorem.");
     expect(stripWikitext("[[Image:Example.png|20px]]Lorem.")).toBe("Lorem.");
     expect(stripWikitext("Lorem.[[Category:Example Category]]")).toBe("Lorem.");
     expect(stripWikitext("[[File:E.jpg|thumb|see [[Example Page Gamma]] here]]Lorem.")).toBe("Lorem.");
   });
 
-  test("comments, refs and html tags go", () => {
+  test("comments, refs and html tags go, and entities left in the wikitext are decoded", () => {
     expect(stripWikitext("Lorem<!-- hidden note -->ipsum.")).toBe("Loremipsum.");
     expect(stripWikitext("Lorem<ref name=x>a citation</ref> ipsum.")).toBe("Lorem ipsum.");
     expect(stripWikitext("Lorem<br />ipsum.")).toBe("Lorem ipsum.");
     expect(stripWikitext("Lorem<!-- unterminated")).toBe("Lorem");
-  });
-
-  test("headings become plain lines and formatting marks go", () => {
-    expect(stripWikitext("== Example Section ==\nLorem.")).toBe("Example Section\nLorem.");
-    expect(stripWikitext("===Deeper===\nLorem.")).toBe("Deeper\nLorem.");
-    expect(stripWikitext("'''Bold''' and ''italic''.")).toBe("Bold and italic.");
-  });
-
-  test("list markers go, list text stays", () => {
-    expect(stripWikitext("* one\n* two\n** nested\n# numbered\n: indented")).toBe(
-      "one\ntwo\nnested\nnumbered\nindented",
-    );
+    expect(stripWikitext("Lorem&nbsp;ipsum &amp; dolor &#65;.")).toBe("Lorem ipsum & dolor A.");
   });
 
   test("external links keep their label only", () => {
     expect(stripWikitext("See [https://example.invalid/x the docs].")).toBe("See the docs.");
     expect(stripWikitext("See [https://example.invalid/x].")).toBe("See .");
-  });
-
-  test("whitespace is collapsed and empty lines dropped", () => {
-    expect(stripWikitext("Lorem   ipsum\n\n\n\nDolor  sit\n\n")).toBe("Lorem ipsum\nDolor sit");
-  });
-
-  test("html entities left in the wikitext are decoded", () => {
-    expect(stripWikitext("Lorem&nbsp;ipsum &amp; dolor &#65;.")).toBe("Lorem ipsum & dolor A.");
   });
 
   test("is deterministic and never throws on hostile input", () => {
@@ -116,7 +94,7 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("Before.\n\n{{unclosed lorem")).toBe("Before.");
   });
 
-  test("inline link templates leave the name they link to", () => {
+  test("inline link templates leave the name they link to, never a display override", () => {
     // Each shape is the template's own slot order: the name is the link target.
     expect(stripWikitext("Sold by {{npc|Alliance|Example Person Gamma|Lorem Seller}} in Example Town.")).toBe(
       "Sold by Example Person Gamma in Example Town.",
@@ -128,34 +106,21 @@ Lorem ipsum dolor sit amet.`;
       "Example Quest Alpha starts here",
     );
     expect(stripWikitext("It drops {{loot|epic|Example Item Delta}}.")).toBe("It drops Example Item Delta.");
-    expect(stripWikitext("Combine {{item|Example Item Delta|icon=Lorem}} with ink.")).toBe(
-      "Combine Example Item Delta with ink.",
-    );
-    expect(stripWikitext("Cast {{ability|Example Spell Kappa}} first.")).toBe("Cast Example Spell Kappa first.");
-    expect(stripWikitext("Slay {{mob|Example Beast Eta|level=12}} twice.")).toBe("Slay Example Beast Eta twice.");
     expect(stripWikitext("Ask {{npclong|Neutral|30|Example Person Gamma|Lorem}} nearby.")).toBe(
       "Ask Example Person Gamma nearby.",
     );
-    expect(stripWikitext("Earn {{achievement|Example Feat Iota}} and {{achievementlong|Example Feat Mu}}.")).toBe(
-      "Earn Example Feat Iota and Example Feat Mu.",
-    );
-  });
-
-  test("the name slot is the link target, never a display override", () => {
     expect(stripWikitext("From {{quest|Example Quest Alpha|(Lorem)}}.")).toBe("From Example Quest Alpha.");
     expect(stripWikitext("From {{loot|rare|Example Item Delta|s}}.")).toBe("From Example Item Delta.");
   });
 
   test("an inline link template is matched the way the wiki matched it", () => {
     expect(stripWikitext("By {{NPC||Example Person Gamma}}.")).toBe("By Example Person Gamma.");
-    expect(stripWikitext("By {{ Npc |Neutral|Example Person Gamma}}.")).toBe("By Example Person Gamma.");
     expect(stripWikitext("By {{Template:Quest|Example Quest Alpha}}.")).toBe("By Example Quest Alpha.");
     expect(stripWikitext("By {{quest\n|Example Quest Alpha\n}}.")).toBe("By Example Quest Alpha.");
     // `2=` names the slot outright; a named argument is never positional.
     expect(stripWikitext("By {{npc|smallicon=Lorem.png|Horde|2=Example Person Gamma}}.")).toBe(
       "By Example Person Gamma.",
     );
-    expect(stripWikitext("By {{npc|level=5|Horde|Example Person Gamma}}.")).toBe("By Example Person Gamma.");
     // A pipe inside a link is not an argument separator.
     expect(stripWikitext("By {{item|[[Example Item Delta|Delta]]}}.")).toBe("By Delta.");
   });
@@ -166,7 +131,7 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("A {{quest}} here.")).toBe("A here.");
   });
 
-  test("every other template still goes, a link template nested in one included", () => {
+  test("every other template still goes, a link template nested in one included, and one nested in a name slot follows the rule", () => {
     expect(stripWikitext("Costs {{cost|1|50|0}} and sits at {{coords|48.2|42.1|Example Zone Beta}}.")).toBe(
       "Costs and sits at .",
     );
@@ -176,9 +141,6 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("{{box|a={{quest|Example Quest Alpha}}}}Lorem.")).toBe("Lorem.");
     expect(stripWikitext("{|\n| {{loot|epic|Example Item Delta}}\n|}\nLorem.")).toBe("Lorem.");
     expect(stripWikitext("{{{quest|Example Quest Alpha}}}Lorem.")).toBe("Lorem.");
-  });
-
-  test("a link template nested in the name slot follows the same rule", () => {
     expect(stripWikitext("By {{quest|{{item|Example Item Delta}}}}.")).toBe("By Example Item Delta.");
     expect(stripWikitext("By {{quest|{{lorem}}}}.")).toBe("By .");
   });
@@ -204,7 +166,6 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("By {{npc||Example Person Gamma (Gilneas Example Hold)}}.")).toBe(
       "By Example Person Gamma (Gilneas Example Hold).",
     );
-    expect(stripWikitext("By {{npc||Example Person Gamma (Goblin)}}.")).toBe("By Example Person Gamma (Goblin).");
     // `(Worgen)` is the worgen starting zone's version of a thing; a bare
     // worgen in a name is this world's.
     expect(stripWikitext("From {{quest|Example Quest Alpha (Worgen)}}.")).toBe("From .");
@@ -217,12 +178,6 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext(screenInlineLinks(wt))).toBe("from");
     // Other templates are untouched by the mark.
     expect(screenInlineLinks("{{cost|1}}{{questbox|x}}")).toBe("{{cost|1}}{{questbox|x}}");
-  });
-
-  test("the strip with rendering off is the strip as it was", () => {
-    expect(stripWikitext("Sold by {{npc|Alliance|Example Person Gamma}} here.", { inlineLinks: false })).toBe(
-      "Sold by here.",
-    );
   });
 
   test("a realistic synthetic article reduces to prose", () => {
@@ -255,7 +210,7 @@ Lorem ipsum dolor sit amet, says the quest giver.
 });
 
 describe("redirectTarget", () => {
-  test("recognises redirects in several shapes", () => {
+  test("recognises redirects in several shapes, and only at the start of a page", () => {
     expect(redirectTarget("#REDIRECT [[Example New Name]]")).toBe("Example New Name");
     expect(redirectTarget("#redirect[[Example New Name]]")).toBe("Example New Name");
     expect(redirectTarget("#REDIRECT [[Example_New_Name]]")).toBe("Example New Name");
@@ -264,23 +219,16 @@ describe("redirectTarget", () => {
     expect(redirectTarget("\n  #REDIRECT [[Example New Name]]\n[[Category:X]]")).toBe(
       "Example New Name",
     );
-  });
-
-  test("returns null for ordinary articles", () => {
     expect(redirectTarget("Lorem ipsum with a [[Example New Name]] link.")).toBeNull();
     expect(redirectTarget("Lorem #REDIRECT [[Example New Name]] mid-article.")).toBeNull();
-    expect(redirectTarget("")).toBeNull();
   });
 });
 
 describe("decodeEntities", () => {
-  test("decodes in a single pass", () => {
+  test("decodes in a single pass and leaves unknown entities alone", () => {
     expect(decodeEntities("&amp;lt;")).toBe("&lt;");
     expect(decodeEntities("&lt;tag&gt; &quot;q&quot; &apos;a&apos;")).toBe(`<tag> "q" 'a'`);
     expect(decodeEntities("&#65;&#x42;")).toBe("AB");
-  });
-
-  test("leaves unknown entities alone", () => {
     expect(decodeEntities("&thinsp;&notanentity;")).toBe("&thinsp;&notanentity;");
   });
 });

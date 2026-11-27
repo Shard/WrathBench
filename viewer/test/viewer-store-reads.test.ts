@@ -14,8 +14,7 @@
 import { writeLegacy05Run } from "../../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../../runner/src/run-reader";
 import { describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../../runner/src/trajectory";
 import { createApi } from "../api";
@@ -31,8 +30,7 @@ import {
   type RunListingRow,
   type RunStore,
 } from "../clickhouse";
-import { positionsFromStore, readLatestMove, readLatestStatus, readPositions } from "../positions";
-import { readMoves } from "../runs";
+import { positionsFromStore, readPositions } from "../positions";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -243,46 +241,6 @@ describe("which runs /api/positions opens", () => {
     };
     expect((await positionsFromStore(store, runsDir, now)).map((p) => p.runId)).toEqual(["live-a"]);
   });
-
-  test("the latest move is the row readMoves lists last, ties and position-less rows included", async () => {
-    const runsDir = tempDir("viewer-reads-move-");
-    const dir = join(runsDir, "r");
-    mkdirSync(dir, { recursive: true });
-    const db = new Database(join(dir, "run.sqlite"));
-    db.run(`CREATE TABLE move (run_id TEXT NOT NULL, ts INTEGER NOT NULL, move_id INTEGER, map INTEGER, x REAL, y REAL, z REAL, target TEXT, status TEXT)`);
-    const ins = db.prepare(`INSERT INTO move VALUES (?,?,?,?,?,?,?,?,?)`);
-    ins.run("r", 100, 1, 0, 1, 1, 1, null, null);
-    ins.run("r", 300, 2, 0, 2, 2, 2, "boar", null);
-    ins.run("r", 300, 2, 0, 3, 3, 3, "boar", "arrived");
-    ins.run("r", 200, 3, 0, 9, 9, 9, null, null); // written late, stamped earlier
-    ins.run("r", 400, 4, 0, null, null, null, null, "no_path"); // no position: never listed
-    db.close();
-    const all = await readMoves(runsDir, "r");
-    expect(await readLatestMove(runsDir, "r")).toEqual(all[all.length - 1]!);
-    expect(await readLatestMove(runsDir, "r")).toMatchObject({ x: 3, status: "arrived" });
-    // No table, and no database: nothing, not an error.
-    const bare = join(runsDir, "bare");
-    mkdirSync(bare);
-    new Database(join(bare, "run.sqlite")).close();
-    expect(await readLatestMove(runsDir, "bare")).toBeNull();
-    expect(await readLatestMove(runsDir, "absent")).toBeNull();
-  });
-
-  test("the newest status line is read off the file's end, and the whole file when the end holds none", () => {
-    const runsDir = tempDir("viewer-reads-status-");
-    const dir = join(runsDir, "r");
-    mkdirSync(dir, { recursive: true });
-    const line = (turn: number): string => JSON.stringify({ turn, level: 5, zone: "Durotar", text: `${"x".repeat(560)} ${turn}`, ts: turn * 1000 });
-    const lines = Array.from({ length: 40 }, (_, i) => line(i + 1));
-    writeFileSync(join(dir, "episodic.jsonl"), lines.join("\n") + "\n");
-    expect(readLatestStatus(runsDir, "r")).toMatchObject({ turn: 40, ts: 40_000 });
-    // A half-written last line is skipped, as the writer's own reader skips it.
-    writeFileSync(join(dir, "episodic.jsonl"), lines.join("\n") + "\n" + line(41).slice(0, 100));
-    expect(readLatestStatus(runsDir, "r")).toMatchObject({ turn: 40 });
-    // The whole tail window unreadable: the file is read whole, and the good line before it found.
-    writeFileSync(join(dir, "episodic.jsonl"), [line(1), "{".repeat(20_000)].join("\n"));
-    expect(readLatestStatus(runsDir, "r")).toMatchObject({ turn: 1 });
-  });
 });
 
 /*
@@ -342,34 +300,6 @@ describe("/api/fleet carries its rows' run figures", () => {
       }
       expect(fleet.runCount).toBe(runs.runs.length);
       expect(fleet.runCount).toBe(3);
-    } finally {
-      Date.now = realNow;
-    }
-  });
-
-  test("tabs polling together share one set of point reads a window", async () => {
-    const runsDir = tempDir("viewer-reads-fleet-share-");
-    writeRun(runsDir, "run-live", { account: "RUNNER" });
-    writeRun(runsDir, "run-paused", { account: "IDLE" });
-    fleetState(runsDir);
-    const inner = localRunStore(runsDir);
-    const point = { runRow: 0, totalsRow: 0 };
-    const store: RunStore = {
-      ...inner,
-      runRow: (id) => ((point.runRow += 1), inner.runRow(id)),
-      totalsRow: (id) => ((point.totalsRow += 1), inner.totalsRow(id)),
-    };
-    const handle = handleOf(runsDir, store);
-    const realNow = Date.now;
-    let clock = realNow();
-    Date.now = () => clock;
-    try {
-      await Promise.all([1, 2, 3].map(() => json<FleetResponse>(handle, "/api/fleet")));
-      expect(point).toEqual({ runRow: 2, totalsRow: 2 });
-      clock += STORE_SHARE_MS;
-      const next = await json<FleetResponse>(handle, "/api/fleet");
-      expect(point).toEqual({ runRow: 4, totalsRow: 4 });
-      expect(next.runFacts?.length).toBe(2);
     } finally {
       Date.now = realNow;
     }

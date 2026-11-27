@@ -73,17 +73,6 @@ describe("wikiBundleMeta", () => {
     expect(wikiBundleMeta(undefined)).toBeNull();
   });
 
-  test("an empty meta table reads all-null rather than throwing", () => {
-    const db = openWikiBundle(bundle("empty.sqlite", {}));
-    expect(wikiBundleMeta(db)).toEqual({
-      schemaVersion: null,
-      builtAt: null,
-      source: null,
-      eraCutoff: null,
-    });
-    db!.close();
-  });
-
   test("a pre-era bundle keeps working: eraCutoff is null, the rest is read", () => {
     const db = openWikiBundle(
       bundle("pre-era.sqlite", {

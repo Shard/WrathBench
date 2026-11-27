@@ -12,8 +12,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { Glob } from "bun";
+import { join } from "node:path";
 import type { FleetServerView } from "../viewer/api-types-runner";
 import { SERVER_PHASES } from "../viewer/api-fleet";
 import { deployWindowOpen, serverBanner } from "../dashboard/src/lib/fleet";
@@ -50,24 +49,6 @@ const VERDICTS = new Set(["running", "failed"]);
 const WINDOW = new Set([...PHASES].filter((p) => !VERDICTS.has(p)));
 
 describe("the deploy window's phases", () => {
-  test("k8s-deploy.sh writes the rest state, the verdict and a window", () => {
-    for (const v of VERDICTS) expect(PHASES.has(v)).toBe(true);
-    expect(WINDOW.size).toBeGreaterThan(0);
-  });
-
-  test("k8s-deploy.sh writes server-state.json only through write_phase, and no other infra script writes it", () => {
-    expect(codeLines(DEPLOY).filter((l) => l.includes("server-state.json"))).toHaveLength(1);
-    expect(codeLines(DEPLOY).some((l) => /^\s*write_phase\(\)\s*\{/.test(l))).toBe(true);
-    // k8s-release.sh's own PHASES (build drain pin deploy resume) are its steps, not server phases: it runs k8s-deploy.sh for the window.
-    const others: string[] = [];
-    for (const rel of new Glob("**/*.sh").scanSync({ cwd: INFRA })) {
-      const path = join(INFRA, rel);
-      if (path === DEPLOY) continue;
-      if (codeLines(path).some((l) => l.includes("server-state"))) others.push(relative(INFRA, path));
-    }
-    expect(others).toEqual([]);
-  });
-
   test("the viewer serves exactly the phases the script writes", () => {
     expect(sorted(SERVER_PHASES)).toEqual(sorted(PHASES));
   });

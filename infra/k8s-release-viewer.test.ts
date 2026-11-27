@@ -216,7 +216,8 @@ function run(c: Case): Result {
       WRATHBENCH_SHA: "full-release-sha",
       WRATHBENCH_RELEASE_REPO_ROOT: tree,
       WRATHBENCH_BUILD_IMAGES_CMD: buildImages,
-      WRATHBENCH_RELEASE_POLL_S: "1",
+      // No sleep between tag polls: a poll that flips counts reads, not seconds.
+      WRATHBENCH_RELEASE_POLL_S: "0",
       WRATHBENCH_RELEASE_PIN_WAIT_S: "4",
       WRATHBENCH_RELEASE_ROLLOUT_WAIT_S: "3",
     },
@@ -254,10 +255,7 @@ describe("k8s-release-viewer.sh", () => {
     expect(r.out).toContain(`VIEWER RELEASED ${r.tag}`);
     expect(r.out).toContain(`over the fleet's ${r.fleetTag}`);
     expect(r.out).toContain(`still ${r.fleetTag}`);
-  });
-
-  test("the hook gets no arguments and only the viewer's variables, never the full release's", () => {
-    const r = run({ withHook: true });
+    // The hook gets no arguments and only the viewer's variables, never the full release's.
     expect(r.calls.find((l) => l.startsWith("viewer-pin-hook "))).toBe(`viewer-pin-hook argc=0 viewer=${r.tag} fleet=${r.fleetTag} tag=unset sha=unset`);
   });
 

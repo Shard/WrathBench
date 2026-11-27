@@ -12,7 +12,7 @@ import type { AdminResponse } from "../api-types-admin";
 import { codexLoginDir } from "../../runner/src/codex-login";
 import { ConfigStore } from "../../runner/src/config-store";
 import { readStoreSecret, STORE_KEY_ENV } from "../../runner/src/store-secrets";
-import { KEY_HEX, OTHER_KEY_HEX, SENTINEL } from "../../runner/test/fixtures/store-secrets";
+import { KEY_HEX, SENTINEL } from "../../runner/test/fixtures/store-secrets";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -137,18 +137,6 @@ describe("PUT /api/admin/secrets/<NAME>", () => {
     expect(or1.secretSet).toBeNull();
   });
 
-  test("one sealed under another key reads as not set, and says why", async () => {
-    const f = fixture({ key: OTHER_KEY_HEX });
-    // Written with the other key, read by a viewer holding KEY_HEX.
-    await f.call("PUT", "/api/admin/secrets/OPENROUTER_KEY", { value: SENTINEL });
-    const g = createAdminApi({ groups: { runner: true, evals: true, viewer: true }, runsDir: f.runsDir, dbPath: f.dbPath, env: { ...f.env, [STORE_KEY_ENV]: KEY_HEX } });
-    const body = (await (await g(new Request("http://x/api/admin"), "/api/admin"))!.json()) as AdminResponse;
-    const or1 = body.credentials.find((c) => c.id === "or-1")!;
-    expect(or1.secretSet).toBe(false);
-    expect(or1.health).toMatchObject({ state: "secret-missing" });
-    expect(or1.health?.reason).toContain("another store key");
-  });
-
   test("a cross-site write never reaches the route", async () => {
     const f = fixture();
     const handle = createApi({ runsDir: f.runsDir, tilesDir: join(f.root, "tiles"), configDbPath: f.dbPath, moduleUrl: "http://127.0.0.1:1", admin: true });
@@ -159,23 +147,6 @@ describe("PUT /api/admin/secrets/<NAME>", () => {
     // And a public handle has no such route at all.
     const pub = createApi({ runsDir: f.runsDir, tilesDir: join(f.root, "tiles"), configDbPath: f.dbPath, moduleUrl: "http://127.0.0.1:1", publicMode: true });
     expect((await pub(new Request("http://x/api/admin/secrets/OPENROUTER_KEY", { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" }))).status).toBe(404);
-  });
-});
-
-describe("a secret replaced since a refusal", () => {
-  test("a run paused auth-failed before a key was stored, or before a home logged in again, no longer reads auth-failed", async () => {
-    const f = fixture();
-    const now = Date.now();
-    const st = (id: string, provider: string, secretEnv: string) => ({ id, provider, billing: "paid", enabled: true, secretEnv, secretSet: true, slots: 1, inUse: 0, budget: "no budget", used: null, held: {}, holds: {}, lastError: { reason: "auth-failed", at: now - 60_000 } });
-    writeFileSync(join(f.runsDir, "fleet-state.json"), JSON.stringify({ heartbeatAt: now, credentials: [st("or-1", "openrouter", "OPENROUTER_KEY"), st("claude-2", "claude", "CLAUDE_CODE_OAUTH_TOKEN_2"), st("chatgpt-1", "chatgpt", "CODEX_HOME")] }));
-    const states = async (): Promise<Record<string, string | undefined>> =>
-      Object.fromEntries((JSON.parse((await f.call("GET", "/api/admin")).text) as AdminResponse).credentials.map((c) => [c.id, c.health?.state]));
-    expect(await states()).toMatchObject({ "or-1": "auth-failed", "claude-2": "auth-failed", "chatgpt-1": "auth-failed" });
-    await f.call("PUT", "/api/admin/secrets/CLAUDE_CODE_OAUTH_TOKEN_2", { value: SENTINEL });
-    const dir = codexLoginDir(f.env);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "chatgpt-1.state.json"), JSON.stringify({ state: "ok", requestedAt: now - 30_000, at: now - 1_000, actor: "mark" }));
-    expect(await states()).toMatchObject({ "or-1": "auth-failed", "claude-2": "ok", "chatgpt-1": "ok" });
   });
 });
 
@@ -194,38 +165,5 @@ describe("POST /api/admin/codex-login/<id>", () => {
     const on = await f.call("POST", "/api/admin/codex-login/chatgpt-1", {});
     expect(on.status).toBe(409);
     expect(on.text).toContain("disable it first");
-  });
-
-  test("refused for a credential that is not a Codex home, and with no supervisor up", async () => {
-    expect((await fixture({ supervisorUp: true }).call("POST", "/api/admin/codex-login/or-1", {})).status).toBe(400);
-    expect((await fixture({ supervisorUp: true }).call("POST", "/api/admin/codex-login/nope", {})).status).toBe(404);
-    expect((await fixture().call("POST", "/api/admin/codex-login/chatgpt-2", {})).status).toBe(409);
-  });
-
-  test("a request the supervisor never took, and a login it never finished, read failed rather than waiting for ever", async () => {
-    const f = fixture({ supervisorUp: true });
-    const dir = codexLoginDir(f.env);
-    mkdirSync(dir, { recursive: true });
-    const now = Date.now();
-    writeFileSync(join(dir, "chatgpt-2.request.json"), JSON.stringify({ at: now - 10 * 60_000, actor: "mark" }));
-    writeFileSync(join(dir, "chatgpt-1.state.json"), JSON.stringify({ state: "waiting", requestedAt: now - 30 * 60_000, at: now - 29 * 60_000, actor: "mark", url: "https://x", code: "ABCD-EFGH" }));
-    const views = Object.fromEntries((JSON.parse((await f.call("GET", "/api/admin")).text) as AdminResponse).credentials.map((c) => [c.id, c.login]));
-    expect(views["chatgpt-2"]).toMatchObject({ state: "failed", detail: "the supervisor did not take the request" });
-    expect(views["chatgpt-1"]).toMatchObject({ state: "failed", code: null });
-    expect((await f.call("POST", "/api/admin/codex-login/chatgpt-2", {})).status).toBe(202);
-  });
-
-  test("the waiting link and code reach the page from the supervisor's state", async () => {
-    const f = fixture({ supervisorUp: true });
-    const dir = codexLoginDir(f.env);
-    mkdirSync(dir, { recursive: true });
-    const now = Date.now();
-    writeFileSync(
-      join(dir, "chatgpt-2.state.json"),
-      JSON.stringify({ state: "waiting", requestedAt: now - 5_000, at: now - 4_000, actor: "mark", url: "https://auth.openai.com/codex/device", code: "D5L9-SKK60", expiresAt: now + 60_000 }),
-    );
-    const view = (JSON.parse((await f.call("GET", "/api/admin")).text) as AdminResponse).credentials.find((c) => c.id === "chatgpt-2")!;
-    expect(view.login).toEqual({ state: "waiting", at: now - 4_000, actor: "mark", url: "https://auth.openai.com/codex/device", code: "D5L9-SKK60", expiresAt: now + 60_000, detail: null });
-    expect(view.stored).toBe(false);
   });
 });

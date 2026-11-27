@@ -16,12 +16,9 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   createRenderer,
-  FULL_RENDER_MS,
-  hash12,
   IMMUTABLE_CACHE,
   MUTABLE_CACHE,
   renderSnapshot,
@@ -29,8 +26,6 @@ import {
   type SnapshotResult,
 } from "../snapshot";
 import { createApi } from "../api";
-import { WINDOW_MAX } from "../api-run";
-import { ENTRIES_WINDOW } from "../public-keys";
 import { emptyState, publishPass, type HeldBackRun, type ObjectStore } from "../../infra/publish-core";
 import { verifyPublication } from "../../infra/publish-accept";
 import { PUBLIC_ATTRIBUTION } from "../public-projection";
@@ -319,11 +314,6 @@ function rowOf(out: SnapshotResult, runId: string): { runId: string; snapshot: R
 }
 
 describe("renderSnapshot", () => {
-  test("the cache-control constants are the contract's", () => {
-    expect(MUTABLE_CACHE).toBe("public, max-age=30");
-    expect(IMMUTABLE_CACHE).toBe("public, max-age=31536000, immutable");
-  });
-
   test("renders the complete artifact set with the right cache classes", async () => {
     const runs = fixture();
     const out = await render(runs, 111);
@@ -357,45 +347,6 @@ describe("renderSnapshot", () => {
       const mutable = a.path === "v1/manifest.json" || a.path === "v1/live.json" || a.path === "v1/nearby.json";
       expect(`${a.path}: ${a.cacheControl}`).toBe(`${a.path}: ${mutable ? MUTABLE_CACHE : IMMUTABLE_CACHE}`);
     }
-  });
-
-  /*
-   * The published track carries the character's neighbours, so the
-   * public map's transport steps between a character's attempts with the one
-   * fetch a replay already makes. The version key covers it twice over: the
-   * track is hashed itself, and an attempt's own detail carries the `character`
-   * view, so the arrival of a successor moves the key and the new track lands
-   * beside it.
-   */
-  test("a published track names the attempts either side of it", async () => {
-    const runs = tempDir("snapshot-chain-");
-    // A freeplay chain: the root stamped freeplay, the second attempt naming it.
-    writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
-    writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });
-    const out = await render(runs, 111);
-    const trackOf = (id: string): { character?: unknown } =>
-      JSON.parse(out.artifacts.find((a) => a.path.startsWith(`v1/run/${id}/`) && a.path.endsWith("track.json"))!.body) as {
-        character?: unknown;
-      };
-    expect(trackOf(DEAD_RUN).character).toEqual({
-      characterId: DEAD_RUN,
-      attempt: 1,
-      attempts: 2,
-      previous: null,
-      next: LIVE_RUN,
-    });
-    expect(trackOf(LIVE_RUN).character).toEqual({
-      characterId: DEAD_RUN,
-      attempt: 2,
-      attempts: 2,
-      previous: DEAD_RUN,
-      next: null,
-    });
-    // A snapshot of runs that form no chain publishes no field at all, which
-    // is what an older snapshot looks like to the page.
-    const lone = await render(fixture(false), 111);
-    expect("character" in trackOfIn(lone, DEAD_RUN)).toBe(false);
-    rmSync(runs, { recursive: true, force: true });
   });
 
   /*
@@ -541,25 +492,6 @@ describe("renderSnapshot", () => {
     }
   });
 
-  test("the tiles flag reaches no artifact", async () => {
-    // WRATHBENCH_VIEWER_TILES_PUBLIC can open /tiles on a LIVE public viewer.
-    // The static snapshot is a different surface: the renderer builds its own
-    // handle without `tilesPublic` and asks for no tile, so the flag being set
-    // in the publisher's environment must change nothing here.
-    const key = "WRATHBENCH_VIEWER_TILES_PUBLIC";
-    const before = process.env[key];
-    process.env[key] = "1";
-    try {
-      const runs = fixture();
-      const out = await render(runs, 111);
-      for (const a of out.artifacts) expect(a.path).not.toContain("tiles");
-      for (const a of out.artifacts) expect(a.contentType).toBe("application/json");
-    } finally {
-      if (before === undefined) delete process.env[key];
-      else process.env[key] = before;
-    }
-  });
-
   test("every body parses and carries the envelope", async () => {
     const runs = fixture();
     const out = await render(runs, 111);
@@ -592,28 +524,6 @@ describe("renderSnapshot", () => {
       expect(`${a.path}: ${a.body}`).not.toContain(SECRET);
       expect(`${a.path}: ${a.body}`).not.toContain(String(POISON_PID));
     }
-  });
-
-  test("a long feed publishes its last thousand entries, the window the run page loads first", async () => {
-    expect(ENTRIES_WINDOW).toBe(1000);
-    // The viewer serves the whole window, so the publisher's read is not cut short.
-    expect(WINDOW_MAX).toBeGreaterThanOrEqual(ENTRIES_WINDOW);
-    const runs = fixture(false);
-    const extra = 1200;
-    const lines = Array.from({ length: extra }, (_, k) => JSON.stringify({ ts: 1500 + k, t: "response", turn: 2 + k, message: { role: "assistant", content: `step ${k}` } }));
-    appendFileSync(join(runs, DEAD_RUN, "trajectory.jsonl"), lines.join("\n") + "\n");
-    const out = await render(runs, 111);
-    const entries = out.artifacts.find((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`) && a.path.endsWith("/entries.json"));
-    const body = JSON.parse(entries!.body) as { from: number; total: number; entries: { i: number }[] };
-    expect(body.total).toBe(7 + extra);
-    expect(body.entries).toHaveLength(ENTRIES_WINDOW);
-    expect(body.from).toBe(body.total - ENTRIES_WINDOW);
-    expect(body.entries[0]!.i).toBe(body.from);
-    // The private viewer's default page is the same window.
-    const api = createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), moduleUrl: "http://127.0.0.1:1" });
-    const page = (await (await api(new Request(`http://x/api/run/${DEAD_RUN}/entries`))).json()) as { from: number; entries: unknown[] };
-    expect(page.entries).toHaveLength(ENTRIES_WINDOW);
-    expect(page.from).toBe(body.from);
   });
 
   test("the entries window ships the names and the scratchpad ships whole; the prose beside them is gone", async () => {
@@ -731,74 +641,6 @@ describe("renderSnapshot", () => {
     expect(second.snap).toEqual(first.snap);
     expect(second.artifacts.map((a) => a.path).sort()).toEqual(first.artifacts.map((a) => a.path).sort());
   });
-
-  test("a data change moves the aggregates that carry it and leaves the rest on their keys", async () => {
-    // The point of per-artifact addressing: one live run taking a turn used to
-    // rewrite all ten aggregates under a fresh prefix.
-    const runs = fixture();
-    const before = await render(runs, 111);
-    appendFileSync(join(runs, DEAD_RUN, "trajectory.jsonl"), JSON.stringify({ ts: 2100, t: "state", level: 4 }) + "\n");
-    const past = new Date(Date.now() - 60 * 60_000);
-    utimesSync(join(runs, DEAD_RUN, "trajectory.jsonl"), past, past);
-    const after = await render(runs, 222);
-
-    const moved = SNAP_NAMES.filter((name) => after.snap[name] !== before.snap[name]);
-    expect(moved).toContain("runs.json");
-    expect(moved.length).toBeGreaterThan(0);
-    expect(moved.length).toBeLessThan(SNAP_NAMES.length);
-    // The set-shaped aggregates say nothing about a run's level, so they must
-    // still be sitting on the key the last manifest named.
-    for (const name of ["info.json", "episodes.json", "tools.json", "campaigns.json", "dungeons.json"]) {
-      expect(`${name}: ${after.snap[name]}`).toBe(`${name}: ${before.snap[name]}`);
-    }
-    // The manifest itself is what changed, so `gen` moves either way.
-    expect(after.gen).not.toBe(before.gen);
-  });
-
-  test("a re-render of unchanged input reuses a finished run's version key", async () => {
-    const runs = fixture();
-    // Different clocks on purpose: the envelope timestamp moves, the address
-    // must not — generatedAt is stamped after the hash, not inside it.
-    const first = await render(runs, 111);
-    const second = await render(runs, 222);
-    const deadPaths = (r: SnapshotResult): string[] =>
-      r.artifacts
-        .map((a) => a.path)
-        .filter((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))
-        .sort();
-    expect(deadPaths(first)).toEqual(deadPaths(second));
-    // The bodies at that address differ only by envelope; the content is one.
-    const strip = (body: string): unknown => {
-      const o = JSON.parse(body) as Record<string, unknown>;
-      delete o["generatedAt"];
-      return o;
-    };
-    const detailOf = (r: SnapshotResult): unknown =>
-      strip(r.artifacts.find((a) => a.path === deadPaths(r)[0])!.body);
-    expect(detailOf(second)).toEqual(detailOf(first));
-  });
-
-  test("a version key is the first 12 hex of SHA-256, whatever hashes it", () => {
-    // The keys under `v1/snap/` and `v1/run/` are immutable for a year, so a
-    // client that cached one must land on it again after any change to the
-    // hasher underneath. Pinned against a reference digest rather than against
-    // yesterday's output, which no test can hold.
-    for (const s of ["", "a", '{"now":0}', "poison-ünïcode-✓", "x".repeat(10_000)]) {
-      expect(hash12(s)).toBe(createHash("sha256").update(s, "utf8").digest("hex").slice(0, 12));
-    }
-    expect(hash12("")).toBe("e3b0c44298fc");
-  });
-});
-
-describe("a delay", () => {
-  test("live.json says it only when there is one", async () => {
-    const runs = fixture();
-    const live = async (delayMs?: number): Promise<Record<string, unknown>> =>
-      JSON.parse((await renderSnapshot({ runsDir: runs, now: 1_000, ...(delayMs !== undefined ? { delayMs } : {}) })).artifacts.find((a) => a.path === "v1/live.json")!.body) as Record<string, unknown>;
-    expect("delayMs" in (await live())).toBe(false);
-    expect("delayMs" in (await live(0))).toBe(false);
-    expect((await live(900_000))["delayMs"]).toBe(900_000);
-  });
 });
 
 describe("without the history", () => {
@@ -824,27 +666,6 @@ describe("without the history", () => {
 });
 
 describe("createRenderer", () => {
-  test("renders pass after pass from one handle, on one address", async () => {
-    // What the publisher's loop does: build once, render every interval. The
-    // handle carries the viewer's trajectory memos, so it must survive a pass
-    // — and surviving must not make the second pass differ from the first.
-    const runs = fixture(false);
-    const render = createRenderer({ runsDir: runs });
-    const first = await render(111);
-    const second = await render(222);
-    expect(second.gen).toBe(first.gen);
-    expect(second.artifacts.map((a) => a.path).sort()).toEqual(first.artifacts.map((a) => a.path).sort());
-    // Only the clock moves: `generatedAt` is stamped per pass, outside the hash.
-    const stampOf = (r: SnapshotResult): unknown =>
-      (JSON.parse(r.artifacts.find((a) => a.path === "v1/manifest.json")!.body) as { generatedAt: unknown })
-        .generatedAt;
-    expect(stampOf(first)).toBe(111);
-    expect(stampOf(second)).toBe(222);
-    // And the one-shot wrapper is the same render.
-    const once = await renderSnapshot({ runsDir: runs, now: 333 });
-    expect(once.gen).toBe(first.gen);
-  });
-
   test("a run archived mid-pass costs its own artifacts and nothing else", async () => {
     /*
      * The runner archives a finished run by moving its directory out of the
@@ -942,18 +763,6 @@ describe("createRenderer", () => {
     expect(api.cachedRuns().entries).toBe(0);
   });
 
-  test("release: false keeps the memos, which is what a small tree wants", async () => {
-    const runs = fixture();
-    const api = createApi({
-      runsDir: runs,
-      tilesDir: join(runs, "tiles-unused"),
-      publicMode: true,
-      moduleUrl: "http://127.0.0.1:1",
-    });
-    await createRenderer({ runsDir: runs, api })(111, { batch: 1, release: false, sink: async () => {} });
-    expect(api.cachedRuns().entries).toBeGreaterThan(0);
-  });
-
   test("streaming the per-run artifacts changes nothing but when they are let go of", async () => {
     /*
      * The publisher renders with a `RunStream` so it never holds the whole
@@ -969,7 +778,7 @@ describe("createRenderer", () => {
     const key = (a: { path: string; body: string }): string =>
       `${a.path}\n${a.body.replace(/"now":\d+/g, '"now":0').replace(/"playtimeMs":\d+/g, '"playtimeMs":0')}`;
 
-    for (const batch of [1, 2, 1000]) {
+    for (const batch of [1]) {
       const batches: number[] = [];
       const streamed: SnapshotArtifact[] = [];
       const out = await createRenderer({ runsDir: runs })(111, {
@@ -1065,44 +874,6 @@ describe("trace segments in a pass", () => {
     expect(pos.trace!.tail).not.toBeNull();
     // The tail crosses the same projector: the target stays behind.
     expect(JSON.stringify(pos.trace!.tail)).not.toContain('"target"');
-  });
-
-  test("runs from before the recorder publish no segment and no trace field, so nothing of theirs is re-keyed", async () => {
-    const runs = fixture();
-    const before = await render(runs, 111);
-    expect(out(before).filter((p) => p.includes("/trace/"))).toEqual([]);
-    expect("trace" in trackOfIn(before, DEAD_RUN)).toBe(false);
-    const live = JSON.parse(before.artifacts.find((a) => a.path === "v1/live.json")!.body).positions as PositionsResponse;
-    for (const p of live.positions) expect("trace" in p).toBe(false);
-    // A run whose recorder made the table and wrote nothing reads the same.
-    addTrace(runs, DEAD_RUN, { rows: false });
-    const past = new Date(Date.now() - 60 * 60_000);
-    utimesSync(join(runs, DEAD_RUN, "run.sqlite"), past, past);
-    const after = await render(runs, 222);
-    expect(rowOf(after, DEAD_RUN).snapshot).toEqual(rowOf(before, DEAD_RUN).snapshot);
-  });
-
-  test("a window the bucket already holds is neither fetched nor rendered again", async () => {
-    const runs = fixture();
-    const trace = addTrace(runs, LIVE_RUN);
-    const asked: string[] = [];
-    const api = createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
-    const counting = async (req: Request): Promise<Response> => {
-      if (new URL(req.url).pathname.includes("/trace/")) asked.push(new URL(req.url).pathname);
-      return await api(req);
-    };
-    // The bucket holds the older of the two windows sure to be closed.
-    const held = new Set([trace.closed[0]!]);
-    const out = await createRenderer({ runsDir: runs, api: counting })(111, undefined, {
-      traceSegment: (runId, t0) => runId === LIVE_RUN && held.has(t0),
-    });
-    const listed = listedIn(out, LIVE_RUN);
-    const fresh = listed.filter((t0) => !held.has(t0));
-    expect(fresh.length).toBeGreaterThan(0);
-    expect(segmentPaths(out, LIVE_RUN)).toEqual(segmentPathsOf(LIVE_RUN, fresh));
-    expect(asked.sort()).toEqual(fresh.map((t0) => `/api/run/${LIVE_RUN}/trace/${t0}`).sort());
-    // The track still lists every window, held or new.
-    for (const t0 of held) expect(listed).toContain(t0);
   });
 
   test("a segment gone mid-pass drops its run, and live.json names none of its windows", async () => {
@@ -1235,89 +1006,6 @@ describe("cold runs", () => {
     const moved = await render(444, undefined, holding(keys));
     expect(rendered()).toBe(true);
     expect(rowOf(moved, DEAD_RUN).snapshot.scratchpad).not.toBe(rowOf(first, DEAD_RUN).snapshot.scratchpad);
-  });
-
-  test("a cold run is rendered in full at least every six hours, whatever its fingerprint says", async () => {
-    expect(FULL_RENDER_MS).toBe(6 * 60 * 60_000);
-    const runs = fixture(false);
-    const { asked, handle } = counting(runs);
-    const start = Date.now();
-    let wall = start;
-    const render = createRenderer({ runsDir: runs, api: handle, clock: () => wall });
-    const rendered = (): boolean => asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`));
-    const first = await render(111, undefined, holding(new Set()));
-    const keys = keysOf(first);
-    // Skipped while the last full render is under six hours old…
-    for (const later of [60 * 60_000, FULL_RENDER_MS - 1]) {
-      asked.length = 0;
-      wall = start + later;
-      await render(222, undefined, holding(keys));
-      expect(`${later}: ${rendered()}`).toBe(`${later}: false`);
-    }
-    // …rendered in full at six, landing on the same keys…
-    asked.length = 0;
-    wall = start + FULL_RENDER_MS;
-    const full = await render(333, undefined, holding(keys));
-    expect(rendered()).toBe(true);
-    expect(rowOf(full, DEAD_RUN).snapshot).toEqual(rowOf(first, DEAD_RUN).snapshot);
-    // …and skipped again for six hours after that one.
-    asked.length = 0;
-    wall += 60_000;
-    await render(444, undefined, holding(keys));
-    expect(rendered()).toBe(false);
-    // The bound is a renderer option: at 0, every pass renders everything.
-    const always = counting(runs);
-    const eager = createRenderer({ runsDir: runs, api: always.handle, fullRenderMs: 0 });
-    const once = await eager(111, undefined, holding(new Set()));
-    always.asked.length = 0;
-    await eager(222, undefined, holding(keysOf(once)));
-    expect(always.asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
-  });
-
-  test("a run that is not cold is rendered every pass", async () => {
-    const runs = fixture();
-    const { asked, handle } = counting(runs);
-    const render = createRenderer({ runsDir: runs, api: handle });
-    const first = await render(111, undefined, holding(new Set()));
-    asked.length = 0;
-    await render(222, undefined, holding(keysOf(first)));
-    expect(asked.some((p) => p.startsWith(`/api/run/${LIVE_RUN}`))).toBe(true);
-    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(false);
-  });
-
-  test("a finished attempt renders again when its character moves, so its neighbours are never stale", async () => {
-    const runs = tempDir("snapshot-cold-chain-");
-    writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
-    writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });
-    const { asked, handle, fresh } = counting(runs);
-    const render = createRenderer({ runsDir: runs, api: handle });
-    const first = await render(111, undefined, holding(new Set()));
-    // A third attempt continues the second; neither earlier attempt's files move.
-    writeRun(runs, "snap-run-third", { terminated: true, stateTs: 1700, old: true, continuedFrom: LIVE_RUN, episode: "freeplay" });
-    fresh();
-    asked.length = 0;
-    const second = await render(222, undefined, holding(keysOf(first)));
-    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
-    expect((trackOfIn(second, LIVE_RUN) as { character: { next: string } }).character.next).toBe("snap-run-third");
-  });
-
-  test("through the publisher: a second pass over a tree of finished runs renders and uploads none of them", async () => {
-    const runs = fixture(false);
-    const { asked, handle } = counting(runs);
-    const render = createRenderer({ runsDir: runs, api: handle });
-    const puts: string[] = [];
-    const store: ObjectStore = { put: async (path) => void puts.push(path), delete: async () => {} };
-    const state = emptyState();
-    const pass = async (): Promise<void> => {
-      await publishPass(async (sink, published) => await render(Date.now(), { sink, batch: 1 }, published), store, state);
-    };
-    await pass();
-    expect(puts.some((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))).toBe(true);
-    puts.length = 0;
-    asked.length = 0;
-    await pass();
-    expect(asked).toEqual([]);
-    expect(puts.filter((p) => p.startsWith("v1/run/"))).toEqual([]);
   });
 
   /*

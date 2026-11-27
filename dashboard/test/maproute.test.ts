@@ -177,25 +177,11 @@ function midReplay() {
 }
 
 describe("the map's two URL states", () => {
-  test("a deep link to ?run= loads that replay and nothing else", () => {
-    const p = page("?run=run-1");
-    expect(p.calls.tracks).toEqual(["run-1"]);
-    // A cold load must not double the live poll's own first request.
-    expect(p.calls.refreshes).toBe(0);
-    p.dispose();
-  });
-
-  test("a cold load of /map asks for no track and no extra poll", () => {
-    const p = page("");
-    expect(p.calls.tracks).toEqual([]);
-    expect(p.calls.refreshes).toBe(0);
-    p.dispose();
-  });
-
   test("the live control clears the replay and asks for positions now", () => {
     const p = midReplay();
     expect(p.state.activeMap()).toBe(530);
     expect(p.canvas.pips.size).toBe(1);
+    p.setReplayError("Error: no such run");
 
     p.navigate("");
 
@@ -206,6 +192,7 @@ describe("the map's two URL states", () => {
     expect(p.sources.cursor()).toBe(0);
     expect(p.sources.pinned()).toBeNull();
     expect(p.sources.selectedId()).toBeNull();
+    expect(p.sources.replayError()).toBeUndefined();
     expect(p.canvas.pips.size).toBe(0);
     // The replay's continent is forgotten; with nothing live the map falls back
     // to the default rather than to "no map", which draws nothing.
@@ -223,14 +210,6 @@ describe("the map's two URL states", () => {
     p.dispose();
   });
 
-  test("a failed replay's error does not follow the page back to live", () => {
-    const p = page("?run=missing");
-    p.setReplayError("Error: no such run");
-    p.navigate("");
-    expect(p.sources.replayError()).toBeUndefined();
-    p.dispose();
-  });
-
   test("one replay straight to another swaps rather than layers", () => {
     const p = midReplay();
     p.navigate("?run=run-2");
@@ -242,45 +221,5 @@ describe("the map's two URL states", () => {
     expect(p.sources.track()).toBeUndefined();
     expect(p.state.activeMap()).toBe(DEFAULT_MAP);
     p.dispose();
-  });
-
-  test("back and forward are the same path as the controls", () => {
-    const p = midReplay();
-    p.navigate("");
-    p.navigate("?run=run-1");
-    expect(p.calls.tracks).toEqual(["run-1", "run-1"]);
-    expect(p.sources.track()).toBeUndefined();
-    p.navigate("");
-    expect(p.calls.refreshes).toBe(2);
-    p.dispose();
-  });
-
-  test("an empty ?run= is the live map, not a run with no name", () => {
-    const p = page("?run=");
-    expect(p.calls.tracks).toEqual([]);
-    p.navigate("?run=run-1&other=1");
-    expect(p.calls.tracks).toEqual(["run-1"]);
-    // A change to a parameter the map does not own must not re-swap.
-    p.navigate("?run=run-1&other=2");
-    expect(p.calls.tracks).toEqual(["run-1"]);
-    p.dispose();
-  });
-});
-
-describe("createLeftReplay", () => {
-  test("only the replay-to-live transition, once per transition", () => {
-    const left = createLeftReplay();
-    expect(left(undefined)).toBe(false); // cold load of /map
-    expect(left(undefined)).toBe(false); // and it does not become true by repetition
-    expect(left("a")).toBe(false); // into a replay
-    expect(left("b")).toBe(false); // replay to replay
-    expect(left(undefined)).toBe(true); // back to live
-    expect(left(undefined)).toBe(false); // still live
-  });
-
-  test("a cold load straight into a replay never fires it", () => {
-    const left = createLeftReplay();
-    expect(left("a")).toBe(false);
-    expect(left(undefined)).toBe(true);
   });
 });

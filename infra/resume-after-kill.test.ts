@@ -119,22 +119,6 @@ describe("2026-09-20: the evicted pod's freeplay runs come back where they left 
     }
   });
 
-  test("a verdict-less run somebody archived is read as archived and left out of the resumes", () => {
-    const runsDir = incidentRunsDir();
-    const stray = "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260920-a2";
-    killedFreeplayRun(join(runsDir, "archive"), { runId: stray, model: "deepseek/deepseek-v4.1-flash", account: "RUNNER2", character: "Novice", level: 1, quietForMs: 2 * H });
-    const raw = readRunFacts(runsDir, NOW, { includeArchived: true });
-    expect(raw.find((f) => f.runId === stray)?.archived).toBe(true);
-    expect(raw.find((f) => f.runId === AURELIAN_RUN)?.archived).toBeUndefined();
-    const runs = implicitPauses({ runs: raw, now: NOW });
-    expect(runs.find((f) => f.runId === stray)?.pause).toBeNull();
-    // The newer archived run does not shadow the real one for the same model.
-    const plan = planResumes({ runs, config, running: new Map(), held, now: NOW });
-    expect(plan.resume.map((r) => r.runId).sort()).toEqual([AURELIAN_RUN, NEMOTRON_RUN]);
-    // Nor does it displace Aurelian as the head.
-    expect(charactersFrom(runs, roster).get("deepseek-v41-flash")?.runId).toBe(AURELIAN_RUN);
-  });
-
   test("Aurelian's run is its ref's character head, and any other launch on RUNNER2 is told to keep Aurelian", () => {
     const runsDir = incidentRunsDir();
     const runs = readRunFacts(runsDir, NOW, { includeArchived: true });
@@ -149,12 +133,11 @@ describe("2026-09-20: the evicted pod's freeplay runs come back where they left 
 
   test("a fresh launch on RUNNER2 that was told nothing still never issues a character-delete for guid 625", async () => {
     const runsDir = incidentRunsDir();
-    // The module as the incident's launch saw it: Aurelian standing at level
-    // 7, and a level-1 leftover of an ended run next to it.
-    let chars = [
-      { name: "Aurelian", guid: "625", race: 3, class: 2, gender: 0, level: 7 },
-      { name: "Novice", guid: "631", race: 3, class: 2, gender: 0, level: 1 },
-    ];
+    // The module as the incident's launch saw it: Aurelian standing at level 7.
+    // Nothing else, so hygiene deletes nothing and skips its 5 s re-list; the
+    // kept line's reason proves the un-ended owner was read from the runs
+    // directory (clearing leftovers is hygiene.test.ts's).
+    let chars = [{ name: "Aurelian", guid: "625", race: 3, class: 2, gender: 0, level: 7 }];
     const deleted: string[] = [];
     const server = Bun.serve({
       port: 0,
@@ -192,7 +175,7 @@ describe("2026-09-20: the evicted pod's freeplay runs come back where they left 
       });
       const stderr = await new Response(proc.stderr).text();
       await proc.exited;
-      expect(deleted).toEqual(["Novice"]);
+      expect(deleted).toEqual([]);
       expect(chars.map((c) => c.guid)).toEqual(["625"]);
       expect(stderr).toContain("KEPT Aurelian (guid 625, level 7)");
       expect(stderr).toContain(`belongs to run ${AURELIAN_RUN}, which has not ended`);

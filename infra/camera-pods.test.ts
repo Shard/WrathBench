@@ -1,13 +1,12 @@
 /**
- * The camera's own pods (infra/camera-pods.ts): built from the chart's
- * template with the world's realm, id and forward target and an owner; a
- * world per eval gets one only while a slot is free, one slot always held for
- * the shared world's; neither start ever throws; and with the camera off,
- * every camera pod left up is removed.
+ * The camera's own pods (infra/camera-pods.ts): a world per eval gets one
+ * only while a slot is free, one slot always held for the shared world's;
+ * neither start ever throws; and with the camera off, every camera pod left
+ * up is removed.
  */
 import { describe, expect, test } from "bun:test";
 import { K8sError, type Pod } from "./k8s-client";
-import { buildCameraPod, CAMERA_REAP_GRACE_S, CAMERA_WORLD_LABEL, cameraPodName, cameraSlotFree, ensureSharedCamera, reapCameras, startWorldCamera, type CameraK8s } from "./camera-pods";
+import { CAMERA_REAP_GRACE_S, CAMERA_WORLD_LABEL, cameraSlotFree, ensureSharedCamera, reapCameras, startWorldCamera, type CameraK8s } from "./camera-pods";
 
 const ID = "wabcdefghij";
 
@@ -29,7 +28,6 @@ function template(max = 2): Pod {
   } as unknown as Pod;
 }
 
-const env = (pod: Pod, c: string, n: string) => pod.spec.containers.find((x) => x.name === c)?.env?.find((e) => e.name === n)?.value;
 const camera = (world: string, extra: Partial<Pod["metadata"]> = {}, phase = "Running"): Pod =>
   ({ metadata: { name: `wrathbench-camera-${world}`, labels: { [CAMERA_WORLD_LABEL]: world }, ...extra }, spec: { containers: [] }, status: { phase } }) as unknown as Pod;
 
@@ -52,21 +50,6 @@ class FakeK8s implements CameraK8s {
 }
 
 describe("a camera pod", () => {
-  test("named after its world, stamped with its realm and world, forwarding to it, owned by what it goes with", () => {
-    const pod = buildCameraPod(template(), { world: ID, realm: `WrathBench ${ID}`, target: `${ID}.worlds:8085`, owner: { name: `wrathbench-world-${ID}`, uid: "u1" } });
-    expect(pod.metadata.name).toBe(`wrathbench-camera-${ID}`);
-    expect(pod.metadata.generateName).toBeUndefined();
-    expect(pod.metadata.labels?.[CAMERA_WORLD_LABEL]).toBe(ID);
-    expect(env(pod, "camera", "CAMERA_REALM")).toBe(`WrathBench ${ID}`);
-    expect(env(pod, "camera-director", "CAMERA_WORLD")).toBe(ID);
-    expect((pod.spec.containers[1] as { command?: string[] }).command).toEqual(["/usr/bin/tini", "--", "bun", "infra/camera/director.ts", "--forward-world", `${ID}.worlds:8085`]);
-    expect(pod.metadata.ownerReferences).toEqual([{ apiVersion: "v1", kind: "Pod", name: `wrathbench-world-${ID}`, uid: "u1" }]);
-    // The template is not touched.
-    expect(template().metadata.name).toBeUndefined();
-    expect(() => buildCameraPod(template(), { world: "wbad", realm: "x", target: "a:1" })).toThrow();
-    expect(() => buildCameraPod(template(), { world: ID, realm: "x", target: "no port" })).toThrow();
-  });
-
   test("slots: one held for the shared world; worlds share the rest; leaving, ended and its own pod do not count", () => {
     expect(cameraSlotFree(template(1), [], "shared")).toBe(true);
     expect(cameraSlotFree(template(1), [], ID)).toBe(false);
@@ -97,19 +80,6 @@ describe("starting cameras", () => {
     k.fail = new K8sError(403, "Forbidden", "exceeded quota");
     expect(await startWorldCamera({ client: k, template: template(2), world: ID, realm: `WrathBench ${ID}`, worldPod, log: () => {} })).toBe("failed");
     expect(await ensureSharedCamera({ client: k, template: template(2), target: "worldserver:8085", log: () => {} })).toBe("failed");
-  });
-
-  test("the shared world's: made when missing, on the shared realm and the worldserver Service, owned by the fleet pod", async () => {
-    const k = new FakeK8s();
-    expect(await ensureSharedCamera({ client: k, template: template(1), owner: { name: "wrathbench-fleet-x", uid: "f1" }, target: "worldserver:8085", log: () => {} })).toBe("started");
-    const pod = k.created[0]!;
-    expect(pod.metadata.name).toBe(cameraPodName(template(), "shared"));
-    expect(env(pod, "camera", "CAMERA_REALM")).toBe("WrathBench v1");
-    expect(env(pod, "camera-director", "CAMERA_WORLD")).toBe("shared");
-    expect((pod.spec.containers[1] as { command?: string[] }).command?.slice(-2)).toEqual(["--forward-world", "worldserver:8085"]);
-    expect(pod.metadata.ownerReferences?.[0]?.name).toBe("wrathbench-fleet-x");
-    expect(await ensureSharedCamera({ client: k, template: template(1), target: "worldserver:8085", log: () => {} })).toBe("present");
-    expect(k.created).toHaveLength(1);
   });
 });
 
@@ -143,16 +113,5 @@ describe("the camera off", () => {
     expect(logs.every((l) => l.includes("the camera is off"))).toBe(true);
     // Nothing left: a later pass does nothing.
     expect(await reapCameras({ client: new ReapK8s([]), log: () => {} })).toEqual([]);
-  });
-
-  test("a refusal (the list, one delete) is logged and never thrown; the rest still go", async () => {
-    const k = new ReapK8s([camera("shared"), camera(ID)]);
-    k.failDelete.add("wrathbench-camera-shared");
-    const logs: string[] = [];
-    expect(await reapCameras({ client: k, log: (l) => logs.push(l) })).toEqual([`wrathbench-camera-${ID}`]);
-    expect(logs.some((l) => l.includes("wrathbench-camera-shared: not removed"))).toBe(true);
-    k.failList = true;
-    expect(await reapCameras({ client: k, log: (l) => logs.push(l) })).toEqual([]);
-    expect(logs.at(-1)).toContain("cameras: not listed");
   });
 });

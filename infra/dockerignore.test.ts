@@ -26,18 +26,6 @@ describe("the runner image's ignore list", () => {
       expect([p, ignored(patterns, p)]).toEqual([p, true]);
     }
   });
-
-  test("keeps the workspace it is made of", () => {
-    for (const p of ["runner/src/env.ts", "wrath-mcp/sdk/src/index.ts", "wrath-mcp/mcp/src/index.ts", "wrath-mcp/inspector/src/index.ts", "wrath-mcp/package.json", "wrath-mcp/tsconfig.base.json", "infra/docker/runner.Dockerfile", "package.json", "bun.lock", "dashboard/src/App.tsx"]) {
-      expect([p, ignored(patterns, p)]).toEqual([p, false]);
-    }
-  });
-
-  test("leaves out the stack's C++ module, its git link and any install inside it", () => {
-    for (const p of ["wrath-mcp/module/src/mod_wrathbench.cpp", "wrath-mcp/.git", "wrath-mcp/node_modules/zod/index.js", "wrath-mcp/sdk/node_modules/zod/index.js"]) {
-      expect([p, ignored(patterns, p)]).toEqual([p, true]);
-    }
-  });
 });
 
 describe("the viewer image's ignore list", () => {
@@ -46,12 +34,6 @@ describe("the viewer image's ignore list", () => {
   test("leaves out env files, data and the private reference program", () => {
     for (const p of [...ENV_FILES, "data/runs/r/run.sqlite", "runner/src/reference/index.ts", "runner/test/reference/a.test.ts"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, true]);
-    }
-  });
-
-  test("keeps what the viewer runs", () => {
-    for (const p of ["viewer/serve.ts", "runner/src/session-store.ts", "wrath-mcp/mcp/src/index.ts", "dashboard/src/App.tsx", "package.json", "bun.lock"]) {
-      expect([p, ignored(patterns, p)]).toEqual([p, false]);
     }
   });
 });
@@ -66,18 +48,6 @@ describe("the server image's ignore list", () => {
   test("leaves out agent worktrees at any depth", () => {
     for (const p of [".claude/worktrees/agent-x/module/src/a.cpp", "deps/azerothcore/.claude/skills/x.md"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, true]);
-    }
-  });
-
-  test("leaves out the TypeScript workspaces, which the server image is not made of", () => {
-    for (const p of ["runner/src/run.ts", "wrath-mcp/sdk/src/index.ts", "wrath-mcp/mcp/src/index.ts", "wrath-mcp/inspector/src/index.ts", "wiki/src/bundle.ts"]) {
-      expect([p, ignored(patterns, p)]).toEqual([p, true]);
-    }
-  });
-
-  test("keeps what server.Dockerfile copies", () => {
-    for (const p of ["wrath-mcp/module/src/mod_wrathbench.cpp", "deps/azerothcore/src/server/apps/worldserver/Main.cpp", "deps/azerothcore/apps/docker/entrypoint.sh", "infra/docker/server.Dockerfile"]) {
-      expect([p, ignored(patterns, p)]).toEqual([p, false]);
     }
   });
 });

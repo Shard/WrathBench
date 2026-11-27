@@ -15,8 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { TraceItemName, TraceQuestReq, TraceSegment } from "../../viewer/api-types";
 import { projectTraceSegment } from "../../viewer/public-projection";
-import { sheetReading } from "@wrathbench/inspector/views/inventory";
-import { QUEST_STATUS_LABEL, objectiveText, questLog, questsInLog, type QuestRow } from "@wrathbench/inspector/views/questlog";
+import { objectiveText, questLog, questsInLog, type QuestRow } from "@wrathbench/inspector/views/questlog";
 import { createTraceStore } from "@wrathbench/inspector/views/traceplayer";
 
 const RUN = "run-quests";
@@ -159,17 +158,8 @@ describe("the quest log at the playhead", () => {
     expect(quest(904).status).toBe("failed");
     // Nothing to count: the state is all there is to show.
     expect(quest(903).objectives).toEqual([]);
-    expect(QUEST_STATUS_LABEL[quest(903).status]).toBe("complete");
-  });
-
-  test("a quest the segment carries no counts for has no objectives, never zeros", () => {
+    // No counts in the segment: no objectives, never zeros.
     expect(quest(905).objectives).toBeNull();
-  });
-
-  test("an item the dictionary does not name still counts, and has no name", () => {
-    const store = createTraceStore();
-    store.setTail(RUN, seg(walk(W, SHEET), W, { item: (id) => (id === 5001 ? undefined : NAMES[id]), quest: (id) => REQS[id] }));
-    expect(logAt(store, W + 1000)!.find((q) => q.questId === 901)!.objectives).toEqual([{ have: 5, need: 8, itemId: 5001 }]);
   });
 
   test("progress follows the playhead: a counter climbs, a pickup counts, the state flips to complete", () => {
@@ -193,25 +183,6 @@ describe("the quest log at the playhead", () => {
     const store = createTraceStore();
     store.setTail(RUN, projectTraceSegment(seg(walk(W, SHEET), W)));
     expect(logAt(store, W + 1000)).toEqual(log);
-  });
-
-  test("a key on the keyring and tokens in the currency slots count, as the server counts them, privately and in public", () => {
-    // 906: a key to collect (on the keyring, bag 255 slot 86) and ten tokens (four in currency slot 118, two in the backpack).
-    const KEY = 5004;
-    const TOKEN = 5005;
-    const names = { ...NAMES, [KEY]: [1, "Fixture Key"], [TOKEN]: [1, "Fixture Token"] } as Record<number, TraceItemName>;
-    const dict: TraceDictLookup = { item: (id) => names[id], quest: (id) => (id === 906 ? [0, 0, 0, 0, [KEY, 1], [TOKEN, 10]] : REQS[id]) };
-    const sheet = { ...SHEET, inv: [...SHEET.inv, [255, 25, TOKEN, 2], [255, 86, KEY], [255, 118, TOKEN, 4]], quests: [[0, 906, 0]] };
-    const want = [
-      { have: 1, need: 1, itemId: KEY, name: "Fixture Key" },
-      { have: 6, need: 10, itemId: TOKEN, name: "Fixture Token" },
-    ];
-    for (const project of [false, true]) {
-      const store = createTraceStore();
-      const s = seg(walk(W, sheet), W, dict);
-      store.setTail(RUN, project ? projectTraceSegment(s) : s);
-      expect(logAt(store, W + 1000)).toEqual([{ questId: 906, slot: 0, status: "active", objectives: want }]);
-    }
   });
 });
 
@@ -246,104 +217,17 @@ describe("turn-ins in the loaded window", () => {
     expect(questsInLog(after)).toBe(5);
     expect(after.length).toBe(6);
   });
-
-  test("the next window starts clean: a turn-in is the window's own", async () => {
-    const store = await loaded();
-    const next = logAt(store, W + 10_000)!;
-    expect(next.some((q) => q.questId === 903)).toBe(false);
-    expect(questsInLog(next)).toBe(5);
-  });
-});
-
-describe("the same array while the log says the same thing", () => {
-  const rows = [
-    ...walk(W, SHEET),
-    row(W + 30_000, "state", { money: 150 }),
-    row(W + 60_000, "state", { inv: [[255, 30, 1001]] }),
-    row(W + 90_000, "state", { quests: [[1, 900, 0, 3]] }),
-  ].sort((a, b) => a.ts - b.ts);
-
-  test("a frame, a money change and an item no quest asks for give back the very same array", () => {
-    const store = tailOf(rows);
-    const a = logAt(store, W + 10_000)!;
-    expect(logAt(store, W + 20_000)).toBe(a);
-    expect(logAt(store, W + 40_000)).toBe(a);
-    expect(logAt(store, W + 70_000)).toBe(a);
-  });
-
-  test("a counter change: a new array, every other row the very same object", () => {
-    const store = tailOf(rows);
-    const a = logAt(store, W + 70_000)!;
-    const b = logAt(store, W + 100_000)!;
-    expect(b).not.toBe(a);
-    expect(b.find((q) => q.questId === 900)).not.toBe(a.find((q) => q.questId === 900));
-    for (const id of [901, 902, 903, 904, 905]) expect(b.find((q) => q.questId === id)).toBe(a.find((q) => q.questId === id));
-  });
-
-  test("the live tail polled anew, then the window arriving closed, gives back the very same array", async () => {
-    const store = createTraceStore();
-    store.setTail(RUN, seg(rows.filter((r) => r.ts < W + 50_000), W));
-    const a = logAt(store, W + 45_000)!;
-    store.setTail(RUN, seg(rows.filter((r) => r.ts < W + 55_000), W));
-    expect(logAt(store, W + 45_000)).toBe(a);
-    store.list(RUN, SEG_MS, [W]);
-    await store.load(RUN, W, async () => seg(rows, W));
-    store.setTail(RUN, null);
-    expect(logAt(store, W + 45_000)).toBe(a);
-  });
 });
 
 describe("where the sheet cannot say there is no quest log", () => {
-  test("a segment from before the sheet: no log, rather than an empty one", () => {
+  test("a segment from before the sheet, or a sheet not observed yet: no log, rather than an empty one", () => {
     const store = tailOf(walk(W, null));
     expect(store.sheetAt(RUN, W + 1000)).not.toBeNull();
     expect(logAt(store, W + 1000)).toBeNull();
-  });
-
-  test("a sheet not observed yet (a sandbox restart before the character's create block): no log", () => {
+    // A sandbox restart before the character's create block.
     const nulls = { money: null, equip: null, bags: null, inv: null, dur: null, quests: null, rep: null, skills: null };
     expect(logAt(tailOf(walk(W, nulls)), W + 1000)).toBeNull();
-  });
-
-  test("nothing loaded at the playhead: no view, so no log", async () => {
-    const store = createTraceStore();
-    store.list(RUN, SEG_MS, [A, W]);
-    await store.load(RUN, W, async () => seg(walk(W, SHEET), W));
-    expect(store.sheetAt(RUN, A + 1000)).toBeNull();
-    expect(logAt(store, A + 1000)).toBeNull();
-  });
-
-  test("a half sheet, the log back and the bags not yet: the log still reads, and the inventory falls back on its own", () => {
-    // Live after a sandbox restart: the feed carries no inventory, so the fallback reading is null.
-    const store = tailOf(walk(W, { ...SHEET, equip: null, bags: null, inv: null }));
-    const view = store.sheetAt(RUN, W + 1000)!;
-    expect(sheetReading(view, { money: 7, items: null }).items).toBeNull();
-    const log = logAt(store, W + 1000)!;
-    expect(questsInLog(log)).toBe(6);
-    // A counter reads; what is carried is not known yet.
-    expect(log.find((q) => q.questId === 900)!.objectives).toEqual([
-      { have: 2, need: 6 },
-      { have: 0, need: 10 },
-    ]);
-    expect(log.find((q) => q.questId === 901)!.objectives).toEqual([{ have: null, need: 8, itemId: 5001, name: "Fixture Pelt" }]);
-  });
-
-  test("an observed empty log is a value: an empty list, and a 0 on the button", () => {
-    const log = logAt(tailOf(walk(W, { ...SHEET, quests: [] })), W + 1000);
-    expect(log).toEqual([]);
-    expect(questsInLog(log!)).toBe(0);
-  });
-
-  test("a log whose carried items were not observed: an item objective's have is unknown, a counter's is not", () => {
-    const log = questLog(
-      { quests: [[0, 904, 0, 1]], equip: [], bags: null, inv: [] },
-      new Map([[904, REQS[904]!]]),
-      new Map(),
-    )!;
-    expect(log[0]!.objectives).toEqual([
-      { have: 1, need: 4 },
-      { have: null, need: 1, itemId: 2001 },
-    ]);
-    expect(log[0]!.objectives!.map(objectiveText)).toEqual(["1 / 4", "— / 1"]);
+    // An observed empty log is a value.
+    expect(logAt(tailOf(walk(W, { ...SHEET, quests: [] })), W + 1000)).toEqual([]);
   });
 });

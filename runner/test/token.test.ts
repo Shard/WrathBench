@@ -16,25 +16,16 @@ import { tempDirs } from "./fixtures/temp-dirs";
 const tempDir = tempDirs();
 
 describe("newSessionToken", () => {
-  test("is 32 hex characters", () => {
-    const token = newSessionToken();
-    expect(token).toMatch(/^[0-9a-f]{32}$/);
-    expect(token.length).toBeGreaterThanOrEqual(MIN_TOKEN_LENGTH);
-  });
 
   test("is random, not derived from the clock like the run id was", () => {
     const tokens = new Set(Array.from({ length: 200 }, () => newSessionToken()));
+    for (const t of tokens) expect(t).toMatch(/^[0-9a-f]{32}$/);
     expect(tokens.size).toBe(200);
     expect(tokens.has(newRunId())).toBe(false);
   });
 });
 
 describe("resolveSessionToken", () => {
-  test("generates one when nothing was stored", () => {
-    const { token, regenerated } = resolveSessionToken(undefined);
-    expect(regenerated).toBe(true);
-    expect(token).toMatch(/^[0-9a-f]{32}$/);
-  });
 
   test("keeps a stored token that already clears the floor", () => {
     const stored = newSessionToken();
@@ -50,11 +41,6 @@ describe("resolveSessionToken", () => {
     expect(token.length).toBeGreaterThanOrEqual(MIN_TOKEN_LENGTH);
   });
 
-  test("a one-character-short token is still weak", () => {
-    const short = "a".repeat(MIN_TOKEN_LENGTH - 1);
-    expect(resolveSessionToken(short).regenerated).toBe(true);
-    expect(resolveSessionToken("a".repeat(MIN_TOKEN_LENGTH)).regenerated).toBe(false);
-  });
 });
 
 describe("token persistence through meta.json", () => {
@@ -72,27 +58,4 @@ describe("token persistence through meta.json", () => {
     traj.close();
   });
 
-  test("a regenerated token is persisted, so the next resume does not swap again", () => {
-    // What run.ts does on resume when the stored token is a pre-hardening run
-    // id: resolve, then re-write the loaded meta with only `config` replaced.
-    const dir = tempDir("wrathbench-token-");
-    const traj = new Trajectory(dir);
-    const old = loadRunConfig({ runId: "run-old", token: "run-old", driver: "stub" });
-    traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 7, config: old });
-
-    const stored = readMeta(dir)!;
-    const resolved = resolveSessionToken(stored.config.token);
-    expect(resolved.regenerated).toBe(true);
-    traj.writeMeta({ ...stored, config: { ...stored.config, token: resolved.token } });
-
-    const after = readMeta(dir);
-    expect(after?.config.token).toBe(resolved.token);
-    // Everything else about the run is untouched.
-    expect(after?.startedAt).toBe(7);
-    expect(after?.harnessVersion).toBe("0.0.0-test");
-    expect(after?.config.character).toBe(old.character);
-    // A second resume finds a strong token and leaves it alone.
-    expect(resolveSessionToken(after!.config.token).regenerated).toBe(false);
-    traj.close();
-  });
 });

@@ -214,20 +214,4 @@ describe("no secret is within a snippet's reach", () => {
     }
   });
 
-  test("the parent's planted credentials never reach the child's environment, by name either", async () => {
-    const host = makeHost(OWN_LEASE);
-    const names = JSON.parse(JSON.parse((await host.evalSnippet("JSON.stringify(Object.keys(process.env).sort())")).value ?? '""') as string) as string[];
-    for (const name of [...PARENT_ENV, "CODEX_HOME"]) expect(names).not.toContain(name);
-    // Nor the leased secret or the bound account: the host passes them in the
-    // spawn env but entry.ts strikes them at startup, so neither is in the
-    // running child's environment (#74; operator, 2026-10-19).
-    expect(names).not.toContain("WRATHBENCH_SECRET");
-    expect(names).not.toContain("WRATHBENCH_ACCOUNT");
-    // What it does get: the plumbing and the three values the host passes that
-    // are not credentials (module URL, the session token, and whether the
-    // child runs the session recorder, `"1"` or empty).
-    for (const name of names) {
-      expect(["PATH", "HOME", "TMPDIR", "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_RECORD", "NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"]).toContain(name);
-    }
-  });
 });

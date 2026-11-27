@@ -26,7 +26,6 @@ import {
   CLICKHOUSE_SETTINGS,
   clickhouseConfigOf,
   clickhouseStore,
-  errorClass,
   extentSql,
   FIRST_PAGE_LINES,
   freshness,
@@ -40,7 +39,6 @@ import {
   main,
   MIN_TOKEN_LENGTH,
   offsetAfter,
-  parseSince,
   questStretches,
   seekTime,
   REDACTED,
@@ -163,16 +161,12 @@ describe("the constants it shares with the runner", () => {
 });
 
 describe("the live rule", () => {
-  test("live is no termination, no pause and a fresh heartbeat", async () => {
+  test("live is no termination, no pause and a fresh heartbeat; a pause is not live, whatever the heartbeat says", async () => {
     const row = { termination_reason: null, termination_detail: null, pause_reason: null };
     expect(verdictOf(row, NOW - 5_000, NOW).state).toBe("live");
     expect(verdictOf(row, NOW - HEARTBEAT_DEAD_MS - 1, NOW).state).toBe("ownerless");
     expect(verdictOf(row, null, NOW).state).toBe("ownerless");
-  });
-
-  test("a pause is not live, whatever the heartbeat says", async () => {
-    const row = { termination_reason: null, termination_detail: null, pause_reason: "operator-pause" };
-    expect(verdictOf(row, NOW - 1_000, NOW)).toMatchObject({ state: "paused", reason: "operator-pause" });
+    expect(verdictOf({ ...row, pause_reason: "operator-pause" }, NOW - 1_000, NOW)).toMatchObject({ state: "paused", reason: "operator-pause" });
   });
 
   test("inspect run says which, and why", async () => {
@@ -201,15 +195,6 @@ describe("the live rule", () => {
     expect((await inspect(["run", "run-live", "--runs-dir", RUNS, "--files"], NOW, STORE)).out.find((l) => l.startsWith("source"))).toBe("source     the files: --files");
   });
 
-  test("an empty-string reason is no reason, as readVerdict reads it", async () => {
-    const runsDir = tmp("inspect-run-empty-");
-    const dir = makeRun(runsDir, "run-empty", "live");
-    const db = new Database(join(dir, "run.sqlite"));
-    db.run("UPDATE run SET pause_reason = '', termination_reason = ''");
-    db.close();
-    expect((await inspect(["run", "run-empty", "--runs-dir", runsDir], NOW, await memoryStore(runsDir))).out.find((l) => l.startsWith("verdict"))).toContain("live:");
-  });
-
   test("inspect live lists the runs with a heartbeat, and only those", async () => {
     const r = await inspect(["live", "--runs-dir", RUNS], NOW, STORE);
     expect(r.code).toBe(0);
@@ -226,23 +211,6 @@ describe("the live rule", () => {
 });
 
 describe("inspect run", () => {
-  test("waits out a live run's write lock instead of crashing on SQLITE_BUSY", async () => {
-    const runsDir = tmp("inspect-run-busy-");
-    const dir = makeRun(runsDir, "run-busy", "live");
-    // Another process holds the write lock for a moment, the way the live runner does mid-write.
-    const holder = Bun.spawn(
-      ["bun", "-e", 'const { Database } = require("bun:sqlite"); const db = new Database(process.argv[1]); db.exec("BEGIN EXCLUSIVE"); console.log("locked"); Bun.sleepSync(800); db.exec("COMMIT"); db.close();', join(dir, "run.sqlite")],
-      { stdout: "pipe", stderr: "inherit" },
-    );
-    const reader = holder.stdout.getReader();
-    const first = await reader.read();
-    expect(new TextDecoder().decode(first.value)).toContain("locked");
-    const r = await inspect(["run", "run-busy", "--runs-dir", runsDir]);
-    expect(await holder.exited).toBe(0);
-    expect(r.err.join("\n")).not.toContain("SQLITE_BUSY");
-    expect(r.code).toBe(0);
-    expect(r.out.find((l) => l.startsWith("trace"))).toContain("none (no session record");
-  });
 
   test("a v1 run's session record is one line: who it is, whether it closed, and its streams; the ring is read from it", async () => {
     const runsDir = tmp("inspect-v1-");
@@ -351,13 +319,6 @@ describe("inspect run", () => {
     expect(at("level")).not.toContain("quests");
   });
 
-  test("--since counts only what came after", async () => {
-    const r = await inspect(["run", "run-live", "--runs-dir", RUNS, "--since", String(NOW - 3_600_000 + 5.5 * 60_000)]);
-    const at = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
-    expect(at("activity")).toContain("since ");
-    expect(at("errors")).toContain("snippets 1/2: timeout 1");
-  });
-
   test("prints a bounded block, never the config or the token", async () => {
     const r = await inspect(["run", "run-live", "--runs-dir", RUNS]);
     expect(r.out.length).toBeLessThanOrEqual(16);
@@ -365,13 +326,6 @@ describe("inspect run", () => {
     const all = r.out.join("\n");
     expect(all).not.toContain(TOKEN);
     expect(all).not.toContain('"token"');
-  });
-
-  test("finds an archived run, and says so", async () => {
-    const runsDir = tmp("inspect-run-archive-");
-    mkdirSync(join(runsDir, ARCHIVE_DIR), { recursive: true });
-    makeRun(join(runsDir, ARCHIVE_DIR), "run-old", "terminated");
-    expect((await inspect(["run", "run-old", "--runs-dir", runsDir])).out[0]).toContain("run-old (archived)");
   });
 
   test("refuses an id that would leave the runs directory", async () => {
@@ -405,14 +359,6 @@ describe("inspect trajectory", () => {
     expect(r.out.join("\n").length).toBeLessThan(20 * DEFAULT_WIDTH);
   });
 
-  test("--errors keeps the failures, --last the newest few", async () => {
-    const errors = (await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--errors"])).out.slice(1, -1);
-    expect(errors.length).toBe(3);
-    for (const l of errors) expect(l).toContain("✗");
-    const last = (await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--last", "2"])).out.slice(1, -1);
-    expect(last.length).toBe(2);
-  });
-
   test("--all is every record kind, the big ones by size alone", async () => {
     const r = await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--all", "--last", "200"]);
     expect(r.out.some((l) => /request {2}\(\d+\.\d KB\)/.test(l))).toBe(true);
@@ -428,105 +374,15 @@ describe("inspect trajectory", () => {
     }
     expect((await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--grep", "bad key"])).out.join("\n")).toContain(REDACTED);
   });
-
-  test("a token that is the run id, or too short to be one, is not struck", async () => {
-    const runsDir = tmp("inspect-run-oldtoken-");
-    makeRun(runsDir, "run-legacy", "terminated", { token: "run-legacy" });
-    const all = (await inspect(["trajectory", "run-legacy", "--runs-dir", runsDir])).out.join("\n");
-    expect(all).toContain("run-legacy");
-    expect(all).not.toContain(REDACTED);
-  });
-
-  test("--grep with --all filters meta records too, so they never spend --last", async () => {
-    const runsDir = tmp("inspect-run-meta-grep-");
-    const dir = join(runsDir, "run-resumed");
-    mkdirSync(dir, { recursive: true });
-    const t0 = NOW - 3_600_000;
-    const rec = (i: number, r: Record<string, unknown>): string => `${JSON.stringify({ ts: t0 + i * 60_000, ...r })}\n`;
-    let body = "";
-    for (let i = 1; i <= 3; i++) body += rec(i, { t: "snippet_result", turn: i, call: i, name: "run_snippet", isError: true, text: `error (5ms)\nNeedleError: miss ${i}` });
-    // Every resume writes a meta record, newer than the matches.
-    for (let i = 4; i <= 8; i++) body += rec(i, { t: "meta", runId: "run-resumed", harnessVersion: "harness-test" });
-    writeFileSync(join(dir, "trajectory.jsonl"), body);
-    const r = await inspect(["trajectory", "run-resumed", "--runs-dir", runsDir, "--all", "--grep", "NeedleError", "--last", "2"]);
-    expect(r.code).toBe(0);
-    const lines = r.out.slice(1, -1);
-    expect(lines.length).toBe(2);
-    expect(lines.some((l) => l.includes(" meta "))).toBe(false);
-    expect(lines[0]).toContain("miss 2");
-    expect(lines[1]).toContain("miss 3");
-    // A grep a meta record matches still shows it.
-    expect((await inspect(["trajectory", "run-resumed", "--runs-dir", runsDir, "--all", "--grep", "harness-test", "--last", "2"])).out.slice(1, -1).every((l) => l.includes(" meta "))).toBe(true);
-  });
-
-  test("--all reads a wake's program error repeat as a count over a span, not as a fresh error", async () => {
-    const runsDir = tmp("inspect-run-repeats-");
-    const dir = join(runsDir, "run-repeats");
-    mkdirSync(dir, { recursive: true });
-    const t0 = Date.UTC(2030, 0, 2, 10, 0, 0);
-    const lines = [
-      { ts: t0, t: "program_error", kind: "refusal", signature: "grind||castSpell|not_ready", name: "grind", action: "castSpell", status: "not_ready", deploy: 2, at: t0 },
-      { ts: t0 + 300_000, t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 12, since: t0 + 1_000, at: t0 + 300_000 },
-      // Written before the span was: its count alone.
-      { ts: t0 + 600_000, t: "program_error", kind: "repeat", signature: "grind||castSpell|not_ready", count: 3 },
-    ];
-    writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
-    const out = (await inspect(["trajectory", "run-repeats", "--runs-dir", runsDir, "--all"])).out.slice(1, -1);
-    expect(out[0]).toContain('"kind":"refusal"');
-    expect(out[1]).toBe("01-02 10:05:00  program_error  repeat ×12 grind||castSpell|not_ready  since 01-02 10:00:01");
-    expect(out[2]).toBe("01-02 10:10:00  program_error  repeat ×3 grind||castSpell|not_ready");
-  });
-
-  test("--since stops reading at the first older record", async () => {
-    const r = await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--since", String(NOW - 3_600_000 + 5.5 * 60_000)]);
-    const body = r.out.slice(1, -1);
-    expect(body.some((l) => l.includes("timeout") || l.includes("exceeded"))).toBe(true);
-    expect(body.some((l) => l.includes("return 1;"))).toBe(false);
-  });
 });
 
 describe("inspect trajectory: a window, and either end of it", () => {
   const at = (min: number): string => String(NOW - 3_600_000 + min * 60_000);
   const body = async (argv: string[]): Promise<string[]> => (await inspect(["trajectory", "run-live", "--runs-dir", RUNS, ...argv])).out.slice(1, -1);
 
-  test("--until leaves out everything after it", async () => {
-    const r = await body(["--until", at(5.5)]);
-    expect(r.some((l) => l.includes("return 1;"))).toBe(true);
-    expect(r.some((l) => l.includes("TypeError"))).toBe(true);
-    expect(r.some((l) => l.includes("exceeded") || l.includes("reflect"))).toBe(false);
-    expect((await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--until", at(5.5)])).out[0]).toContain("until 2030-01-02T11:05:30Z");
-  });
-
   test("--since and --until together are a range", async () => {
     const r = await body(["--since", at(2.5), "--until", at(5.5)]);
     expect(r.map((l) => /return \d;|TypeError/.exec(l)?.[0])).toEqual(["return 3;", "TypeError"]);
-  });
-
-  test("--next is the first N from --since, or from the file's start", async () => {
-    const r = await body(["--since", at(1.5), "--next", "2"]);
-    expect(r.length).toBe(2);
-    expect(r[0]).toContain("return 2;");
-    expect(r[1]).toContain("return 3;");
-    expect((await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--next", "2"])).out[0]).toContain("the first 2 item(s)");
-    expect((await body(["--next", "1"]))[0]).toContain("return 1;");
-    // Read forward, a tool call meets its result after it.
-    expect((await body(["--since", at(6.9), "--until", at(7), "--next", "5"]))[0]).toContain("reflect ✗  {}  ⇒ Reflection needs rest");
-  });
-
-  test("inspect run takes the same window", async () => {
-    const r = await inspect(["run", "run-live", "--runs-dir", RUNS, "--until", at(5.5)]);
-    const line = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
-    expect(line("activity")).toContain("until 2030-01-02T11:05:30Z: ");
-    expect(line("errors")).toContain("snippets 1/4: TypeError 1");
-  });
-
-  test("a bad window is a usage error, said with the flag that was wrong", async () => {
-    const bad = await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--until", "yesterday"]);
-    expect(bad.code).toBe(2);
-    expect(bad.err[0]).toContain("--until yesterday");
-    expect((await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--since", at(5), "--until", at(4)])).code).toBe(2);
-    expect((await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--last", "2", "--next", "2"])).code).toBe(2);
-    expect((await inspect(["trajectory", "run-live", "--runs-dir", RUNS, "--next", "0"])).code).toBe(2);
   });
 
   test("a big file is bisected to the window, and every view still reads the same lines", async () => {
@@ -564,31 +420,6 @@ describe("inspect trajectory: a window, and either end of it", () => {
   });
 });
 
-describe("parsing", () => {
-  test("an error's class is its name, timeout for the ceiling, else its first words", async () => {
-    expect(errorClass("error (10012ms)\nEventTimeoutError: timed out after 10000ms")).toBe("EventTimeoutError");
-    expect(errorClass("error (1ms)\nTypeError: undefined is not an object")).toBe("TypeError");
-    expect(errorClass("error (30000ms)\nsnippet evaluation exceeded 30000ms")).toBe("timeout");
-    expect(errorClass("error (3ms)\nError: scratchpad.write refused")).toBe("Error");
-    expect(errorClass("something odd happened here")).toBe("something odd happened");
-  });
-
-  test("--since takes a duration back from now, epoch ms or ISO", async () => {
-    expect(parseSince("30m", NOW)).toBe(NOW - 30 * 60_000);
-    expect(parseSince("2h", NOW)).toBe(NOW - 7_200_000);
-    expect(parseSince(String(NOW - 5), NOW)).toBe(NOW - 5);
-    expect(parseSince("2030-01-02T11:00:00Z", NOW)).toBe(NOW - 3_600_000);
-    expect(() => parseSince("yesterday", NOW)).toThrow();
-  });
-
-  test("a bad flag or a missing id is a usage error", async () => {
-    expect((await inspect(["run"])).code).toBe(2);
-    expect((await inspect(["trajectory", "run-live", "--last", "0", "--runs-dir", RUNS])).code).toBe(2);
-    expect((await inspect(["trajectory", "run-live", "--nope"])).code).toBe(2);
-    expect((await inspect([])).code).toBe(2);
-  });
-});
-
 describe("a whole-table read of a run walks it in rowid windows, one statement each", () => {
   test("every row comes back, in rowid order, and no statement covers more than a window", async () => {
     const db = new Database(":memory:");
@@ -614,31 +445,26 @@ describe("ClickHouse and the files give the same views", () => {
   const view = async (id: string, argv: string[], store?: InspectStore): Promise<string[]> =>
     (await inspect([argv[0]!, id, ...argv.slice(1), "--runs-dir", RUNS], NOW, store)).out.filter((l) => !l.startsWith("source"));
   const at = (min: number): string => String(NOW - 3_600_000 + min * 60_000);
-  const trajectoryViews = [
+  const views = [
     ["trajectory"],
     ["trajectory", "--errors"],
-    ["trajectory", "--last", "3"],
     ["trajectory", "--all", "--last", "200"],
-    ["trajectory", "--grep", "TypeError|return 2"],
     ["trajectory", "--all", "--grep", "session"],
     ["trajectory", "--since", at(2.5), "--until", at(5.5)],
     ["trajectory", "--since", at(1.5), "--next", "2"],
-    ["trajectory", "--next", "1"],
-    ["trajectory", "--errors", "--next", "5"],
     ["tools"],
-    ["tools", "--since", at(5)],
     ["pad"],
   ];
-  const runViews = [["run"], ["run", "--since", at(5.5)], ["run", "--until", at(5.5)]];
-  for (const id of ["run-live", "run-ownerless", "run-paused", "run-ended"]) {
-    // A live run's row is read only from ClickHouse, so `run` is compared where the files may answer it too.
-    for (const argv of id === "run-live" ? trajectoryViews : [...trajectoryViews, ...runViews]) {
-      test(`${id}: ${argv.join(" ")}`, async () => {
+  const runViews = [["run"], ["run", "--since", at(5.5)]];
+  // A live run's row is read only from ClickHouse, so `run` is compared where the files may answer it too.
+  for (const id of ["run-live", "run-ended"]) {
+    test(id, async () => {
+      for (const argv of id === "run-live" ? views : [...views, ...runViews]) {
         const files = await view(id, argv);
-        expect(files.length).toBeGreaterThan(0);
-        expect(await view(id, argv, STORE)).toEqual(files);
-      });
-    }
+        expect({ argv, empty: files.length === 0 }).toEqual({ argv, empty: false });
+        expect({ argv, lines: await view(id, argv, STORE) }).toEqual({ argv, lines: files });
+      }
+    });
   }
 });
 

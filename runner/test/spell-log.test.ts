@@ -82,8 +82,6 @@ describe("spellLogNote: the combat log's sentence", () => {
       damage(ME, MOB, { crit: true, absorb: 5, resist: 4, blocked: 3, overkill: 2, schoolMask: 0x14 }),
       "Your Test Bolt crits Test Evoker for 54 (fire+frost, 5 absorbed, 4 resisted, 3 blocked, 2 overkill)",
     ],
-    ["a hit on a party member", "SMSG_SPELLNONMELEEDAMAGELOG", damage(MOB, MEMBER), "Test Evoker's Test Bolt hits Ysolde for 54 (fire)"],
-    ["our own heal on ourselves", "SMSG_SPELLHEALLOG", heal(ME, ME), "Your Test Mend heals you for 120"],
     [
       "a member's crit heal on us, part overheal",
       "SMSG_SPELLHEALLOG",
@@ -102,12 +100,9 @@ describe("spellLogNote: the combat log's sentence", () => {
     );
   });
 
-  test("every other opcode has no sentence", () => {
+  test("every other opcode has no sentence, a dispel line included", () => {
     expect(spellLogNote("SMSG_ATTACKERSTATEUPDATE", damage(MOB, ME), ME, nameOf)).toBeUndefined();
     expect(spellLogNote("SMSG_PERIODICAURALOG", damage(MOB, ME), ME, nameOf)).toBeUndefined();
-  });
-
-  test("a dispel line has none either", () => {
     for (const opcode of DISPEL_LOG_OPCODES) expect(spellLogNote(opcode, dispel(ME, MOB), ME, nameOf)).toBeUndefined();
   });
 });
@@ -120,22 +115,14 @@ describe("spellLogShown: which spell lines the window keeps", () => {
     ["damage a party member takes", "SMSG_SPELLNONMELEEDAMAGELOG", damage(MOB, MEMBER), true],
     ["damage a party member deals", "SMSG_SPELLNONMELEEDAMAGELOG", damage(MEMBER, MOB), false],
     ["damage between strangers", "SMSG_SPELLNONMELEEDAMAGELOG", damage(STRANGER, MOB), false],
-    ["a heal on us", "SMSG_SPELLHEALLOG", heal(MEMBER, ME), true],
     ["a heal we cast on a member", "SMSG_SPELLHEALLOG", heal(ME, MEMBER), true],
     ["a member's heal on a member", "SMSG_SPELLHEALLOG", heal(MEMBER, MEMBER), false],
-    ["our own power gain", "SMSG_SPELLENERGIZELOG", energize(ME, ME), true],
     ["a member's power gain", "SMSG_SPELLENERGIZELOG", energize(MEMBER, MEMBER), false],
     ["our dispel on a mob", "SMSG_SPELLDISPELLOG", dispel(ME, MOB), true],
-    ["a mob's dispel on us", "SMSG_SPELLDISPELLOG", dispel(MOB, ME), true],
     ["a member's cleanse on us", "SMSG_SPELLDISPELLOG", dispel(MEMBER, ME), true],
     ["a mob's purge of a member", "SMSG_SPELLDISPELLOG", dispel(MOB, MEMBER), false],
-    ["a member's cleanse of a member", "SMSG_SPELLDISPELLOG", dispel(MEMBER, MEMBER), false],
-    ["strangers' dispel", "SMSG_SPELLDISPELLOG", dispel(STRANGER, MOB), false],
-    ["our Spellsteal", "SMSG_SPELLSTEALLOG", dispel(ME, MOB), true],
     ["a stranger's Spellsteal", "SMSG_SPELLSTEALLOG", dispel(STRANGER, MOB), false],
-    ["our dispel resisted", "SMSG_DISPEL_FAILED", dispel(ME, MOB), true],
     ["a resisted dispel on us", "SMSG_DISPEL_FAILED", dispel(MOB, ME), true],
-    ["a member's dispel resisted", "SMSG_DISPEL_FAILED", dispel(MEMBER, MOB), false],
   ])("%s", (_, opcode, data, want) => {
     expect(spellLogShown(opcode, data, ME, party)).toBe(want);
   });

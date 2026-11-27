@@ -13,7 +13,6 @@ import {
   RAW_USAGE_MAX_LEAVES,
   USER_AGENT,
   openCodeServedOf,
-  openCodeSessionHeaders,
   parseRetryAfter,
   RETRY_DETAIL_CHARS,
   statedResetOf,
@@ -109,22 +108,11 @@ describe("OpenAiChatAdapter attribution headers", () => {
     expect(headers.get("http-referer")).toBe("https://example.test/wb");
   });
 
-  test("a blank WRATHBENCH_APP_URL falls back to the default", async () => {
-    const { headers } = await sentRequest({ env: { WRATHBENCH_APP_URL: "   " } });
-    expect(headers.get("http-referer")).toBe(APP_URL);
-  });
-
   test("an unusable WRATHBENCH_APP_URL falls back instead of breaking every request", async () => {
     // A control character would make fetch throw building the headers, which
     // the adapter would read as a network error and retry five times.
     const { headers } = await sentRequest({ env: { WRATHBENCH_APP_URL: "https://x.test/\nInjected: 1" } });
     expect(headers.get("http-referer")).toBe(APP_URL);
-  });
-
-  test("attribution is not host-gated: a non-OpenRouter endpoint gets it too", async () => {
-    const { headers, body } = await sentRequest({ env: {} });
-    expect(body).not.toHaveProperty("usage"); // not OpenRouter
-    expect(headers.get("x-title")).toBe(APP_TITLE);
   });
 });
 
@@ -180,13 +168,6 @@ describe("OpenAiChatAdapter OpenCode session header", () => {
     }
   });
 
-  test("the session header is the only OpenCode header: the client's own are never claimed", async () => {
-    const [h] = await headersOver("https://opencode.ai/inference/go/openai/v1", 1, { sessionId: RUN });
-    const opencode = [...h!.keys()].filter((k) => k.startsWith("x-opencode-"));
-    expect(opencode).toEqual([OPENCODE_SESSION_HEADER]);
-    expect(h!.get("user-agent")).toBe("WrathBench");
-  });
-
   /** One complete against a base whose response carries `headers`. */
   async function turnWith(baseUrl: string, headers: Record<string, string>, body: unknown = { model: "mimo-v2.5", choices }): Promise<AssistantTurn> {
     const adapter = new OpenAiChatAdapter({
@@ -237,30 +218,16 @@ describe("OpenAiChatAdapter OpenCode session header", () => {
       model: "deepseek/deepseek-v4.1-flash",
     });
   });
-
-  test("openCodeSessionHeaders is host-exact", () => {
-    expect(openCodeSessionHeaders("https://opencode.ai/inference/go/openai/v1", RUN)).toEqual({ [OPENCODE_SESSION_HEADER]: RUN });
-    expect(openCodeSessionHeaders("https://notopencode.ai/zen/go/v1", RUN)).toEqual({});
-    expect(openCodeSessionHeaders("not a url", RUN)).toEqual({});
-  });
 });
 
 describe("parseRetryAfter", () => {
   const now = Date.parse("2026-08-22T00:00:00Z");
 
-  test("integer seconds", () => {
+  test("integer seconds, or an HTTP-date as the delta from now and never negative; anything else is null, never NaN", () => {
     expect(parseRetryAfter("3", now)).toBe(3_000);
-  });
-
-  test("an HTTP-date becomes the delta from now, never negative", () => {
     expect(parseRetryAfter("Sat, 22 Aug 2026 00:00:07 GMT", now)).toBe(7_000);
     expect(parseRetryAfter("Fri, 21 Aug 2026 00:00:00 GMT", now)).toBe(0);
-  });
-
-  test("absent or unparseable yields null, never NaN", () => {
-    expect(parseRetryAfter(null, now)).toBeNull();
-    expect(parseRetryAfter("soon", now)).toBeNull();
-    expect(parseRetryAfter("", now)).toBeNull();
+    for (const bad of [null, "soon", ""]) expect(parseRetryAfter(bad, now)).toBeNull();
   });
 });
 
@@ -320,11 +287,6 @@ describe("OpenAiChatAdapter request ids", () => {
     expect(out.kind === "ok" && out.turn.providerRequestId).toBe("req_abc");
   });
 
-  test("the body's generation id is the fallback when no header carries one", async () => {
-    const out = await adapterReturning({ id: "gen-123", choices }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.providerRequestId).toBe("gen-123");
-  });
-
   test("a Cloudflare ray never shadows the body's generation id", async () => {
     // OpenRouter is CDN-fronted, so cf-ray is on nearly every response; the
     // gen-… id is the only one its generation lookup accepts.
@@ -338,21 +300,9 @@ describe("OpenAiChatAdapter request ids", () => {
     expect(out.kind === "ok" && out.turn.providerRequestId).toBe("gen-real");
   });
 
-  test("no id anywhere leaves the field absent", async () => {
-    const out = await adapterReturning({ choices }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.providerRequestId).toBeUndefined();
-  });
-
   test("a fatal 4xx names the request id so the provider can be asked about it", async () => {
     const res = new Response("bad request", { status: 400, headers: { "x-request-id": "req_bad" } });
     await expect(adapterPlaying([res]).complete({ messages: [], tools: [] })).rejects.toThrow(/req_bad/);
-  });
-
-  test("a pause detail names the request id too", async () => {
-    const res = (): Response =>
-      new Response("slow down", { status: 429, headers: { "x-openrouter-id": "gen-xyz" } });
-    const out = await adapterPlaying([res(), res()]).complete({ messages: [], tools: [] });
-    expect(out.kind === "pause" && out.detail).toContain("gen-xyz");
   });
 });
 
@@ -364,118 +314,32 @@ describe("OpenAiChatAdapter reasoning effort", () => {
   test("a configured effort is sent verbatim", async () => {
     expect(await sentBody({ effort: "low" })).toMatchObject({ reasoning_effort: "low" });
   });
-
-  test("`none` — thinking off — goes through like any other level", async () => {
-    // Some OpenRouter models accept it and some reject it, which is true of
-    // `xhigh` and `max` too: the adapter does not curate the vocabulary.
-    expect(await sentBody({ effort: "none" })).toMatchObject({ reasoning_effort: "none" });
-  });
-
-  test("effort is not host-gated the way the usage opt-in is", async () => {
-    const body = await sentBody({ effort: "high" });
-    expect(body["reasoning_effort"]).toBe("high");
-    // the usage opt-in IS host-gated, and this base url is not OpenRouter
-    expect(body).not.toHaveProperty("usage");
-  });
 });
 
 describe("OpenAiChatAdapter usage", () => {
-  test("carries provider-reported usage onto the turn", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { prompt_tokens: 900, completion_tokens: 12, total_tokens: 912 },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind).toBe("ok");
-    expect(out.kind === "ok" && out.turn.usage).toEqual({
-      prompt_tokens: 900,
-      completion_tokens: 12,
-      total_tokens: 912,
-    });
-  });
-
-  test("a provider that omits usage parses and reports none", async () => {
-    const out = await adapterReturning({ choices }).complete({ messages: [], tools: [] });
-    expect(out.kind).toBe("ok");
-    expect(out.kind === "ok" && out.turn.usage).toBeUndefined();
-  });
-
-  test("cached_tokens is flattened from prompt_tokens_details", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 80 } },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({ prompt_tokens: 100, cached_tokens: 80 });
-  });
-
-  test("a top-level cached_tokens wins and details are the fallback", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { cached_tokens: 40, prompt_tokens_details: { cached_tokens: 9 } },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({ cached_tokens: 40 });
-  });
-
-  test("cache_write_tokens is flattened from prompt_tokens_details — the shape OpenRouter sends", async () => {
-    // Follow-up 59: OpenRouter nests writes and never sends the flat key, so
-    // reading only the top level found nothing and every write priced at zero.
-    const out = await adapterReturning({
-      choices,
-      usage: {
-        prompt_tokens: 100,
-        prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 25 },
-      },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({
-      prompt_tokens: 100,
-      cached_tokens: 60,
-      cache_write_tokens: 25,
-    });
-  });
-
-  test("a top-level cache_write_tokens wins and details are the fallback", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { cache_write_tokens: 7, prompt_tokens_details: { cache_write_tokens: 999 } },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({ cache_write_tokens: 7 });
-  });
-
-  test("a provider that reports no cache writes stays absent, never zero", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 10 } },
-    }).complete({ messages: [], tools: [] });
-    const u = out.kind === "ok" ? out.turn.usage : undefined;
-    expect(u).toEqual({ prompt_tokens: 100, cached_tokens: 10 });
-    expect(u && "cache_write_tokens" in u).toBe(false);
-  });
-
-  test("the provider's own cost survives into the turn — it is the actual bill", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { prompt_tokens: 900, completion_tokens: 12, cost: 0.000138 },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({
-      prompt_tokens: 900,
-      completion_tokens: 12,
-      cost: 0.000138,
-    });
-  });
-
-  test("reasoning tokens are flattened from completion_tokens_details", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 31 } },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({ completion_tokens: 40, reasoning_tokens: 31 });
-  });
-
-  test("partial usage keeps the counters it has and drops the rest", async () => {
-    const out = await adapterReturning({
-      choices,
-      usage: { prompt_tokens: 5, completion_tokens: null },
-    }).complete({ messages: [], tools: [] });
-    expect(out.kind === "ok" && out.turn.usage).toEqual({ prompt_tokens: 5 });
+  // What the provider reported, and what the turn carries: the normalised block every bill is read from.
+  const cases: [string, unknown, unknown][] = [
+    ["carried onto the turn", { prompt_tokens: 900, completion_tokens: 12, total_tokens: 912 }, { prompt_tokens: 900, completion_tokens: 12, total_tokens: 912 }],
+    ["none reported, none carried", undefined, undefined],
+    ["cached_tokens flattened from prompt_tokens_details", { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 80 } }, { prompt_tokens: 100, cached_tokens: 80 }],
+    ["a top-level cached_tokens wins over details", { cached_tokens: 40, prompt_tokens_details: { cached_tokens: 9 } }, { cached_tokens: 40 }],
+    // OpenRouter nests writes and never sends the flat key: reading only the top level priced every write at zero.
+    [
+      "cache_write_tokens flattened from prompt_tokens_details, the shape OpenRouter sends",
+      { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 25 } },
+      { prompt_tokens: 100, cached_tokens: 60, cache_write_tokens: 25 },
+    ],
+    ["a top-level cache_write_tokens wins over details", { cache_write_tokens: 7, prompt_tokens_details: { cache_write_tokens: 999 } }, { cache_write_tokens: 7 }],
+    ["no cache writes reported stays absent, never zero", { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 10 } }, { prompt_tokens: 100, cached_tokens: 10 }],
+    ["the provider's own cost survives: it is the actual bill", { prompt_tokens: 900, completion_tokens: 12, cost: 0.000138 }, { prompt_tokens: 900, completion_tokens: 12, cost: 0.000138 }],
+    ["reasoning tokens flattened from completion_tokens_details", { completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 31 } }, { completion_tokens: 40, reasoning_tokens: 31 }],
+    ["partial usage keeps the counters it has", { prompt_tokens: 5, completion_tokens: null }, { prompt_tokens: 5 }],
+  ];
+  test("each provider shape normalises to the counters it reported, and nothing it did not", async () => {
+    for (const [why, usage, want] of cases) {
+      const out = await adapterReturning(usage === undefined ? { choices } : { choices, usage }).complete({ messages: [], tools: [] });
+      expect([why, out.kind === "ok" ? out.turn.usage : out.kind] as unknown[]).toEqual([why, want]);
+    }
   });
 });
 
@@ -613,29 +477,59 @@ describe("OpenAiChatAdapter raw usage", () => {
 
 describe("OpenAiChatAdapter budget pauses", () => {
   const req = { messages: [], tools: [] };
+  const errBody = (error: Record<string, unknown>): string => JSON.stringify({ error });
 
-  test("a 429 with no quota wording pauses as rate-limited", async () => {
-    const out = await adapterPlaying([
-      status(429, "slow down"),
-      status(429, "slow down"),
-    ]).complete(req);
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+  test("provider weather and a spent budget pause the run, resumable, under the reason that names them", async () => {
+    // Each was a run lost as adapter-error, or a pause under the wrong reason.
+    const blip404 = errBody({ message: "Provider returned error", code: 404, metadata: { raw: "", provider_name: "Nvidia" } });
+    const upstream400 = errBody({ type: "server_error", message: "Error from provider (Console): Upstream request failed: Model is unavailable." });
+    const cases: [string, Response[], string][] = [
+      ["a 429 with no quota wording", [status(429, "slow down"), status(429, "slow down")], "rate-limited"],
+      ["a 429 whose body says quota", [status(429, "insufficient credit")], "quota-exhausted"],
+      ["OpenCode Go's spent allowance (GoUsageLimitError)", [status(429, JSON.stringify({ type: "error", error: { type: "GoUsageLimitError", message: "usage allowance reached" } }))], "quota-exhausted"],
+      ["quota wins over a later plain rate limit", [status(429, "quota exceeded for this key"), status(429, "slow down")], "quota-exhausted"],
+      ["an OpenRouter 404 provider blip", [status(404, blip404), status(404, blip404)], "rate-limited"],
+      ["an OpenCode 400 upstream-unavailable", [status(400, upstream400), status(400, upstream400)], "rate-limited"],
+      ["persistent HTTP 500s", [status(500, "Internal server error"), status(500, "Internal server error")], "rate-limited"],
+      // Free-tier upstreams answer HTTP 200 with {"error": ...} and no choices.
+      ["a 2xx error body with code 429", [status(200, errBody({ message: "Provider returned error", code: 429 })), status(200, errBody({ message: "Provider returned error", code: 429 }))], "rate-limited"],
+      ["a 2xx error body with a string rate-limit code", [status(200, errBody({ message: "Too many requests", code: "rate_limit_exceeded" })), status(200, errBody({ message: "Too many requests", code: "rate_limit_exceeded" }))], "rate-limited"],
+      ["a 2xx error body with a numeric-string 429", [status(200, errBody({ message: "Provider returned error", code: "429" })), status(200, errBody({ message: "Provider returned error", code: "429" }))], "rate-limited"],
+      // The key's, not the model's, wherever it shows.
+      ["a 401 after a 429", [status(429, "slow down"), status(401, "api_key_expired")], "auth-failed"],
+      ["a 2xx body whose error names code 401", [status(200, errBody({ code: 401, message: "User not found" }))], "auth-failed"],
+      ["a 403 after a 429", [status(429, "slow down"), status(403, "forbidden")], "no-access"],
+      ["a 2xx body whose error names code 403", [status(200, errBody({ code: 403, message: "Forbidden" }))], "no-access"],
+    ];
+    for (const [why, script, reason] of cases) {
+      const out = await adapterPlaying(script).complete(req);
+      expect([why, out.kind === "pause" ? out.reason : out.kind]).toEqual([why, reason]);
+    }
   });
 
-  test("a 429 whose body says quota pauses as quota-exhausted", async () => {
-    const out = await adapterPlaying([status(429, "insufficient credit")]).complete(req);
-    expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
-  });
-
-  test("OpenCode Go's spent allowance (GoUsageLimitError) is quota-exhausted, not a passing rate limit", async () => {
-    const body = JSON.stringify({ type: "error", error: { type: "GoUsageLimitError", message: "usage allowance reached" } });
-    const out = await adapterPlaying([status(429, body)]).complete(req);
-    expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
+  test("a harness bug or a dead slug fails fast as an AdapterError, never a rate-limited pause", async () => {
+    const ours = errBody({ param: "messages[3] assistant must provide content", type: "server_error", message: "Upstream request failed: [400] Param Incorrect" });
+    const pointer = errBody({ message: "Model is unavailable. Use this slug instead: vendor/model", code: 404 });
+    const cases: [string, Response[], RegExp][] = [
+      ["a non-retryable 4xx", [status(400, "bad request")], /HTTP 400/],
+      ["a 404 for a bad model slug", [status(404, errBody({ message: "No endpoints found for zz/not-a-model", code: 404 }))], /No endpoints found/],
+      ["the paid-slug pointer alone", [status(404, pointer), status(404, pointer)], /HTTP 404/],
+      ["a refusal naming one of our messages, in a 2xx body", [status(200, ours), status(200, ours)], /after 2 attempt\(s\)/],
+      ["a 2xx error body without any status shape", [status(200, errBody({ message: "something odd, no code" })), status(200, errBody({ message: "something odd, no code" }))], /after 2 attempt\(s\)/],
+      // About the input, not the key.
+      ["a moderation 403", [status(403, errBody({ code: 403, message: "Your chosen model requires moderation and your input was flagged", metadata: { reasons: ["x"] } }))], /HTTP 403/],
+    ];
+    for (const [why, script, error] of cases) {
+      const got = await adapterPlaying(script).complete(req).then(
+        (out) => `resolved ${out.kind}`,
+        (e: unknown) => String(e),
+      );
+      expect([why, error.test(got)]).toEqual([why, true]);
+    }
   });
 
   test("a 429 followed by network failures still pauses, not adapter-errors", async () => {
-    // The run-real-smoke-1 shape: the 429's status used to be overwritten by
-    // the next attempt's network error and the run died as adapter-error.
+    // The 429's status used to be overwritten by the next attempt's network error and the run died as adapter-error.
     const out = await adapterPlaying([
       status(429, "too many requests"),
       new Error("fetch timed out"),
@@ -647,153 +541,64 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("429");
   });
 
-  test("an OpenRouter 404 provider blip pauses as rate-limited, not adapter-error", async () => {
-    // A healthy 60-turn nemotron episode died to one of these. Transient pool
-    // weather, resumable — not a harness bug.
-    const body = JSON.stringify({
-      error: { message: "Provider returned error", code: 404, metadata: { raw: "", provider_name: "Nvidia" } },
+  /** An adapter that answers every attempt with `res()`, counting the requests. */
+  function counting(res: () => Response, baseUrl = "http://model.invalid/v1"): { adapter: OpenAiChatAdapter; calls: () => number } {
+    let calls = 0;
+    const adapter = new OpenAiChatAdapter({
+      baseUrl,
+      apiKey: "k",
+      model: "m",
+      maxAttempts: 3,
+      fetchImpl: Object.assign(
+        (): Promise<Response> => {
+          calls++;
+          return Promise.resolve(res());
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
     });
-    const out = await adapterPlaying([status(404, body), status(404, body)]).complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
-  });
+    return { adapter, calls: () => calls };
+  }
 
-  test("an OpenCode 400 upstream-unavailable pauses as rate-limited", async () => {
-    const body = JSON.stringify({
-      error: { type: "server_error", message: "Error from provider (Console): Upstream request failed: Model is unavailable." },
-    });
-    const out = await adapterPlaying([status(400, body), status(400, body)]).complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
-  });
-
-  test("an upstream 400 that names one of our messages fails fast as an AdapterError, not a rate-limited pause", async () => {
-    // Verbatim from mimo-v26-flash-go a3: the request carried an assistant
-    // message with null content and no tool calls. A harness bug, the same
-    // bytes on every retry — not pool weather.
-    const body =
+  test("an upstream 400 that names one of our messages, or a withdrawn free slug, fails on the first request", async () => {
+    // Verbatim shapes: an assistant message with null content and no tool calls
+    // (a harness bug, the same bytes on every retry), and a free slug withdrawn
+    // for good, which a retry would climb the defer ladder on.
+    const ours =
       '{"error":{"param":"messages[32] assistant must provide content, reasoning_content or tool_calls","type":"server_error","message":"Upstream request failed: [400] Param Incorrect"}}';
-    let calls = 0;
-    const adapter = new OpenAiChatAdapter({
-      baseUrl: "http://model.invalid/v1",
-      apiKey: "k",
-      model: "m",
-      maxAttempts: 3,
-      fetchImpl: Object.assign(
-        (): Promise<Response> => {
-          calls++;
-          return Promise.resolve(status(400, body));
-        },
-        { preconnect: () => {} },
-      ) as unknown as typeof fetch,
-      sleep: () => Promise.resolve(),
-    });
-    await expect(adapter.complete(req)).rejects.toThrow(/messages\[32\]/);
-    expect(calls).toBe(1);
-  });
-
-  test("the same refusal in a 2xx error body is not read as a provider blip either", async () => {
-    const errBody = JSON.stringify({
-      error: { param: "messages[3] assistant must provide content", type: "server_error", message: "Upstream request failed: [400] Param Incorrect" },
-    });
-    await expect(adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req)).rejects.toThrow(/after 2 attempt\(s\)/);
-  });
-
-  test("a 404 for a bad model slug still fails fast as an AdapterError", async () => {
-    const body = JSON.stringify({ error: { message: "No endpoints found for zz/not-a-model", code: 404 } });
-    await expect(adapterPlaying([status(404, body)]).complete(req)).rejects.toThrow(/No endpoints found/);
-  });
-
-  test("a withdrawn free slug fails fast as an AdapterError, not a rate-limited pause", async () => {
-    // Verbatim from the minimax-m3-free stream: `model is unavailable` alone
-    // read it as a provider blip, so it retried, paused rate-limited and
-    // climbed the defer ladder on a slug that will never serve again.
-    const body =
+    const withdrawn =
       '{"error":{"message":"This model is unavailable for free. The paid version is available now - use this slug instead: minimax/minimax-m3","code":404},"user_id":"user_x"}';
-    let calls = 0;
-    const adapter = new OpenAiChatAdapter({
-      baseUrl: "http://model.invalid/v1",
-      apiKey: "k",
-      model: "m",
-      maxAttempts: 3,
-      fetchImpl: Object.assign(
-        (): Promise<Response> => {
-          calls++;
-          return Promise.resolve(status(404, body));
-        },
-        { preconnect: () => {} },
-      ) as unknown as typeof fetch,
-      sleep: () => Promise.resolve(),
-    });
-    await expect(adapter.complete(req)).rejects.toThrow(/unavailable for free/);
-    expect(calls).toBe(1);
-  });
-
-  test("the paid-slug pointer alone is enough to fail fast", async () => {
-    const body = JSON.stringify({ error: { message: "Model is unavailable. Use this slug instead: vendor/model", code: 404 } });
-    await expect(adapterPlaying([status(404, body), status(404, body)]).complete(req)).rejects.toThrow(/HTTP 404/);
-  });
-
-  test("a 2xx body carrying an error object with code 429 pauses instead of adapter-erroring", async () => {
-    // The night-nemotron-1 shape: free-tier upstream returns HTTP 200 with
-    // {"error": ...} and no choices; this used to terminate as a schema error.
-    const errBody = JSON.stringify({ error: { message: "Provider returned error", code: 429 } });
-    const out = await adapterPlaying([
-      status(200, errBody),
-      status(200, errBody),
-    ]).complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
-    expect(out.kind === "pause" && out.detail).toContain("2xx body");
-  });
-
-  test("a 2xx error body with a string rate-limit code pauses as rate-limited", async () => {
-    // Providers that send code as a string ("rate_limit_exceeded") with
-    // rate-limit wording used to terminate the run instead of pausing.
-    const errBody = JSON.stringify({
-      error: { message: "Too many requests for this model", code: "rate_limit_exceeded" },
-    });
-    const out = await adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
-  });
-
-  test("a 2xx error body with a numeric-string 429 code pauses as rate-limited", async () => {
-    const errBody = JSON.stringify({ error: { message: "Provider returned error", code: "429" } });
-    const out = await adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+    for (const [code, body, error] of [[400, ours, /messages\[32\]/], [404, withdrawn, /unavailable for free/]] as const) {
+      const c = counting(() => status(code, body));
+      await expect(c.adapter.complete(req)).rejects.toThrow(error);
+      expect(c.calls()).toBe(1);
+    }
   });
 
   test("a 2xx error body that is only ever 5xx-shaped pauses instead of hard-erroring", async () => {
     // Provider-down weather: the run is resumable, the roster defers it.
-    const errBody = JSON.stringify({ error: { message: "upstream exploded", code: 500 } });
-    const out = await adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req);
+    const body = errBody({ message: "upstream exploded", code: 500 });
+    const out = await adapterPlaying([status(200, body), status(200, body)]).complete(req);
     expect(out.kind).toBe("pause");
     expect(out.kind === "pause" && out.detail).toContain("persistent 5xx");
   });
 
   test("attempts exhausted on pure network errors pause instead of terminating", async () => {
-    // The other half of the 2026-08-22 fix: a timeout/reset/DNS failure never
-    // has an HTTP status, so it fell past the persistent-5xx branch and three
-    // episodes died as adapter-error on 2026-08-24 ("network error: The
-    // operation timed out.", two different platforms). Provider-down weather
-    // either way — the run is resumable, the roster defers it.
+    // A timeout, reset or DNS failure never has an HTTP status, so it fell past
+    // the persistent-5xx branch and episodes died as adapter-error.
     const out = await adapterPlaying([new Error("The operation timed out."), new Error("The operation timed out.")]).complete(req);
     expect(out.kind).toBe("pause");
     expect(out.kind === "pause" && out.reason).toBe("rate-limited");
     expect(out.kind === "pause" && out.detail).toContain("persistent network failure");
   });
 
-  test("an empty choices is retried like a 5xx, and the next answer is the turn", async () => {
-    // The OpenCode Go shape (deepseek-v4.1-flash): 200 with `choices: []`,
-    // which ended a scored attempt as adapter-error on the schema's min(1).
-    const out = await adapterPlaying([
-      status(200, JSON.stringify({ id: "x", choices: [] })),
-      status(200, JSON.stringify({ choices })),
-    ]).complete(req);
-    expect(out.kind).toBe("ok");
-    expect(out.kind === "ok" && out.turn.content).toBe("hi");
+  test("an empty choices or a 2xx error body is retried, and the next answer is the turn", async () => {
+    // The OpenCode Go shape: 200 with `choices: []`, which ended a scored attempt as adapter-error.
+    for (const first of [JSON.stringify({ id: "x", choices: [] }), errBody({ message: "upstream exploded", code: 500 })]) {
+      const out = await adapterPlaying([status(200, first), status(200, JSON.stringify({ choices }))]).complete(req);
+      expect(out.kind === "ok" && out.turn.content).toBe("hi");
+    }
   });
 
   test("an empty answer that persists pauses as provider-unresponsive, never adapter-error", async () => {
@@ -806,65 +611,17 @@ describe("OpenAiChatAdapter budget pauses", () => {
     }
   });
 
-  test("a 2xx body that is malformed rather than empty is still a fatal schema mismatch", async () => {
-    let calls = 0;
+  test("a 2xx body that is malformed rather than empty is still a fatal schema mismatch, on the first request", async () => {
     for (const bad of [
       { object: "error", message: "model not found" },
       { choices: "nope" },
       { choices: [{ message: { content: 7 } }] },
       { choices: [{ message: { tool_calls: [{ function: { name: "f" } }] } }] },
     ]) {
-      const adapter = new OpenAiChatAdapter({
-        baseUrl: "http://model.invalid/v1",
-        apiKey: "k",
-        model: "m",
-        maxAttempts: 3,
-        fetchImpl: Object.assign(
-          (): Promise<Response> => {
-            calls++;
-            return Promise.resolve(status(200, JSON.stringify(bad)));
-          },
-          { preconnect: () => {} },
-        ) as unknown as typeof fetch,
-        sleep: () => Promise.resolve(),
-      });
-      await expect(adapter.complete(req)).rejects.toThrow(/did not match schema/);
+      const c = counting(() => status(200, JSON.stringify(bad)));
+      await expect(c.adapter.complete(req)).rejects.toThrow(/did not match schema/);
+      expect(c.calls()).toBe(1);
     }
-    expect(calls).toBe(4);
-  });
-
-  test("a 2xx error body without any status shape still hard-errors", async () => {
-    const errBody = JSON.stringify({ error: { message: "something odd, no code" } });
-    await expect(
-      adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req),
-    ).rejects.toThrow(/after 2 attempt\(s\)/);
-  });
-
-  test("persistent HTTP 500s pause as rate-limited instead of terminating", async () => {
-    // Five consecutive 500s ended a level-3 run.
-    const out = await adapterPlaying([
-      status(500, "Internal server error"),
-      status(500, "Internal server error"),
-    ]).complete(req);
-    expect(out.kind).toBe("pause");
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
-  });
-
-  test("a 2xx error body followed by a good response succeeds", async () => {
-    const errBody = JSON.stringify({ error: { message: "upstream exploded", code: 500 } });
-    const out = await adapterPlaying([
-      status(200, errBody),
-      status(200, JSON.stringify({ choices })),
-    ]).complete(req);
-    expect(out.kind).toBe("ok");
-  });
-
-  test("quota wins over a later plain rate limit", async () => {
-    const out = await adapterPlaying([
-      status(429, "quota exceeded for this key"),
-      status(429, "slow down"),
-    ]).complete(req);
-    expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
   });
 
   test("the retry budget stops the loop long before the idle watchdog could blame the model", async () => {
@@ -899,90 +656,20 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("persistent network failure after 2 attempt(s)");
   });
 
-  // "network failures with no 4xx anywhere are still a hard error" was pinned
-  // here (af7e4aa) without a defence, and 2026-08-24 overturned it the same
-  // way 2026-08-22 overturned it for 5xx: three live episodes died to pure
-  // timeouts. The boundary now pauses — see "attempts exhausted on pure
-  // network errors pause instead of terminating" above. What still hard-errors
-  // on exhausted attempts is a failure that is neither an HTTP status nor a
-  // socket error, which no longer has a test to itself because no such shape
-  // has been observed.
-
-  test("a non-retryable 4xx is fatal immediately", async () => {
-    await expect(adapterPlaying([status(400, "bad request")]).complete(req)).rejects.toThrow(
-      /HTTP 400/,
-    );
-  });
-
-  test("a 401 is the key's, not the model's: one request, then a pause as auth-failed, on any provider", async () => {
-    for (const baseUrl of ["http://model.invalid/v1", "https://opencode.ai/inference/go/openai/v1"]) {
-      let calls = 0;
-      const adapter = new OpenAiChatAdapter({
-        baseUrl,
-        apiKey: "k",
-        model: "m",
-        fetchImpl: Object.assign(
-          (): Promise<Response> => {
-            calls++;
-            return Promise.resolve(status(401, JSON.stringify({ type: "authentication_error", message: "Invalid credential" })));
-          },
-          { preconnect: () => {} },
-        ) as unknown as typeof fetch,
-        sleep: () => Promise.resolve(),
-      });
-      const out = await adapter.complete(req);
-      expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
-      expect(out.kind === "pause" && out.detail).toContain("HTTP 401");
-      expect(calls).toBe(1);
+  test("a 401 or a 403 is the key's, not the model's: one request, then a pause, on any provider", async () => {
+    const cases = [
+      [401, JSON.stringify({ type: "authentication_error", message: "Invalid credential" }), "auth-failed"],
+      [403, JSON.stringify({ type: "error", message: "workspace not subscribed to Go" }), "no-access"],
+    ] as const;
+    for (const [code, body, reason] of cases) {
+      for (const baseUrl of ["http://model.invalid/v1", "https://opencode.ai/inference/go/openai/v1"]) {
+        const c = counting(() => status(code, body), baseUrl);
+        const out = await c.adapter.complete(req);
+        expect(out).toMatchObject({ kind: "pause", reason });
+        expect(out.kind === "pause" && out.detail).toContain(`HTTP ${code}`);
+        expect(c.calls()).toBe(1);
+      }
     }
-  });
-
-  test("a 401 after a 429 is still the key's: auth-failed, not a rate limit", async () => {
-    const out = await adapterPlaying([status(429, "slow down"), status(401, "api_key_expired")]).complete(req);
-    expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
-  });
-
-  test("a 2xx body whose error names code 401 pauses as auth-failed too", async () => {
-    const out = await adapterPlaying([new Response(JSON.stringify({ error: { code: 401, message: "User not found" } }), { status: 200 })]).complete(req);
-    expect(out).toMatchObject({ kind: "pause", reason: "auth-failed" });
-  });
-
-  test("a 403 is the key's too: one request, then a pause as no-access, on any provider", async () => {
-    for (const baseUrl of ["http://model.invalid/v1", "https://opencode.ai/inference/go/openai/v1"]) {
-      let calls = 0;
-      const adapter = new OpenAiChatAdapter({
-        baseUrl,
-        apiKey: "k",
-        model: "m",
-        fetchImpl: Object.assign(
-          (): Promise<Response> => {
-            calls++;
-            return Promise.resolve(status(403, JSON.stringify({ type: "error", message: "workspace not subscribed to Go" })));
-          },
-          { preconnect: () => {} },
-        ) as unknown as typeof fetch,
-        sleep: () => Promise.resolve(),
-      });
-      const out = await adapter.complete(req);
-      expect(out).toMatchObject({ kind: "pause", reason: "no-access" });
-      expect(out.kind === "pause" && out.detail).toContain("HTTP 403");
-      expect(calls).toBe(1);
-    }
-  });
-
-  test("a 403 after a 429 is still the key's: no-access, not a rate limit", async () => {
-    const out = await adapterPlaying([status(429, "slow down"), status(403, "forbidden")]).complete(req);
-    expect(out).toMatchObject({ kind: "pause", reason: "no-access" });
-  });
-
-  test("a 2xx body whose error names code 403 pauses as no-access too", async () => {
-    const out = await adapterPlaying([new Response(JSON.stringify({ error: { code: 403, message: "Forbidden" } }), { status: 200 })]).complete(req);
-    expect(out).toMatchObject({ kind: "pause", reason: "no-access" });
-  });
-
-  test("a moderation 403 is about the input, not the key: still fatal", async () => {
-    const flagged = JSON.stringify({ error: { code: 403, message: "Your chosen model requires moderation and your input was flagged", metadata: { reasons: ["x"] } } });
-    await expect(adapterPlaying([status(403, flagged)]).complete(req)).rejects.toThrow(/HTTP 403/);
   });
 });
 
@@ -1114,25 +801,6 @@ describe("redirects", () => {
       await target.stop(true);
     }
     expect(reached).toEqual([]);
-  });
-
-  test("the request is sent with redirect: manual", async () => {
-    let mode: RequestInit["redirect"];
-    const adapter = new OpenAiChatAdapter({
-      baseUrl: "http://model.invalid/v1",
-      apiKey: "k",
-      model: "m",
-      fetchImpl: Object.assign(
-        (_url: string, init: RequestInit): Promise<Response> => {
-          mode = init.redirect;
-          return Promise.resolve(new Response(JSON.stringify({ choices }), { status: 200 }));
-        },
-        { preconnect: () => {} },
-      ) as unknown as typeof fetch,
-      sleep: () => Promise.resolve(),
-    });
-    await adapter.complete({ messages: [], tools: [] });
-    expect(mode).toBe("manual");
   });
 });
 

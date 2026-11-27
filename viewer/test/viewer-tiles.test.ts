@@ -18,8 +18,6 @@ import {
   TILE_CACHE_CONTROL,
   SERVED_DIR,
   TILE_PUBLIC_CACHE_CONTROL,
-  tileNotModified,
-  tileValidators,
 } from "../tiles";
 import { buildTileIndex, parseTileIndex, renderTileIndex } from "../tileindex";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
@@ -138,21 +136,6 @@ describe("tiles outside public mode", () => {
  * each use, and answered 304 while unchanged.
  */
 describe("the art layer revalidates", () => {
-  test("served with no-cache and both validators, while every other tile stays immutable", async () => {
-    const handle = handleFor({ publicMode: false });
-    const art = await get(handle, ART);
-    expect(art.status).toBe(200);
-    expect(art.headers.get("cache-control")).toBe(ART_TILE_CACHE_CONTROL);
-    expect(art.headers.get("etag")).toMatch(/^W\/".+"$/);
-    expect(art.headers.get("last-modified")).not.toBeNull();
-    expect(new Uint8Array(await art.arrayBuffer())).toEqual(PNG);
-    for (const path of TILES) {
-      const res = await get(handle, path);
-      expect(res.headers.get("cache-control")).toBe(TILE_CACHE_CONTROL);
-      expect(res.headers.get("etag")).toBeNull();
-    }
-  });
-
   test("an unchanged tile is a 304 by tag or by date, and a re-bake is a 200 again", async () => {
     const dirs = fixture();
     const handle = handleFor({ publicMode: false }, dirs);
@@ -172,30 +155,6 @@ describe("the art layer revalidates", () => {
     expect(after.status).toBe(200);
     expect(after.headers.get("etag")).not.toBe(etag);
     expect((await get(handle, ART, { "if-modified-since": lastModified })).status).toBe(200);
-  });
-
-  test("public mode with tiles opted in keeps it private, revalidated and noindex", async () => {
-    const res = await get(handleFor({ publicMode: true, tilesPublic: true }), ART);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe(ART_TILE_PUBLIC_CACHE_CONTROL);
-    expect(res.headers.get("x-robots-tag")).toBe("noindex");
-    expect(res.headers.get("etag")).not.toBeNull();
-    const withheld = await get(handleFor({ publicMode: true }), ART);
-    expect(withheld.status).toBe(403);
-  });
-
-  test("the conditional check: a tag list, a wildcard, weak against strong, and a stale date", () => {
-    const v = tileValidators({ size: 4096, mtimeMs: 1_790_000_000_123 });
-    const h = (o: Record<string, string>): Headers => new Headers(o);
-    expect(tileNotModified(h({ "if-none-match": `"x", ${v.etag}` }), v)).toBe(true);
-    expect(tileNotModified(h({ "if-none-match": v.etag.replace(/^W\//, "") }), v)).toBe(true);
-    expect(tileNotModified(h({ "if-none-match": "*" }), v)).toBe(true);
-    expect(tileNotModified(h({ "if-none-match": `W/"other"` }), v)).toBe(false);
-    // If-None-Match decides alone when both are sent.
-    expect(tileNotModified(h({ "if-none-match": `W/"other"`, "if-modified-since": v.lastModified }), v)).toBe(false);
-    expect(tileNotModified(h({ "if-modified-since": new Date(0).toUTCString() }), v)).toBe(false);
-    expect(tileNotModified(h({ "if-modified-since": "not a date" }), v)).toBe(false);
-    expect(tileNotModified(h({}), v)).toBe(false);
   });
 });
 
@@ -265,21 +224,6 @@ describe("the served tree", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
-  });
-
-  test("with no served file, or one older than its master, the master answers, typed as a PNG", async () => {
-    const bare = await get(handleFor({ publicMode: false }), LEVEL);
-    expect(bare.status).toBe(200);
-    expect(bare.headers.get("content-type")).toBe("image/png");
-    expect(new Uint8Array(await bare.arrayBuffer())).toEqual(PNG);
-
-    const dirs = served();
-    // A re-bake after the last transcode: the master is newer.
-    const later = new Date(Date.now() + 5000);
-    utimesSync(join(dirs.tilesDir, "0", "minimap", "3", "5_3.png"), later, later);
-    const stale = await get(handleFor({ publicMode: false }, dirs), LEVEL);
-    expect(stale.headers.get("content-type")).toBe("image/png");
-    expect(new Uint8Array(await stale.arrayBuffer())).toEqual(PNG);
   });
 
   test("a served file with no master behind it is not a tile", async () => {

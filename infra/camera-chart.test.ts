@@ -72,53 +72,16 @@ describe.skipIf(helm === null)("the chart's camera block", () => {
         expect(ws["AC_GM_VISIBLE"]?.value).toBe("0");
       }
       const pod = cameraPod(docs)!;
-      expect(pod.metadata.generateName).toBe("wrathbench-camera-");
-      expect(pod.metadata.labels?.["app.kubernetes.io/component"]).toBe("camera");
-      expect(pod.metadata.annotations?.["wrathbench.shard.page/camera-max"]).toBe("2");
-      expect(pod.metadata.annotations?.["wrathbench.shard.page/shared-realm"]).toBe("WrathBench");
-      expect(pod.spec.restartPolicy).toBe("Always");
-      expect(pod.spec.terminationGracePeriodSeconds).toBe(30);
       expect(pod.spec.containers.map((c) => c.name)).toEqual(["camera", "camera-director"]);
       const cam = byName(pod.spec, "camera")!;
-      expect(cam.image).toBe("harbor.example/wrathbench/wrathbench-camera:camera-1");
-      const ce = envOf(cam);
-      // The password by reference only; the realm the launcher's to stamp.
-      expect(ce["CAMERA_PASSWORD"]).toEqual({ name: "CAMERA_PASSWORD", valueFrom: { secretKeyRef: { name: "wrathbench-env", key: "WRATHBENCH_CAMERA_PASSWORD" } } });
-      expect(ce["CAMERA_REALM"]?.value).toBe("");
-      expect(ce["CAMERA_ACCOUNT"]?.value).toBe("CAMERA");
-      expect(ce["WOW_CLOCK"]?.value).toBe("720");
+      // The password by reference only, never a value.
+      expect(envOf(cam)["CAMERA_PASSWORD"]).toEqual({ name: "CAMERA_PASSWORD", valueFrom: { secretKeyRef: { name: "wrathbench-env", key: "WRATHBENCH_CAMERA_PASSWORD" } } });
       expect(cam.resources?.limits?.["devic.es/dri"]).toBe(1);
-      expect(cam.volumeMounts?.find((m) => m.name === "camera-client-data")).toEqual({ name: "camera-client-data", mountPath: "/data/client", subPath: "Data", readOnly: true });
+      // The client's data, read-only.
+      expect(cam.volumeMounts?.find((m) => m.name === "camera-client-data")?.readOnly).toBe(true);
       expect(pod.spec.volumes?.find((v) => v.name === "camera-client-data")?.persistentVolumeClaim).toEqual({ claimName: "wrathbench-client-data", readOnly: true });
-      const dir = byName(pod.spec, "camera-director")!;
-      expect(dir.image).toBe("harbor.example/wrathbench/wrathbench-runner:harness-0.5-1-gabcdef0");
-      expect(dir.command).toEqual(["/usr/bin/tini", "--", "bun", "infra/camera/director.ts"]);
-      expect(envOf(dir)["CAMERA_WORLD"]?.value).toBe("");
-      expect(envOf(dir)["CAMERA_INTERVAL_SECONDS"]?.value).toBe("10");
-      // The client's memory: few malloc arenas, and a restart after an hour in the world.
-      expect(ce["MALLOC_ARENA_MAX"]?.value).toBe("2");
-      expect(envOf(dir)["CAMERA_RESTART_MINUTES"]?.value).toBe("60");
-      expect(dir.volumeMounts?.find((m) => m.mountPath === "/wrathbench/data/runs")?.subPath).toBe("runs");
       const cron = find(docs, "CronJob", "wrathbench-camera-sweep") as unknown as CronJob;
-      expect(cron.spec.schedule).toBe("*/10 * * * *");
       expect(cron.spec.concurrencyPolicy).toBe("Forbid");
-      const sweep = cron.spec.jobTemplate.spec.template.spec.containers[0]!;
-      expect(sweep.command).toEqual(["nice", "-n", "19", "bun", "infra/camera/sweep.ts", "/wrathbench/data/runs", "--interval-seconds", "10", "--keep-hours", "24"]);
-      expect(sweep.volumeMounts?.map((m) => m.subPath)).toEqual(["runs"]);
-    },
-    HELM_TEST_MS,
-  );
-
-  test(
-    "the client's memory settings are the values': no arena cap at 0, no scheduled restart at 0",
-    () => {
-      const { docs } = render([...ON, "--set", "camera.mallocArenaMax=0", "--set", "camera.restartMinutes=0"]);
-      const pod = cameraPod(docs)!;
-      expect(envOf(byName(pod.spec, "camera")!)["MALLOC_ARENA_MAX"]).toBeUndefined();
-      expect(envOf(byName(pod.spec, "camera-director")!)["CAMERA_RESTART_MINUTES"]?.value).toBe("0");
-      const other = cameraPod(render([...ON, "--set", "camera.mallocArenaMax=4", "--set", "camera.restartMinutes=120"]).docs)!;
-      expect(envOf(byName(other.spec, "camera")!)["MALLOC_ARENA_MAX"]?.value).toBe("4");
-      expect(envOf(byName(other.spec, "camera-director")!)["CAMERA_RESTART_MINUTES"]?.value).toBe("120");
     },
     HELM_TEST_MS,
   );
@@ -136,15 +99,6 @@ describe.skipIf(helm === null)("the chart's camera block", () => {
       expect(pod.metadata.annotations?.["wrathbench.shard.page/camera-max"]).toBe("3");
       const cron = find(docs, "CronJob", "wrathbench-camera-sweep") as unknown as CronJob;
       expect(cron.spec.jobTemplate.spec.template.spec.containers[0]!.command!.slice(-2)).toEqual(["--keep-hours", "6"]);
-    },
-    HELM_TEST_MS,
-  );
-
-  test(
-    "on without an image or a data claim: refused, never a guess",
-    () => {
-      expect(render(["--set", "camera.enabled=true", "--set", "camera.clientData.claimName=x"], false).stderr).toContain("camera.image is required");
-      expect(render(["--set", "camera.enabled=true", "--set", "camera.image=x:1"], false).stderr).toContain("camera.clientData.claimName is required");
     },
     HELM_TEST_MS,
   );

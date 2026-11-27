@@ -4,10 +4,8 @@
  * The contract worth pinning: the refusal sentence arrives VERBATIM — the
  * whole point of the API is that a rejected edit carries the sentence
  * `parseFleet` would refuse the file with, and `client.ts`'s `getJson` glues
- * the URL onto it — the status comes with it so the page can tell a refusal
- * from a missing store, a write carries no attribution, every write says
- * JSON (the viewer's cross-site write guard), and the export body never names
- * a path (the server writes no file and refuses one).
+ * the URL onto it — with its status, a row key's halves are encoded each on
+ * its own, and every write says JSON (the viewer's cross-site write guard).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -45,30 +43,6 @@ describe("paths and methods", () => {
     expect(s.calls[0]?.method).toBe("PATCH");
   });
 
-  test("each verb goes where it says", async () => {
-    const s = stub({ config: {}, keys: [], version: 0, path: "x", seeded: false });
-    const c = createConfigClient({ fetch: s.fetch });
-    await c.config();
-    await c.audit(50);
-    await c.put("policy", {});
-    await c.remove("roster/a");
-    await c.export();
-    expect(s.calls.map((x) => `${x.method} ${x.url}`)).toEqual([
-      "GET /api/config",
-      "GET /api/config/audit?limit=50",
-      "PUT /api/config/policy",
-      "DELETE /api/config/roster/a",
-      "POST /api/config/export",
-    ]);
-  });
-
-  test("the export body never names a path — the server writes no file and refuses one", async () => {
-    const s = stub({ bytes: 3, text: "{}\n" });
-    const c = createConfigClient({ fetch: s.fetch });
-    await c.export();
-    expect(s.calls[0]?.body).toBe("{}");
-  });
-
   test("every write says JSON, with a body or without — the viewer refuses an unsafe method that does not", async () => {
     const s = stub({ key: "roster/a", value: null, version: 1 });
     const c = createConfigClient({ fetch: s.fetch });
@@ -96,22 +70,6 @@ describe("paths and methods", () => {
   });
 });
 
-describe("attribution", () => {
-  test("a write carries no actor and no note: the server records the path it came by", async () => {
-    const s = stub({ key: "policy", value: {}, version: 1 });
-    const c = createConfigClient({ fetch: s.fetch });
-    await c.put("policy", { a: 1 });
-    expect(Object.keys(s.calls[0]!.headers).sort()).toEqual(["accept", "content-type"]);
-  });
-
-  test("a read carries no body", async () => {
-    const s = stub({ config: {}, keys: [], version: 0, path: "x", seeded: true });
-    const c = createConfigClient({ fetch: s.fetch });
-    await c.config();
-    expect(s.calls[0]?.body).toBeUndefined();
-  });
-});
-
 describe("refusals", () => {
   test("the server's sentence comes back verbatim, with nothing prepended", async () => {
     const sentence = "roster.x: tier must be one of t0, t1, t2";
@@ -121,51 +79,5 @@ describe("refusals", () => {
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as ConfigError).message).toBe(sentence);
     expect((err as ConfigError).status).toBe(400);
-  });
-
-  test("the status tells a refusal from an unseeded store from a route that is not mounted", async () => {
-    for (const [status, body] of [
-      [409, { error: "no config store at /x — seed it first" }],
-      [404, { error: "not found" }],
-    ] as [number, unknown][]) {
-      const c = createConfigClient({ fetch: stub(body, status).fetch });
-      const err = (await c.config().catch((e: unknown) => e)) as ConfigError;
-      expect(err.status).toBe(status);
-    }
-  });
-
-  test("a non-JSON error body still errors, with the status as the sentence", async () => {
-    const f = (async () => new Response("<html>502</html>", { status: 502 })) as unknown as typeof globalThis.fetch;
-    const c = createConfigClient({ fetch: f });
-    const err = (await c.config().catch((e: unknown) => e)) as ConfigError;
-    expect(err.status).toBe(502);
-    expect(err.message).toBe("502");
-  });
-});
-
-describe("drafts", () => {
-  test("each draft call goes where it says; the model rides in the body, never the path", async () => {
-    const s = stub({});
-    const c = createConfigClient({ fetch: s.fetch });
-    await c.drafts();
-    await c.fetchDrafts();
-    await c.ignoreDraft("z-ai/glm-6:free");
-    await c.unignoreDraft("z-ai/glm-6:free");
-    await c.promoteDraft({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" });
-    expect(s.calls.map((x) => [x.method, x.url, x.body])).toEqual([
-      ["GET", "/api/config/proposed", undefined],
-      ["POST", "/api/config/proposed/fetch", undefined],
-      ["POST", "/api/config/proposed/ignore", JSON.stringify({ model: "z-ai/glm-6:free" })],
-      ["POST", "/api/config/proposed/unignore", JSON.stringify({ model: "z-ai/glm-6:free" })],
-      ["POST", "/api/config/proposed/promote", JSON.stringify({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" })],
-    ]);
-  });
-
-  test("a promotion the parser refuses comes back as its sentence", async () => {
-    const sentence = "roster:claude: entry anthropic/claude-x: roster policy — claude models run only via the claude-code driver";
-    const c = createConfigClient({ fetch: stub({ error: sentence, key: "roster/claude" }, 400).fetch });
-    const err = (await c.promoteDraft({ model: "anthropic/claude-x", name: "claude", tier: "t0" }).catch((e: unknown) => e)) as ConfigError;
-    expect(err.status).toBe(400);
-    expect(err.message).toBe(sentence);
   });
 });

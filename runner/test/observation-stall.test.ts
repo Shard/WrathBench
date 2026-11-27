@@ -109,35 +109,6 @@ describe("the sampler names an observation that stopped arriving", () => {
     h.trajectory.close();
   });
 
-  test("a drop the reconnect ladder repairs passes without a record", async () => {
-    const slot = { eventCount: 10, lastSeq: 10, connected: true };
-    const h = harness(slot);
-    await h.sample();
-    slot.connected = false;
-    await h.sample();
-    slot.connected = true;
-    slot.eventCount += 40;
-    slot.lastSeq += 40;
-    await h.sample();
-    expect(h.records("observation_stalled")).toHaveLength(0);
-    expect(h.records("observation_resumed")).toHaveLength(0);
-    h.trajectory.close();
-  });
-
-  test("a sandbox restart does not disarm a run that had been observing", async () => {
-    // The fresh child counts from zero again, and its stream never opens: the
-    // arming latch is the run's history, not this sample's cursor.
-    const slot = { eventCount: 4_000, lastSeq: 4_000, connected: true };
-    const h = harness(slot);
-    await h.sample();
-    slot.eventCount = 0;
-    slot.lastSeq = -1;
-    slot.connected = false;
-    for (let i = 0; i < 5; i++) await h.sample();
-    expect(h.records("observation_stalled")).toHaveLength(1);
-    h.trajectory.close();
-  });
-
   test("a stall that ends is closed on the record", async () => {
     const slot = { eventCount: 100, lastSeq: 100, connected: false };
     const h = harness(slot);
@@ -156,16 +127,16 @@ describe("the sampler names an observation that stopped arriving", () => {
     expect(h.records("observation_stalled")).toHaveLength(2);
     h.trajectory.close();
   });
+});
 
+describe("a stalled observation asks for the pause", () => {
   test("a sandbox that says nothing about its stream is never called stalled", async () => {
     const h = harness({ eventCount: 500, lastSeq: 500 });
     for (let i = 0; i < 6; i++) await h.sample();
     expect(h.records("observation_stalled")).toHaveLength(0);
     h.trajectory.close();
   });
-});
 
-describe("a stalled observation asks for the pause", () => {
   test("once, on the first stall record, and not before", async () => {
     const asked: string[] = [];
     const slot = { eventCount: 900, lastSeq: 900, connected: false };
@@ -202,6 +173,8 @@ describe("a stalled observation asks for the pause", () => {
       await h.sample();
     }
     expect(asked).toHaveLength(0);
+    expect(h.records("observation_stalled")).toHaveLength(0);
+    expect(h.records("observation_resumed")).toHaveLength(0);
     h.trajectory.close();
   });
 
@@ -216,6 +189,8 @@ describe("a stalled observation asks for the pause", () => {
     slot.lastSeq = -1;
     slot.connected = false;
     for (let i = 0; i < 4; i++) await h.sample();
+    // The arming latch is the run's history, not this sample's cursor: the restart did not disarm it.
+    expect(h.records("observation_stalled")).toHaveLength(1);
     expect(asked).toHaveLength(1);
     h.trajectory.close();
   });

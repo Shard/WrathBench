@@ -270,15 +270,6 @@ export function dxt1Block(c0: number, c1: number, indices = 0): Uint8Array {
   return b;
 }
 
-/** One 4x4 DXT3 block with a constant 4-bit alpha and a DXT1-style colour half. */
-export function dxt3Block(alpha4: number, c0: number, c1: number, indices = 0): Uint8Array {
-  const b = new Uint8Array(16);
-  const byte = (alpha4 & 0x0f) | ((alpha4 & 0x0f) << 4);
-  for (let i = 0; i < 8; i++) b[i] = byte;
-  b.set(dxt1Block(c0, c1, indices), 8);
-  return b;
-}
-
 /** One 4x4 DXT5 block whose every texel selects alpha endpoint 0. */
 export function dxt5Block(a0: number, a1: number, c0: number, c1: number, indices = 0): Uint8Array {
   const b = new Uint8Array(16);

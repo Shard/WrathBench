@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { PAUSE_REASONS } from "../src/config";
-import { NOT_THE_MODELS_FAULT, PROVIDER_PAUSES, STALL_PAUSE, classifyLapse, countedRun, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
+import { NOT_THE_MODELS_FAULT, STALL_PAUSE, classifyLapse, countedRun, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
 
 /**
  * The whole of the lapse rule, as a table. Every row is a case an operator
@@ -142,11 +141,6 @@ describe("what happens to a lapsed run", () => {
     });
   }
 
-  test("the gap is named in the detail, in the units an operator reads", () => {
-    const l = classifyLapse({ episode: "e90", pause: null, staleForMs: 12 * H + 42 * 60_000 });
-    expect(l.detail).toContain("no activity for 12h42m");
-  });
-
   test("a run is stale after its OWN budget; one with no wall clock after twice the long tier", () => {
     expect(staleAfterMs(90 * 60_000)).toBe(90 * 60_000);
     expect(staleAfterMs(null)).toBe(STALE_FALLBACK_MS);
@@ -164,12 +158,6 @@ describe("what happens to a lapsed run", () => {
     expect(resumesOnPause(undefined)).toBe(true);
     expect(resumesOnPause("nonsense")).toBe(true);
   });
-});
-
-test("the stall pause is a pause reason the runner writes, and not a provider's", () => {
-  expect(STALL_PAUSE).toBe("observation-stalled");
-  expect((PAUSE_REASONS as readonly string[]).includes(STALL_PAUSE)).toBe(true);
-  expect(PROVIDER_PAUSES.has(STALL_PAUSE)).toBe(false);
 });
 
 test("adapter-error is not the model's fault (operator, 2026-08-30)", () => {

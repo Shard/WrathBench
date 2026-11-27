@@ -2,32 +2,22 @@
  * The driver registry (`src/drivers.ts`) and its adapter map
  * (`src/driver-adapters.ts`).
  *
- * The load-bearing claims: every derived list reads exactly as the scattered
- * literals it replaced did, in the same order (refusals print them and the
- * comparability schema is built from one), and the registry agrees with the
- * adapters — a scaffold runs its own episode, a fixed-loop driver does not.
+ * The load-bearing claims: the harness tags runs are owned by, the registry
+ * agreeing with the adapters (a scaffold runs its own episode, a fixed-loop
+ * driver does not), which drivers carry the unscored stamp and which are
+ * probe-only, and the codex lane's run-pod refusal.
  */
 
 import { describe, expect, test } from "bun:test";
-import { COMPACT_WINDOW_DRIVERS, compactWindowDriverRefusal, DRIVER_STAMPS } from "../src/config";
-import { REFERENCE_STAMP, STUB_STAMP, DEFAULT_DRIVER, DRIVER_LIST, DRIVER_POD_VOLUMES, DRIVER_TABLE, DRIVERS, entryOf, HARNESS_OF_DRIVER, HARNESSES, HOME_CREDENTIAL_ENVS, inProcessRunPodRefusal, RUN_POD_STAMP_ENV, ROSTER_DRIVERS, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal, type RosterDriver } from "../src/drivers";
+import { DRIVER_STAMPS } from "../src/config";
+import { REFERENCE_STAMP, STUB_STAMP, DRIVER_LIST, entryOf, HARNESS_OF_DRIVER, HARNESSES, inProcessRunPodRefusal, RUN_POD_STAMP_ENV, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal } from "../src/drivers";
 import { DRIVER_ADAPTERS } from "../src/driver-adapters";
 import { providerOfModel } from "../src/credential-slots";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./fixtures/temp-dirs";
 
-/** Compile-time: the roster's driver union is exactly these four. */
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const rosterUnion: Equal<RosterDriver, "openai" | "claude-code" | "codex" | "pi"> = true;
-
 describe("the driver registry", () => {
-  test("one entry per driver, keyed by its own id, in DRIVERS order", () => {
-    expect(DRIVER_LIST.map((d) => d.id)).toEqual([...DRIVERS]);
-    for (const d of DRIVERS) expect(DRIVER_TABLE[d].id).toBe(d);
-    expect(rosterUnion).toBe(true);
-  });
-
   test("the harness tags are the entries' harnesses, first seen first", () => {
     expect([...new Set(DRIVER_LIST.map((d) => d.harness))]).toEqual([...HARNESSES]);
     expect(HARNESS_OF_DRIVER).toEqual({
@@ -44,23 +34,14 @@ describe("the driver registry", () => {
     expect(harnessDriver("openai")).toBeUndefined();
   });
 
-  test("the derived vocabularies read as the literals they replaced", () => {
-    expect(DEFAULT_DRIVER).toBe("openai");
-    expect(ROSTER_DRIVERS).toEqual(["openai", "claude-code", "codex", "pi"]);
-    expect(COMPACT_WINDOW_DRIVERS).toEqual(["claude-code", "codex", "pi"]);
-    expect(compactWindowDriverRefusal("openai")).toBe(
-      "compactWindow is a CLI harness's auto-compaction window (claude-code, codex, pi) — the openai driver has none",
-    );
-    expect(DRIVER_LIST.filter((d) => d.roster && d.sessionCap).map((d) => d.id)).toEqual(["openai", "claude-code", "codex", "pi"]);
-    expect(DRIVER_STAMPS).toEqual({ stub: STUB_STAMP, reference: REFERENCE_STAMP });
-    expect(DRIVER_POD_VOLUMES).toEqual(["codex-home"]);
-    expect(HOME_CREDENTIAL_ENVS).toEqual(["CODEX_HOME"]);
-  });
-
   test("a scaffold runs its own episode; a fixed-loop driver hands runLoop an adapter", () => {
     for (const d of DRIVER_LIST) {
       expect({ id: d.id, runsEpisode: DRIVER_ADAPTERS[d.id].runEpisode !== undefined }).toEqual({ id: d.id, runsEpisode: d.kind === "scaffold" });
     }
+  });
+
+  test("the scripted drivers carry the unscored stamp, and only they do", () => {
+    expect(DRIVER_STAMPS).toEqual({ stub: STUB_STAMP, reference: REFERENCE_STAMP });
   });
 
   test("the facts hang together", () => {
@@ -105,18 +86,6 @@ describe("the driver registry", () => {
     expect(DRIVER_LIST.filter((d) => d.routing).map((d) => d.id)).toEqual(["openai"]);
     // Its CLI's own provider, named on the key's row: the roster refuses a key without one.
     expect(DRIVER_LIST.filter((d) => d.cliProvider === true).map((d) => d.id)).toEqual(["pi"]);
-  });
-
-  test("the credential wording the fleet prints", () => {
-    expect(entryOf("claude-code").credential!.describe(undefined)).toBe("claude CLI subscription");
-    expect(entryOf("codex").credential!.describe(undefined)).toBe("codex CLI subscription, home CODEX_HOME");
-    expect(entryOf("codex").credential!.describe("CODEX_HOME_2")).toBe("codex CLI subscription, home CODEX_HOME_2");
-    expect(entryOf("claude-code").credential!.containerRefusal("CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(
-      "CLAUDE_CODE_OAUTH_TOKEN_2 is not visible to the fleet container — put it in /wrathbench/.env (`claude setup-token`), it is loaded by Bun there and never passed via argv",
-    );
-    expect(entryOf("codex").credential!.containerRefusal("CODEX_HOME")).toBe(
-      "CODEX_HOME is not visible to the fleet container — put it in /wrathbench/.env as the path of a logged-in Codex home (`codex login`); it is loaded by Bun there and never passed via argv",
-    );
   });
 });
 

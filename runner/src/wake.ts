@@ -1469,7 +1469,7 @@ const LEVEL_RANK: Readonly<Record<DurabilityLevel, number>> = { ok: 0, low: 1, b
  * seen" when its seat latched none for this death. Cut at
  * `FANOUT_DEATH_LINE_CHARS`. Pure.
  */
-export function fanoutDeathLine(character: string, cause: DeathCause | null): string {
+function fanoutDeathLine(character: string, cause: DeathCause | null): string {
   const window = `${Math.round(DEATH_WINDOW_MS / 1000)}s`;
   const taken = cause === null ? undefined : damageTaken(cause.damage);
   const line =

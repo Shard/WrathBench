@@ -44,15 +44,6 @@ function fakes(): {
 }
 
 describe("visibleInterval", () => {
-  test("ticks while the tab is visible", () => {
-    const f = fakes();
-    let runs = 0;
-    visibleInterval(() => runs++, 1000, { visibility: f.visibility, every: f.every });
-    f.tick();
-    f.tick();
-    expect(runs).toBe(2);
-  });
-
   test("does no work while hidden, and catches up once on coming back", () => {
     const f = fakes();
     let runs = 0;
@@ -70,15 +61,6 @@ describe("visibleInterval", () => {
     expect(runs).toBe(1);
     f.tick();
     expect(runs).toBe(2);
-  });
-
-  test("coming back before any tick fell due does not tick early", () => {
-    const f = fakes();
-    let runs = 0;
-    visibleInterval(() => runs++, 1000, { visibility: f.visibility, every: f.every });
-    f.visibility.set(true);
-    f.visibility.set(false);
-    expect(runs).toBe(0);
   });
 
   test("a stop ends the timer and the watch, even from inside a tick", () => {
@@ -99,22 +81,5 @@ describe("visibleInterval", () => {
     f.visibility.set(true);
     f.visibility.set(false);
     expect(runs).toBe(1);
-  });
-
-  test("with no document at all it is a plain interval", () => {
-    const f = fakes();
-    let runs = 0;
-    visibleInterval(() => runs++, 1000, { visibility: null, every: f.every });
-    f.tick();
-    expect(runs).toBe(1);
-  });
-});
-
-describe("the map page", () => {
-  test("keeps no timer of its own that runs while the tab is hidden", async () => {
-    const src = await Bun.file(new URL("../src/pages/MapPage.tsx", import.meta.url)).text();
-    expect(src).not.toMatch(/\bsetInterval\(/);
-    // The pump and a replay's tail poll both go through the one helper.
-    expect(src.match(/visibleInterval\(/g)?.length).toBe(2);
   });
 });

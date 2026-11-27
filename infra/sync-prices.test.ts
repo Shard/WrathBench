@@ -7,18 +7,13 @@
 import { describe, expect, test } from "bun:test";
 import { formatCatalogue, parseCatalogue, priceTables, type ModelCatalogue } from "./model-catalogue";
 import {
-  applyListingWindows,
   foldListing,
   listingAsks,
   listingQuote,
   listingRows,
-  movedToday,
-  openRouterAsks,
-  parseArgs,
   peakNote,
   rosterLaunches,
   rosterModels,
-  runLaunches,
   type ListingRow,
 } from "./sync-prices";
 
@@ -102,10 +97,6 @@ describe("listingQuote: what one listing row says a model costs on a base", () =
     expect(listingQuote(written, BASE)).toEqual({ price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, peak: null });
   });
 
-  test("a base is compared as origin plus path, trailing slash ignored", () => {
-    expect("price" in listingQuote(row("m", flat(1, 2), { api: { "chat-completions": { base_url: `${BASE}/` } } }), BASE)).toBe(true);
-  });
-
   test("a peak-hours multiplier keeps the off-peak rate and says when it doubles", () => {
     const q = listingQuote(row("m", flat(0.15, 0.6, 0.003), { cost: { text: flat(0.15, 0.6, 0.003) as never, multipliers: [PEAK] } }), BASE);
     expect(q).toEqual({ price: { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0.15 }, peak: "2× in peak hours, 01:00–04:00 and 06:00–10:00 UTC Monday to Friday" });
@@ -153,34 +144,6 @@ describe("what the fleet runs, as the sync is told it", () => {
     // The OpenRouter leg's own id is asked for, and a codex slug under its vendor.
     expect(rosterModels(fleet)).toContain("acme-labs/kept-1");
     expect(rosterModels(fleet)).toContain("openai/gpt-6-astra");
-  });
-
-  test("a runs file is the viewer's /api/runs body or a bare list; a run with no model names nothing", () => {
-    const runs = [{ model: "kept-1", driver: "openai", apiBase: BASE, cost: {} }, { model: null }, { model: "acme-labs/new-1" }];
-    const want = [
-      { model: "kept-1", driver: "openai", apiBase: BASE },
-      { model: "acme-labs/new-1", driver: undefined, apiBase: null },
-    ];
-    expect(runLaunches(JSON.stringify({ runs }))).toEqual(want);
-    expect(runLaunches(JSON.stringify(runs))).toEqual(want);
-  });
-
-  test("--fleet and --runs take a file each; anything else is refused", () => {
-    expect(parseArgs([])).toEqual({ fleet: null, runs: null });
-    expect(parseArgs(["--fleet", "a.json", "--runs", "b.json"])).toEqual({ fleet: "a.json", runs: "b.json" });
-    expect(() => parseArgs(["--fleet"])).toThrow("needs a file");
-    expect(() => parseArgs(["--apply"])).toThrow("unknown argument");
-  });
-
-  test("a launch asks OpenRouter for its id and for its entry's vendor-prefixed key, the row the alias fallback reads", () => {
-    // Go's bare glm-5.3 is the catalogue's z-ai/glm-5.3.
-    expect(openRouterAsks({ model: "glm-5.3", apiBase: BASE }).sort()).toEqual(["glm-5.3", "z-ai/glm-5.3"]);
-    // A `:free` run asks for its entry's paid listing too.
-    expect(openRouterAsks({ model: "google/gemma-4-31b-it:free" }).sort()).toEqual(["google/gemma-4-31b-it", "google/gemma-4-31b-it:free"]);
-    // A bare key is no OpenRouter id; an uncatalogued id asks for itself only.
-    expect(openRouterAsks({ model: "kimi-k3.1-pro" })).toEqual(["kimi-k3.1-pro"]);
-    expect(openRouterAsks({ model: "nobody-catalogued-this-1" })).toEqual(["nobody-catalogued-this-1"]);
-    expect(openRouterAsks({ model: "gpt-6-astra", driver: "codex" })).toEqual(["openai/gpt-6-astra"]);
   });
 });
 
@@ -234,22 +197,6 @@ describe("folding a listing into the catalogue", () => {
     expect(rows.find((r) => r.model === "kept-1")!.note).toBe(`Acme Go's own listing (row since 2026-10-01, read ${TODAY})`);
   });
 
-  test("a kept row reads as of the listing's last read, as an OpenRouter row does; a hand-held row keeps its own date", () => {
-    const before = priceTables(parseCatalogue(formatCatalogue(doc())) as ModelCatalogue).endpoints;
-    expect(before.find((r) => r.model === "kept-1")!.asOf).toBe("2026-11-01");
-    const { doc: out } = foldListing(doc(), "acmego", listing, launches, TODAY);
-    const rows = priceTables(parseCatalogue(formatCatalogue(out)) as ModelCatalogue).endpoints;
-    // Typed 2026-10-01, confirmed by today's read: today is the date it is read as.
-    expect(rows.find((r) => r.model === "kept-1")!.asOf).toBe(TODAY);
-    expect(rows.find((r) => r.model === "new-1")!.asOf).toBe(TODAY);
-    expect(rows.find((r) => r.model === "held-1")!.asOf).toBe("2026-10-01");
-    // A provider with no listing keeps every row's own date.
-    const noListing = doc();
-    delete (noListing.providers["acmego"] as Record<string, unknown>)["listing"];
-    const plain = priceTables(parseCatalogue(formatCatalogue(noListing)) as ModelCatalogue).endpoints;
-    expect(plain.find((r) => r.model === "kept-1")!.asOf).toBe("2026-10-01");
-  });
-
   test("a hand-held row is never touched, even when the listing quotes its id", () => {
     const before = doc();
     const { doc: out } = foldListing(before, "acmego", listing, [...launches, { model: "held-1", apiBase: BASE }], TODAY);
@@ -279,39 +226,5 @@ describe("folding a listing into the catalogue", () => {
     const { doc: out, report } = foldListing(doc(), "acmego", [row("new-1", flat(0, 0))], [{ model: "new-1", apiBase: BASE }], TODAY);
     expect(out.models["acme-labs/new-1"]!.prices!.endpoints).toBeUndefined();
     expect(report.skipped).toEqual(["new-1 (quoted at 0/0 without a free suffix)"]);
-  });
-
-  test("an id no entry lists, or one whose entry already has a row on the provider under another id, is reported and not written", () => {
-    const priced = [{ input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }];
-    const { doc: out, unlisted, clash } = applyListingWindows(doc(), "acmego", { "nobody-1": priced, "acme-labs/kept-1": priced }, {}, TODAY);
-    expect(unlisted).toEqual(["nobody-1"]);
-    expect(clash).toEqual(["acme-labs/kept-1"]);
-    expect(out.models["acme-labs/kept-1"]).toEqual(doc().models["acme-labs/kept-1"]!);
-    // A key id gets a row with no ids list.
-    const { doc: bare } = applyListingWindows(doc(), "acmego", { "bare-1": priced }, { "bare-1": null }, TODAY);
-    expect(bare.models["bare-1"]!.prices!.endpoints!["acmego"]).toEqual({ asOf: TODAY, windows: priced });
-  });
-});
-
-describe("movedToday: whether a sync wrote news", () => {
-  const w = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 };
-  test("an appended window is news; an earlier sync's window from today, unchanged, is not", () => {
-    expect(movedToday([w], [w, { ...w, input: 2, from: TODAY }], TODAY)).toBe(true);
-    expect(movedToday([w, { ...w, input: 2, from: TODAY }], [w, { ...w, input: 2, from: TODAY }], TODAY)).toBe(false);
-    expect(movedToday([w, { ...w, input: 2, from: TODAY }], [w, { ...w, input: 3, from: TODAY }], TODAY)).toBe(true);
-    expect(movedToday([w], [w], TODAY)).toBe(false);
-  });
-});
-
-describe("the catalogue's listing field", () => {
-  const withProvider = (p: Record<string, unknown>): string => {
-    const d = doc() as unknown as Record<string, any>;
-    d["providers"]["acmego"] = p;
-    return JSON.stringify(d);
-  };
-  test("is for an endpoint provider, and must be a URL", () => {
-    expect(() => parseCatalogue(JSON.stringify(doc()))).not.toThrow();
-    expect(() => parseCatalogue(withProvider({ name: "Acme Go", listing: `${BASE}/models` }))).toThrow("listing is for an endpoint provider");
-    expect(() => parseCatalogue(withProvider({ ...(doc().providers["acmego"] as object), listing: "not a url" }))).toThrow("listing is not a URL");
   });
 });

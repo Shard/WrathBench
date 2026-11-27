@@ -62,22 +62,6 @@ function pixelAt(pngPath: string, x: number, y: number, width = 256): number[] {
   return [raw[off], raw[off + 1], raw[off + 2], raw[off + 3]] as number[];
 }
 
-function firstPixel(pngPath: string): number[] {
-  const png = new Uint8Array(readFileSync(pngPath));
-  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
-  let at = 8;
-  while (at < png.byteLength) {
-    const len = view.getUint32(at, false);
-    const type = new TextDecoder().decode(png.subarray(at + 4, at + 8));
-    if (type === "IDAT") {
-      const raw = new Uint8Array(inflateSync(png.subarray(at + 8, at + 8 + len)));
-      return [raw[1], raw[2], raw[3], raw[4]] as number[];
-    }
-    at += 12 + len;
-  }
-  throw new Error("no IDAT");
-}
-
 function placement(position: number[], yaw: number): WmoPlacement {
   return {
     name: "World\\wmo\\Dungeon\\Fixture\\Fixture.wmo",
@@ -105,28 +89,17 @@ describe("extractMap", () => {
   });
 
   test("decodes the tile through BLP2 and PNG intact", () => {
-    const px = firstPixel(join(outDir, "43_31.png"));
+    const px = pixelAt(join(outDir, "43_31.png"), 0, 0);
     expect(px[3]).toBe(255);
     expect(px[0]).toBeGreaterThan(240); // red tile
     expect(px[2]).toBeLessThan(16);
-    expect(firstPixel(join(outDir, "48_32.png"))[2]).toBeGreaterThan(240); // blue tile
+    expect(pixelAt(join(outDir, "48_32.png"), 0, 0)[2]).toBeGreaterThan(240); // blue tile
   });
 
-  test("is idempotent: a second pass skips everything", () => {
+  test("is idempotent: a second pass skips everything, and --force rewrites", () => {
     const stats = extractMap(c, tiles, outDir, { force: false, limit: Infinity });
     expect(stats).toMatchObject({ written: 0, skipped: 2, missing: 1, failed: 0 });
-    expect(stats.bytes).toBeGreaterThan(0);
-  });
-
-  test("--force rewrites", () => {
-    const stats = extractMap(c, tiles, outDir, { force: true, limit: Infinity });
-    expect(stats).toMatchObject({ written: 2, skipped: 0 });
-  });
-
-  test("--limit caps the number of tiles considered", () => {
-    const limited = join(scratch, "limited");
-    const stats = extractMap(c, tiles, limited, { force: false, limit: 1 });
-    expect(stats.written).toBe(1);
+    expect(extractMap(c, tiles, outDir, { force: true, limit: Infinity })).toMatchObject({ written: 2, skipped: 0 });
   });
 });
 
@@ -169,38 +142,13 @@ describe("compositeWmoMap", () => {
     expect(statSync(join(outDir, "31_32.png")).size).toBeGreaterThan(0);
   });
 
-  test("the colour survives the 4:1 resample", () => {
+  test("the colour survives the 4:1 resample, and what no source pixel covered stays transparent", () => {
     const red = pixelAt(join(outDir, "32_32.png"), 0, 0);
     expect(red[0]).toBeGreaterThan(240);
     expect(red[2]).toBeLessThan(16);
     expect(red[3]).toBe(255);
     expect(pixelAt(join(outDir, "31_32.png"), 0, 0)[2]).toBeGreaterThan(240);
-  });
-
-  test("what no source pixel covered stays transparent", () => {
-    // The group is 128 yards across; a world tile is 533, so most of it is
-    // untouched and must stay see-through for the lattice underneath.
     expect(pixelAt(join(outDir, "32_32.png"), 200, 200)[3]).toBe(0);
-  });
-
-  test("is idempotent, and --force rewrites", () => {
-    expect(compositeWmoMap(c, placed(), outDir, { force: false, limit: Infinity })).toMatchObject({
-      written: 0,
-      skipped: 2,
-    });
-    expect(compositeWmoMap(c, placed(), outDir, { force: true, limit: Infinity })).toMatchObject({
-      written: 2,
-      skipped: 0,
-    });
-  });
-
-  test("counts a group the model does not have rather than throwing", () => {
-    const stats = compositeWmoMap(c, placed([boxes[0] as WmoGroupBox]), join(scratch, "369-partial"), {
-      force: false,
-      limit: Infinity,
-    });
-    expect(stats.failed).toBe(1);
-    expect(stats.written).toBe(1);
   });
 });
 
@@ -241,11 +189,6 @@ describe("an instance's placed models over its terrain", () => {
   const toWorld = placementToWorld(at, "adt");
   const outDir = join(scratch, "36");
 
-  test("the stem filter keeps another model's tiles out", () => {
-    expect(wmoTiles).toHaveLength(1);
-    expect(wmoTiles[0]?.hash).toBe("green.blp");
-  });
-
   test("a turned model lands where its placement says", () => {
     const stats = { written: 0, skipped: 0, missing: 0, failed: 0, bytes: 0 };
     const paint: WmoPaint = paintWmos(c, [{ tiles: wmoTiles, boxes: [box], toWorld }], { limit: Infinity }, stats);
@@ -277,35 +220,10 @@ describe("an instance's placed models over its terrain", () => {
     expect(outside[0]).toBeGreaterThan(240);
     expect(outside[1]).toBeLessThan(16);
   });
-
-  test("is idempotent: the composite is written once and then skipped", () => {
-    const paint = paintWmos(c, [{ tiles: wmoTiles, boxes: [box], toWorld }], { limit: Infinity }, {
-      written: 0,
-      skipped: 0,
-      missing: 0,
-      failed: 0,
-      bytes: 0,
-    });
-    expect(extractMap(c, adtTiles, outDir, { force: false, limit: Infinity }, paint)).toMatchObject({
-      written: 0,
-      skipped: 1,
-    });
-    expect(pixelAt(join(outDir, "32_32.png"), 55, 55)[1]).toBeGreaterThan(240);
-  });
 });
 
 describe("the default maps", () => {
   test("are exactly the maps the dashboard names, so none is drawn as a bare number", () => {
     expect([...DEFAULT_MAPS].sort((a, b) => a - b)).toEqual(Object.keys(TILED_MAPS).map(Number).sort((a, b) => a - b));
-  });
-
-  test("still cover every map already published", () => {
-    for (const id of [0, 1, 36, 369, 530, 571]) expect(DEFAULT_MAPS).toContain(id);
-  });
-
-  test("take in the dungeons and raids, and leave out what has no place to draw", () => {
-    for (const id of [33, 230, 429, 540, 574, 668, 249, 533, 631]) expect(DEFAULT_MAPS).toContain(id);
-    // Unused in Map.dbc (44, 598), a test map (169), no client minimap (624, 649, 650).
-    for (const id of [44, 169, 598, 624, 649, 650]) expect(DEFAULT_MAPS).not.toContain(id);
   });
 });

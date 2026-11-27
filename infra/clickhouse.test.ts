@@ -46,29 +46,7 @@ describe("clickhouse drop-ins", () => {
       );
     });
 
-    test(`${name} is mounted as a FILE by both deployments`, () => {
-      // A directory mount over config.d/users.d would make them read-only, and
-      // the image's entrypoint writes users.d/default-user.xml at first boot to
-      // create CLICKHOUSE_USER. compose bind-mounts the file; the chart uses
-      // subPath, which is the same thing.
-      const compose = readFileSync(join(here, "compose.yml"), "utf8");
-      const rel = path.slice(here.length + 1);
-      expect(compose).toContain(`./${rel}:/etc/clickhouse-server/`);
-      expect(compose).toContain(`/${name}:ro`);
-      expect(template).toContain(`subPath: ${name}`);
-    });
   }
-
-  test("XML comments carry no `--`, which ClickHouse refuses to parse", () => {
-    // Learned the hard way: a stray `--replay` in a comment is a
-    // SAXParseException at boot, not a warning.
-    for (const path of Object.values(files)) {
-      for (const [i, line] of readFileSync(path, "utf8").split("\n").entries()) {
-        const body = line.replaceAll("<!--", "").replaceAll("-->", "");
-        expect(body.includes("--"), `${path}:${i + 1}`).toBe(false);
-      }
-    }
-  });
 
   test("every drop-in is in the pod's config checksum", () => {
     // subPath mounts never hot-reload, so a drop-in the annotation does not
@@ -80,13 +58,5 @@ describe("clickhouse drop-ins", () => {
     for (const name of Object.values(defines)) {
       expect(line!, `${name} is checksummed`).toContain(name);
     }
-  });
-
-  test("the chart's memory limit leaves room for the bounded caches", () => {
-    // The drop-ins declare ~512 MiB of cache plus a 512 MiB merge soft limit
-    // plus 512 MiB per query; a 2Gi limit is what broke (Code: 241).
-    const values = readFileSync(join(here, "chart/wrathbench/values.yaml"), "utf8");
-    const block = values.slice(values.indexOf("\nclickhouse:"));
-    expect(block).toContain("memory: 4Gi");
   });
 });

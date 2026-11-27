@@ -4,8 +4,8 @@
 # dashboard/test/preload-solid.ts for what it does and why.
 #
 # `bun run test` (package.json) is the same suite over eight workers, the local
-# loop: about a minute on the 16-core box against about four in one process.
-# The wall clock is the slowest file's (infra/fleet-update.test.ts), so more
+# loop: about 75 s on the 16-core box against about six minutes in one process.
+# The wall clock is the slowest file's (wrath-mcp/sdk/test/client.test.ts), so more
 # workers buy nothing and only crowd a machine other suites share.
 # `--no-isolate` keeps one module registry per worker across its files, as the
 # single process always did; a fresh one per file boots Vite and Babel cold in

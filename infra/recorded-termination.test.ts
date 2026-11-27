@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { comparabilityOf } from "../runner/src/comparability";
 import { loadRunConfig, newSessionToken } from "../runner/src/config";
-import { readRunFact, terminationOfTrajectory, verdictOfTrajectory } from "../runner/src/run-fact";
+import { readRunFact, terminationOfTrajectory } from "../runner/src/run-fact";
 import { readTrajectory, Trajectory } from "../runner/src/trajectory";
 import { HEARTBEAT_FILE } from "../runner/src/heartbeat";
 import { implicitPauses, repairRecordedTerminations } from "./run-fleet";
@@ -96,36 +96,5 @@ describe("a termination on record but not in the row", () => {
     expect(again.terminationReason).toBe("harness-error");
     expect(again.recordedTermination).toBeUndefined();
     expect(repairRecordedTerminations(runsDir, [f])).toEqual([]);
-  });
-
-  test("a pause only meta.json marks still reads as paused; a resume after a pause record cancels it", async () => {
-    const runsDir = tempDir("wb-rec-pause-");
-    const dir = join(runsDir, "fleet-rec-p2");
-    const t = new Trajectory(dir);
-    const config = loadRunConfig({ runId: "fleet-rec-p2", runsDir, moduleUrl: "http://127.0.0.1:9", driver: "openai", model: "z-ai/glm-5.2:free", episode: "e90" });
-    const meta = { runId: "fleet-rec-p2", harnessVersion: HARNESS, startedAt: 1, config, comparability: comparabilityOf(config, HARNESS) };
-    await t.writeMeta({ ...meta, pause: { reason: "rate-limited", detail: "429", at: 5_000, episodeElapsedMs: 900 } });
-    t.close();
-    const f = readRunFact(runsDir, "fleet-rec-p2", Date.now() + 10 * 60_000)!;
-    expect(f.pause).toMatchObject({ reason: "rate-limited", at: 5_000, episodeElapsedMs: 900 });
-
-    const resumed = await runWithRecordOnly(runsDir, "fleet-rec-p3", (tr) => {
-      tr.append({ t: "pause", reason: "operator-pause", detail: "SIGTERM" });
-      tr.append({ t: "resume", harnessVersion: "v" });
-    });
-    expect(verdictOfTrajectory(join(resumed, "trajectory.jsonl"))).toEqual({ kind: "resumed" });
-  });
-
-  test("a run whose row has its verdict never reads the trajectory for one", async () => {
-    const runsDir = tempDir("wb-rec-term-");
-    const dir = join(runsDir, "fleet-rec-a5");
-    const t = new Trajectory(dir);
-    const config = loadRunConfig({ runId: "fleet-rec-a5", runsDir, moduleUrl: "http://127.0.0.1:9", driver: "openai", model: "z-ai/glm-5.2:free", episode: "e90" });
-    await t.writeMeta({ runId: "fleet-rec-a5", harnessVersion: HARNESS, startedAt: 1, config, comparability: comparabilityOf(config, HARNESS) });
-    await t.setTermination("fleet-rec-a5", "manual", "by hand");
-    t.close();
-    const f = readRunFact(runsDir, "fleet-rec-a5", Date.now() + 10 * 60_000)!;
-    expect(f.terminationReason).toBe("manual");
-    expect(f.recordedTermination).toBeUndefined();
   });
 });

@@ -16,8 +16,8 @@
  * The fit's own contract (an ask waiting for someone, asked now, a pick
  * dropping a waiting ask, several sessions framed) is the inspector's suite
  * (`wrath-mcp/inspector/test/views/mapfit.test.ts`), on a graph of its own;
- * this file keeps what the dashboard adds: `createMapState`, a run's replayed
- * positions, and the live list's pick by run.
+ * this file keeps what the dashboard adds: `createMapState` and a run's
+ * replayed positions.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -86,9 +86,6 @@ function replayPage() {
       seek: (ts: number): void => {
         setCursor(ts);
       },
-      pin: (map: number | null): void => {
-        setPinned(map);
-      },
     };
   });
 }
@@ -108,93 +105,6 @@ describe("the map's camera fit", () => {
     expect(p.state.activeMap()).toBe(1);
     expect(p.fits.at(-1)).toEqual([{ map: 1, x: -4025.4 }]);
     expect(p.camera.pending()).toBe(false);
-    p.dispose();
-  });
-
-  test("a crossing lets go of a pinned chip and frames the new continent", () => {
-    const p = replayPage();
-    p.load(TRACK);
-    p.seek(200);
-    p.pin(0);
-    p.seek(300);
-    expect(p.state.activeMap()).toBe(1);
-    expect(p.fits.at(-1)).toEqual([{ map: 1, x: -4025.4 }]);
-    p.dispose();
-  });
-});
-
-/** A live feed reading, as the poll serves one. */
-const live = (runId: string, map: number, x: number, level: number | null): AgentPosition => ({
-  runId,
-  character: runId,
-  model: "test/model",
-  map,
-  x,
-  y: 0,
-  ts: 0,
-  level,
-  xp: null,
-  money: null,
-  questsCompleted: null,
-  harnessVersion: null,
-});
-
-/** The live page minus its canvas, with the live list's pick done the way `MapPage`'s `focusOn` does it. */
-function livePage(initial: readonly AgentPosition[]) {
-  return createRoot((dispose) => {
-    const [feed, setFeed] = createSignal<readonly AgentPosition[]>(initial);
-    const [pinned, setPinned] = createSignal<number | null>(null);
-    const [selectedId, setSelectedId] = createSignal<string | null>(null);
-    const state = createMapState({ feed, track: () => undefined, pinned, selectedId });
-    const fits: { map: number; x: number }[][] = [];
-    const camera = createMapFit({
-      activeMap: state.activeMap,
-      feed,
-      cursorMap: state.cursorMap,
-      fit: (here) => fits.push(here.map((p) => ({ map: p.map, x: p.x }))),
-    });
-    return {
-      state,
-      camera,
-      fits,
-      dispose,
-      setFeed,
-      pin: (map: number | null): void => {
-        setPinned(map);
-      },
-      pick: (runId: string): void => {
-        setSelectedId(runId);
-        const at = feed().find((p) => p.runId === runId)!;
-        if (at.map !== state.activeMap()) setPinned(at.map);
-        camera.focus(at);
-      },
-    };
-  });
-}
-
-describe("a pick from the live list", () => {
-  const FEED = [live("a", 0, 100, 7), live("b", 0, 900, 12), live("c", 1, -4000, 3)];
-
-  test("selects the character and frames it alone, on its own map", () => {
-    const p = livePage(FEED);
-    // The first map to appear is fitted to everyone on it.
-    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 100 }, { map: 0, x: 900 }]);
-    p.pick("b");
-    expect(p.state.selected()?.runId).toBe("b");
-    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 900 }]);
-    p.dispose();
-  });
-
-  test("a character on another continent pins that continent, keeps the selection and is framed there", () => {
-    const p = livePage(FEED);
-    p.pick("c");
-    expect(p.state.activeMap()).toBe(1);
-    expect(p.state.selected()?.runId).toBe("c");
-    expect(p.fits.at(-1)).toEqual([{ map: 1, x: -4000 }]);
-    // The next poll moves nobody's camera: the pick was the fit.
-    const made = p.fits.length;
-    p.setFeed(FEED.map((q) => ({ ...q, x: q.x + 1 })));
-    expect(p.fits.length).toBe(made);
     p.dispose();
   });
 });

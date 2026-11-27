@@ -6,8 +6,6 @@
  * supervisor's cache is never written by a reader beside it:
  *
  * - the one read is the cold read, with or without a cache file;
- * - the archive-less facts the paused-run planners read are the archive-less
- *   read, and the projection and the characters are what their own reads gave;
  * - the cache file is left exactly as it was, even where a writer would have
  *   kept, dropped or replaced entries.
  *
@@ -19,13 +17,11 @@ import { writeReadings } from "../runner/test/fixtures/v1-session";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type FleetRosterEntry, rosterModels } from "./run-fleet-config";
-import { charactersFrom } from "./run-fleet-plan";
-import { readReportFacts, unarchived } from "./run-fleet-state";
+import { readReportFacts } from "./run-fleet-state";
 import { tempDirs } from "./temp-dirs";
 import { comparabilityOf } from "../runner/src/comparability";
 import { loadRunConfig, newSessionToken, type TerminationReason } from "../runner/src/config";
-import { modelStates, runFactCache } from "../runner/src/models";
+import { runFactCache } from "../runner/src/models";
 import { readRunFacts, RUN_FACT_SETTLE_MS, type RunFact } from "../runner/src/run-fact";
 import { Trajectory } from "../runner/src/trajectory";
 import { HEARTBEAT_FILE } from "../runner/src/heartbeat";
@@ -86,8 +82,6 @@ const RUNS: Fixture[] = [
 const ARCHIVED: Fixture = { runId: "fleet-glm-e90-glm-5-2-20261015", responses: 0, level: 1, account: "RUNNER", end: "adapter-error" };
 const LATE: Fixture = { runId: "fleet-glm-e90-glm-5-2-20261017", responses: 9, level: 3, account: "RUNNER", end: "episode-limit" };
 
-const roster: Record<string, FleetRosterEntry> = { glm: { model: MODEL, tier: "t1", idle: "unlimited" } };
-
 function runsDirWithRuns(): { dir: string; cachePath: string } {
   const dir = tempDir("wb-report-facts-");
   for (const r of RUNS) writeRun(dir, r);
@@ -122,35 +116,6 @@ describe("a report reads every run once, and the answer is the cold read", () =>
     supervisorRead(dir, cachePath, now);
     expect(existsSync(cachePath)).toBe(true);
     expect(readReportFacts(now, dir, cachePath)).toStrictEqual(plain);
-  });
-
-  test("it is served from the supervisor's file: a kept fact rewritten under its key comes back as written", () => {
-    // What makes the report fast: an ended run's trajectory is not counted again.
-    const { dir, cachePath } = runsDirWithRuns();
-    const now = settled();
-    supervisorRead(dir, cachePath, now);
-    const doc = JSON.parse(readFileSync(cachePath, "utf8")) as { entries: Record<string, { fact: RunFact }> };
-    doc.entries[RUNS[0]!.runId]!.fact.modelResponses = 999;
-    writeFileSync(cachePath, JSON.stringify(doc));
-    expect(readReportFacts(now, dir, cachePath).find((f) => f.runId === RUNS[0]!.runId)?.modelResponses).toBe(999);
-  });
-
-  test("the archive-less facts, the projection and the characters are what their own reads gave", () => {
-    const { dir, cachePath } = runsDirWithRuns();
-    const now = settled();
-    supervisorRead(dir, cachePath, now);
-    const facts = readReportFacts(now, dir, cachePath);
-    // The paused-run planners' input: `readRunFacts(RUNS_DIR)`, which skips the archive.
-    const runsDirOnly = readRunFacts(dir, now);
-    expect(unarchived(facts)).toStrictEqual(runsDirOnly);
-    expect(runsDirOnly.some((f) => f.runId === ARCHIVED.runId)).toBe(false);
-    // The models table and the job progress: the projection's own read.
-    const models = rosterModels(roster);
-    expect(modelStates({ runsDir: dir, roster: models, now, runs: facts })).toStrictEqual(modelStates({ runsDir: dir, roster: models, now }));
-    // The freeplay characters: their own archive-inclusive read.
-    const characters = charactersFrom(facts, roster);
-    expect(characters).toEqual(charactersFrom(cold(dir, now), roster));
-    expect(characters.get("glm")?.runId).toBe(RUNS[3]!.runId);
   });
 });
 

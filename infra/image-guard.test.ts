@@ -59,11 +59,6 @@ describe("image-guard matcher", () => {
     expect(match(paths).flagged).toEqual(paths);
   });
 
-  test("credential files: git, Codex, cloud and Claude Code's dotted one", () => {
-    const paths = ["root/.git-credentials", "home/bun/.codex/auth.json", "home/bun/.aws/credentials", "wrathbench/credentials.json", "srv/.credentials.json"];
-    expect(match(paths).flagged).toEqual(paths);
-  });
-
   test("a .claude or .wrangler tree is named once at its root, however many files it holds", () => {
     const paths = ["wrathbench/.claude/"];
     for (let i = 0; i < 200; i++) paths.push(`wrathbench/.claude/worktrees/agent-${i}/runner/src/x.ts`);

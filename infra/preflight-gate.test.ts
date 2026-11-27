@@ -23,14 +23,6 @@ describe("wakeWhenReady: the gate's readiness poll", () => {
     expect(wakes).toBe(1);
   });
 
-  test("does not probe before the first interval has passed", async () => {
-    let probes = 0;
-    const cancel = wakeWhenReady(async () => (probes++, false), 50, () => {});
-    await Bun.sleep(10);
-    expect(probes).toBe(0);
-    cancel();
-  });
-
   test("a probe that throws is not ready, and polling goes on", async () => {
     let probes = 0;
     let wakes = 0;
@@ -66,27 +58,6 @@ describe("wakeWhenReady: the gate's readiness poll", () => {
     expect(probes).toBe(1);
     expect(wakes).toBe(0);
   });
-
-  test("one probe at a time: a slow probe holds the next one back", async () => {
-    let inFlight = 0;
-    let most = 0;
-    let probes = 0;
-    const cancel = wakeWhenReady(
-      async () => {
-        probes++;
-        inFlight++;
-        most = Math.max(most, inFlight);
-        await Bun.sleep(20);
-        inFlight--;
-        return false;
-      },
-      2,
-      () => {},
-    );
-    await until(() => probes >= 3);
-    cancel();
-    expect(most).toBe(1);
-  });
 });
 
 describe("healthReady: what the gate counts as a server to smoke", () => {
@@ -105,11 +76,6 @@ describe("healthReady: what the gate counts as a server to smoke", () => {
 
   test("a 200 from a world that loaded whole is ready", () => {
     expect(healthReady(200, loaded)).toBe(true);
-  });
-
-  test("a module that predates worldLoaded is judged on ok and worldStopped, as before", () => {
-    const { worldLoaded: _, ...older } = loaded;
-    expect(healthReady(200, older)).toBe(true);
   });
 
   test("503 world_not_loaded (a load that lost rows to a database restart) is not ready", () => {

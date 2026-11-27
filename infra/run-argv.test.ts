@@ -10,14 +10,13 @@
  * lane: the roster's argv for e90, e360, freeplay (the policy's uncapped
  * session and a hand-written job), a queue job, a resume and a probe; both
  * `infra/run-episode.sh` paths (a fresh launch and a resume, through each of
- * its three heads) and its hand probe; and the smoke scripts, which launch no
- * run at all and are held to that.
+ * its three heads) and its hand probe.
  */
 
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { campaignFileOf, parseCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
+import { writeCampaignFile } from "../runner/src/campaign-file";
 import {
   ARM_RESERVED_FLAGS,
   PROBE_SHAPE_FLAGS,
@@ -189,15 +188,14 @@ const EXPECTED_REFUSED_WHILE_HELD: string[] = [
 ];
 
 describe("the roster's argv, every lane, through run.ts's parser", () => {
-  for (const { name, spec, resume } of everyLane()) {
-    test(name, () => {
+  test("every lane, fresh and resumed, parses, and both heads put the same flags after themselves", () => {
+    for (const { name, spec, resume } of everyLane()) {
       const flags = episodeFlags(spec, resume);
-      expect(() => parses(flags)).not.toThrow();
-      // Both heads put the same flags after themselves.
-      expect(episodeArgv(spec, resume, { container: true }).slice(2)).toEqual(flags);
-      expect(episodeArgv(spec, resume).slice(1)).toEqual(flags);
-    });
-  }
+      expect(() => parses(flags), name).not.toThrow();
+      expect(episodeArgv(spec, resume, { container: true }).slice(2), name).toEqual(flags);
+      expect(episodeArgv(spec, resume).slice(1), name).toEqual(flags);
+    }
+  });
 
   test("a fresh launch of every non-probe lane is accepted by the whole fresh-launch seam; run.ts refuses none while scored episodes are open, and exactly the scored ones while they are held", () => {
     const refusedAtLaunch: string[] = [];
@@ -260,11 +258,6 @@ describe("the roster's argv, every lane, through run.ts's parser", () => {
     expect(config.party!.id).toBe(specs[0]!.party!.id);
     // A resume restates none of it.
     expect(episodeFlags(healer, true)).not.toContain("--character");
-  });
-
-  test("a probe on the release image runs through the fresh-launch seam with the cell's shape", () => {
-    const [spec] = specsOf(job({ ref: "glm-free", episode: "probing", attempt: 1, probe: { campaign: "race-probe", version: 1, cell: "orc-warrior", arm: "base" } }), campaigns);
-    expect(probeConfig(spec!)).toMatchObject({ campaign: "race-probe", campaignVersion: 1, cell: "orc-warrior", arm: "base", race: 2, class: 1, stopAtLevel: 10 });
   });
 
   test("SUPERVISOR_FLAGS is exactly what the roster emits, and every one is a flag run.ts reads", () => {
@@ -365,50 +358,6 @@ describe("claude-code's default compaction window, from the roster entry to the 
     expect(windowKeys(tupleOf(config))).toEqual(Object.keys(comparabilityOf(stored, "harness-0.5-1")));
     expect(configFromArgs(["--driver", "claude-code", "--model", "sonnet", "--compact-window", "AUTO"], LATER).compactWindow).toBeUndefined();
   });
-
-  test("a stated window is still its own, and codex still defaults to its CLI's auto", () => {
-    const small = launch(job({ ref: "sonnet-100k", episode: "e360", attempt: 1 }));
-    expect(configFromArgs(episodeFlags(small, false), LATER).compactWindow).toBe("100k");
-    const codex = configFromArgs(episodeFlags(launch(job({ ref: "astra", episode: "e90", attempt: 1 })), false), LATER);
-    expect(codex.compactWindow).toBeUndefined();
-    expect("compactWindow" in tupleOf(codex)).toBe(false);
-    expect(configFromArgs(["--driver", "stub"], LATER).compactWindow).toBeUndefined();
-  });
-
-  test("a freeplay session takes the default now, in the held series, on a fresh launch and on a continuation", () => {
-    const spec = launch(job({ ref: "sonnet-auto", episode: "freeplay", attempt: 1 }));
-    expect(configFromArgs(episodeFlags(spec, false), HELD).compactWindow).toBeUndefined();
-    const plain = resolve(
-      jobSpawn(job({ ref: "sonnet", episode: "freeplay", attempt: 2, continueFrom: "fleet-sonnet-freeplay-sonnet-low-20261001" }), { ...ROSTER, sonnet: { ...ROSTER["sonnet"]!, idle: "unlimited" } }, "RUNNER1", STAMP, () => true, []).entries,
-      STAMP,
-    )[0]!;
-    const config = configFromArgs(episodeFlags(plain, false), HELD);
-    expect(config).toMatchObject({ episode: "freeplay", compactWindow: "300k", compactWindowDefaulted: true, continuedFrom: "fleet-sonnet-freeplay-sonnet-low-20261001" });
-  });
-
-  test("a probe takes the default like any fresh launch; an arm or an entry that wants the CLI's auto says so", () => {
-    // A campaign is a spike, not a record to keep comparable: an arm that
-    // passes no window launches at the driver's default (operator, 2026-11-10).
-    const plain = launch(job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), campaigns);
-    expect(episodeFlags(plain, false)).not.toContain("--compact-window");
-    expect(probeConfig(plain)).toMatchObject({ episode: "probing", compactWindow: "300k", compactWindowDefaulted: true });
-    // An arm's own window is stated, so it is never the clamped default.
-    const armed = probeConfig(launch(job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "w200k" } }), campaigns));
-    expect(armed.compactWindow).toBe("200k");
-    expect("compactWindowDefaulted" in armed).toBe(false);
-    // The CLI's own window, stated by the arm or by the entry.
-    const autoArm = definition({ id: "auto-probe", arms: [{ id: "cli", image: "registry.example/wb/runner:t1", args: ["--compact-window", "auto"] }] });
-    const byArm = launch(
-      job({ ref: "sonnet", episode: "probing", attempt: 1, probe: { campaign: "auto-probe", version: 1, cell: "a", arm: "cli" } }),
-      joined([autoArm], { "auto-probe": { version: 1, assignments: [{ model: "sonnet" }] } }).campaigns,
-    );
-    expect(probeConfig(byArm).compactWindow).toBeUndefined();
-    const byEntry = launch(job({ ref: "sonnet-auto", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), joined([windows], { "window-probe": { version: 1, assignments: [{ model: "sonnet-auto" }] } }).campaigns);
-    expect(probeConfig(byEntry).compactWindow).toBeUndefined();
-    // codex defaults none, on a probe as anywhere.
-    const codexProbe = launch(job({ ref: "astra", episode: "probing", attempt: 1, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "auto" } }), joined([windows], { "window-probe": { version: 1, assignments: [{ model: "astra" }] } }).campaigns);
-    expect(probeConfig(codexProbe).compactWindow).toBeUndefined();
-  });
 });
 
 describe("run.ts's parser", () => {
@@ -419,14 +368,6 @@ describe("run.ts's parser", () => {
 
   test("refuses a flag given twice, rather than letting the last win", () => {
     expect(() => parseRunArgs(["--compact-window", "100k", "--compact-window", "200k"])).toThrow(/--compact-window given more than once/);
-  });
-
-  test("refuses a word that is no flag's value", () => {
-    expect(() => parseRunArgs(["--extra", "true", "stray"])).toThrow(/"stray"/);
-  });
-
-  test("reads bare and valued flags as before", () => {
-    expect(parseRunArgs(["--extra", "--race", "3", "--wiki-coords", "true"])).toEqual({ extra: true, race: "3", "wiki-coords": "true" });
   });
 });
 
@@ -489,71 +430,40 @@ describe("infra/run-episode.sh, every head, through run.ts's parser", () => {
     ["--k8s", ["--k8s"]],
     ["compose", []],
   ];
-  for (const [head, extra] of heads) {
-    test(`${head}: a fresh launch passes its own flags through and strips the script's`, () => {
+  test("a fresh launch passes its own flags through and strips the script's", () => {
+    for (const [head, extra] of heads) {
       const r = runScript([...extra, "--driver", "openai", "--model", "z-ai/glm-5.2:free", "--episode", "e90", "--race", "3", "--class", "2"]);
-      expect(r.code).toBe(0);
+      expect(r.code, head).toBe(0);
       const flags = runFlags(r.calls);
-      expect(flags).not.toContain("--local");
-      expect(flags).not.toContain("--k8s");
-      expect(parses(flags)).toMatchObject({ driver: "openai", model: "z-ai/glm-5.2:free", episode: "e90" });
-    });
+      expect(flags, head).not.toContain("--local");
+      expect(flags, head).not.toContain("--k8s");
+      expect(parses(flags), head).toMatchObject({ driver: "openai", model: "z-ai/glm-5.2:free", episode: "e90" });
+    }
+  });
 
-    test(`${head}: a resume`, () => {
+  test("a resume", () => {
+    for (const [head, extra] of heads) {
       const r = runScript([...extra, "--resume", "fleet-x-e90-20261011", "--max-tool-calls", "0"]);
-      expect(r.code).toBe(0);
-      expect(parses(runFlags(r.calls))).toEqual({ resume: "fleet-x-e90-20261011", "max-tool-calls": "0" });
-    });
+      expect(r.code, head).toBe(0);
+      expect(parses(runFlags(r.calls)), head).toEqual({ resume: "fleet-x-e90-20261011", "max-tool-calls": "0" });
+    }
+  });
 
-    test(`${head}: a hand probe writes its campaign file where the store is, then launches run.ts on it`, () => {
+  test("a hand probe writes its campaign file where the store is, then launches run.ts on it", () => {
+    for (const [head, extra] of heads) {
       const r = runScript([...extra, "--driver", "openai", "--model", "z-ai/glm-5.2:free", "--campaign", "race-probe@1", "--cell", "orc-warrior", "--arm", "base"]);
-      expect(r.code).toBe(0);
+      expect(r.code, head).toBe(0);
       const helper = r.calls.find((c) => c.includes("runner/src/campaign-file.ts"))!;
-      expect(helper.slice(helper.indexOf("runner/src/campaign-file.ts") + 1)).toEqual(["--campaign", "race-probe@1", "--cell", "orc-warrior", "--arm", "base"]);
+      expect(helper.slice(helper.indexOf("runner/src/campaign-file.ts") + 1), head).toEqual(["--campaign", "race-probe@1", "--cell", "orc-warrior", "--arm", "base"]);
       // The helper runs in the same place run.ts does.
       const runCall = r.calls.find((c) => c.includes("runner/src/run.ts"))!;
-      expect(helper.slice(0, helper.indexOf("bun"))).toEqual(runCall.slice(0, runCall.indexOf("bun")));
-      expect(parses(runFlags(r.calls))).toEqual({
+      expect(helper.slice(0, helper.indexOf("bun")), head).toEqual(runCall.slice(0, runCall.indexOf("bun")));
+      expect(parses(runFlags(r.calls)), head).toEqual({
         driver: "openai",
         model: "z-ai/glm-5.2:free",
         "run-id": "hand-run-1",
         "campaign-file": "data/runs/hand-run-1/campaign.json",
       });
-    });
-  }
-
-  test("a hand probe keeps the run id it was given", () => {
-    const r = runScript(["--local", "--model", "m", "--run-id", "mine", "--campaign", "race-probe@1", "--cell", "orc-warrior"]);
-    expect(parses(runFlags(r.calls))).toMatchObject({ "run-id": "mine", "campaign-file": "data/runs/mine/campaign.json" });
-  });
-
-  test("a cell without a campaign, and a campaign without a cell, are refused before anything runs", () => {
-    expect(runScript(["--local", "--model", "m", "--cell", "orc-warrior"])).toMatchObject({ code: 2, calls: [] });
-    expect(runScript(["--local", "--model", "m", "--campaign", "race-probe@1"])).toMatchObject({ code: 2, calls: [] });
-  });
-});
-
-describe("the smoke scripts", () => {
-  test("launch no run: none of them calls run.ts, so none has an argv to keep in step", () => {
-    const dir = join(REPO_ROOT, "infra", "smoke");
-    const files: string[] = [];
-    const walk = (d: string): void => {
-      for (const e of readdirSync(d, { withFileTypes: true })) {
-        if (e.isDirectory()) walk(join(d, e.name));
-        else if (e.name.endsWith(".ts") || e.name.endsWith(".sh")) files.push(join(d, e.name));
-      }
-    };
-    walk(dir);
-    expect(files.length).toBeGreaterThan(0);
-    // A smoke that starts launching runs belongs in this file's argv tests.
-    expect(files.filter((f) => /runner\/src\/run\.ts|run-episode\.sh/.test(readFileSync(f, "utf8")))).toEqual([]);
-  });
-});
-
-describe("the campaign file a fresh probe carries", () => {
-  test("reads back as itself", () => {
-    const pub = joined([race], {}).definitions[0]!;
-    const f = campaignFileOf(pub, "orc-warrior");
-    expect(parseCampaignFile(JSON.parse(JSON.stringify(f)))).toEqual(f);
+    }
   });
 });

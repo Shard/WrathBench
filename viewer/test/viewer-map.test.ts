@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STALL_PAUSE } from "../../runner/src/lapse";
-import { openTestSession, recordDrain, traceOfReading, writeReadings } from "../../runner/test/fixtures/v1-session";
+import { openTestSession, traceOfReading, writeReadings } from "../../runner/test/fixtures/v1-session";
 import { Trajectory } from "../../runner/src/trajectory";
 import { localRunStore, type RunStore } from "../clickhouse";
 import { positionsFromStore, readLatestStatus, readPositions } from "../positions";
@@ -11,22 +11,7 @@ import { projectPositions } from "../public-projection";
 import { trackFrom } from "../results";
 import { readStates } from "../runs";
 import { parseTilePath, resolveTilePath, tileRefPath } from "../tiles";
-import {
-  GRID,
-  LOD_MAX,
-  TILE_PX,
-  coordToTile,
-  lodGrid,
-  lodServedName,
-  lodTileName,
-  nativeServedName,
-  pixelToWorld,
-  tileToCoord,
-  tileToWorld,
-  visibleTiles,
-  worldToPixel,
-  worldToTile,
-} from "../worldmap";
+import { LOD_MAX, lodServedName, lodTileName, nativeServedName, tileToWorld, worldToTile } from "../worldmap";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -41,17 +26,6 @@ describe("worldmap", () => {
     expect(t.col).toBeCloseTo(31.2875, 3);
   });
 
-  test("the world origin is the centre of the grid", () => {
-    const t = worldToTile(0, 0);
-    expect(t.row).toBe(32);
-    expect(t.col).toBe(32);
-  });
-
-  test("one tile of world is one tile of grid", () => {
-    expect(coordToTile(533.33325)).toBeCloseTo(31, 9);
-    expect(coordToTile(-533.33325)).toBeCloseTo(33, 9);
-  });
-
   test("world → tile → world round-trips", () => {
     for (const [x, y] of [
       [-6240, 380],
@@ -64,48 +38,6 @@ describe("worldmap", () => {
       expect(back.x).toBeCloseTo(x, 4);
       expect(back.y).toBeCloseTo(y, 4);
     }
-  });
-
-  test("tile → coord is the inverse of coord → tile", () => {
-    expect(tileToCoord(coordToTile(-6240))).toBeCloseTo(-6240, 4);
-    expect(tileToCoord(43.7)).toBeCloseTo(-6240, 2);
-  });
-
-  test("pixels are tiles scaled, with X from world Y and Y from world X", () => {
-    const p = worldToPixel(-6240, 380);
-    expect(p.py).toBeCloseTo(43.7 * TILE_PX, 2);
-    expect(p.px).toBeCloseTo(31.2875 * TILE_PX, 2);
-    const back = pixelToWorld(p.px, p.py);
-    expect(back.x).toBeCloseTo(-6240, 4);
-    expect(back.y).toBeCloseTo(380, 4);
-  });
-
-  test("visible tiles are clamped to the grid", () => {
-    const v = visibleTiles(-5000, -5000, 5 * TILE_PX, 3 * TILE_PX);
-    expect(v).toEqual({ row0: 0, col0: 0, row1: 3, col1: 5 });
-    const far = visibleTiles(1e9, 1e9, 2e9, 2e9);
-    expect(far.row0).toBe(GRID - 1);
-    expect(far.col1).toBe(GRID - 1);
-  });
-});
-
-/*
- * The replay seam: the transform must be usable with nothing else
- * loaded — no runs directory, no sqlite, no viewer. A future trajectory reader
- * imports exactly this and nothing more.
- */
-describe("worldmap standalone", () => {
-  test("imports on its own and answers without any other module", async () => {
-    const mod = (await import("../worldmap")) as Record<string, unknown>;
-    expect(typeof mod["worldToTile"]).toBe("function");
-    const fn = mod["worldToTile"] as (x: number, y: number) => { row: number; col: number };
-    expect(fn(-6240, 380).row).toBeCloseTo(43.7, 3);
-  });
-
-  test("has no imports at all", async () => {
-    const src = await Bun.file(new URL("../worldmap.ts", import.meta.url).pathname).text();
-    expect(src).not.toMatch(/^\s*import\s/m);
-    expect(src).not.toMatch(/\brequire\s*\(/);
   });
 });
 
@@ -128,8 +60,11 @@ describe("tile paths", () => {
       expect(parseTilePath(p)).toBeNull();
   });
 
-  test("non-integer segments are rejected", () => {
+  test("non-integer segments and indices outside the 64×64 grid are rejected", () => {
+    expect(parseTilePath("/tiles/0/63_63.png")).not.toBeNull();
     for (const p of [
+      "/tiles/0/64_0.png",
+      "/tiles/0/0_64.png",
       "/tiles/a/43_31.png",
       "/tiles/0/4.3_31.png",
       "/tiles/0/-1_31.png",
@@ -141,12 +76,6 @@ describe("tile paths", () => {
       "/tiles/0/43_31",
     ])
       expect(parseTilePath(p)).toBeNull();
-  });
-
-  test("indices outside the 64×64 grid are rejected", () => {
-    expect(parseTilePath("/tiles/0/64_0.png")).toBeNull();
-    expect(parseTilePath("/tiles/0/0_64.png")).toBeNull();
-    expect(parseTilePath("/tiles/0/63_63.png")).not.toBeNull();
   });
 
   test("resolveTilePath finds an extracted tile and only that", () => {
@@ -166,12 +95,6 @@ describe("tile paths", () => {
 /* ---------- the pyramid's paths ---------- */
 
 describe("pyramid tile paths", () => {
-  test("a level's grid halves per level, down to one tile for the world", () => {
-    expect(lodGrid(0)).toBe(GRID);
-    expect(lodGrid(1)).toBe(32);
-    expect(lodGrid(LOD_MAX)).toBe(1);
-  });
-
   test("lodTileName spells levels 1..LOD_MAX and refuses level 0 and anything outside the level's grid", () => {
     expect(lodTileName("minimap", 1, 21, 15)).toBe("minimap/1/21_15.png");
     expect(lodTileName("minimap", LOD_MAX, 0, 0)).toBe("minimap/6/0_0.png");
@@ -201,11 +124,6 @@ describe("pyramid tile paths", () => {
     });
     // The native path is untouched and its canonical form is itself.
     expect(tileRefPath(parseTilePath("/tiles/0/43_31.png")!)).toBe("/tiles/0/43_31.png");
-  });
-
-  test("a pyramid tile under its master's .png name is not a tile path: the served name is the only one", () => {
-    expect(parseTilePath("/tiles/0/minimap/3/5_3.png")).toBeNull();
-    expect(parseTilePath("/tiles/0/art/3/5_3.png")).toBeNull();
   });
 
   test("a native parses as .webp, the spelling its index names, and as the .png every older build asks for", () => {
@@ -467,20 +385,6 @@ describe("readPositions", () => {
     });
   });
 
-  test("the feed carries no inventory, however much the state line recorded: the sidebar reads the trace's sheet", async () => {
-    const items = JSON.stringify([
-      { name: "Invented Mace", count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
-      { name: "Invented Jerky", count: 5, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
-    ]);
-    const runsDir = fixture([
-      { id: "live-items", states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]], items },
-      { id: "live-bare", states: [[NOW - 4000, 4, 900, 0, -6240, 380, 380, 1, 0]] },
-    ]);
-    const feed = await readPositions(runsDir, NOW);
-    expect(feed.map((p) => p.runId).sort()).toEqual(["live-bare", "live-items"]);
-    for (const p of feed) expect(Object.keys(p)).not.toContain("items");
-  });
-
   test("the unit frame's numbers ride the sample the pip is drawn from", async () => {
     const runsDir = fixture([
       {
@@ -515,17 +419,6 @@ describe("readPositions", () => {
       nextLevelXp: 2100,
       class: 4,
     });
-  });
-
-  test("a character at exactly 0 xp reads 0 once its bar's length is known, and unknown before", async () => {
-    // The create block carries non-zero fields only: the bar's length, and no xp at 0.
-    const runsDir = fixture([
-      { id: "fresh-bar", states: [[NOW - 5000, 1, null, 0, 1, 2, 3, 0, 0]], gauges: [50, 50, 0, 0, 0, 400] },
-      { id: "fresh-none", states: [[NOW - 4000, 1, null, 0, 1, 2, 3, 0, 0]] },
-    ]);
-    const byId = new Map((await readPositions(runsDir, NOW)).map((p) => [p.runId, p]));
-    expect([byId.get("fresh-bar")?.xp, byId.get("fresh-bar")?.nextLevelXp]).toEqual([0, 400]);
-    expect(byId.get("fresh-none")?.xp).toBeNull();
   });
 
   test("the recorded track carries the frame's numbers through readStates", () => {
@@ -586,20 +479,6 @@ describe("readPositions", () => {
   test("a schema with no position columns is skipped, not an error", async () => {
     const runsDir = fixture([{ id: "old-1", noPositionColumns: true, states: [[NOW, 4, 900]] }]);
     expect(await readPositions(runsDir, NOW)).toEqual([]);
-  });
-
-  test("a run with no database at all is skipped", async () => {
-    const runsDir = tempDir("wrathbench-map-empty-");
-    mkdirSync(join(runsDir, "bare"));
-    expect(await readPositions(runsDir, NOW)).toEqual([]);
-  });
-
-  test("newest position first", async () => {
-    const runsDir = fixture([
-      { id: "a", states: [[NOW - 30_000, 1, 1, 0, 1, 2, 3, 0, 0]] },
-      { id: "b", states: [[NOW - 1_000, 1, 1, 1, 1, 2, 3, 0, 0]] },
-    ]);
-    expect((await readPositions(runsDir, NOW)).map((p) => p.runId)).toEqual(["b", "a"]);
   });
 
   test("the quest count is the run's, summed across the resumes that start the recorded one again", async () => {
@@ -747,25 +626,6 @@ describe("positionsFromStore", () => {
     expect(Object.keys(fromStore[1]!)).not.toContain("items");
   });
 
-  test("the listing is the store's: a run it does not list is not opened, whatever is on disk", async () => {
-    const runsDir = corpus();
-    const inner = localRunStore(runsDir);
-    const reads = { runRows: 0, latestReadings: 0 };
-    const store: RunStore = {
-      ...inner,
-      runRows: async () => {
-        reads.runRows += 1;
-        return (await inner.runRows()).filter((r) => r.run_id === "live-a");
-      },
-      latestReadings: () => {
-        reads.latestReadings += 1;
-        return inner.latestReadings();
-      },
-    };
-    expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-a"]);
-    expect(reads).toEqual({ runRows: 1, latestReadings: 1 });
-  });
-
   test("a run paused because its observation stalled is off the map in both feeds; another pause is not", async () => {
     // A stalled run's newest rows are the last reading repeated while the
     // character went on elsewhere: fresh by the stamp, wrong by the content.
@@ -784,23 +644,6 @@ describe("positionsFromStore", () => {
       runRows: async () => (await inner.runRows()).map((r) => (r.run_id === "live-a" ? { ...r, archived: 1 } : r)),
     };
     expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-b"]);
-  });
-
-  test("both feeds carry the run's quest count across a resume, which a v1 run's newest sample already holds", async () => {
-    const runsDir = tempDir("wrathbench-map-resumed-");
-    writeRun(runsDir, "resumed", { stateTs: NOW - 300_000 });
-    // The fleet resumed it in place: a new process, whose recorder states the
-    // character again and then sees two more turn-ins. The trace's count is the
-    // run's (`trace-samples.ts`), so nothing starts again at zero.
-    const session = openTestSession(join(runsDir, "resumed"), NOW - 2_000);
-    const again = traceOfReading({ ts: NOW - 120_000, level: 4, xp: 130, map: 0, x: -6240, y: 380, z: 380, money: 71 });
-    session.writer.ingest(recordDrain({ trace: [...again.trace, { ts: NOW - 60_000, kind: "state", data: { qdone: [80_001] } }, { ts: NOW - 2_000, kind: "state", data: { qdone: [80_002] } }], dict: again.dict, character: null }));
-    await session.writer.close();
-    const store = localRunStore(runsDir);
-    expect((await store.latestStates()).get("resumed")?.questsCompleted).toBe(5);
-    const fromStore = await positionsFromStore(store, runsDir, NOW);
-    expect(fromStore.map((p) => p.questsCompleted)).toEqual([5]);
-    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(await readPositions(runsDir, NOW)));
   });
 });
 

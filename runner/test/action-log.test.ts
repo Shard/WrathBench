@@ -62,7 +62,21 @@ function startModuleStub(): { url: string; bodies: Record<string, unknown>[] } {
       }
       return new Response("not found", { status: 404 });
     },
-    websocket: { message() {} },
+    websocket: {
+      // The module's state on a subscribe: with no own position `createSession` waits out its bound (3 s).
+      open(ws) {
+        ws.send(
+          JSON.stringify({
+            seq: 0,
+            opcode: "WB_SESSION_STATE",
+            opcodeId: 0xff03,
+            ts: Date.now(),
+            data: { character: "Fenwick", guid: "7", inWorld: true, map: 0, x: -6240, y: 331, z: 383, o: 0, level: 1 },
+          }),
+        );
+      },
+      message() {},
+    },
   });
   stubs.push({ stop: () => server.stop(true) });
   return { url: `http://127.0.0.1:${server.port}`, bodies };

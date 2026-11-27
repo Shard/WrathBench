@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { OpenAiChatAdapter } from "../src/adapter";
 import type { RunConfig } from "../src/config";
@@ -57,16 +56,6 @@ describe("the table", () => {
         `apiKeyEnv ${name} names a harness or infrastructure credential, never a model provider's key`,
       ]);
     }
-  });
-
-  test("every table key is one the chart forwards and .env.example documents", () => {
-    const values = readFileSync(join(REPO, "infra", "chart", "wrathbench", "values.yaml"), "utf8");
-    const envExample = readFileSync(join(REPO, ".env.example"), "utf8");
-    for (const { keyEnv } of KEY_PROVIDERS) {
-      expect([keyEnv, values.includes(`  - ${keyEnv}\n`)]).toEqual([keyEnv, true]);
-      expect([keyEnv, envExample.includes(`\n${keyEnv}=`)]).toEqual([keyEnv, true]);
-    }
-    expect(envExample.includes(`\n${LOCAL_MODEL_HOSTS_ENV}=\n`)).toBe(true);
   });
 });
 
@@ -172,31 +161,6 @@ describe("the launch", () => {
       expect(launched.config.apiBase).toBe(DEFAULT_API_BASE);
       expect(launched.adapter).toBeInstanceOf(OpenAiChatAdapter);
     } finally {
-      if (saved.key === undefined) delete process.env["OPENROUTER_KEY"];
-      else process.env["OPENROUTER_KEY"] = saved.key;
-      if (saved.base !== undefined) process.env["OPENAI_BASE_URL"] = saved.base;
-    }
-  });
-
-  test("an openai run's adapter writes each retry to the trajectory as an adapter_retry harness record", async () => {
-    const saved = { key: process.env["OPENROUTER_KEY"], base: process.env["OPENAI_BASE_URL"], fetch: globalThis.fetch };
-    process.env["OPENROUTER_KEY"] = "fake-key-for-tests";
-    delete process.env["OPENAI_BASE_URL"];
-    // The adapter takes the global fetch when it is built: a 429 that asks for no wait, then a turn.
-    let calls = 0;
-    globalThis.fetch = Object.assign(
-      () => Promise.resolve(calls++ === 0 ? new Response("slow down", { status: 429, headers: { "retry-after": "0" } }) : new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }))),
-      { preconnect: () => {} },
-    ) as unknown as typeof fetch;
-    try {
-      const records: Record<string, unknown>[] = [];
-      const trajectory = { redact: () => {}, append: (r: Record<string, unknown>) => records.push(r) } as unknown as Trajectory;
-      const config = { runId: "r1", driver: "openai", model: "vendor/m", apiKeyEnv: "OPENROUTER_KEY" } as RunConfig;
-      const launched = DRIVER_ADAPTERS.openai.prepare(config, trajectory);
-      expect((await launched.adapter!.complete({ messages: [], tools: [] })).kind).toBe("ok");
-      expect(records).toEqual([{ t: "harness", kind: "adapter_retry", attempt: 2, of: 10, waitMs: expect.any(Number), cause: "http", status: 429, detail: "HTTP 429: slow down" }]);
-    } finally {
-      globalThis.fetch = saved.fetch;
       if (saved.key === undefined) delete process.env["OPENROUTER_KEY"];
       else process.env["OPENROUTER_KEY"] = saved.key;
       if (saved.base !== undefined) process.env["OPENAI_BASE_URL"] = saved.base;

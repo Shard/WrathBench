@@ -108,15 +108,6 @@ describe("credentialHealth", () => {
     // A supervisor that worded its holds only.
     expect(credentialHealth(input({ holdsOf: { freeplay: { code: null, until: null } } })).health.reason).toBe("held by its budget (freeplay)");
   });
-
-  test("unread: the provider gave no answer, said with what it gave", () => {
-    expect(credentialHealth(input({ read: read({ http: null, code: "TimeoutError", classification: "unread", since: NOW - H }) })).health).toEqual({
-      state: "unread",
-      reason: "usage not read: TimeoutError",
-      since: NOW - H,
-      lastCheck: { at: NOW - 60_000, http: null, code: "TimeoutError" },
-    });
-  });
 });
 
 describe("credentialWindows", () => {

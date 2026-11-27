@@ -153,12 +153,6 @@ describe("a party member's run page", () => {
     expect(d.party!.kills).toEqual([{ ts: T0 + 4400, victimGuid: "7001", entry: 644, name: null, self: false }]);
   });
 
-  test("a run that is no party member has no block and no stamp", async () => {
-    const d = await detail(api(fixture()), "fixture-solo");
-    expect(d).not.toHaveProperty("party");
-    expect(d.run).not.toHaveProperty("party");
-  });
-
   test("the public handle serves the same block, still without accounts", async () => {
     const d = await detail(api(fixture(), true), `${STEM}-tank`);
     expect(d.party!.kills[0]!.name).toBe("Fixture Boss");

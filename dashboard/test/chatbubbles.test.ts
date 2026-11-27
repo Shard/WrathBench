@@ -1,28 +1,15 @@
 /**
- * The map's chat bubbles: which lines are up at a playhead, how a long one is
- * cut, several characters at once, and the trace store handing each line over
- * once across the tail's promotion to a closed window. Every line is invented.
+ * The map's chat bubbles: which lines are up at a playhead, several characters
+ * at once, and the trace store handing each line over once across the tail's
+ * promotion to a closed window. Every line is invented.
  */
 
 import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceChatLine, type TraceRow } from "@wrathbench/inspector/codec/trace";
 import type { TraceSegment } from "../../viewer/api-types";
 import { projectTraceSegment } from "../../viewer/public-projection";
-import {
-  BUBBLE_CHARS,
-  BUBBLE_GAP_PX,
-  BUBBLE_LIFT_PX,
-  BUBBLE_MIN_WALL_MS,
-  BUBBLE_MS,
-  BUBBLE_STACK,
-  bubbleLifeMs,
-  bubblesAt,
-  clipBubble,
-  layoutStacks,
-  stacksKey,
-  type StackBox,
-} from "@wrathbench/inspector/views/chatbubbles";
-import { createTraceStore, replayCursorAt } from "@wrathbench/inspector/views/traceplayer";
+import { BUBBLE_MS, bubblesAt } from "@wrathbench/inspector/views/chatbubbles";
+import { createTraceStore } from "@wrathbench/inspector/views/traceplayer";
 
 const W = 1_760_000_100_000 - (1_760_000_100_000 % SEG_MS);
 const line = (t: number, text: string, kind: TraceChatLine["kind"] = "say"): TraceChatLine => ({ t, kind, text });
@@ -39,112 +26,9 @@ describe("a bubble's lifetime, on the playhead's clock", () => {
     expect(bubblesAt("a", lines, W + 40_000).map((b) => b.text)).toEqual(["on my way"]);
     expect(bubblesAt("a", lines, W + 55_000)).toEqual([]);
   });
-
-  test("in a fast replay a bubble stays at least BUBBLE_MIN_WALL_MS of the reader's time; live, and at 1x, 30 s of the run", () => {
-    expect(BUBBLE_MIN_WALL_MS).toBe(4_000);
-    expect(bubbleLifeMs(null)).toBe(BUBBLE_MS);
-    expect(bubbleLifeMs(1)).toBe(BUBBLE_MS);
-    expect(bubbleLifeMs(60)).toBe(240_000);
-    const said = [line(W, "now")];
-    // Wall ms the bubble is up for, at each speed, played from the moment it was said.
-    for (const [speed, wallMs] of [[1, 30_000], [10, 4_000], [60, 4_000], [600, 4_000]] as const) {
-      const anchor = { cursor: W, at: 1_000, speed };
-      const at = (p: number): number => replayCursorAt(anchor, p, [], W + 36_000_000);
-      const life = bubbleLifeMs(speed);
-      expect(bubblesAt("a", said, at(1_000 + wallMs - 1), life)).toHaveLength(1);
-      expect(bubblesAt("a", said, at(1_000 + wallMs), life)).toHaveLength(0);
-    }
-  });
-
-  test("a replay scrubbed back takes a line down again; scrubbed forward, it is up as if played", () => {
-    expect(bubblesAt("a", lines, W + 30_000)).toHaveLength(2);
-    expect(bubblesAt("a", lines, W + 5_000)).toHaveLength(0);
-    expect(bubblesAt("a", lines, W + 26_000)).toHaveLength(2);
-  });
-
-  test("several lines close together stack, newest lowest, and the oldest gives way past BUBBLE_STACK", () => {
-    const burst = [1, 2, 3, 4, 5].map((i) => line(W + i * 1_000, `line ${i}`));
-    const up = bubblesAt("a", [...burst].reverse(), W + 6_000);
-    expect(up).toHaveLength(BUBBLE_STACK);
-    expect(up.map((b) => b.text)).toEqual(["line 3", "line 4", "line 5"]);
-  });
-
-  test("the same line said twice is two bubbles with two keys; a bubble's key holds while it is up", () => {
-    const twice = [line(W + 1_000, "go"), line(W + 2_000, "go")];
-    const up = bubblesAt("a", twice, W + 3_000);
-    expect(up).toHaveLength(2);
-    expect(new Set(up.map((b) => b.key)).size).toBe(2);
-    expect(stacksKey([{ runId: "a", bubbles: bubblesAt("a", twice, W + 3_000) }])).toBe(
-      stacksKey([{ runId: "a", bubbles: bubblesAt("a", twice, W + 20_000) }]),
-    );
-    expect(stacksKey([{ runId: "a", bubbles: up }])).not.toBe(stacksKey([{ runId: "a", bubbles: bubblesAt("a", twice, W + 31_500) }]));
-  });
-});
-
-describe("truncation", () => {
-  test("a long line is cut with an ellipsis, and the hover keeps the whole of it with its kind", () => {
-    const long = `${"word ".repeat(40)}end`;
-    const [b] = bubblesAt("a", [line(W, long, "yell")], W);
-    expect(b!.text.length).toBe(BUBBLE_CHARS);
-    expect(b!.text.endsWith("…")).toBe(true);
-    expect(b!.title).toBe(`yell: ${long}`);
-    expect(b!.kind).toBe("yell");
-  });
-
-  test("a line that fits is as written; the cut never splits a surrogate pair", () => {
-    expect(clipBubble("short")).toBe("short");
-    expect(clipBubble("x".repeat(BUBBLE_CHARS))).toBe("x".repeat(BUBBLE_CHARS));
-    const emoji = "🐗".repeat(BUBBLE_CHARS + 5);
-    const cut = clipBubble(emoji);
-    expect([...cut]).toHaveLength(BUBBLE_CHARS);
-    expect(cut.endsWith("🐗…")).toBe(true);
-  });
 });
 
 describe("several speakers", () => {
-  const box = (runId: string, sx: number, sy: number, w = 100, h = 20): StackBox => ({ runId, sx, sy, w, h });
-
-  test("a stack sits centred above its pip, its leader running down to the puck", () => {
-    const [p] = layoutStacks([box("a", 500, 400)], 1000);
-    expect(p).toMatchObject({ runId: "a", x: 450, y: 400 - BUBBLE_LIFT_PX - 20, w: 100, h: 20, leadX: 50 });
-    expect(p!.lead).toBeGreaterThan(0);
-  });
-
-  test("a party standing together says its lines one above another, each leader still to its own pip", () => {
-    const placed = layoutStacks([box("tank", 500, 400), box("healer", 510, 402), box("mage", 495, 398)], 1000);
-    for (let i = 0; i < placed.length; i++) {
-      for (let j = i + 1; j < placed.length; j++) {
-        const a = placed[i]!;
-        const b = placed[j]!;
-        const apart = a.x + a.w + BUBBLE_GAP_PX <= b.x || b.x + b.w + BUBBLE_GAP_PX <= a.x || a.y + a.h + BUBBLE_GAP_PX <= b.y || b.y + b.h + BUBBLE_GAP_PX <= a.y;
-        expect(apart).toBe(true);
-      }
-    }
-    // The lowest pip keeps its place; the others are lifted, with longer leaders.
-    const healer = placed.find((p) => p.runId === "healer")!;
-    expect(healer.y).toBe(402 - BUBBLE_LIFT_PX - 20);
-    for (const p of placed.filter((x) => x.runId !== "healer")) expect(p.lead).toBeGreaterThan(healer.lead);
-    // The order is fixed by position and id, so the same scene lays out the same.
-    expect(layoutStacks([box("mage", 495, 398), box("healer", 510, 402), box("tank", 500, 400)], 1000)).toEqual(placed);
-  });
-
-  test("a stack never hides another character: a puck in its way lifts it above the puck", () => {
-    const puck = { x: 486, y: 330, w: 28, h: 28 };
-    const [p] = layoutStacks([box("a", 500, 400)], 1000, [puck]);
-    expect(p!.y + p!.h + BUBBLE_GAP_PX).toBeLessThanOrEqual(puck.y);
-    expect(p!.lead).toBeGreaterThan(puck.h);
-    // Its own puck, below the stack, moves nothing.
-    expect(layoutStacks([box("a", 500, 400)], 1000, [{ x: 486, y: 386, w: 28, h: 28 }])).toEqual(layoutStacks([box("a", 500, 400)], 1000));
-  });
-
-  test("characters far apart are not moved; a stack at the stage's edge stays on it, its leader still on the pip", () => {
-    const [a, b] = layoutStacks([box("a", 100, 400), box("b", 900, 400)], 1000);
-    expect(a!.y).toBe(b!.y);
-    const [edge] = layoutStacks([box("e", 10, 300)], 1000);
-    expect(edge!.x).toBe(BUBBLE_GAP_PX);
-    expect(edge!.leadX).toBe(10 - BUBBLE_GAP_PX);
-  });
-
   test("each character's lines are its own: one store, two runs, two stacks", () => {
     const store = createTraceStore();
     const rows = (x: number, said: string): TraceRow[] => [

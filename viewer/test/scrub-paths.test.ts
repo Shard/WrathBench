@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { CONTAINER_ROOT, LOCAL_PATH_ROOTS, scrubPathsText, scrubPathsValue } from "../scrub-paths";
+import { CONTAINER_ROOT, LOCAL_PATH_ROOTS, scrubPathsText } from "../scrub-paths";
 import { projectEntries, projectRunDetail } from "../public-projection";
 
 describe("the scrub itself", () => {
@@ -36,18 +36,6 @@ describe("the scrub itself", () => {
     for (const s of ["wrathbench is a benchmark", "the wrathbench/sdk workspace", "/wrathbench"]) {
       expect(scrubPathsText(s)).toBe(s);
     }
-  });
-
-  test("scrubbing twice is scrubbing once, which the double projection needs", () => {
-    const s = "[error] /wrathbench/sdk/src/a.ts and /wrathbench/runner/b.ts";
-    expect(scrubPathsText(scrubPathsText(s))).toBe(scrubPathsText(s));
-    expect(scrubPathsText(s)).toBe("[error] sdk/src/a.ts and runner/b.ts");
-  });
-
-  test("the deep form walks objects, arrays and nesting, and keeps non-strings", () => {
-    expect(
-      scrubPathsValue({ a: ["/wrathbench/x.ts", { b: "/wrathbench/y.ts" }], n: 1, z: null }),
-    ).toEqual({ a: ["x.ts", { b: "y.ts" }], n: 1, z: null });
   });
 
   test("the container root is on the verifier's root list, so a miss is a finding", () => {

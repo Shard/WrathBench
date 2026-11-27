@@ -64,18 +64,19 @@ describe("run.ts in a run pod", () => {
     }
   }, 60_000);
 
-  test("hygiene keeps what the launcher's owners say an un-ended run still plays, and clears the rest", async () => {
+  test("hygiene keeps what the launcher's owners say an un-ended run still plays", async () => {
     const runsDir = join(tempDir("wrathbench-run-pod-ctx-"), "runs");
     mkdirSync(join(runsDir, "pod-run"), { recursive: true });
     // The sibling that owns Novice is not in this pod's runs directory at all: only the launcher saw it.
     const context: LaunchContext = { characterOwners: { RUNNER2: { novice: { runId: "paused-sibling", ended: false } } }, subscriptionUsage: [], ownGuids: [] };
-    const mod = fakeModule([
-      { name: "Novice", guid: "311", level: 1 },
-      { name: "Stray", guid: "312", level: 1 },
-    ]);
+    // Novice alone: a level-1 character nobody accounts for would be deleted,
+    // so keeping it proves the handed-over owners reached hygiene. No other
+    // character, so hygiene deletes nothing and skips its 5 s re-list
+    // (clearing the rest is hygiene.test.ts's).
+    const mod = fakeModule([{ name: "Novice", guid: "311", level: 1 }]);
     try {
       const { stderr } = await launchInPod(runsDir, mod.url, "pod-run", context);
-      expect(mod.deleted).toEqual(["Stray"]);
+      expect(mod.deleted).toEqual([]);
       expect(stderr).toContain("Novice");
       expect(existsSync(join(runsDir, "pod-run", "meta.json"))).toBe(true);
     } finally {

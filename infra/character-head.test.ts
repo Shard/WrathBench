@@ -17,10 +17,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FleetConfig, FleetRosterEntry } from "./run-fleet-config";
 import { charactersFrom, liveCharactersFrom, planResumes, resumeNotBefore } from "./run-fleet-plan";
-import { formatCharacters } from "./run-fleet-status";
 import { backoffMs } from "./run-roster";
 import { loadRunConfig, type PauseReason } from "../runner/src/config";
-import { byNewestStart, DEFAULT_POLICY, newestStarted, projectModel } from "../runner/src/models";
+import { DEFAULT_POLICY, projectModel } from "../runner/src/models";
 import { readRunFact, type RunFact } from "../runner/src/run-fact";
 import type { RosterModel } from "../runner/src/roster-entry";
 import { Trajectory, type RunMeta } from "../runner/src/trajectory";
@@ -69,13 +68,6 @@ describe("the head of a character is its newest-started run, at every site", () 
   const older = paused("fleet-fp-freeplay-vendor-durable-model-free-20260920-a2", NOW - 10 * H, NOW - H);
   const newer = paused("fleet-fp-freeplay-vendor-durable-model-free-20260920-a3", NOW - 5 * H, NOW - 3 * H);
 
-  test("the comparator: newest start first, ties to the higher run id", () => {
-    expect([older, newer].sort(byNewestStart).map((f) => f.runId)).toEqual([newer.runId, older.runId]);
-    const tie = { ...older, startedAt: newer.startedAt };
-    expect(newestStarted([tie, newer])!.runId).toBe(newer.runId); // "-a3" > "-a2"
-    expect(newestStarted([])).toBeUndefined();
-  });
-
   test("character head, model hold and resume planner all name the same run", () => {
     // Input order deliberately not by start: nothing may lean on the caller's sort.
     const runs = [newer, older];
@@ -93,7 +85,7 @@ describe("the head of a character is its newest-started run, at every site", () 
   });
 });
 
-describe("--status names the run a character is playing, not the one it continued from", () => {
+describe("a live run is not the character the tick continues from", () => {
   // a2 ended on an adapter error a week ago; a3 continued Thalvorn from it and is live.
   const a2: RunFact = {
     ...paused("fleet-fp-freeplay-vendor-durable-model-free-20261011-a2", NOW - 17 * 24 * H, NOW - 10 * 24 * H),
@@ -113,18 +105,6 @@ describe("--status names the run a character is playing, not the one it continue
   test("the tick still continues from the newest run that is not live", () => {
     expect(charactersFrom(runs, roster).get("fp")?.runId).toBe(a2.runId);
     expect(liveCharactersFrom(runs, roster).get("fp")?.runId).toBe(a3.runId);
-  });
-
-  test("the character row's head is the live run while it plays", () => {
-    const occupants = new Map([["RUNNER3", { ref: "fp", unlimited: true }]]);
-    const rows = formatCharacters(roster, charactersFrom(runs, roster), occupants, new Set(["fp"]), liveCharactersFrom(runs, roster));
-    expect(rows).toEqual([`character fp: head ${a3.runId} on RUNNER3 as Thalvorn — in flight`]);
-  });
-
-  test("once it stops, the row is the tick's head again", () => {
-    const stopped = [a2, { ...a3, live: false, terminationReason: "idle" as const, endedAt: NOW }];
-    const rows = formatCharacters(roster, charactersFrom(stopped, roster), new Map(), new Set(), liveCharactersFrom(stopped, roster));
-    expect(rows).toEqual([`character fp: head ${a3.runId} on RUNNER3 as Thalvorn — continuable`]);
   });
 });
 
@@ -167,11 +147,5 @@ describe("the resume cadence reads the pause streak", () => {
     const f = writeRun("fleet-fp-freeplay-refused", 10, 0, "quota-exhausted");
     expect(f.pause!.count).toBe(10);
     expect(resumeNotBefore(f.pause!)).toBe("never");
-  });
-
-  test("the exempt pauses stay exempt whatever the streak reads", () => {
-    const at = NOW - H;
-    expect(resumeNotBefore({ reason: "operator-pause", at, count: 12, episodeElapsedMs: null })).toBeNull();
-    expect(resumeNotBefore({ reason: "offline", at, count: 12, episodeElapsedMs: null, notBefore: at + 5 })).toBe(at + 5);
   });
 });

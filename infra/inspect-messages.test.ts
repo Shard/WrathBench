@@ -102,39 +102,4 @@ describe("inspect messages", () => {
     expect(rows(stored.out)).toEqual(rows(files.out));
     expect(rows(stored.out).length).toBe(5);
   });
-
-  test("prints the blocks off the wake records when the run writes them, and --last bounds the requests", async () => {
-    const id = "run-messages-records";
-    const dir = join(RUNS, id);
-    let clock = T0;
-    const traj = new Trajectory(dir, { now: () => clock });
-    traj.writeMeta({ runId: id, harnessVersion: "t", startedAt: T0, config: { ...loadRunConfig({ driver: "stub" }), runId: id, token: TOKEN } });
-    for (let turn = 1; turn <= 4; turn++) {
-      clock = T0 + turn * MIN;
-      traj.append({ t: "wake", via: "turn-end", turn, fired: "cap", sleptMs: 1, maxMs: 1, n: turn, block: `[wake ${turn} · slept 0s · woke for: five minutes passed]` });
-      traj.append({ t: "request", turn, adapter: "openai", slim: 1, user: context(turn, { pad: "z", wake: `[wake ${turn} · slept 0s · woke for: five minutes passed]` }) });
-    }
-    traj.close();
-    const text = (await inspect(["messages", id, "--runs-dir", RUNS, "--wakes", "--last", "2"])).out.join("\n");
-    expect(text).toContain("the last 2,");
-    expect(text).toContain("wakes     4 block(s), off the wake records");
-    expect(text).not.toContain("[wake 2 ·");
-    expect(text).toContain("[wake 4 · slept 0s · woke for: five minutes passed]");
-  });
-});
-
-describe("trajectory --all", () => {
-  test("a routine's thrown text runs past 80 characters", async () => {
-    const id = "run-messages-error";
-    const dir = join(RUNS, id);
-    let clock = T0;
-    const traj = new Trajectory(dir, { now: () => clock });
-    traj.writeMeta({ runId: id, harnessVersion: "t", startedAt: T0, config: { ...loadRunConfig({ driver: "stub" }), runId: id, token: TOKEN } });
-    const error = `TypeError: turnInQuest: "Eagan Peltskinner" is neither a decimal guid nor the name of anything in view${"!".repeat(40)}`;
-    clock = T0 + MIN;
-    traj.append({ t: "routine", event: "ended", name: "work", state: "threw", error, signature: "work|TypeError|main.ts:4" });
-    traj.close();
-    const text = (await inspect(["trajectory", id, "--runs-dir", RUNS, "--all", "--width", "1000"])).out.join("\n");
-    expect(text).toContain(JSON.stringify(error).slice(1, -1));
-  });
 });

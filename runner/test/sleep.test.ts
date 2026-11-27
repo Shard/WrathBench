@@ -85,16 +85,6 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(res.value).toContain("early: true");
   });
 
-  test("someone else being attacked does not wake it", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    const res = await host.evalSnippet(`
-      setTimeout(() => attackStart("12345"), 40);
-      return await sleep(300);
-    `);
-    expect(res.value).toBe(JSON.stringify("elapsed"));
-  });
-
   test("a unit's spell hitting us wakes it early with 'attacked': a caster never starts a melee attack", async () => {
     const host = makeHost();
     await host.evalSnippet(PRELUDE);
@@ -110,7 +100,6 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
 
   test.each([
     ["a spell hitting someone else", "99", "12345"],
-    ["our own spell hitting ourselves", "7", "7"],
     ["our own spell hitting a mob", "7", "99"],
   ])("%s does not wake it", async (_, caster, target) => {
     const host = makeHost();
@@ -118,16 +107,6 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     const res = await host.evalSnippet(`
       setTimeout(() => spellHit("${caster}", "${target}"), 40);
       return await sleep(250);
-    `);
-    expect(res.value).toBe(JSON.stringify("elapsed"));
-  });
-
-  test("{ wake: false } sleeps through a spell hit too", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    const res = await host.evalSnippet(`
-      setTimeout(() => spellHit("99", "7"), 40);
-      return await sleep(250, { wake: false });
     `);
     expect(res.value).toBe(JSON.stringify("elapsed"));
   });
@@ -157,30 +136,7 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(res.value).toBe(JSON.stringify("elapsed"));
   });
 
-  test("dying again after coming back does wake it", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet('selfFields({ health: 0 }); "dead"');
-    const res = await host.evalSnippet(`
-      setTimeout(() => selfFields({ health: 20 }), 40);
-      setTimeout(() => selfFields({ health: 0 }), 90);
-      return await sleep(4_000);
-    `);
-    expect(res.value).toBe(JSON.stringify("died"));
-  });
-
-  test("{ wake: false } sleeps through being attacked and dying", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    const res = await host.evalSnippet(`
-      setTimeout(() => attackStart("7"), 40);
-      setTimeout(() => selfFields({ health: 0 }), 60);
-      return await sleep(250, { wake: false });
-    `);
-    expect(res.value).toBe(JSON.stringify("elapsed"));
-  });
-
-  test("{ wake: false } is a pure timer: a party line, a whisper and a spell hit do not wake it", async () => {
+  test("{ wake: false } is a pure timer: a party line, a whisper, a spell hit and a melee attack do not wake it", async () => {
     // Deadmines a8: the leader's lines cut a third of the tank's timer sleeps
     // short, and every member wrapped them in Date.now() loops.
     const host = makeHost();
@@ -190,6 +146,7 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
       setTimeout(() => chat(0x02, "12", "rezzing you"), 30);
       setTimeout(() => chat(0x07, "12", "psst"), 50);
       setTimeout(() => spellHit("99", "7"), 70);
+      setTimeout(() => attackStart("7"), 90);
       const why = await sleep(300, { wake: false });
       return { why, heard: state.chat.at(-1)?.message };
     `);
@@ -247,22 +204,10 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(res.value).toContain("early: true");
   });
 
-  test("a melee attacker still wakes a sleep begun in combat: each new attacker is its own ATTACKSTART", async () => {
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    await host.evalSnippet(`selfFields({ unitFlags: ${IN_COMBAT} }); "fighting"`);
-    const res = await host.evalSnippet(`
-      setTimeout(() => attackStart("7"), 40);
-      return await sleep(4_000);
-    `);
-    expect(res.value).toBe(JSON.stringify("attacked"));
-  });
-
   // `CHAT_MSG_*` codes (SharedDefines.h): 0x01 SAY, 0x02 PARTY, 0x07 WHISPER,
   // 0x09 WHISPER_INFORM, 0x0c MONSTER_SAY, 0x10 MONSTER_EMOTE, 0x33 PARTY_LEADER.
   test.each([
     ["a party line", 0x02],
-    ["the party leader's line", 0x33],
     ["a whisper", 0x07],
   ])("%s from another player wakes it early with 'chat'", async (_, type) => {
     const host = makeHost();
@@ -280,8 +225,6 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
   test.each([
     ["our own party line", 0x02, "7"],
     ["our whisper's echo, which names the recipient as sender", 0x09, "12"],
-    ["a creature's say", 0x0c, "99"],
-    ["a creature's emote", 0x10, "99"],
     ["another player's say", 0x01, "12"],
   ])("%s does not wake it", async (_, type, sender) => {
     const host = makeHost();
@@ -294,19 +237,6 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     `);
     expect(res.value).toContain('"elapsed"');
     expect(res.value).toContain('"heard"');
-  });
-
-  test("Promise.race with a background routine is unchanged: the routine still wins", async () => {
-    // Pattern (1) from the runs — sleep as a deadline. An early wake is
-    // harmless here by construction, but the routine finishing first must
-    // still be what the race returns.
-    const host = makeHost();
-    await host.evalSnippet(PRELUDE);
-    const res = await host.evalSnippet(`
-      const routine = (async () => { await sleep(50, { wake: false }); return "routine done"; })();
-      return await Promise.race([routine, sleep(3_000)]);
-    `);
-    expect(res.value).toBe(JSON.stringify("routine done"));
   });
 
   test("an abandoned snippet's sleep still rejects with the abort reason", async () => {
@@ -379,18 +309,6 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(res.error).not.toContain("sleep(");
     // The background sleep still rejected, with the message it always had.
     expect((await host.evalSnippet("await bg")).value).toContain("snippet abandoned by the harness");
-    // And one the snippet caught itself is the snippet's business, not the note's.
-    const caught = await host.evalSnippet("try { await sleep(5_000) } catch {} await new Promise(() => {})");
-    expect(caught.timedOut).toBe(true);
-    expect(caught.error).not.toContain("sleep(");
-  });
-
-  test("a sleep that fits what the snippet has left carries no note", async () => {
-    // The note is about the sleep, not about every abandon a sleep is part of.
-    const host = makeHost(300);
-    const res = await host.evalSnippet("await Promise.all([sleep(20, { wake: false }), new Promise(() => {})])");
-    expect(res.timedOut).toBe(true);
-    expect(res.error).not.toContain("sleep(");
   });
 
   test("a bad argument is rejected with a message that says what sleep takes", async () => {

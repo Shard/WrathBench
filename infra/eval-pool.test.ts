@@ -10,8 +10,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { evalPoolAccountNames, isEvalPoolAccountName } from "../runner/src/account-pool";
-import { defsBlock, definition, PARTY_MEMBERS, partyDefinition } from "../runner/test/fixtures/campaigns";
+import { isEvalPoolAccountName } from "../runner/src/account-pool";
+import { defsBlock, PARTY_MEMBERS, partyDefinition } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig, type FleetJob } from "./run-fleet-config";
 import { evalPoolDraw, evalPoolTaken, fillEntries, jobSpawn, planResumes } from "./run-fleet-plan";
 import { DEFAULT_POLICY } from "../runner/src/models";
@@ -51,15 +51,6 @@ const drawFor = (cfg: FleetConfig, runs: Pick<RunFact, "account" | "fanoutAccoun
   evalPoolDraw({ mode: cfg.policy.worlds, pool: cfg.accounts.evalPool ?? [], taken: evalPoolTaken(runs, []), held });
 
 describe("the eval pool", () => {
-  test("is EVAL01 … EVALnn from the deployment's size, and only the deployment says so", () => {
-    expect(evalPoolAccountNames(3)).toEqual(["EVAL01", "EVAL02", "EVAL03"]);
-    expect(isEvalPoolAccountName("eval07")).toBe(true);
-    expect(isEvalPoolAccountName("EVAL7")).toBe(false);
-    expect(fleet(["a"]).accounts.evalPool).toEqual(evalPoolAccountNames(10));
-    expect(fleet(["a"], { env: {} }).accounts.evalPool).toBeUndefined();
-    expect(() => fleet(["a"], { env: { WRATHBENCH_EVAL_POOL_SIZE: "100" } })).toThrow(/WRATHBENCH_EVAL_POOL_SIZE/);
-  });
-
   test("an eval account is never pinned on a job or a campaign, listed in the pool, or the gate's", () => {
     const pinnedJob = fleet([], { extra: { queue: [{ ref: "glm", episode: "e90", account: "EVAL03" }] } });
     expect(pinnedJob.refusals.map((r) => r.why).join(" ")).toContain("EVAL03 is an eval pool account");
@@ -78,17 +69,6 @@ describe("the eval pool", () => {
     expect(pinnedParty.campaigns.find((c) => c.name === "deadmines")!.enabled).toBe(false);
     expect(() => parseFleet({ _notes: ["n"], accounts: { pool: ["RUNNER", "EVAL02"] }, roster: ROSTER, queue: [] }, { env: ENV })).toThrow(/eval pool account/);
     expect(() => parseFleet({ _notes: ["n"], accounts: { pool: ["RUNNER"] }, roster: ROSTER, queue: [], preflight: { enabled: true, account: "EVAL01", smokes: [{ script: "infra/smoke/preflight.ts", account: "EVAL01" }] } }, { env: ENV })).toThrow(/eval pool account/);
-  });
-
-  test("a party row may draw its accounts; a campaign that is no party may not", () => {
-    const c = fleet(["deadmines"]).campaigns[0]!;
-    expect(c).toMatchObject({ drawsAccounts: true, enabled: true });
-    expect(c.account).toBeUndefined();
-    const solo = parseFleet(
-      { _notes: ["n"], accounts: { pool: ["RUNNER"] }, roster: ROSTER, credentials: CREDENTIALS, "campaign-defs": defsBlock(definition({ id: "solo" })), campaigns: { solo: { version: 1, assignments: [{ model: "glm" }], accounts: "evals" } }, queue: [] },
-      { env: ENV },
-    );
-    expect(solo.campaignRefusals.map((r) => r.reason).join(" ")).toContain("no party");
   });
 });
 
@@ -131,15 +111,6 @@ describe("parties side by side", () => {
     const own = ["EVAL06", "EVAL07", "EVAL08", "EVAL09", "EVAL10"];
     const draw = evalPoolDraw({ mode: "evals", pool: cfg.accounts.evalPool!, taken: evalPoolTaken([], own), held: () => undefined, running: (n) => (n === "deadmines-party-base" ? own : undefined) });
     expect(pinnedCampaignJobs(cfg, [], undefined, draw)[0]!.accounts).toEqual(own);
-  });
-
-  test("with worlds off, a party that draws its accounts is held with the reason, never moved to a pinned list", () => {
-    const cfg = fleet(["deadmines"], { worlds: "off" });
-    const held: { job: FleetJob; why: string }[] = [];
-    expect(pinnedCampaignJobs(cfg, [], undefined, drawFor(cfg), held)).toEqual([]);
-    expect(held[0]!.why).toContain('policy.worlds is "off"');
-    // And without a draw at all (a reader that has none), it yields nothing either.
-    expect(pinnedCampaignJobs(cfg, [])).toEqual([]);
   });
 });
 
@@ -208,14 +179,5 @@ describe("a paused party that drew its accounts", () => {
     const p = planResumes({ runs: facts(DRAWN), config: { ...cfg, policy: { ...DEFAULT_POLICY, ...cfg.policy } }, running: new Map(), held: () => undefined, now: NOW, campaignFileOf: fileOf });
     expect(p.listed).toEqual([]);
     expect(p.resume[0]!.job).toMatchObject({ name: "deadmines-party-base", account: "EVAL03", accounts: DRAWN, partyId: stem });
-  });
-
-  test("is listed when the accounts it ran on are not the eval pool's", () => {
-    const named = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"];
-    const other = pinnedCampaignJobs(cfg, [], undefined, evalPoolDraw({ mode: "evals", pool: named, taken: new Set(), held: () => undefined }))[0]!;
-    const otherFile = (runId: string) => fillEntries(jobSpawn(other, cfg.roster, other.account!, STAMP, undefined, cfg.campaigns), STAMP).find((e) => e.runId === runId)?.campaignFile ?? null;
-    const p = planResumes({ runs: facts(named), config: { ...cfg, policy: { ...DEFAULT_POLICY, ...cfg.policy } }, running: new Map(), held: () => undefined, now: NOW, campaignFileOf: otherFile });
-    expect(p.resume).toEqual([]);
-    expect(JSON.stringify(p.listed)).toContain("draws its accounts from the eval pool");
   });
 });

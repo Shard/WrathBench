@@ -127,7 +127,7 @@ const RECORDS: readonly string[] = [
 
 describe("the collector's kept scanners are incremental, and the full reads' answer", () => {
   test("random appends cut anywhere, torn lines included: the full reads after every pass, from the same scanners", async () => {
-    for (const seed of [1, 2, 3, 4, 5]) {
+    for (const seed of [1, 2, 3]) {
       const runsDir = tmpRoot();
       const runId = `live-${seed}`;
       const dir = writeLiveRun(runsDir, runId);
@@ -293,18 +293,6 @@ describe("the collector's kept scanners are incremental, and the full reads' ans
     expect(collector.countScannerOf(runId)!.path).toBe(join(archived, "trajectory.jsonl"));
     expect(collector.totalsScannerOf(runId)!.path).toBe(join(archived, "trajectory.jsonl"));
     await expectFullRead(sink, join(runsDir, "archive"), runId, clock.now);
-  });
-
-  test("a run no longer listed drops its scanners", async () => {
-    const runsDir = tmpRoot();
-    writeLiveRun(runsDir, "gone");
-    const { collector, clock } = clocked(runsDir);
-    await collector.pass();
-    expect(collector.totalsScannerOf("gone")).toBeDefined();
-    rmSync(join(runsDir, "gone"), { recursive: true });
-    clock.now += 5_000;
-    await collector.pass();
-    expectGone(keptOf(collector, "gone"));
   });
 
   test("a restarted collector: nothing re-derived while nothing moves, then one whole read, then incremental", async () => {

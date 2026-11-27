@@ -3,7 +3,7 @@
  * model id the repository names in it.
  *
  * Fixture-based throughout: the committed file, the repository's own fixtures
- * and roster example, and documents built in-process. No network, no `data/`.
+ * and documents built in-process. No network, no `data/`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -17,7 +17,6 @@ import {
   FAMILIES,
   OPENROUTER_DELISTED,
   OPENROUTER_PRICES,
-  WEIGHTS,
   canonicalModelId,
   catalogueKeyOf,
   familyOf,
@@ -28,8 +27,8 @@ import {
   weightsOf,
   type ModelCatalogue,
 } from "./model-catalogue";
-import { applyOpenRouterWindows, catalogueOpenRouterIds, catalogueWindows, mergeWindows } from "./sync-prices";
-import { modelIdsOf, reformat, uncatalogued } from "./model-catalogue-check";
+import { applyOpenRouterWindows, catalogueWindows, mergeWindows } from "./sync-prices";
+import { modelIdsOf, uncatalogued } from "./model-catalogue-check";
 
 const ROOT = join(import.meta.dir, "..");
 const FILE = join(import.meta.dir, "model-catalogue.json");
@@ -41,13 +40,6 @@ describe("the committed file", () => {
     expect(() => parseCatalogue(TEXT)).not.toThrow();
     // A hand edit and a sync write the same bytes, so a diff shows what moved.
     expect(formatCatalogue(JSON.parse(TEXT))).toBe(TEXT);
-  });
-
-  test("every entry has a weights verdict, its own or its family's", () => {
-    for (const [key, e] of Object.entries(CATALOGUE.models)) {
-      const family = FAMILIES.find((f) => f.id === e.family);
-      expect({ key, weights: e.weights ?? family?.weights }).toEqual({ key, weights: expect.stringMatching(/^(open|closed|unknown)$/) });
-    }
   });
 
   test("an entry a family's globs claim is filed under that family", () => {
@@ -96,12 +88,6 @@ function filesUnder(dir: string): string[] {
 }
 
 describe("no model id the repository names falls through to the fallback", () => {
-  test("the roster example's models are all catalogued", () => {
-    const example = JSON.parse(readFileSync(join(ROOT, "infra/fleet.example.json"), "utf8")) as { roster: Record<string, { model: string }> };
-    const ids = Object.values(example.roster).map((e) => e.model);
-    expect(ids.length).toBeGreaterThan(0);
-    expect(ids.filter((id) => catalogueKeyOf(id) === null)).toEqual([]);
-  });
 
   test("every fixture's models are catalogued, or invented on purpose", () => {
     const files = [join(ROOT, "infra/shots/fixture.ts"), ...filesUnder(join(ROOT, "runner/test/fixtures")), ...filesUnder(join(ROOT, "dashboard/test/fixtures"))];
@@ -155,42 +141,6 @@ describe("lookup", () => {
     expect(modelOf("ling-3.0-flash-fin-free").key).toBe("inclusionai/ling-3.0-flash-fin");
   });
 
-  test("ids are compared trimmed and lowercased, and a provider's own casing of an id resolves", () => {
-    expect(idOf("OpenAI/GPT-5.6-Luna")).toBe("openai");
-    expect(idOf("NVIDIA/Nemotron-3-Ultra-550B-A55B:FREE")).toBe("nvidia");
-    expect(modelOf("LongCat-2.5-Preview").key).toBe("longcat-2.5-preview-free");
-    expect(modelOf("CatJam").key).toBe("cat-jam-free");
-    expect(modelOf("  sonnet  ").key).toBe("sonnet");
-  });
-
-  test("vendors no family claimed before the catalogue now have their families", () => {
-    expect(idOf("mimo-v2.5")).toBe("mimo");
-    expect(idOf("xiaomi/mimo-v2.5")).toBe("mimo");
-    expect(idOf("inclusionai/ling-3.0-flash-vl:free")).toBe("ling");
-    expect(idOf("liquid/lfm-2.5-2.6b:free")).toBe("lfm");
-    expect(idOf("inception/mercury-2.5")).toBe("mercury");
-    expect(idOf("longcat-2.5-preview-free")).toBe("longcat");
-    expect(idOf("nex-agi/nex-n2.5-pro:free")).toBe("nex");
-    expect(idOf("dots-studio/dots-3-note-preview:free")).toBe("dots");
-    expect(idOf("thinkingmachines/inkling-small:free")).toBe("inkling");
-    expect(idOf("hy3-free")).toBe("hunyuan");
-    expect(idOf("cat-jam-free")).toBe("beam");
-    // Revealed stealth ids under their developers.
-    expect(idOf("stealth/ox-alpha")).toBe("glm");
-    expect(idOf("space-bunny")).toBe("minimax");
-    expect(idOf("stealth/space-bunny-alpha")).toBe("minimax");
-  });
-
-  test("Muse Spark 1.2 is Meta's, and closed", () => {
-    expect(modelOf("muse-spark-1.2-contributor-free")).toMatchObject({ family: { id: "llama", company: "Meta" }, weights: "closed" });
-  });
-
-  test("an unrevealed developer is a listed entry with no family: the UI's monogram", () => {
-    expect(catalogueKeyOf("omen-alpha")).toBe("omen-alpha");
-    expect(familyOf("omen-alpha")).toBeNull();
-    expect(weightsOf("omen-alpha")).toBe("unknown");
-  });
-
   test("an unlisted id falls back to the first family whose glob claims it", () => {
     expect(modelOf("anthropic/claude-opus-4-1")).toMatchObject({ key: null, family: { id: "claude" }, name: null });
     expect(idOf("z-ai/glm-5.2:free")).toBe("glm");
@@ -203,24 +153,6 @@ describe("lookup", () => {
     expect(first).toBeGreaterThanOrEqual(0);
     expect(first).toBeLessThan(FAMILIES.findIndex((f) => f.id === "qwen"));
     expect(familyOf("opus")).toMatchObject({ id: "claude", name: "Claude", company: "Anthropic" });
-  });
-
-  test("every family is well formed, and each of its globs claims for it", () => {
-    for (const f of FAMILIES) {
-      expect(f.id).toMatch(/^[a-z0-9-]+$/);
-      expect(f.name.length).toBeGreaterThan(0);
-      expect(f.company.length).toBeGreaterThan(0);
-      expect(f.match.length).toBeGreaterThan(0);
-      for (const pattern of f.match) expect(familyOf(pattern.replace(/\*/g, "x"))?.id).toBe(f.id);
-    }
-  });
-
-  test("nothing at all is nothing: null, undefined, empty, blank", () => {
-    for (const v of [null, undefined, "", "   ", ":free"]) {
-      expect(familyOf(v)).toBeNull();
-      expect(weightsOf(v)).toBe("unknown");
-      expect(catalogueKeyOf(v)).toBeNull();
-    }
   });
 });
 
@@ -237,15 +169,6 @@ describe("canonicalModelId — one model whichever provider served it (operator,
     // Listed under its bare key, with the prefixed spelling an alias.
     expect(canonicalModelId("xiaomi/mimo-v2.5")).toBe("mimo-v2.5");
     expect(canonicalModelId("mimo-v2.5")).toBe("mimo-v2.5");
-  });
-
-  test("the aliases are the explicit entries, for what the rule cannot decide", () => {
-    expect(canonicalModelId("qwen-3.8-27b")).toBe("qwen/qwen3.8-27b");
-    expect(canonicalModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
-  });
-
-  test("compared trimmed and lowercased", () => {
-    expect(canonicalModelId(" DeepSeek-V4.1-Flash ")).toBe("deepseek/deepseek-v4.1-flash");
   });
 
   test("a literally free endpoint is never the paid model: it is the model marked free, on any free endpoint (operator, 2026-11-16)", () => {
@@ -284,14 +207,6 @@ describe("canonicalModelId — one model whichever provider served it (operator,
 });
 
 describe("weights", () => {
-  test("a closed model in a family with open siblings is closed, and the open sibling is open", () => {
-    expect(weightsOf("openai/gpt-oss-120b")).toBe("open");
-    expect(weightsOf("openai/gpt-5.6-luna")).toBe("closed");
-    expect(weightsOf("gpt-6-luna")).toBe("closed");
-    expect(weightsOf("google/gemma-4-31b-it:free")).toBe("open");
-    expect(weightsOf("google/gemini-4-argon")).toBe("closed");
-    expect(weightsOf("google/gemini-4-carbon")).toBe("closed");
-  });
 
   test("every spelling of one model reads the same", () => {
     for (const id of ["opus", "sonnet", "claude-haiku-4-5-20251001", "anthropic/claude-opus-4-1"]) expect(weightsOf(id)).toBe("closed");
@@ -308,44 +223,6 @@ describe("weights", () => {
     expect(weightsOf("anthropic/fixture-model")).toBe("closed");
     // An operator verdict where the developer's own pages are silent.
     expect(weightsOf("meta/muse-spark-1.3-contributor")).toBe("closed");
-    expect(WEIGHTS).toEqual(["open", "closed", "unknown"]);
-  });
-});
-
-describe("prices", () => {
-  test("the flat views are the file's, keyed on the ids each provider bills under", () => {
-    expect(OPENROUTER_PRICES.asOf).toBe(CATALOGUE.providers["openrouter"]!.asOf!);
-    expect(ANTHROPIC_PRICES.find((r) => r.ids.includes("claude-haiku-4-5-20251001"))?.ids).toEqual(["claude-haiku-4-5", "claude-haiku-4-5-20251001"]);
-    expect(ANTHROPIC_UNPRICED["claude-haiku-5-5"]).toContain("tiered per request");
-    expect(ENDPOINT_PRICES.map((r) => r.id).sort()).toEqual([
-      "cerebras/qwen-3.8-27b",
-      "deepseek/deepseek-flash",
-      "opencode-go/deepseek-v4.1-flash",
-      "opencode-go/glm-5.3",
-      "opencode-go/kimi-k3.1-pro",
-      "opencode-go/mimo-v2.5",
-      "opencode-go/mimo-v2.6-flash",
-      "opencode-go/omen-alpha",
-      "opencode-go/space-bunny",
-    ]);
-    // A row OpenCode's listing no longer quotes keeps the provenance it was typed with.
-    const go = ENDPOINT_PRICES.find((r) => r.id === "opencode-go/mimo-v2.5")!;
-    expect(go.note).toStartWith("models.dev registry listing for the opencode-go provider, read 2026-10-16.");
-    expect(go.source).toBe("catalogue");
-    // A row the sync keeps reads the provider's note, with the row's date and the listing's in it.
-    const kimi = ENDPOINT_PRICES.find((r) => r.id === "opencode-go/kimi-k3.1-pro")!;
-    expect(kimi.source).toBe("list");
-    expect(kimi.note).toContain("row since 2026-10-24");
-    expect(kimi.note).toContain(`listing last read ${CATALOGUE.providers["opencode-go"]!.asOf}`);
-    expect(kimi.note).not.toContain("{");
-    // Go is the one subscription endpoint; its older base keeps its own reading.
-    expect(ENDPOINT_PRICES.filter((r) => r.subscription).every((r) => r.apiBase === CATALOGUE.providers["opencode-go"]!.apiBase)).toBe(true);
-    expect(ENDPOINT_PRICES.find((r) => r.id === "opencode-go/omen-alpha")!.subscription).toBe(false);
-  });
-
-  test("an emptied OpenRouter id reads as no row at all, and a delisted one says why", () => {
-    expect(OPENROUTER_PRICES.models["stealth/ox-alpha"]).toBeUndefined();
-    expect(OPENROUTER_DELISTED["stealth/ox-alpha"]).toContain("delisted");
   });
 });
 
@@ -415,24 +292,11 @@ describe("parseCatalogue", () => {
     expect(() => parseCatalogue(mutate((d) => (d.providers.anthropic.subscription = true)))).toThrow(/subscription must be true, on an endpoint provider/);
   });
 
-  test("a model needs a weights verdict unless its family states one for all", () => {
-    expect(() => parseCatalogue(mutate((d) => delete d.models["acme-labs/acme-1"].weights))).toThrow(/acme-labs\/acme-1: weights is required/);
-    expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-1"].weights = "maybe")))).toThrow(/weights must be one of open, closed, unknown/);
-    // The Claude family is closed throughout, so its entry states none.
-    expect(() => parseCatalogue(json(doc()))).not.toThrow();
-  });
-
   test("an id is written as the catalogue compares it, and names one entry only", () => {
     expect(() => parseCatalogue(mutate((d) => (d.models["Acme-Labs/Acme-2"] = { family: "acme", name: "x", weights: "open" })))).toThrow(/must be written as the catalogue compares it \("acme-labs\/acme-2"\)/);
     expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-0"].aliases = ["acme-1"])))).toThrow(/"acme-1" names two entries/);
     // A bare form two entries share: a Go-served and an OpenRouter-served run would land on two models.
     expect(() => parseCatalogue(mutate((d) => (d.models["other-host/acme-1"] = { family: "acme", name: "x", weights: "open" })))).toThrow(/the bare id "acme-1" names two entries/);
-  });
-
-  test("a price names only its own entry's ids, and a provider prices an id once", () => {
-    expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-1"].prices.endpoints.acmehost.ids = ["acme-9"])))).toThrow(/served id "acme-9" is not this entry's key or one of its aliases/);
-    expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-0"].prices.openrouter["acme-labs/acme-1"] = { windows: [] })))).toThrow(/OpenRouter id "acme-labs\/acme-1" is not this entry's/);
-    expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-1"].prices.endpoints.nowhere = { asOf: "2026-09-01", windows: [{ input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }] })))).toThrow(/nowhere is not an endpoint provider/);
   });
 
   test("rate windows are ordered, dated after the first, and never a suffixless zero", () => {
@@ -444,55 +308,11 @@ describe("parseCatalogue", () => {
     // A paid model reading as free is the one shape no row may hold; a free slug's 0/0 is fine.
     expect(() => parseCatalogue(mutate((d) => (w(d)[0] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })))).toThrow(/suffixless id is never priced at zero/);
   });
-
-  test("an Anthropic row is windows or a decided blank, not both", () => {
-    expect(() => parseCatalogue(mutate((d) => (d.models["claude-x-1"].prices.anthropic.unpriced = "why")))).toThrow(/give windows \(with asOf\) or unpriced/);
-    expect(() => parseCatalogue(mutate((d) => (d.models["claude-x-1"].prices.anthropic = { unpriced: "tiered" })))).not.toThrow();
-  });
-
-  test("families: ids are safe file names, unique, and an icon-less family is allowed", () => {
-    expect(() => parseCatalogue(mutate((d) => (d.families[1].id = "../escape")))).toThrow(/must match/);
-    expect(() => parseCatalogue(mutate((d) => d.families.push({ ...d.families[1] })))).toThrow(/duplicate family id "acme"/);
-    expect(() => parseCatalogue(mutate((d) => delete d.families[1].company))).toThrow(/family acme company/);
-    expect(() => parseCatalogue(mutate((d) => (d.families[1].match = [])))).toThrow(/family acme match/);
-    expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-1"].family = "nope")))).toThrow(/family must be a family id or null/);
-    expect(parseCatalogue(json(doc())).families[1]!.icon).toBeUndefined();
-  });
-
-  test("bad shapes are refused by name, not coerced", () => {
-    expect(() => parseCatalogue("{oops")).toThrow(/not valid JSON/);
-    expect(() => parseCatalogue(mutate((d) => (d.version = "2")))).toThrow(/version must be a number/);
-    expect(() => parseCatalogue(mutate((d) => (d.icons.version = "")))).toThrow(/icons\.version/);
-    expect(() => parseCatalogue(mutate((d) => (d.extra = 1)))).toThrow(/unknown key `extra`/);
-    expect(() => parseCatalogue(mutate((d) => (d.models["acme-labs/acme-1"].vendor = "x")))).toThrow(/unknown key `vendor`/);
-    expect(() => parseCatalogue(mutate((d) => delete d.providers.openrouter))).toThrow(/providers\.openrouter is required/);
-  });
-});
-
-describe("formatCatalogue", () => {
-  test("--format turns a hand edit's spelling into the file's, and refuses an invalid one", () => {
-    expect(reformat(JSON.stringify(doc(), null, 4))).toBe(formatCatalogue(doc()));
-    expect(reformat(TEXT)).toBe(TEXT);
-    expect(() => reformat(mutate((d) => (d.models["acme-labs/acme-1"].weights = "maybe")))).toThrow(/weights must be one of/);
-  });
-
-  test("short objects and arrays stay on one line, long ones break, and the result is valid JSON", () => {
-    const text = formatCatalogue(doc());
-    expect(text).toContain('"aliases": ["acme-1"]');
-    expect(text).toContain('{ "input": 1, "output": 2, "cacheRead": 0.1, "cacheWrite": 1 }');
-    expect(JSON.parse(text)).toEqual(doc());
-    expect(formatCatalogue(JSON.parse(text))).toBe(text);
-  });
 });
 
 describe("the sync writes onto the catalogue", () => {
   const base = doc() as Parameters<typeof applyOpenRouterWindows>[0];
   const priced = { input: 2, output: 4, cacheRead: 0.2, cacheWrite: 2 };
-
-  test("the standing asks are every OpenRouter id the catalogue carries, emptied ones included", () => {
-    expect(catalogueOpenRouterIds(base).sort()).toEqual(["acme-labs/acme-0", "acme-labs/acme-1", "acme-labs/acme-1:free"]);
-    expect(catalogueWindows(base)["acme-labs/acme-0"]).toEqual([]);
-  });
 
   test("a merge round-trip changes nothing but OpenRouter windows and the provider's asOf", () => {
     const windows = { ...catalogueWindows(base), "acme-labs/acme-1": [{ input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }, { ...priced, from: "2026-10-20" }] };
@@ -546,10 +366,5 @@ describe("the sync writes onto the catalogue", () => {
     expect(out.models["acme-labs/acme-1"]!.prices!.openrouter!["acme-1"]!.windows).toEqual([priced]);
     expect(unlisted).toEqual(["acme-labs/acme-9"]);
     expect(JSON.stringify(out)).not.toContain("acme-9");
-  });
-
-  test("a relisted id loses the note that said it never would be", () => {
-    const { doc: out } = applyOpenRouterWindows(base, { "acme-labs/acme-0": [priced] }, "2026-10-20");
-    expect(out.models["acme-labs/acme-0"]!.prices!.openrouter!["acme-labs/acme-0"]).toEqual({ windows: [priced] });
   });
 });

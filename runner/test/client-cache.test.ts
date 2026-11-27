@@ -14,9 +14,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { StateCache } from "@wrathbench/sdk";
 import { assertRunDirFree } from "../src/run";
-import { CLIENT_CACHE_FILE, ClientCacheStore, keepsAnswer, reparseFrame } from "@wrathbench/mcp";
+import { CLIENT_CACHE_FILE, ClientCacheStore } from "@wrathbench/mcp";
 import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
 import { Scratchpad } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -207,13 +206,6 @@ describe("the client cache across a sandbox restart", () => {
     expect(res.ok).toBe(true);
     expect(JSON.parse(JSON.parse(res.value!) as string)).toMatchObject(ALL_NAMED);
   }, 20_000);
-
-  test("without a kept cache a restarted child has none of them — the bug this closes", async () => {
-    const host = makeHost(tempDir("wrathbench-client-cache-"), { store: null });
-    expect((await host.evalSnippet(ANSWERS)).ok).toBe(true);
-    expect((await host.evalSnippet("for (;;) {}")).restarted).toBe(true);
-    expect(await readCache(host)).toEqual({ ...NONE_NAMED, ...UNTOUCHED_COUNTERS });
-  }, 20_000);
 });
 
 describe("the client cache across a resume, and what never inherits it", () => {
@@ -322,22 +314,5 @@ describe("ClientCacheStore", () => {
       }),
     );
     expect(new ClientCacheStore(path).size).toBe(1);
-  });
-
-  test("a seed frame folds into a StateCache exactly as the live frame did", () => {
-    const frame = reparseFrame({
-      seq: 12,
-      opcode: "SMSG_CREATURE_QUERY_RESPONSE",
-      opcodeId: 0x61,
-      ts: 5000,
-      data: { entry: 299, found: true, name: "Invented Wolf", subname: "", type: 1, rank: 0 },
-    });
-    expect(frame).not.toBeNull();
-    expect(keepsAnswer(frame!)).toBe(true);
-    const live = new StateCache();
-    live.apply({ seq: 12, opcode: "SMSG_CREATURE_QUERY_RESPONSE", opcodeId: 0x61, ts: 5000, data: { entry: 299, found: true, name: "Invented Wolf", subname: "", type: 1, rank: 0 } });
-    const seeded = new StateCache();
-    seeded.apply(frame!);
-    expect(seeded.creatures.get(299)).toEqual(live.creatures.get(299));
   });
 });

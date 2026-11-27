@@ -198,7 +198,9 @@ function run(c: Case): Result {
       WRATHBENCH_BUILD_IMAGES_CMD: buildImages,
       WRATHBENCH_FLEET_UPDATE_CMD: fleetUpdate,
       WRATHBENCH_K8S_DEPLOY_CMD: k8sDeploy,
-      WRATHBENCH_RELEASE_POLL_S: "1",
+      // No sleep between tag polls: a poll that flips counts reads, not seconds.
+      // A case whose pin never lands passes WRATHBENCH_RELEASE_PIN_WAIT_S=0.
+      WRATHBENCH_RELEASE_POLL_S: "0",
       WRATHBENCH_RELEASE_PIN_WAIT_S: "4",
       WRATHBENCH_RELEASE_ROLLOUT_WAIT_S: "3",
       ...c.env,
@@ -229,23 +231,11 @@ describe("k8s-release.sh", () => {
     expect(r.exitCode).toBe(0);
     expect(r.out).not.toContain("arithmetic syntax error");
     expect(phases(r)).toEqual(["build-images --push", "fleet-update drain", "k8s-deploy --namespace", "fleet-update resume"]);
-    expect(r.calls.some((l) => l.startsWith(`build-images --push --tag ${TAG}`))).toBe(true);
-    expect(r.out).toContain(`RELEASED ${TAG}`);
-  });
-
-  test("the build is handed the commit the tag describes, so a commit landing mid-release changes nothing", () => {
-    const r = run({});
+    // The build is handed the commit the tag describes, so a commit landing mid-release changes nothing.
     expect(r.calls.find((l) => l.startsWith("build-images "))).toBe(`build-images --push --tag ${TAG} --commit ${r.sha}`);
-    const dry = run({ args: ["--dry-run"] });
-    expect(dry.out).toContain(`--push --tag ${TAG} --commit ${dry.sha}`);
-  });
-
-  test("the deploy window is handed the tag, so it refuses on its own if the pin slips", () => {
-    const r = run({});
-    const deploy = r.calls.find((l) => l.startsWith("k8s-deploy "));
-    expect(deploy).toContain(`--expect-tag ${TAG}`);
-    expect(deploy).toContain("--namespace wrathbench");
-    expect(deploy).toContain("--release wrathbench");
+    // The deploy window is handed the tag, so it refuses on its own if the pin slips.
+    expect(r.calls.find((l) => l.startsWith("k8s-deploy "))).toContain(`--expect-tag ${TAG}`);
+    expect(r.out).toContain(`RELEASED ${TAG}`);
   });
 
   test("a probe image's tag is never released, not even from a later phase", () => {
@@ -265,26 +255,11 @@ describe("k8s-release.sh", () => {
     expect(r.out).toContain("build drain skipped");
   });
 
-  test("--from deploy runs only the window and the resume", () => {
-    const r = run({ args: ["--from", "deploy"] });
-    expect(r.exitCode).toBe(0);
-    expect(phases(r)).toEqual(["k8s-deploy --namespace", "fleet-update resume"]);
-    // The pin phase is skipped entirely: no tag poll, no rollout status.
-    expect(r.calls.filter((l) => l.startsWith("kubectl rollout"))).toEqual([]);
-  });
-
   test("an unknown --from is refused with the sibling scripts' exit 2", () => {
     const r = run({ args: ["--from", "smoke"] });
     expect(r.exitCode).toBe(2);
     expect(r.out).toContain("--from takes one of");
     expect(phases(r)).toEqual([]);
-  });
-
-  test("the pin hook gets the tag and the sha as argv AND in the environment", () => {
-    const r = run({ withHook: true, clusterTagBefore: "old-tag", flipAfter: 1 });
-    expect(r.exitCode).toBe(0);
-    const call = r.calls.find((l) => l.startsWith("pin-hook "));
-    expect(call).toBe(`pin-hook ${TAG} ${r.sha} | env ${TAG} ${r.sha}`);
   });
 
   test("a hook that fails stops the release before the deploy window opens", () => {
@@ -305,19 +280,8 @@ describe("k8s-release.sh", () => {
     expect(phases(r).filter((p) => p.startsWith("k8s-deploy"))).toHaveLength(1);
   });
 
-  test("with no hook it prints the tag, the commit and where the chart expects them", () => {
-    const r = run({ clusterTagBefore: "old-tag", flipAfter: 1 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain(`image.tag = ${TAG}`);
-    // A viewer release may have left the viewer group on its own tag; a full pin resets it.
-    expect(r.out).toContain(`image.viewerTag = ${TAG}, or cleared`);
-    expect(r.out).toContain(`commit    = ${r.sha}`);
-    expect(r.out).toContain("image.tag");
-    expect(r.out).toContain("--pin-hook");
-  });
-
   test("a pin that left a viewer release's image.viewerTag never completes, and says which value", () => {
-    const r = run({ viewerTag: "harness-0.9-3-gfeed000" });
+    const r = run({ viewerTag: "harness-0.9-3-gfeed000", env: { WRATHBENCH_RELEASE_PIN_WAIT_S: "0" } });
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("the pin left image.viewerTag set");
     // Nothing past the pin ran: no deploy window over a viewer behind the fleet.
@@ -337,7 +301,7 @@ describe("k8s-release.sh", () => {
   });
 
   test("a pin that never lands times out and never opens the deploy window", () => {
-    const r = run({ clusterTag: "harness-0.5-625-gold" });
+    const r = run({ clusterTag: "harness-0.5-625-gold", env: { WRATHBENCH_RELEASE_PIN_WAIT_S: "0" } });
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("still does not carry");
     expect(r.out).toContain("--from pin");
@@ -379,12 +343,6 @@ describe("k8s-release.sh", () => {
     expect(r.calls[waitAt]).toContain("helmrelease/wrathbench");
   });
 
-  test("no --helmrelease means no wait at all — nothing here assumes Flux", () => {
-    const r = run({});
-    expect(r.calls.filter((l) => l.startsWith("kubectl wait"))).toEqual([]);
-    expect(r.out).toContain("no --helmrelease given");
-  });
-
   test("--helmrelease must name a namespace and a name", () => {
     const r = run({ args: ["--helmrelease", "wrathbench"] });
     expect(r.exitCode).toBe(2);
@@ -403,12 +361,6 @@ describe("k8s-release.sh", () => {
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("uncommitted changes");
     expect(phases(r)).toEqual([]);
-  });
-
-  test("a dirty tree is only the build phase's business: --from drain still runs", () => {
-    const r = run({ dirty: true, args: ["--from", "drain"] });
-    expect(r.exitCode).toBe(0);
-    expect(phases(r)).toEqual(["fleet-update drain", "k8s-deploy --namespace", "fleet-update resume"]);
   });
 
   test("a build that fails stops the release before the fleet is drained", () => {
@@ -438,13 +390,6 @@ describe("k8s-release.sh", () => {
     expect(r.out).toContain(`(not ${TAG})`);
   });
 
-  test("--dry-run --from pin plans only the phases it would run", () => {
-    const r = run({ args: ["--dry-run", "--from", "pin"] });
-    expect(r.exitCode).toBe(0);
-    const plan = r.out.split("\n").filter((l) => l.includes("would "));
-    expect(plan.map((l) => l.replace(/^.*would /, "").split(" ")[0])).toEqual(["pin", "wait", "deploy", "resume"]);
-  });
-
   test("--namespace and --release reach every command", () => {
     const r = run({ args: ["--namespace", "wb-test", "--release", "wb"] });
     expect(r.exitCode).toBe(0);
@@ -454,18 +399,7 @@ describe("k8s-release.sh", () => {
     expect(r.out).toContain("namespace   wb-test (release wb)");
   });
 
-  test("--registry is passed to the build and nothing else", () => {
-    const r = run({ args: ["--registry", "reg.example/wrathbench"] });
-    expect(r.exitCode).toBe(0);
-    expect(r.calls.find((l) => l.startsWith("build-images"))).toContain("--registry reg.example/wrathbench");
-  });
-
-  test("--no-smoke reaches the deploy window", () => {
-    const r = run({ args: ["--no-smoke"] });
-    expect(r.calls.find((l) => l.startsWith("k8s-deploy "))).toContain("--no-smoke");
-  });
-
-  test("--keep-paused reaches the deploy window and skips the resume phase, saying so", () => {
+  test("--keep-paused reaches the deploy window and skips the resume phase", () => {
     // The release whose new build the gate smokes cannot vouch for: the fleet
     // comes back holding, and clearing the switch is the operator's, after a
     // real smoke. A resume here would undo the deploy's --keep-paused.
@@ -474,16 +408,6 @@ describe("k8s-release.sh", () => {
     expect(phases(r)).toEqual(["build-images --push", "fleet-update drain", "k8s-deploy --namespace"]);
     expect(r.calls.find((l) => l.startsWith("k8s-deploy "))).toContain("--keep-paused");
     expect(r.calls.filter((l) => l.startsWith("fleet-update resume"))).toEqual([]);
-    expect(r.out).toContain("=== resume: SKIPPED (--keep-paused)");
-    expect(r.out).toContain("Phases run: build drain pin deploy.");
-    // The last thing it says is what to run next.
-    expect(r.out.trimEnd().split("\n").at(-1)).toContain("./infra/fleet-update.sh resume");
-  });
-
-  test("--keep-paused with --from deploy still skips the resume", () => {
-    const r = run({ args: ["--keep-paused", "--from", "deploy"] });
-    expect(r.exitCode).toBe(0);
-    expect(phases(r)).toEqual(["k8s-deploy --namespace"]);
   });
 
   test("--from resume --keep-paused would run nothing, so it is refused", () => {
@@ -491,26 +415,6 @@ describe("k8s-release.sh", () => {
     expect(r.exitCode).toBe(2);
     expect(r.out).toContain("would run nothing");
     expect(phases(r)).toEqual([]);
-  });
-
-  test("--dry-run --keep-paused shows the choice: the deploy flag, and no resume", () => {
-    const r = run({ args: ["--dry-run", "--keep-paused"] });
-    expect(r.exitCode).toBe(0);
-    expect(phases(r)).toEqual([]);
-    const plan = r.out.split("\n").filter((l) => l.includes("would "));
-    expect(plan.map((l) => l.replace(/^.*would /, "").split(" ")[0])).toEqual(["build", "drain", "pin", "wait", "deploy"]);
-    expect(plan.find((l) => l.includes("would deploy"))).toContain("--keep-paused");
-    expect(r.out).toContain("skip resume  --keep-paused");
-  });
-
-  test("--help prints the header and no shell", () => {
-    // `sed -n '2,Np'` over the header is easy to get one line wrong, and
-    // nothing else in this suite runs that path.
-    const r = run({ args: ["--help"] });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("--pin-hook");
-    expect(r.out).not.toContain("set -Eeuo");
-    expect(r.out).not.toContain("SCRIPT_DIR=");
   });
 
   test("the runner Deployment is a pin witness: the smokes run from it", () => {

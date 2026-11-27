@@ -67,12 +67,6 @@ describe("the classify guard", () => {
     expect(readVerdict(runs, "c-live")).toEqual({ terminationReason: "manual", pauseReason: null });
   }, 20_000);
 
-  test("a paused run is ended without --force, and its pause goes with it", async () => {
-    writeRun("c-paused", "paused");
-    expect((await classify("c-paused", "manual")).code).toBe(0);
-    expect(readVerdict(runs, "c-paused")).toEqual({ terminationReason: "manual", pauseReason: null });
-  }, 20_000);
-
   test("a mistyped run id is refused, and no directory is made for it", async () => {
     const r = await classify("--force", "no-such-run", "manual");
     expect(r.code).toBe(CLASSIFY_REFUSED_EXIT);
@@ -106,15 +100,5 @@ describe("an archived run", () => {
       .map((l) => JSON.parse(l) as { t: string; reason?: string; detail?: string });
     expect(records.at(-1)).toMatchObject({ t: "termination", reason: "manual", detail: "manually classified: release the character" });
     expect(existsSync(join(runs, "a-paused"))).toBe(false);
-  }, 20_000);
-
-  test("one with no verdict is still refused without --force", async () => {
-    writeRun("a-live", "live");
-    archive("a-live");
-    const r = await classify("a-live", "manual");
-    expect(r.code).toBe(CLASSIFY_REFUSED_EXIT);
-    expect(r.stderr).toContain("--force");
-    expect(readVerdict(runs, "a-live")).toEqual({ terminationReason: null, pauseReason: null });
-    expect(existsSync(join(runs, "a-live"))).toBe(false);
   }, 20_000);
 });

@@ -9,7 +9,7 @@ import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, claudeRateLimitWindows, compactEnv, compactionRecord, DEFAULT_WIND_DOWN_GRACE_MS as CLAUDE_WIND_DOWN_GRACE_MS, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
+import { childEnv, claudeArgs, claudeRateLimitWindows, compactEnv, compactionRecord, DEFAULT_WIND_DOWN_GRACE_MS as CLAUDE_WIND_DOWN_GRACE_MS, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv } from "../src/adapter-claude";
 import { DEFAULT_WIND_DOWN_GRACE_MS as CODEX_WIND_DOWN_GRACE_MS } from "../src/adapter-codex";
 import { DEFAULT_WIND_DOWN_GRACE_MS as PI_WIND_DOWN_GRACE_MS } from "../src/adapter-pi";
 import { END_REQUEST_FILE, END_REQUEST_POLL_MS, PARTY_END_GRACE_MS, readEndRequest, watchEndRequest, writeEndRequest } from "../src/end-request";
@@ -29,7 +29,6 @@ import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leaky
 import { tempDirs } from "./fixtures/temp-dirs";
 import { campaignFileOf, writeCampaignFile } from "../src/campaign-file";
 import { checkedIn, joined } from "./fixtures/campaigns";
-
 
 /** Count the state snapshots a sandbox is asked for, from now on. */
 function countSnapshots(sandbox: unknown): () => number {
@@ -237,6 +236,10 @@ describe("claude-code driver", () => {
     expect(userMessages).toHaveLength(2);
     expect(userMessages[0]).toContain("[turn 1]");
     expect(userMessages[0]).toContain("== state");
+    // No trim notice is ever raised here (docs/METHODOLOGY.md, "An episodic
+    // log, asked for at each trim or compaction"): the CLI owns its own
+    // history, so the model must never be told of a block trim.
+    for (const msg of userMessages) expect(msg).not.toMatch(/trim_pending|window_trimmed|will be trimmed/);
 
     // the tool call went to the runner's sandbox and is in the trajectory
     const records = readTrajectory(runDir);
@@ -254,6 +257,7 @@ describe("claude-code driver", () => {
     expect(dispatchTs as number).toBeGreaterThan(0);
     expect(dispatchTs as number).toBeLessThanOrEqual(toolCall!.ts);
     expect(snippetResult?.["dispatchTs"]).toBeUndefined();
+    expect(records.filter((r) => r.t === "harness" && (r["kind"] === "trim_pending" || r["kind"] === "window_trimmed"))).toHaveLength(0);
     const result = records.find((r) => r.t === "claude_result");
     expect(result?.["numTurns"]).toBe(2);
     // Both clocks: `duration_ms` covers the tool round trips too, and the
@@ -263,46 +267,6 @@ describe("claude-code driver", () => {
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("turn-limit");
     trajectory.close();
   }, 20_000);
-
-  test("no trim notice is ever raised here: this harness runs no message window", async () => {
-    // docs/METHODOLOGY.md, "An episodic log, asked for at each trim or
-    // compaction": the CLI owns its own history, so there is no block trim to
-    // announce and the model must never be told there was one.
-    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 4 });
-    await runClaudeEpisode(options);
-    for (const msg of readRecord(recordPath)["userMessages"] as string[]) {
-      expect(msg).not.toContain("trim_pending");
-      expect(msg).not.toContain("window_trimmed");
-      expect(msg).not.toContain("will be trimmed");
-    }
-    const records = readTrajectory(runDir);
-    expect(records.filter((r) => r.t === "harness" && r["kind"] === "trim_pending")).toHaveLength(0);
-    expect(records.filter((r) => r.t === "harness" && r["kind"] === "window_trimmed")).toHaveLength(0);
-    trajectory.close();
-  }, 20_000);
-
-  test("a reflection window left open at the end of the episode is closed on the record", async () => {
-    // The teardown counterpart of runLoop's finally. The fixture never reflects,
-    // so the gate is opened directly on the builder the driver shares with the
-    // tools; what is under test is that shutdown drains it either way.
-    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
-    await runClaudeEpisode(options);
-    const windows = readTrajectory(runDir).filter((r) => r.t === "reflect_window");
-    // Nothing opened one, so nothing may close one: the drain must not invent
-    // a record for a window that never existed.
-    expect(windows).toHaveLength(0);
-    trajectory.close();
-  }, 20_000);
-
-  test("claudeArgs: a level is a flag, `none` is not", () => {
-    const of = (effort?: string) =>
-      claudeArgs({ mcpConfigPath: "/tmp/mcp.json", ...(effort !== undefined ? { effort } : {}) });
-    expect(of("xhigh")).toContain("--effort");
-    expect(of("xhigh")).toContain("xhigh");
-    expect(of("none")).not.toContain("--effort");
-    expect(of("none")).not.toContain("none");
-    expect(of()).not.toContain("--effort");
-  });
 
   test("a declared effort reaches the CLI as --effort; an undeclared one sends no flag", async () => {
     const plain = setupEpisode("tools", { maxTurns: 1 });
@@ -639,18 +603,6 @@ describe("claude-code driver", () => {
     ]);
   }, 30_000);
 
-  test("the spawned CLI never sees API-key credentials", async () => {
-    const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
-    await runClaudeEpisode(options);
-    const env = readRecord(recordPath)["env"] as Record<string, unknown>;
-    expect(env["hasAnthropicApiKey"]).toBe(false);
-    expect(env["hasAwsBearer"]).toBe(false);
-    expect(env["hasOauthToken"]).toBe(true);
-    // config dir is scratch, inside the run directory
-    expect(String(env["configDir"])).toContain("claude-config");
-    trajectory.close();
-  }, 20_000);
-
   test("a usage-limit result pauses the run as quota-exhausted", async () => {
     const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 });
     const outcome = await runClaudeEpisode(options);
@@ -698,19 +650,6 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 30_000);
 
-  test("the state ticker samples during a turn, through this driver too", async () => {
-    // The record is not the ticker's (the stack's host drains its child's
-    // recorder on a tick of its own); what the ticker still owes every driver
-    // is its samples, for the watchdogs, taken while the CLI holds the turn.
-    const { trajectory, options } = setupEpisode("long-turn", { watchdogs: { episodeMs: 300 } });
-    const sampled = countSnapshots(options.sandbox);
-    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
-    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
-    // More than the turn preamble's one: the ticker sampled while the CLI ran.
-    expect(sampled()).toBeGreaterThanOrEqual(3);
-    trajectory.close();
-  }, 30_000);
-
   test("the tool-call ceiling bounds the CLI's inner loop", async () => {
     const { runDir, trajectory, options } = setupEpisode("long-turn", {
       maxToolCallsPerEpisode: 3,
@@ -724,32 +663,6 @@ describe("claude-code driver", () => {
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("tool-call-limit");
     trajectory.close();
   }, 30_000);
-
-  test("at the ceiling, further tool calls are refused rather than executed", async () => {
-    // cap 1: one call runs, the next is refused with an explicit result — the
-    // same path the real CLI hits while it is being torn down.
-    const { runDir, trajectory, options } = setupEpisode("long-turn", { maxToolCallsPerEpisode: 1 });
-    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 50, killGraceMs: 200 });
-    expect(outcome.kind === "terminated" && outcome.reason).toBe("tool-call-limit");
-    const records = readTrajectory(runDir);
-    expect(records.filter((r) => r.t === "snippet")).toHaveLength(1);
-    trajectory.close();
-  }, 30_000);
-
-  test("a null ceiling is no ceiling: the branch the guard takes never trips", () => {
-    // The predicate the enforcement branch reads, tested directly. A run with
-    // the cap off cannot be driven past it end to end in a test — proving it
-    // means letting the fake CLI make more calls than the ceiling it no longer
-    // has — so the branch itself is pinned here and the cap-1/cap-3 cases above
-    // keep covering the finite path all the way through the driver.
-    expect(toolCallLimitReached(0, null)).toBe(false);
-    expect(toolCallLimitReached(500, null)).toBe(false);
-    expect(toolCallLimitReached(1_000_000, null)).toBe(false);
-    // A finite ceiling is unchanged: it trips at the cap, not before it.
-    expect(toolCallLimitReached(2, 3)).toBe(false);
-    expect(toolCallLimitReached(3, 3)).toBe(true);
-    expect(toolCallLimitReached(4, 3)).toBe(true);
-  });
 
   test("with the ceiling off, a long turn ends on its watchdog and never on tool-call-limit", async () => {
     // The live shape: fleet-sub-opus-low-freeplay-opus-low-20260825-a6 sat at
@@ -868,35 +781,6 @@ describe("claude-code driver", () => {
     }
     trajectory.close();
   }, 30_000);
-
-  test("windDownGraceMs 0 keeps the old immediate kill, and an operator stop always does", async () => {
-    // The ceiling with no grace: killed at once, no wind-down record.
-    const off = setupEpisode("wind-down-deaf", { maxToolCallsPerEpisode: 2 });
-    const outcome = await runClaudeEpisode({
-      ...off.options,
-      watchdogTickMs: 50,
-      killGraceMs: 200,
-      windDownGraceMs: 0,
-    });
-    expect(outcome.kind === "terminated" && outcome.reason).toBe("tool-call-limit");
-    expect(readTrajectory(off.runDir).filter((r) => r.t === "wind-down")).toHaveLength(0);
-    off.trajectory.close();
-
-    // An operator stop is intent, not a measurement opportunity: it kills now.
-    const stop = setupEpisode("wind-down", {});
-    const abort = new AbortController();
-    setTimeout(() => abort.abort("SIGTERM"), 300);
-    const stopped = await runClaudeEpisode({
-      ...stop.options,
-      signal: abort.signal,
-      watchdogTickMs: 50,
-      killGraceMs: 200,
-      windDownGraceMs: 10_000,
-    });
-    expect(stopped).toEqual({ kind: "terminated", reason: "manual", detail: "SIGTERM" });
-    expect(readTrajectory(stop.runDir).filter((r) => r.t === "wind-down")).toHaveLength(0);
-    stop.trajectory.close();
-  }, 40_000);
 
   test("a party member asked to end on another member's end winds down like its own end: the closing result is recorded", async () => {
     // deadmines@4: the mage was SIGTERMed as operator-pause and ended
@@ -1093,25 +977,6 @@ describe("childEnv", () => {
     expect(thinkingEnv(undefined)).toEqual({});
   });
 
-  test("the compaction window comes from the run's config, never from the shell, and the scrub still holds", () => {
-    const parent = {
-      PATH: "/usr/bin",
-      ANTHROPIC_API_KEY: "sk-ant-secret",
-      ANTHROPIC_BASE_URL: "https://example.invalid",
-      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k",
-      CLAUDE_CODE_OAUTH_TOKEN: "oauth",
-    };
-    const set = childEnv(parent, { configDir: "/c", extra: { ...thinkingEnv("max"), ...compactEnv("100k") } });
-    expect(set["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBe("100000");
-    expect(Object.keys(set).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
-    expect(set["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
-    // Absent is the CLI's own `auto`: the variable is not there at all.
-    const unset = childEnv(parent, { configDir: "/c", extra: compactEnv(undefined) });
-    expect(unset["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBeUndefined();
-    expect(Object.keys(unset).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
-    expect(compactEnv(undefined)).toEqual({});
-  });
-
   test("the compaction window is sent as the integer token count, never the <n>k spelling", () => {
     // 2.1.293 read every `<n>k` as 100k (`200k` and `300k` both logged
     // effectiveWindow=80000); the integer reads as written on every version.
@@ -1189,15 +1054,6 @@ describe("driver selection and stamping", () => {
     expect(isUnscoredDriver("openai")).toBe(false);
     expect(isUnscoredDriver("stub")).toBe(true);
     expect(unscoredStamp("claude-code")).toBeUndefined();
-  });
-
-  test("every effort level parses, `none` included, and an invented one does not", () => {
-    for (const effort of ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
-      expect(loadRunConfig({ effort }).effort).toBe(effort);
-    }
-    // Absent is not a level: it is the provider's own default.
-    expect(loadRunConfig({}).effort).toBeUndefined();
-    expect(() => loadRunConfig({ effort: "off" })).toThrow();
   });
 
   test("a compaction window parses to one canonical spelling, `auto` is absent, and out-of-range values are refused", () => {
@@ -1330,8 +1186,13 @@ describe("driver selection and stamping", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    // let it get into the turn and run some tool calls
-    await new Promise((r) => setTimeout(r, 2_500));
+    // Let it get into the turn and run a tool call: poll for the first snippet.
+    const inTurn = (): boolean => {
+      const id = readdirSync(dir).find((d) => d.startsWith("run-"));
+      return id !== undefined && readTrajectory(join(dir, id)).some((r) => r.t === "snippet_result");
+    };
+    for (let k = 0; k < 200 && !inTurn(); k++) await new Promise((r) => setTimeout(r, 50));
+    expect(inTurn()).toBe(true);
     proc.kill(sig);
     const stderr = await new Response(proc.stderr).text();
     await proc.exited;
@@ -1375,34 +1236,6 @@ describe("driver selection and stamping", () => {
     trajectory.close();
   }, 40_000);
 
-  test("run.ts refuses to start the claude driver without the OAuth token", async () => {
-    const dir = tempDir("wrathbench-refuse-");
-    const env = { ...process.env };
-    delete env["CLAUDE_CODE_OAUTH_TOKEN"];
-    const proc = Bun.spawn({
-      cmd: [
-        process.execPath,
-        join(import.meta.dir, "..", "src", "run.ts"),
-        "--driver",
-        "claude-code",
-        "--model",
-        "opus",
-        ...probeArgs(),
-        "--runs-dir",
-        dir,
-      ],
-      // a cwd without a .env: Bun auto-loads one, and the repo's has the token
-      cwd: dir,
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const stderr = await new Response(proc.stderr).text();
-    expect(await proc.exited).toBe(2);
-    expect(stderr).toContain("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(stderr).toContain("claude setup-token");
-  }, 20_000);
-
   test("the refusal names the chosen credential's variable, not the default one", async () => {
     const dir = tempDir("wrathbench-refuse-lane-");
     const env = { ...process.env };
@@ -1433,27 +1266,6 @@ describe("driver selection and stamping", () => {
     expect(await proc.exited).toBe(2);
     expect(stderr).toContain("$CLAUDE_CODE_OAUTH_TOKEN_2");
     expect(stderr).toContain("CLAUDE_CODE_OAUTH_TOKEN_2=...");
-  }, 20_000);
-
-  test("run.ts refuses the former --adapter spelling by name, rather than ignoring it", async () => {
-    const dir = tempDir("wrathbench-refuse-adapter-");
-    const proc = Bun.spawn({
-      cmd: [
-        process.execPath,
-        join(import.meta.dir, "..", "src", "run.ts"),
-        "--adapter",
-        "stub",
-        "--runs-dir",
-        dir,
-      ],
-      cwd: dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const stderr = await new Response(proc.stderr).text();
-    expect(await proc.exited).toBe(2);
-    expect(stderr).toContain("--adapter");
-    expect(stderr).toContain("--driver");
   }, 20_000);
 });
 

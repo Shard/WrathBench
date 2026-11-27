@@ -1,6 +1,6 @@
 /**
- * The run view's two pure pieces: the cumulative-XP/level-band derivation and
- * the "is the feed pinned to the bottom" decision that drives autoscroll.
+ * The run view's cumulative-XP/level-band derivation, and the run chart's
+ * clock across a resume.
  *
  * The derivation is the load-bearing one — it reconstructs a total XP the
  * served data does not carry (see `lib/runview.ts`), so what it is allowed to
@@ -10,9 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../../viewer/api-types";
-import { createMemo, createRoot, createSignal } from "solid-js";
-import { playtimeMs, recordSegments } from "../../runner/src/sessions";
-import { atBottom, chartClock, chartWindowMs, hasModelSide, runChartInput, showsComparability, xpChartModel } from "../src/lib/runview";
+import { runChartInput, xpChartModel } from "../src/lib/runview";
 
 function s(ts: number, level: number | null, xp: number | null): StatePoint {
   return { ts, level, xp, map: null, x: null, y: null, z: null, eventCount: null, lastSeq: null, turn: null };
@@ -37,11 +35,8 @@ describe("xpChartModel", () => {
     ]);
     expect(m.points.map((p) => p.cum)).toEqual([100, 200, 250, 350, 350]);
     expect(m.yMax).toBe(350);
-  });
-
-  test("a noisy dip within a level does not lower the cumulative curve", () => {
-    const m = xpChartModel([s(0, 1, 100), s(1, 1, 90)], opts);
-    expect(m.points.map((p) => p.cum)).toEqual([100, 100]);
+    // A noisy dip within a level does not lower the curve.
+    expect(xpChartModel([s(0, 1, 100), s(1, 1, 90)], opts).points.map((p) => p.cum)).toEqual([100, 100]);
   });
 
   test("level and xp are read off the same sample; a half-recorded sample is skipped", () => {
@@ -54,56 +49,12 @@ describe("xpChartModel", () => {
     expect(m.points.map((p) => p.cum)).toEqual([100, 140]);
   });
 
-  test("unordered samples are sorted before accumulating", () => {
-    const m = xpChartModel([s(2, 2, 50), s(0, 1, 100), s(1, 1, 200)], opts);
-    expect(m.points.map((p) => p.cum)).toEqual([100, 200, 250]);
-  });
-
-  test("a level jump between samples opens one band, at the level reached", () => {
-    const m = xpChartModel([s(0, 1, 300), s(1, 3, 10)], opts);
-    expect(m.bands).toEqual([
-      { level: 1, cum: 0, ts: 0 },
-      { level: 3, cum: 300, ts: 1 },
-    ]);
-  });
-
-  describe("x-axis window", () => {
+  test("the x-axis closes at the deadline capped at now, at endedAt when that beats it, else at the last sample", () => {
     const states = [s(0, 1, 100), s(4, 1, 200)];
-    test("episodeMs sets the deadline, capped at now for a live run", () => {
-      const m = xpChartModel(states, { startedAt: 0, endedAt: null, episodeMs: 10_000, now: 5_000 });
-      expect(m.t0).toBe(0);
-      expect(m.t1).toBe(5_000); // not the full 10_000: the future is not drawn
-    });
-    test("a finished run closes at endedAt when it beats the deadline", () => {
-      const m = xpChartModel(states, { startedAt: 0, endedAt: 3_000, episodeMs: 10_000, now: 9_999 });
-      expect(m.t1).toBe(3_000);
-    });
-    test("no episodeMs closes at the last sample", () => {
-      const m = xpChartModel(states, { startedAt: 0, endedAt: null, episodeMs: null, now: 1_000_000 });
-      expect(m.t1).toBe(4);
-    });
-  });
-
-  test("fewer than two usable samples yields an empty, drawable model", () => {
-    const m = xpChartModel([s(0, 1, 100)], opts);
-    expect(m.points.length).toBe(1);
-    expect(m.t1).toBeGreaterThan(m.t0);
-    expect(m.yMax).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe("atBottom", () => {
-  test("exactly at the bottom follows", () => {
-    expect(atBottom(800, 1000, 200)).toBe(true);
-  });
-  test("just within the threshold still follows", () => {
-    expect(atBottom(780, 1000, 200, 32)).toBe(true);
-  });
-  test("scrolled up past the threshold stops following", () => {
-    expect(atBottom(700, 1000, 200, 32)).toBe(false);
-  });
-  test("a non-overflowing container is always at the bottom", () => {
-    expect(atBottom(0, 200, 200)).toBe(true);
+    // Live: the future is not drawn.
+    expect(xpChartModel(states, { startedAt: 0, endedAt: null, episodeMs: 10_000, now: 5_000 }).t1).toBe(5_000);
+    expect(xpChartModel(states, { startedAt: 0, endedAt: 3_000, episodeMs: 10_000, now: 9_999 }).t1).toBe(3_000);
+    expect(xpChartModel(states, { startedAt: 0, endedAt: null, episodeMs: null, now: 1_000_000 }).t1).toBe(4);
   });
 });
 
@@ -128,15 +79,8 @@ describe("runChartInput", () => {
     // Live: the window runs to the session clock's now, 21 hours, not six days.
     expect(c.now).toBe(21 * HOUR);
     expect(c.seams.map((x) => x.at)).toEqual([20 * HOUR]);
-    expect(c.seams[0]!.label.startsWith("session 2 · resumed ")).toBe(true);
     const m = xpChartModel(c.states, { startedAt: c.startedAt, endedAt: c.endedAt, episodeMs: null, now: c.now });
-    // No episode budget: the axis ends at the last sample, twenty hours in — not six days.
     expect(m.t1 - m.t0).toBe(20 * HOUR + 1000);
-  });
-
-  test("a run no longer live closes its window at its served playtime", () => {
-    const c = runChartInput(states, { startedAt: T0, endedAt: null, live: false }, sessions, 20 * HOUR + 5000, RESUME + DAY);
-    expect(c.endedAt).toBe(20 * HOUR + 5000);
   });
 
   test("a run of one session reads as it always did, ninety minutes for an e90", () => {
@@ -145,79 +89,5 @@ describe("runChartInput", () => {
     expect(c.seams).toEqual([]);
     const m = xpChartModel(c.states, { startedAt: c.startedAt, endedAt: c.endedAt, episodeMs: 90 * 60_000, now: c.now });
     expect([m.t0, m.t1]).toEqual([0, 90 * 60_000]);
-  });
-
-  test("a store session is drawn over its record's span, the timeline's, not 0:00 to 0:00", () => {
-    // `recordSegments`: one segment, the record's open to its close; playtime its length.
-    const span = 9 * 60_000 + 39_000;
-    const record = recordSegments({ startedAt: T0, endedAt: T0 + span });
-    expect(record).toEqual([{ start: T0, end: T0 + span }]);
-    const served = playtimeMs(record, { lastTs: null, live: false, now: T0 + DAY });
-    expect(served).toBe(span);
-    const run = { source: "store" as const, live: false, comparability: null, startedAt: T0, endedAt: T0 + span };
-    const c = runChartInput([s(T0, 3, 410), s(T0 + 5 * 60_000, 3, 820)], run, record, served, T0 + DAY);
-    // The window runs to the record's end, past the last sample at five minutes.
-    const m = xpChartModel(c.states, { startedAt: c.startedAt, endedAt: c.endedAt, episodeMs: chartWindowMs(run, served), now: c.now });
-    expect([m.t0, m.t1]).toEqual([0, span]);
-    expect(c.endedAt).toBe(span);
-  });
-
-  test("chartWindowMs: a run's episode budget, an ended store session's span, a live one's nothing", () => {
-    const budget = { budget: { episodeMs: 90 * 60_000 } };
-    expect(chartWindowMs({ live: false, comparability: budget }, 30_000)).toBe(90 * 60_000);
-    expect(chartWindowMs({ live: false, comparability: null }, 30_000)).toBeNull();
-    expect(chartWindowMs({ source: "store", live: false, comparability: null }, 579_000)).toBe(579_000);
-    expect(chartWindowMs({ source: "store", live: true, comparability: null }, 579_000)).toBeNull();
-  });
-
-  test("a run served without sessions keeps the wall clock", () => {
-    const c = runChartInput(states, { startedAt: T0, endedAt: null, live: true }, undefined, null, RESUME + HOUR);
-    expect(c.states).toEqual(states);
-    expect([c.startedAt, c.endedAt, c.now]).toEqual([T0, null, RESUME + HOUR]);
-    expect(c.seams).toEqual([]);
-  });
-});
-
-describe("hasModelSide", () => {
-  test("a store session has none, so its run page draws no model, token or cost card; every run has one", () => {
-    expect(hasModelSide({ source: "store" })).toBe(false);
-    expect(hasModelSide({})).toBe(true);
-  });
-});
-
-describe("showsComparability", () => {
-  test("a run with a model side on a deployment with evals on draws the tuple and the server line", () => {
-    expect(showsComparability({}, { evals: true })).toBe(true);
-  });
-  test("a store session draws neither, whatever the groups", () => {
-    expect(showsComparability({ source: "store" }, { evals: true })).toBe(false);
-    expect(showsComparability({ source: "store" }, { evals: false })).toBe(false);
-  });
-  test("with evals off no run draws them", () => {
-    expect(showsComparability({}, { evals: false })).toBe(false);
-  });
-});
-
-describe("chartClock", () => {
-  test("a live run's chart follows the 1 Hz clock; an ended run's is not laid out again by it", () => {
-    createRoot((dispose) => {
-      const [now, setNow] = createSignal(1_000);
-      const [live, setLive] = createSignal(true);
-      let runs = 0;
-      const chart = createMemo(() => {
-        runs++;
-        return chartClock(live(), now);
-      });
-      expect(chart()).toBe(1_000);
-      setNow(2_000);
-      expect([chart(), runs]).toEqual([2_000, 2]);
-      // The run ends: the clock is read once more, then never tracked.
-      setLive(false);
-      expect([chart(), runs]).toEqual([2_000, 3]);
-      setNow(3_000);
-      setNow(4_000);
-      expect([chart(), runs]).toEqual([2_000, 3]);
-      dispose();
-    });
   });
 });

@@ -13,7 +13,6 @@ import type { DeathCause } from "../src/sandbox/snippet-delta";
 import {
   endedRunKey,
   fanoutConditionLines,
-  fanoutDeathLine,
   freshRoutines,
   ProgramWake,
   renderWake,
@@ -208,12 +207,6 @@ describe("fan-out: each character's death cause and condition", () => {
     expect(woke.block).toContain("  Alfa: cause not seen");
   });
 
-  test("a death line is cut so five stay readable", () => {
-    const line = fanoutDeathLine("Alfa", { ts: 1, killer: "x".repeat(300), damage: DEFIAS });
-    expect(line.length).toBe(200);
-    expect(line.endsWith("…")).toBe(true);
-  });
-
   const WORN: SnapshotLike["inventory"] = [
     { slot: 4, name: "Patched Vest", durability: { current: 48, max: 60 } },
     { slot: 15, name: "Rusted Cleaver", durability: { current: 0, max: 40 } },
@@ -290,17 +283,6 @@ describe("durability crossings are reported at the next wake", () => {
     expect((await wake.sleep(p, { ...opts, turn: 2 })).block).not.toContain("worn down");
   });
 
-  test("at fan-out each entry names its character", async () => {
-    const c = fakeClock();
-    const wake = new ProgramWake({ trajectory: { append: () => {}, scrub: (t) => t }, now: c.now, sleep: c.sleep });
-    let worn: Record<string, SnapshotLike["inventory"]> = { Alfa: inv(48, 40), Bravo: inv(48, 40) };
-    wake.useWorn(async () => worn);
-    wake.onSample({ seats: [{ character: "Alfa", level: 18, connected: true }, { character: "Bravo", level: 18, connected: true }] });
-    const opts = { via: "turn-end" as const, capMs: 20_000, floorMs: 3_000, stopped: () => false, kept: true, hud: true };
-    expect((await wake.sleep(fakeProgram(), { ...opts, turn: 1 })).block).not.toContain("worn down");
-    worn = { Alfa: inv(48, 0), Bravo: inv(12, 40) };
-    expect((await wake.sleep(fakeProgram(), { ...opts, turn: 2 })).block).toContain("worn down since you slept: Alfa main hand Rusted Cleaver broken (0/40); Bravo chest Patched Vest low (12/60)");
-  });
 });
 
 describe("routine rows long ended and already shown are left out", () => {

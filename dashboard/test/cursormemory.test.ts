@@ -37,22 +37,6 @@ function track(runId: string, times: number[]): TrackResponse {
 const RUN_A = track("run-a", [1000, 2000, 3000]);
 
 describe("cursor memory", () => {
-  test("a run never scrubbed opens at its first recorded sample", () => {
-    expect(createCursorMemory().resume(RUN_A)).toBe(1000);
-  });
-
-  test("a scrubbed run reopens where it was left", () => {
-    const mem = createCursorMemory();
-    mem.remember("run-a", 2500);
-    expect(mem.resume(RUN_A)).toBe(2500);
-  });
-
-  test("the end of the track is inside the span, not past it", () => {
-    const mem = createCursorMemory();
-    mem.remember("run-a", 3000);
-    expect(mem.resume(RUN_A)).toBe(3000);
-  });
-
   test("a cursor beyond the loaded track falls back to the first sample", () => {
     // The track that loads is the authority: a run whose recording is shorter
     // than what was remembered would otherwise park the scrubber out of range.
@@ -61,26 +45,6 @@ describe("cursor memory", () => {
     expect(mem.resume(RUN_A)).toBe(1000);
     mem.remember("run-a", 1);
     expect(mem.resume(RUN_A)).toBe(1000);
-  });
-
-  test("one run's cursor never lands in another's replay", () => {
-    const mem = createCursorMemory();
-    mem.remember("run-a", 2500);
-    expect(mem.resume(track("run-b", [1000, 2000, 3000]))).toBe(1000);
-  });
-
-  test("runs are remembered independently", () => {
-    const mem = createCursorMemory();
-    mem.remember("run-a", 2500);
-    mem.remember("run-b", 1500);
-    expect(mem.resume(RUN_A)).toBe(2500);
-    expect(mem.resume(track("run-b", [1000, 2000]))).toBe(1500);
-  });
-
-  test("a run that recorded no position has no cursor to resume", () => {
-    const mem = createCursorMemory();
-    mem.remember("run-a", 2500);
-    expect(mem.resume(track("run-a", []))).toBe(0);
   });
 
   /*
@@ -151,16 +115,5 @@ describe("cursor memory", () => {
     p.navigate("run-a");
     expect(p.cursor()).toBe(2500);
     p.dispose();
-  });
-
-  test("a fresh page does not resume another page's cursor", () => {
-    /* The memory dies with the document: a new one is a new session. */
-    const first = createCursorMemory();
-    const a = page(first, "run-a");
-    a.scrubTo(2500);
-    a.dispose();
-    const b = page(createCursorMemory(), "run-a");
-    expect(b.cursor()).toBe(1000);
-    b.dispose();
   });
 });

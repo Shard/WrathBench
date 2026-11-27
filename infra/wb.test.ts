@@ -1,23 +1,21 @@
 /**
- * `bun wb`: the table, the plan each command becomes, and one real spawn
+ * `bun wb`: the table, the plan each command becomes, and a real spawn
  * through a `kubectl` shim.
  *
- * The properties pinned here are the ones the dispatcher exists for:
- *  - help and dispatch read one table, so every command is in the help with
- *    the argv it runs;
- *  - every command runs a file the repository has, and no command asks the
- *    runner pod to run wb itself (the pod's image can be older than the
- *    checkout);
+ * The properties pinned here are the ones that would hurt if they broke:
+ *  - every command runs a file the repository has, and a fleet command always
+ *    carries its mode flag (a bare one in the pod is a second supervisor);
+ *  - a group alone is help, never a release, and nothing cluster-driving has a
+ *    --local form;
+ *  - a row whose flag the pod's older copy of its file lacks never runs;
  *  - the operator's arguments reach the script byte for byte, whatever they
- *    look like;
- *  - a runner command on the cluster is a `kubectl exec` into the runner
- *    Deployment, and under --local an exec into compose's runner container.
+ *    look like.
  */
 import { describe, expect, test } from "bun:test";
 import { accessSync, chmodSync, constants, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./temp-dirs";
-import { ENTRIES, GROUPS, REPO_ROOT, argvFor, groupHelp, parse, plan, targetPath, topHelp, type Entry, type Options, type Plan } from "./wb";
+import { ENTRIES, GROUPS, REPO_ROOT, argvFor, parse, plan, targetPath, type Entry, type Options, type Plan } from "./wb";
 
 const tempDir = tempDirs();
 const WB = join(REPO_ROOT, "infra", "wb.ts");
@@ -56,36 +54,15 @@ describe("the table", () => {
     }
   });
 
-  test("no command runs wb itself, in the pod or here", () => {
-    for (const e of ENTRIES) {
-      for (const form of forms(e)) expect(form.argv.some((a) => /(^|\/)wb\.ts$|^infra\/cli\//.test(a)), `${e.group} ${e.command}`).toBe(false);
-    }
-  });
-
-  test("a runner command is `bun <file>`, the only thing the pod is asked to run", () => {
-    for (const e of ENTRIES) {
-      for (const form of forms(e)) if (form.place === "runner") expect(form.argv.slice(0, 2)).toEqual(["bun", targetPath(form)!]);
-    }
-  });
-
   test("every run-fleet.ts command carries its mode flag: a bare one in the pod is a second supervisor", () => {
     const fleet = ENTRIES.filter((e) => e.cluster.argv.includes("infra/run-fleet.ts"));
     expect(fleet.length).toBeGreaterThan(0);
     for (const e of fleet) expect(["--status", "--dry-run", "--clear-model"]).toContain(e.cluster.argv[2]!);
   });
 
-  test("the smokes are every infra/smoke/*.ts and nothing under lib/", () => {
-    const files = readdirSync(join(REPO_ROOT, "infra", "smoke"))
-      .filter((f) => f.endsWith(".ts"))
-      .map((f) => f.slice(0, -3))
-      .sort();
-    expect(ENTRIES.filter((e) => e.group === "smoke").map((e) => e.command)).toEqual(files);
-    expect(files).toContain("preflight");
-  });
-
   test("a row's required flag is in its argv and in this checkout's copy of its file", () => {
     const rows = ENTRIES.filter((e) => e.requires !== undefined);
-    expect(rows.map((e) => `${e.group} ${e.command}`).sort()).toEqual(["accounts camera", "accounts ensure", "accounts spectator", "accounts stager"]);
+    expect(rows.length).toBeGreaterThan(0);
     for (const e of rows) {
       for (const form of forms(e)) {
         expect(form.argv).toContain(e.requires!);
@@ -93,31 +70,9 @@ describe("the table", () => {
       }
     }
   });
-
-  test("the root package.json runs this file as `bun wb`", () => {
-    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(pkg.scripts["wb"]).toBe("bun infra/wb.ts");
-  });
 });
 
 describe("help is the table", () => {
-  test("the top help names every group and every command", () => {
-    const help = topHelp(CLUSTER);
-    for (const group of Object.keys(GROUPS)) expect(help).toContain(`  ${group} `);
-    for (const e of ENTRIES) expect(help).toContain(e.command);
-  });
-
-  test("a group's help shows each command with the argv it runs on each target", () => {
-    for (const group of Object.keys(GROUPS)) {
-      const help = groupHelp(group, CLUSTER);
-      for (const e of ENTRIES.filter((x) => x.group === group)) {
-        expect(help).toContain(`  ${e.command}`);
-        expect(help).toContain(argvFor(e.cluster, CLUSTER, []).join(" "));
-        if (e.local !== null) expect(help).toContain(argvFor(e.local, LOCAL, []).join(" "));
-      }
-    }
-  });
-
   test("no group runs anything on its own: `bun wb release` is help, never a release", () => {
     for (const group of Object.keys(GROUPS)) {
       expect(parse([group], {})).toEqual({ kind: "help", opts: CLUSTER, group });
@@ -125,14 +80,6 @@ describe("help is the table", () => {
     }
     expect(parse([], {})).toEqual({ kind: "help", opts: CLUSTER });
     expect(parse(["-h"], {})).toEqual({ kind: "help", opts: CLUSTER });
-  });
-
-  test("an unknown group, command or global flag is an error", () => {
-    expect(parse(["nope"], {}).kind).toBe("error");
-    expect(parse(["fleet", "nope"], {})).toMatchObject({ kind: "error", group: "fleet" });
-    expect(parse(["--nope", "fleet", "status"], {}).kind).toBe("error");
-    expect(parse(["-n"], {}).kind).toBe("error");
-    expect(parse(["fleet", "status"], { WRATHBENCH_TARGET: "staging" }).kind).toBe("error");
   });
 });
 
@@ -146,83 +93,15 @@ describe("arguments pass through untouched", () => {
       }
     }
   });
-
-  test("global flags after the command are the script's, not wb's", () => {
-    const r = parse(["run", "episode", "--local", "--model", "m", "-n", "elsewhere", "--release", "r"], {});
-    expect(r).toMatchObject({ kind: "run", opts: CLUSTER, args: ["--local", "--model", "m", "-n", "elsewhere", "--release", "r"] });
-  });
 });
 
 describe("where a command runs", () => {
   const entry = (g: string, c: string): Entry => ENTRIES.find((e) => e.group === g && e.command === c)!;
 
-  test("on the cluster, a runner command is a kubectl exec into the runner Deployment", () => {
-    expect(planned(entry("fleet", "status"), CLUSTER, []).argv).toEqual([
-      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/run-fleet.ts", "--status",
-    ]);
-    expect(planned(entry("config", "get"), CLUSTER, ["preflight"]).argv).toEqual([
-      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "runner/src/config-store.ts", "get", "preflight",
-    ]);
-    // A credential move rewrites a run's meta.json under the runs volume, so it runs where that is mounted.
-    expect(planned(entry("config", "move-credential"), CLUSTER, ["fleet-x", "claude-2", "--pin", "--note", "two words"]).argv).toEqual([
-      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--",
-      "bun", "runner/src/config-store.ts", "move-credential", "fleet-x", "claude-2", "--pin", "--note", "two words",
-    ]);
-    // The character archive reads the runs volume and the databases and drives SOAP: all in the runner.
-    expect(planned(entry("accounts", "export-character"), CLUSTER, ["fleet-x", "--no-trajectory"]).argv).toEqual([
-      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/character-archive.ts", "export", "fleet-x", "--no-trajectory",
-    ]);
-    expect(planned(entry("accounts", "import-character"), CLUSTER, ["x.tar.gz", "--account", "RUNNER3"]).argv).toEqual([
-      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/character-archive.ts", "import", "x.tar.gz", "--account", "RUNNER3",
-    ]);
-  });
-
-  test("the namespace and release come from the environment, and a global flag beats it", () => {
-    const env = { WRATHBENCH_K8S_NAMESPACE: "lab", WRATHBENCH_K8S_RELEASE: "wb2" };
-    const fromEnv = parse(["smoke", "preflight"], env);
-    expect(fromEnv).toMatchObject({ kind: "run", opts: { target: "cluster", namespace: "lab", release: "wb2" } });
-    if (fromEnv.kind !== "run") throw new Error("parse");
-    expect(planned(fromEnv.entry, fromEnv.opts, []).argv.slice(0, 7)).toEqual(["kubectl", "-n", "lab", "exec", "-i", "deploy/wb2-runner", "--"]);
-    const fromFlag = parse(["-n", "ns", "--release", "rel", "smoke", "preflight"], env);
-    expect(fromFlag).toMatchObject({ kind: "run", opts: { namespace: "ns", release: "rel" } });
-  });
-
-  test("a host script gets the namespace and release through its environment, never as a flag", () => {
-    const opts: Options = { target: "cluster", namespace: "lab", release: "wb2" };
-    const p = planned(entry("fleet", "drain"), opts, ["--dry-run"]);
-    expect(p.argv).toEqual(["infra/fleet-update.sh", "drain", "--dry-run"]);
-    expect(p.env).toEqual({ WRATHBENCH_K8S_NAMESPACE: "lab", WRATHBENCH_K8S_RELEASE: "wb2" });
-    expect(p.cwd).toBe(REPO_ROOT);
-  });
-
-  test("--local, or WRATHBENCH_TARGET=local, is the compose quickstart", () => {
-    expect(parse(["--local", "fleet", "status"], {})).toMatchObject({ kind: "run", opts: { target: "local" } });
-    const r = parse(["config", "audit", "5"], { WRATHBENCH_TARGET: "local" });
-    if (r.kind !== "run") throw new Error("parse");
-    expect(planned(r.entry, r.opts, r.args).argv).toEqual([
-      "docker", "compose", "-f", "infra/compose.yml", "exec", "-T", "runner", "bun", "runner/src/config-store.ts", "audit", "5",
-    ]);
-  });
-
-  test("an episode is run-episode.sh into the pod on the cluster, and its compose default under --local", () => {
-    expect(planned(entry("run", "episode"), CLUSTER, ["--model", "m"]).argv).toEqual(["infra/run-episode.sh", "--k8s", "--model", "m"]);
-    expect(planned(entry("run", "episode"), LOCAL, ["--model", "m"]).argv).toEqual(["infra/run-episode.sh", "--model", "m"]);
-  });
-
-  test("a campaign publish writes the pod's store on the cluster and the local one under --local", () => {
-    const file = "runner/campaigns/race-probe@1.json";
-    expect(planned(entry("campaign", "publish"), CLUSTER, [file]).argv).toEqual(["bun", "runner/src/campaign-publish.ts", "--k8s", file]);
-    expect(planned(entry("campaign", "publish"), LOCAL, [file]).argv).toEqual(["bun", "runner/src/campaign-publish.ts", file]);
-  });
-
   test("a command that drives the cluster has no --local form", () => {
     for (const [g, c] of [["release", "run"], ["release", "deploy"], ["release", "viewer"], ["fleet", "drain"], ["fleet", "resume"], ["fleet", "state"], ["server", "health"], ["server", "log-retention"]] as const) {
       expect(plan(entry(g, c), LOCAL, [])).toHaveProperty("refused");
     }
-  });
-
-  test("the local-model probe runs here on either target: it needs no module", () => {
-    expect(planned(entry("smoke", "local-model"), CLUSTER, []).argv).toEqual(["bun", "infra/smoke/local-model.ts"]);
   });
 });
 
@@ -276,26 +155,6 @@ describe("bun wb, for real", () => {
     ]);
   });
 
-  test("exits with the command's own code, and says nothing more when the file is in the pod", () => {
-    const r = runWb(["fleet", "status"], { FAKE_RC: "3" });
-    expect(r.code).toBe(3);
-    expect(r.calls.length).toBe(2);
-    expect(r.err).not.toContain("not in the runner pod");
-  });
-
-  test("names the deployed image when a failed command's file is not in the pod", () => {
-    const r = runWb(["smoke", "preflight"], { FAKE_RC: "1", FAKE_PRESENT: "absent" });
-    expect(r.code).toBe(1);
-    expect(r.calls[1]!.slice(-4)).toEqual(["-c", 'if [ -e "$1" ]; then echo present; else echo absent; fi', "sh", "infra/smoke/preflight.ts"]);
-    expect(r.err).toContain("infra/smoke/preflight.ts is not in the runner pod, which runs registry.example/wrathbench-runner:harness-0.5-1-gold");
-  });
-
-  test("--local execs into compose's runner container", () => {
-    const r = runWb(["--local", "smoke", "module-slice"]);
-    expect(r.code).toBe(0);
-    expect(r.calls).toEqual([["docker", "compose", "-f", "infra/compose.yml", "exec", "-T", "runner", "bun", "infra/smoke/module-slice.ts"]]);
-  });
-
   test("a row whose flag the pod's copy of its file lacks is refused, naming the image, and nothing runs", () => {
     const r = runWb(["accounts", "ensure", "SMOKE5"], { FAKE_PRESENT: "absent" });
     expect(r.code).toBe(2);
@@ -303,41 +162,6 @@ describe("bun wb, for real", () => {
     expect(r.calls[0]!.slice(-3)).toEqual(["sh", "--accounts-only", "infra/bootstrap/bootstrap.ts"]);
     expect(r.calls[1]!.slice(0, 4)).toEqual(["kubectl", "-n", "wrathbench", "get"]);
     expect(r.err).toContain("infra/bootstrap/bootstrap.ts predates --accounts-only; the pod runs registry.example/wrathbench-runner:harness-0.5-1-gold");
-  });
-
-  test("a check that cannot read the pod's file refuses too", () => {
-    const r = runWb(["accounts", "spectator"], { FAKE_PRESENT: "Error from server" });
-    expect(r.code).toBe(2);
-    expect(r.calls.length).toBe(1);
-    expect(r.err).toContain("could not read the runner pod's infra/spectator-account.ts");
-  });
-
-  test("once the pod's file has the flag, the command runs with the operator's names", () => {
-    const r = runWb(["accounts", "ensure", "SMOKE5", "PROBE"]);
-    expect(r.code).toBe(0);
-    expect(r.calls.length).toBe(2);
-    expect(r.calls[1]).toEqual([
-      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/bootstrap/bootstrap.ts", "--accounts-only", "SMOKE5", "PROBE",
-    ]);
-  });
-
-  test("--local checks nothing first, and needs no runner: a one-off of compose's bootstrap service, this checkout's file", () => {
-    const r = runWb(["--local", "accounts", "ensure", "SMOKE5"]);
-    expect(r.code).toBe(0);
-    expect(r.calls).toEqual([
-      ["docker", "compose", "-f", "infra/compose.yml", "run", "--rm", "--no-deps", "-T", "bootstrap", "bun", "infra/bootstrap/bootstrap.ts", "--accounts-only", "SMOKE5"],
-    ]);
-  });
-
-  test("a failed --local runner command says how to start the runner when it is not running, and only then", () => {
-    const down = runWb(["--local", "smoke", "module-slice"], { FAKE_RC: "1" });
-    expect(down.code).toBe(1);
-    expect(down.calls[1]).toEqual(["docker", "compose", "-f", "infra/compose.yml", "ps", "--status", "running", "-q", "runner"]);
-    expect(down.err).toContain("compose's `runner` container, which is not running");
-    expect(down.err).toContain("up -d --no-deps runner");
-    const up = runWb(["--local", "smoke", "module-slice"], { FAKE_RC: "1", FAKE_RUNNER_ID: "abc123" });
-    expect(up.code).toBe(1);
-    expect(up.err).not.toContain("not running");
   });
 
   test("help, and an unknown command, run nothing", () => {

@@ -93,6 +93,7 @@ describe("the program loop over a real sandbox", () => {
     const secret = lease.secret!;
     const sandbox = host(runDir, wake, module, secret);
     expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
+    overrideEvents(sandbox, () => evs(1, 5));
     const requests: ChatRequest[] = [];
     const stub = new StubAdapter([
       { content: null, toolCalls: [{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }, { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } }] },
@@ -133,6 +134,10 @@ describe("the program loop over a real sandbox", () => {
     ]);
     expect(records.find((r) => r.t === "deploy")).toMatchObject({ ok: true, by: "save", deploy: 1 });
     expect(records.find((r) => r.t === "routine" && r["event"] === "ended")).toMatchObject({ name: "trip", state: "returned" });
+    // The fixed loop keeps no earlier turn message, so every request holds one
+    // user message, this turn's, and carries the event window whole.
+    expect(requests.every((q) => q.messages.filter((m) => m.role === "user").length === 1)).toBe(true);
+    expect(requests.map((q) => String(q.messages.at(-1)!.content)).every((u) => u.includes(fullWindow(1, 5)) && !u.includes(EVENTS_UNCHANGED_LINE))).toBe(true);
 
     // The resume: a new process over the same run directory brings idle back.
     await sandbox.stop();
@@ -173,8 +178,8 @@ async function codexProgramRun(
     events?: (message: number) => EventSummary[];
     /** The fake's `WB_FAKE_MODE`; `tools` unless said. */
     mode?: string;
-    /** `WB_FAKE_ROLLOUT`'s entries; null writes none, so every read fails. A rollout of every turn unless said. */
-    rollout?: unknown[] | null;
+    /** `WB_FAKE_ROLLOUT`'s entries; a rollout of every turn unless said. */
+    rollout?: unknown[];
   } = {},
 ) {
   const runDir = tempDir("wrathbench-program-codex-");
@@ -203,7 +208,7 @@ async function codexProgramRun(
   const sandbox = host(runDir, wake, module, lease.secret!);
   expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
   overrideEvents(sandbox, o.events);
-  const rollout = o.rollout === null ? undefined : (o.rollout ?? calls.map((_, i) => ({ total: 10_000 * (i + 1) })));
+  const rollout = o.rollout ?? calls.map((_, i) => ({ total: 10_000 * (i + 1) }));
   const record = join(runDir, "fake-record.json");
   const started = Date.now();
   const outcome = await runCodexEpisode({
@@ -222,7 +227,7 @@ async function codexProgramRun(
       WB_FAKE_RECORD: record,
       WB_FAKE_CALLS: JSON.stringify(calls),
       WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a60",
-      ...(rollout !== undefined ? { WB_FAKE_ROLLOUT: JSON.stringify(rollout) } : {}),
+      WB_FAKE_ROLLOUT: JSON.stringify(rollout),
     },
     killGraceMs: 500,
     programWake: wake,
@@ -233,40 +238,7 @@ async function codexProgramRun(
 }
 
 describe("the program loop on the codex driver, through the fake CLI", () => {
-  test("the turn-end pause sleeps until a wake, whose block opens the next turn; yield is served and answers its wake", async () => {
-    const r = await codexProgramRun(
-      [
-        [
-          { name: "write_file", arguments: { path: "main.ts", content: MAIN } },
-          { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } },
-        ],
-        [
-          { name: "start_routine", arguments: { name: "idle" } },
-          { name: "yield", arguments: { seconds: 1 } },
-        ],
-      ],
-      { maxTurns: 2 },
-    );
-    expect(r.outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
-    // The program's prompt, tools and the raised tool timeout are what the CLI was handed.
-    expect(String(r.rec["instructions"])).toContain("## Your program");
-    const served = (r.rec["mcpToolsLists"] as { tools: { name: string }[] }[])[0]!.tools.map((t) => t.name);
-    expect(served).toEqual(expect.arrayContaining(["write_file", "start_routine", "stop_routine", "yield"]));
-    expect((r.rec["argvs"] as string[][])[0]).toContain("mcp_servers.wrathbench.tool_timeout_sec=600");
-    // The second turn opens with the wake trip's end caused, and only that turn.
-    const messages = r.rec["userMessages"] as string[];
-    expect(messages[0]).not.toContain("[wake");
-    expect(messages[1]).toMatch(/^\[turn 2\]\n\n\[wake 1 · slept \d+s · woke for: routine ended \(trip, returned\)\]/);
-    const results = r.records.filter((x) => x.t === "tool_result").map((x) => [x["name"], String(x["text"])]);
-    expect(results.find(([n]) => n === "write_file")?.[1]).toContain("loaded: deploy 1 · routines: idle, trip");
-    expect(results.find(([n]) => n === "yield")?.[1]).toContain("[wake 2 · slept 1s · woke for: 1s passed]");
-    expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([
-      ["turn-end", "routine_ended"],
-      ["yield", "cap"],
-    ]);
-  }, 60_000);
-
-  test("the pad goes whole only when the thread does not hold it as it is: the first turn, and after a snippet changed it", async () => {
+  test("the turn-end pause sleeps until a wake, whose block opens the next turn; yield is served; the pad and the event window go whole only when the thread does not hold them", async () => {
     const r = await codexProgramRun(
       [
         [
@@ -279,27 +251,52 @@ describe("the program loop on the codex driver, through the fake CLI", () => {
           { name: "run_snippet", arguments: { code: 'await scratchpad.write("# plan\\nfrom a snippet"); return 1' } },
           { name: "start_routine", arguments: { name: "trip", args: { to: "Westfall" } } },
         ],
-        [],
+        [
+          { name: "start_routine", arguments: { name: "idle" } },
+          { name: "yield", arguments: { seconds: 1 } },
+        ],
       ],
-      { maxTurns: 4 },
+      { maxTurns: 4, events: (n) => (n < 3 ? evs(1, 5) : evs(1, 6)) },
     );
+    expect(r.outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "4 turns" });
+    // The program's prompt, tools and the raised tool timeout are what the CLI was handed.
+    expect(String(r.rec["instructions"])).toContain("## Your program");
+    const served = (r.rec["mcpToolsLists"] as { tools: { name: string }[] }[])[0]!.tools.map((t) => t.name);
+    expect(served).toEqual(expect.arrayContaining(["write_file", "start_routine", "stop_routine", "yield"]));
+    expect((r.rec["argvs"] as string[][])[0]).toContain("mcp_servers.wrathbench.tool_timeout_sec=600");
+    const results = r.records.filter((x) => x.t === "tool_result").map((x) => [x["name"], String(x["text"])]);
+    expect(results.find(([n]) => n === "write_file")?.[1]).toContain("loaded: deploy 1 · routines: idle, trip");
+    expect(results.find(([n]) => n === "yield")?.[1]).toContain("[wake 4 · slept 1s · woke for: 1s passed]");
+    expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([
+      ["turn-end", "routine_ended"],
+      ["turn-end", "routine_ended"],
+      ["turn-end", "routine_ended"],
+      ["yield", "cap"],
+    ]);
     const messages = r.rec["userMessages"] as string[];
     expect(messages.length).toBe(4);
-    // Turn 1: the pad as it then was (empty).
+    // Each turn after a sleep opens with the wake its routine's end caused; the first with none.
+    expect(messages[0]).not.toContain("[wake");
+    expect(messages[1]).toMatch(/^\[turn 2\]\n\n\[wake 1 · slept \d+s · woke for: routine ended \(trip, returned\)\]/);
+    // Turn 1: the pad as it then was (empty), and the window whole.
     expect(messages[0]).toContain("[scratchpad]\n(empty");
-    // Turn 2: the model wrote it itself, so the thread holds it.
+    expect(messages[0]).toContain(fullWindow(1, 5));
+    // Turn 2: the model wrote the pad itself, so the thread holds it; the window is unchanged.
     expect(messages[1]).toEndWith("[scratchpad 0.0k/32k: unchanged since you last saw it in this conversation, so not repeated]");
     expect(messages[1]).not.toContain("# plan");
-    // Turn 3 is the same; turn 4 follows a snippet's write, which the thread never saw.
+    expect(messages[1]).toContain(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`);
+    // Turn 3 is the same; turn 4 follows a snippet's write, which the thread never saw, and a new event.
     expect(messages[2]).toContain("so not repeated]");
+    expect(messages[2]).toContain(EVENTS_UNCHANGED_LINE);
     expect(messages[3]).toEndWith("[scratchpad 0.0k/32k]\n# plan\nfrom a snippet");
+    expect(messages[3]).toContain(fullWindow(1, 6));
   }, 60_000);
 
   test("a stop request ends the sleep at once, and time asleep is not idle", async () => {
     const ac = new AbortController();
     // Nothing runs, so the turn-end sleep would last five minutes; idle is far shorter than the sleep.
-    setTimeout(() => ac.abort(), 6_000);
-    const r = await codexProgramRun([[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }]], { idleMs: 3_000, signal: ac.signal });
+    setTimeout(() => ac.abort(), 3_500);
+    const r = await codexProgramRun([[{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }]], { idleMs: 1_500, signal: ac.signal });
     expect(r.outcome).toEqual({ kind: "terminated", reason: "manual", detail: "aborted" });
     expect(r.ms).toBeLessThan(15_000);
     expect(r.records.filter((x) => x.t === "wake").map((x) => [x["via"], x["fired"]])).toEqual([["turn-end", "stopped"]]);
@@ -322,28 +319,12 @@ const rollout = (turns: number, compactAt?: number): unknown[] =>
   Array.from({ length: turns }, (_, i) => ({ total: 10_000 * (i + 1), ...(i + 1 === compactAt ? { compact: { pre: 440_000, post: 50_000 } } : {}) }));
 
 describe("the event window on codex's program loop", () => {
-  test("a window the thread already holds is a line; a new event sends it whole again", async () => {
-    const r = await codexProgramRun(TRIPS(4), { maxTurns: 4, events: (n) => (n < 3 ? evs(1, 5) : evs(1, 6)) });
-    const messages = r.rec["userMessages"] as string[];
-    expect(messages.length).toBe(4);
-    expect(messages[0]).toContain(fullWindow(1, 5));
-    expect(messages[1]).toContain(`\n\n${EVENTS_UNCHANGED_LINE}\n\n`);
-    expect(messages[2]).toContain(EVENTS_UNCHANGED_LINE);
-    expect(messages[3]).toContain(fullWindow(1, 6));
-  }, 60_000);
-
   test("a compaction the rollout shows sends the window whole in the next message", async () => {
     const r = await codexProgramRun(TRIPS(3), { maxTurns: 3, events: () => evs(1, 5), rollout: rollout(3, 2) });
     const messages = r.rec["userMessages"] as string[];
     expect(r.records.some((x) => x.t === "harness" && x["kind"] === "compaction")).toBe(true);
     expect(messages[1]).toContain(EVENTS_UNCHANGED_LINE);
     expect(messages[2]).toContain(fullWindow(1, 5));
-  }, 60_000);
-
-  test("a turn whose rollout could not be read may have hidden a compaction: every message sends the window whole", async () => {
-    const r = await codexProgramRun(TRIPS(3), { maxTurns: 3, events: () => evs(1, 5), rollout: null });
-    const messages = r.rec["userMessages"] as string[];
-    expect(messages.map((m) => m.includes(fullWindow(1, 5)))).toEqual([true, true, true]);
   }, 60_000);
 
   test("a thread that lost turns sends the window and the pad whole after it", async () => {
@@ -373,48 +354,5 @@ describe("the event window on codex's program loop", () => {
     // the turn has started), so the second is the line; every later one is whole.
     const r = await codexProgramRun(TRIPS(4), { maxTurns: 4, events: () => evs(1, 5), mode: "new-thread" });
     expect((r.rec["userMessages"] as string[]).map((m) => m.includes(EVENTS_UNCHANGED_LINE))).toEqual([false, true, false, false]);
-  }, 60_000);
-});
-
-describe("the event window on the fixed loop", () => {
-  test("keeps no earlier turn message, so every request carries the window whole", async () => {
-    const runDir = tempDir("wrathbench-program-window-");
-    const config = {
-      ...loadRunConfig({ driver: "stub", stepIntervalMs: 50, stateIntervalMs: 1, loop: "program", yield: true }),
-      runId: "run-program-window",
-      token: "run-program-window",
-    };
-    const trajectory = new Trajectory(runDir);
-    trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
-    const wake = new ProgramWake({ trajectory, tickMs: 20, coalesceMs: 100 });
-    const module = startStub();
-    stubs.push(module);
-    const lease = await leaseSessionSecret({ moduleUrl: module.url, token: TOKEN, account: "RUNNER", env: { WRATHBENCH_MODULE_SECRET: PORT_SECRET } });
-    const sandbox = host(runDir, wake, module, lease.secret!);
-    expect((await sandbox.evalSnippet(LOGIN)).value).toContain("Thalvorn");
-    overrideEvents(sandbox, () => evs(1, 5));
-    const requests: ChatRequest[] = [];
-    const stub = new StubAdapter([
-      { content: null, toolCalls: [{ name: "write_file", arguments: { path: "main.ts", content: MAIN } }, { name: "start_routine", arguments: { name: "trip", args: { to: "Goldshire" } } }] },
-      { content: "waiting", toolCalls: [] },
-      { content: null, toolCalls: [{ name: "yield", arguments: { seconds: 1 } }] },
-    ]);
-    const outcome = await runLoop({
-      config,
-      adapter: { label: "stub", complete: (req) => (requests.push(req), stub.complete(req)) },
-      sandbox,
-      scratchpad: new Scratchpad(join(runDir, "scratchpad.md")),
-      episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
-      trajectory,
-      watchdogs: new Watchdogs(config.watchdogs),
-      programWake: wake,
-    });
-    trajectory.close();
-    expect(outcome).toEqual({ kind: "terminated", reason: "stub-complete" });
-    const users = requests.map((q) => String(q.messages.at(-1)!.content));
-    expect(users.length).toBeGreaterThanOrEqual(3);
-    // The request holds one user message, this turn's: the earlier ones are not kept.
-    expect(requests.every((q) => q.messages.filter((m) => m.role === "user").length === 1)).toBe(true);
-    expect(users.every((u) => u.includes(fullWindow(1, 5)) && !u.includes(EVENTS_UNCHANGED_LINE))).toBe(true);
   }, 60_000);
 });

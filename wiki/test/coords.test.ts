@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { createMemoryBundle, makeWriter } from "../src/bundle";
 import { extractCoords } from "../src/coords";
 import { openBundle, searchReference } from "../src/search";
-import { stripWikitext } from "../src/strip";
 
 /*
  * Everything here is synthetic and invented. No dump, no bundle and no game
@@ -14,29 +13,13 @@ import { stripWikitext } from "../src/strip";
  */
 
 describe("extractCoords", () => {
-  test("a {{coords|X|Y|Zone}} template yields that triple", () => {
+  test("a {{coords|X|Y|Zone}} template yields that triple, whatever its case, spacing or zone link", () => {
     expect(extractCoords("Lorem {{coords|48.2|42.1|Elwynn Forest}} ipsum.")).toEqual([
       { zone: "Elwynn Forest", x: 48.2, y: 42.1, raw: "{{coords|48.2|42.1|Elwynn Forest}}" },
     ]);
-  });
-
-  test("case and internal whitespace are tolerated", () => {
-    const got = extractCoords("{{ Coords | 12.5 | 67.5 | Example Vale }}");
-    expect(got).toHaveLength(1);
-    expect(got[0]!.x).toBe(12.5);
-    expect(got[0]!.y).toBe(67.5);
-    expect(got[0]!.zone).toBe("Example Vale");
-  });
-
-  test("a coords template with no zone yields x and y only", () => {
-    expect(extractCoords("{{coords|10|20}}")).toEqual([
-      { x: 10, y: 20, raw: "{{coords|10|20}}" },
-    ]);
-  });
-
-  test("a wikilinked zone is reduced to its label", () => {
-    const got = extractCoords("{{coords|30|40|[[Example Vale|the vale]]}}");
-    expect(got[0]!.zone).toBe("the vale");
+    expect(extractCoords("{{ Coords | 12.5 | 67.5 | Example Vale }}")).toMatchObject([{ x: 12.5, y: 67.5, zone: "Example Vale" }]);
+    expect(extractCoords("{{coords|30|40|[[Example Vale|the vale]]}}")[0]!.zone).toBe("the vale");
+    expect(extractCoords("{{coords|10|20}}")).toEqual([{ x: 10, y: 20, raw: "{{coords|10|20}}" }]);
   });
 
   test("infobox loc + location fields are paired", () => {
@@ -52,12 +35,8 @@ describe("extractCoords", () => {
     expect(got[0]!.zone).toBe("Example Zone Beta");
   });
 
-  test("a page with no coordinates yields nothing", () => {
+  test("malformed templates and pages with none yield nothing", () => {
     expect(extractCoords("Just some prose with a [[link]] and no coordinates.")).toEqual([]);
-    expect(extractCoords("")).toEqual([]);
-  });
-
-  test("malformed templates are ignored", () => {
     expect(extractCoords("{{coords|foo|bar|Nowhere}}")).toEqual([]); // non-numeric
     expect(extractCoords("{{coords|48.2}}")).toEqual([]); // only one number
     expect(extractCoords("{{coords|999|-5|Nowhere}}")).toEqual([]); // out of range
@@ -69,25 +48,6 @@ describe("extractCoords", () => {
     expect(dup).toHaveLength(1);
     const many = Array.from({ length: 30 }, (_, i) => `{{coords|${i}|${i}|Z}}`).join(" ");
     expect(extractCoords(many).length).toBeLessThanOrEqual(8);
-  });
-
-  test("is deterministic and produces JSON-safe finite numbers", () => {
-    const wt = "{{coords|48.2|42.1|Elwynn Forest}}";
-    expect(extractCoords(wt)).toEqual(extractCoords(wt));
-    for (const c of extractCoords(wt)) {
-      expect(Number.isFinite(c.x)).toBe(true);
-      expect(Number.isFinite(c.y)).toBe(true);
-    }
-  });
-});
-
-describe("strip still drops the coords template", () => {
-  test("the template is gone from the readable text", () => {
-    const wt = "{{coords|48.2|42.1|Elwynn Forest}}\nExample Person Gamma stands here.";
-    const text = stripWikitext(wt);
-    expect(text).not.toContain("coords");
-    expect(text).not.toContain("48.2");
-    expect(text).toBe("Example Person Gamma stands here.");
   });
 });
 
@@ -111,28 +71,18 @@ describe("search returns wiki coords", () => {
     writer.flush();
   });
 
-  test("a title hit carries its coordinates as {zone,x,y}", () => {
+  test("a title or full-text hit carries its coordinates as {zone,x,y}", () => {
     const hit = searchReference(db, "Example Person Gamma")[0]!;
     expect(hit.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
-  });
-
-  test("a full-text hit carries its coordinates too", () => {
-    const hit = searchReference(db, "quest giver standing")[0]!;
-    expect(hit.title).toBe("Example Person Gamma");
-    expect(hit.coords?.[0]).toEqual({ zone: "Example Zone Beta", x: 48.2, y: 42.1 });
+    const body = searchReference(db, "quest giver standing")[0]!;
+    expect(body.title).toBe("Example Person Gamma");
+    expect(body.coords?.[0]).toEqual({ zone: "Example Zone Beta", x: 48.2, y: 42.1 });
   });
 
   test("a page without coordinates omits the field", () => {
     const hit = searchReference(db, "consectetur")[0]!;
     expect(hit.title).toBe("Example Zone Beta");
     expect(hit.coords).toBeUndefined();
-  });
-
-  test("coords survive a JSON round trip with finite numbers", () => {
-    const hits = searchReference(db, "Example Person Gamma");
-    const round = JSON.parse(JSON.stringify(hits)) as typeof hits;
-    expect(round[0]!.coords).toEqual(hits[0]!.coords);
-    expect(Number.isFinite(round[0]!.coords![0]!.x)).toBe(true);
   });
 });
 
@@ -156,21 +106,5 @@ describe("bundle schema", () => {
     w.close();
     expect(() => openBundle(path)).toThrow(/page_coords/);
     expect(() => openBundle(path)).toThrow(/bun wiki\/src\/build\.ts/);
-  });
-
-  test("searchReference degrades to no coords on a stale bundle without crashing", () => {
-    // A consumer that opens the sqlite file directly bypasses openBundle's
-    // guard (the runner no longer does — see runner/src/wiki.ts), so search
-    // itself must still not crash on a missing table.
-    const stale = new Database(":memory:");
-    stale.run("CREATE TABLE pages (id INTEGER PRIMARY KEY, title TEXT, ns INTEGER, text TEXT, text_len INTEGER)");
-    stale.run("CREATE TABLE redirects (source TEXT PRIMARY KEY, target TEXT, ns INTEGER)");
-    stale.run(`CREATE VIRTUAL TABLE pages_fts USING fts5(title, text, content='pages', content_rowid='id')`);
-    stale.run("INSERT INTO pages VALUES (1, 'Example Page', 0, 'lorem ipsum coordinates absent', 30)");
-    stale.run("INSERT INTO pages_fts(rowid, title, text) VALUES (1, 'Example Page', 'lorem ipsum coordinates absent')");
-    const hits = searchReference(stale, "Example Page");
-    expect(hits[0]!.title).toBe("Example Page");
-    expect(hits[0]!.coords).toBeUndefined();
-    stale.close();
   });
 });

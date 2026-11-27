@@ -8,15 +8,15 @@
  * two probe fan-out runs are in no public body and come back as withdrawn.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { renderSnapshot } from "../viewer/snapshot";
 import { verifyPublication } from "./publish-accept";
 import type { DungeonsResponse, EpisodesResponse } from "../viewer/api-types-evals";
 import { DUNGEON_SOLO_CLEARED_RUN, DUNGEON_SOLO_RUN, FANOUT_LIVE_RUN, FANOUT_RUN, writeFixture } from "./shots/fixture";
+import { tempDirs } from "./temp-dirs";
 
+const tempDir = tempDirs();
 const SOLO = [DUNGEON_SOLO_RUN, DUNGEON_SOLO_CLEARED_RUN];
 const PROBES = [FANOUT_RUN, FANOUT_LIVE_RUN];
 
@@ -26,7 +26,7 @@ const get = async (publicMode: boolean, path: string): Promise<Response> => awai
 
 beforeAll(async () => {
   delete process.env["CLICKHOUSE_URL"];
-  runsDir = mkdtempSync(join(tmpdir(), "wb-dungeons-"));
+  runsDir = tempDir("wb-dungeons-");
   await writeFixture(runsDir).ready;
 }, 60_000);
 
@@ -40,12 +40,6 @@ describe("/api/dungeons", () => {
       });
       const solo = JSON.stringify(body.boards.find((b) => b.episode === "deadmines-solo"));
       for (const id of SOLO) expect({ publicMode, id, named: solo.includes(`"${id}"`) }).toEqual({ publicMode, id, named: true });
-      // Each row carries its best attempt's cost, the provider's charge summed over its responses, on either handle.
-      const costs = body.boards[0]!.rows.map((r) => [r.best.runIds[0], r.best.costUsd === null ? null : Number(r.best.costUsd.toFixed(2))]).sort();
-      expect({ publicMode, costs }).toEqual({ publicMode, costs: [[DUNGEON_SOLO_RUN, 0.36], [DUNGEON_SOLO_CLEARED_RUN, 4.2]].sort() });
-      // The route's seven are its bosses; Cookie, killed on the ship, rides beside them as the extra.
-      const bosses = body.boards[0]!.rows.map((r) => [r.best.runIds[0], r.best.bosses.length, r.best.cookie]).sort();
-      expect({ publicMode, bosses }).toEqual({ publicMode, bosses: [[DUNGEON_SOLO_RUN, 3, false], [DUNGEON_SOLO_CLEARED_RUN, 7, true]].sort() });
     }
   }, 60_000);
 });

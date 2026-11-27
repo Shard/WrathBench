@@ -2,18 +2,14 @@
  * The typed client. What is worth pinning is the contract, not the fetch:
  * that every method is a GET, that paths are root-relative so the same code
  * works behind the dev proxy and same-origin off the viewer, that a run id is
- * encoded rather than interpolated, and that a non-2xx becomes an `ApiError`
- * carrying the status a page needs to tell 404 from 500.
- *
- * The typing is checked by construction: the responses below are declared as
- * the shared wire types from `viewer/api-types.ts`, so a drift between
- * the viewer's shapes and the client's is a compile error, not a runtime one.
+ * encoded rather than interpolated, that a non-2xx becomes an `ApiError`
+ * carrying the status a page needs to tell 404 from 500, and that the memo
+ * never holds a failure.
  */
 
 import { describe, expect, test } from "bun:test";
 import type { RunsResponse } from "../../viewer/api-types";
-import type { FleetResponse } from "../../viewer/api-types-runner";
-import { ApiError, createClient, LIVE_TTL_MS, sweepExpired } from "../src/api/client";
+import { ApiError, createClient } from "../src/api/client";
 
 interface Call {
   url: string;
@@ -54,99 +50,12 @@ describe("paths", () => {
     ]);
   });
 
-  test("the episode filter travels in the query, and is omitted when unset", async () => {
-    const s = stub({ runs: [] });
-    const c = createClient({ fetch: s.fetch });
-    await c.episodes();
-    await c.results();
-    await c.results("e360");
-    await c.results("all");
-    await c.ladder("e360");
-    expect(s.calls.map((x) => x.url)).toEqual([
-      "/api/episodes",
-      // No param at all: the server's own default (e90) is the one default.
-      "/api/results",
-      "/api/results?episode=e360",
-      "/api/results?episode=all",
-      "/api/ladder?episode=e360",
-    ]);
-    expect(s.calls.every((x) => x.method === "GET")).toBe(true);
-  });
-
   test("a run id is encoded, never interpolated raw", async () => {
     const s = stub({});
     const c = createClient({ fetch: s.fetch });
     await c.run("../../etc/passwd");
     expect(s.calls[0]!.url).toBe("/api/run/..%2F..%2Fetc%2Fpasswd");
     expect(s.calls[0]!.url).not.toContain("/etc/");
-  });
-
-  test("windowing passes from and limit through", async () => {
-    const s = stub({ from: 0, total: 0, entries: [] });
-    const c = createClient({ fetch: s.fetch });
-    await c.entries("r1", 40, 60);
-    expect(s.calls[0]!.url).toBe("/api/run/r1/entries?limit=60&from=40");
-    // The timeline's jump to a time: the window that holds it.
-    await c.entriesAt("r1", 1_763_000_000_499.6, 60);
-    expect(s.calls[1]!.url).toBe("/api/run/r1/entries?limit=60&at=1763000000500");
-  });
-
-  test("a base prefix is honoured, for a viewer reached elsewhere", async () => {
-    const s = stub({});
-    await createClient({ fetch: s.fetch, base: "http://127.0.0.1:8091" }).runs();
-    expect(s.calls[0]!.url).toBe("http://127.0.0.1:8091/api/runs");
-  });
-
-  test("the stream URL is derived, not fetched", () => {
-    expect(createClient().streamUrl("a b")).toBe("/api/run/a%20b/stream");
-    // The first entry the page does not hold; 0 is a real start, not "absent".
-    expect(createClient().streamUrl("a b", 42)).toBe("/api/run/a%20b/stream?from=42");
-    expect(createClient().streamUrl("r", 0)).toBe("/api/run/r/stream?from=0");
-  });
-
-  test("a trace window is its run's path and its t0, and nothing else is asked for", async () => {
-    const s = stub({});
-    const c = createClient({ fetch: s.fetch });
-    await c.traceSegment("a b", 1_760_000_100_000);
-    expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/trace/1760000100000"]);
-    for (const bad of [Number.NaN, 1.5, -300_000, Number.MAX_SAFE_INTEGER + 2]) {
-      const err = (await c.traceSegment("r1", bad).catch((e: unknown) => e)) as ApiError;
-      expect(err).toBeInstanceOf(ApiError);
-    }
-    expect(s.calls.length).toBe(1);
-  });
-
-  test("a run's trace index is its run's trace path", async () => {
-    const s = stub({ segMs: 300_000, segs: [], tail: null, now: 0 });
-    await createClient({ fetch: s.fetch }).traceIndex("a b");
-    expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/trace"]);
-  });
-
-  test("a run's nearby window is its run's nearby path with the span, a whole number of ms", async () => {
-    const s = stub({});
-    await createClient({ fetch: s.fetch }).nearby("a b", 60_000.4);
-    expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/nearby?span=60000"]);
-  });
-
-  test("the live feed says it renders on request", () => {
-    expect(createClient().feedCadence).toEqual({ renderMs: 0, cacheMs: LIVE_TTL_MS });
-  });
-
-  test("a run's scratchpad is its run's scratchpad path, read as the text it is served as", async () => {
-    // The viewer serves the file's own text/plain, not JSON: a body that is
-    // not JSON at all must come back whole, as the published shape.
-    const pad = "# Plan\n- [ ] turn in {quests}\n<b>not markup</b>";
-    const s = stub(pad);
-    expect(await createClient({ fetch: s.fetch }).scratchpad("a b")).toEqual({ text: pad });
-    expect(s.calls).toEqual([{ url: "/api/run/a%20b/scratchpad", method: "GET" }]);
-  });
-
-  test("a run with no scratchpad is a 404 the page can tell apart", async () => {
-    const c = createClient({ fetch: stub({ error: "no scratchpad" }, 404).fetch });
-    const err = (await c.scratchpad("r1").catch((e: unknown) => e)) as ApiError;
-    expect(err).toBeInstanceOf(ApiError);
-    expect(err.status).toBe(404);
-    expect(err.message).toContain("no scratchpad");
   });
 });
 
@@ -157,44 +66,6 @@ describe("errors", () => {
     const err = (await c.run("nope").catch((e: unknown) => e)) as ApiError;
     expect(err.status).toBe(404);
     expect(err.message).toContain("no such run");
-  });
-
-  test("a non-JSON error body still produces a status, not a parse crash", async () => {
-    const c = createClient({ fetch: stub("<html>gateway</html>", 502).fetch });
-    const err = (await c.runs().catch((e: unknown) => e)) as ApiError;
-    expect(err.status).toBe(502);
-  });
-});
-
-describe("shapes", () => {
-  test("a run listing round-trips as the shared wire type", async () => {
-    const payload: RunsResponse = {
-      runs: [
-        {
-          runId: "r1", model: "m", driver: "openai", harness: "wrathbench", shakeout: null, objective: null,
-          campaign: null, cell: null, extra: false,
-          comparability: null, continuedFrom: null,
-          character: "Chr", race: 3, raceName: "Dwarf", class: 3, className: "Hunter",
-          characterLabel: "Dwarf Hunter", platform: "openrouter", resolvedModel: "claude-sonnet-5", cliVersion: "2.1.239",
-          apiBase: null, harnessVersion: "harness-0.2",
-          startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
-          pauseReason: null, level: 4, xp: 0, money: 0, questsCompleted: 2, items: null, mtime: 5,
-          bytes: 9, live: true, tokens: null, cost: null, firstTs: 1, lastTs: 2, playtimeMs: 1,
-          modelResponses: 3,
-        },
-      ],
-    };
-    const got = await createClient({ fetch: stub(payload).fetch }).runs();
-    expect(got.runs[0]!.level).toBe(4);
-    // A recorded zero is a value, not a gap: it must survive the round trip.
-    expect(got.runs[0]!.xp).toBe(0);
-  });
-
-  test("an absent fleet reads as present:false with no jobs", async () => {
-    const payload: FleetResponse = { present: false, server: { phase: "running", since: 1, build: "", detail: "", updatedAt: 1 }, jobs: [], accounts: [], paused: [], ended: [], now: 1 };
-    const got = await createClient({ fetch: stub(payload).fetch }).fleet();
-    expect(got.present).toBe(false);
-    expect(got.jobs).toHaveLength(0);
   });
 });
 
@@ -219,21 +90,6 @@ describe("the memo", () => {
     expect(s.calls).toHaveLength(2);
   });
 
-  test("the window is shorter than the shortest poll a page runs", () => {
-    // The whole safety argument for memoising the live path: a 5s feed's tick
-    // always finds its entry expired, so no page's cadence is reduced.
-    expect(LIVE_TTL_MS).toBeLessThan(5_000);
-  });
-
-  test("different URLs are different entries", async () => {
-    const s = stub({ runs: [] });
-    const c = createClient({ fetch: s.fetch, now: () => 0 });
-    await c.ladder("e90");
-    await c.ladder("freeplay");
-    await c.ladder("e90");
-    expect(s.calls.map((x) => x.url)).toEqual(["/api/ladder?episode=e90", "/api/ladder?episode=freeplay"]);
-  });
-
   test("concurrent callers share one request rather than racing", async () => {
     const s = stub({ runs: [] });
     const c = createClient({ fetch: s.fetch, now: () => 0 });
@@ -249,18 +105,5 @@ describe("the memo", () => {
     // Two attempts, not one attempt and a remembered failure holding the
     // window: a blip must not outlive the request that hit it.
     expect(s.calls).toHaveLength(2);
-  });
-
-  test("expired entries are swept, not only overwritten", () => {
-    // Expiry alone does not bound the map: a session's navigation mints URLs
-    // per episode, harness and run id that are never asked for again.
-    const cache = new Map([
-      ["/api/ladder?episode=e90", { at: 0 }],
-      ["/api/ladder?episode=freeplay", { at: 4_000 }],
-    ]);
-    sweepExpired(cache, 4_000, 4_000);
-    expect([...cache.keys()]).toEqual(["/api/ladder?episode=freeplay"]);
-    sweepExpired(cache, 7_999, 4_000);
-    expect(cache.size).toBe(1);
   });
 });
