@@ -36,10 +36,10 @@ import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsR
 import { characterLabel, className, raceName } from "../src/characters";
 import { harnessOfRun, parseComparability } from "../src/comparability-tuple";
 import { platformOf } from "../src/platform";
-import type { RunFact } from "../src/models";
+import type { RunFact } from "../src/run-fact";
 import type { RunTotals } from "../src/run-totals";
 import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } from "../src/run-list";
-import { runCredentialOf } from "../src/credential-slots";
+import { runCredentialOf } from "../src/run-credential";
 import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";
 import { sessionStoreOf } from "../src/session-store";
 

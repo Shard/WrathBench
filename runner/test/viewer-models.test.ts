@@ -18,7 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ConfigStore, splitFleet } from "../src/config-store";
-import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster, rosterNameOf } from "../viewer/models";
+import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster } from "../viewer/models";
+import { rosterNameOf } from "../viewer/roster";
 import type { ModelsResponse, RunDetailResponse } from "../viewer/api-types";
 
 const SENTINEL = "sentinel-bearer-9d31ff";

@@ -31,7 +31,7 @@
  */
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
-import type { RunReading } from "./models";
+import type { RunReading } from "./run-fact";
 
 interface Entry {
   key: string;

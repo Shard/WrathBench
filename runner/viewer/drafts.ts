@@ -50,6 +50,8 @@ import type {
   TokenTotals,
 } from "./api-types";
 import { breakdownTotal, costOf } from "./pricing";
+import { fullRosterOf } from "./models";
+import type { RosterBase } from "./roster";
 
 /** The catalogue a fetch reads. */
 export const CATALOGUE_URL = CATALOGUE;
@@ -371,6 +373,11 @@ function median(xs: readonly number[]): number {
   const s = [...xs].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return Math.round(s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2);
+}
+
+/** The policy a draft's estimate is priced under: the roster's, completed off the handle's shared read (`fullRosterOf`). */
+export function draftPolicyOf(roster: RosterBase): SchedulingPolicy {
+  return fullRosterOf(roster).policy;
 }
 
 /**

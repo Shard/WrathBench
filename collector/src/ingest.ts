@@ -54,7 +54,7 @@ import { SessionReader, type CallRow, type EventRow, type StreamCursor } from "@
 import { openRunDb } from "../../runner/src/rundb";
 import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, milestoneOfEvent, readRunRow, SESSIONS_DIR, sessionDirOfRun, sessionSamplesOf, turnIndexOf } from "../../runner/src/run-reader";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/src/run-totals";
-import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
+import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/run-fact";
 import { isBareSessionDir } from "../../runner/src/session-store";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
 import type { Batcher } from "./batch";

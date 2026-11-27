@@ -11,7 +11,7 @@ import { json, notFound, withheld } from "./http";
 import type { RunDetailResponse, RunRow, TrackResponse } from "./api-types";
 import { episodeOf, questsAcrossRestarts, trackFrom } from "./results";
 import { ENTRIES_WINDOW } from "./public-keys";
-import { rosterNameOf } from "./models";
+import { rosterNameOf } from "./roster";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
 import { creatureNamesOf, partyDetailOf } from "./party-marks";

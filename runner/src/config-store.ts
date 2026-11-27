@@ -53,6 +53,18 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseFleet } from "../../infra/run-fleet-config";
 import {
+  CONFIG_DB_BUSY_TIMEOUT_MS,
+  configDbPath,
+  DRAFT_ROWS,
+  isCollection,
+  PROPOSED_PREFIX,
+  readFleetConfig,
+  renderFleet,
+  selectConfigRows,
+  TOP_LEVEL_KEYS,
+  type ConfigRow,
+} from "./config-read";
+import {
   CAMPAIGN_DEFS_PREFIX,
   campaignDefKey,
   campaignHash,
@@ -66,27 +78,23 @@ import { describeBudget, parseCredentials, rosterProviderRefusal, type Credentia
 import { subscriptionFamilyRefusal } from "./roster-refusal";
 import { parseSiteBlock } from "./site-settings";
 
-/** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
-export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
-
-/**
- * The top-level keys the store knows, in the order a rendered config writes
- * them — the order `infra/fleet.example.json` uses, so two exports diff
- * cleanly rather than reordering the whole document.
- *
- * A top-level key outside this list is not carried: `parseFleet` ignores
- * unknown top-level keys, and silently round-tripping something nothing reads
- * would make the store a place to hide config that does nothing.
+/*
+ * Reading the store — where it lives, its keys, how rows render, and
+ * `readFleetConfig` — is `config-read.ts`'s, which a reader loads without the
+ * write gate below; re-exported here unchanged.
  */
-export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "credentials", "roster", "policy", "site", "campaign-defs", "campaigns", "queue"] as const;
-
-/** The keys whose entries get a row each. Everything else is a singleton row. */
-export const COLLECTION_KEYS = ["credentials", "roster", "campaign-defs", "campaigns", "queue"] as const;
-export type CollectionKey = (typeof COLLECTION_KEYS)[number];
-
-function isCollection(k: string): k is CollectionKey {
-  return (COLLECTION_KEYS as readonly string[]).includes(k);
-}
+export {
+  COLLECTION_KEYS,
+  CONFIG_DB_BUSY_TIMEOUT_MS,
+  configDbPath,
+  PROPOSED_PREFIX,
+  readFleetConfig,
+  renderFleet,
+  TOP_LEVEL_KEYS,
+  type CollectionKey,
+  type ConfigRow,
+  type FleetRead,
+} from "./config-read";
 
 /**
  * Whether a row key is one the renderer would actually emit.
@@ -167,17 +175,6 @@ function hashOf(doc: unknown): string | undefined {
   return typeof doc === "object" && doc !== null && typeof (doc as { hash?: unknown }).hash === "string" ? (doc as { hash: string }).hash : undefined;
 }
 
-/** One stored document: a whole singleton block, or one entry of a collection. */
-export interface ConfigRow {
-  /** `policy`, `roster/sonnet`, `queue/0`. */
-  key: string;
-  /** Position in the rendered file. Collection rows order within their key. */
-  ord: number;
-  /** The document, exactly as it was written. */
-  value: unknown;
-  updatedAt: number;
-}
-
 /** One line of the change history. `before`/`after` null means created/deleted. */
 export interface AuditRow {
   id: number;
@@ -218,16 +215,15 @@ export class ConfigRejected extends Error {
  *   and is recorded like any other.
  * - A reseed keeps them, so an ignored model stays ignored through
  *   `seed --force`.
+ *
+ * The prefix, and the SQL that keeps its rows out of a config read
+ * (`DRAFT_ROWS`), are `config-read.ts`'s.
  */
-export const PROPOSED_PREFIX = "proposed/";
 
 /** `proposed/<model id>`. */
 export function proposedKey(model: string): string {
   return `${PROPOSED_PREFIX}${model}`;
 }
-
-/** The SQL that keeps draft rows out of a config read. The prefix holds no GLOB metacharacter. */
-const DRAFT_ROWS = `key GLOB '${PROPOSED_PREFIX}*'`;
 
 /**
  * A promotion refused before anything was parsed: the draft is gone
@@ -241,24 +237,6 @@ export class DraftRefused extends Error {
     this.name = "DraftRefused";
     this.reason = reason;
   }
-}
-
-// ------------------------------------------------------------------ paths
-
-/**
- * Where the store lives: the data volume, beside `runs/`.
- *
- * `WRATHBENCH_CONFIG_DB` names the file outright; otherwise it is
- * `config.sqlite` under `WRATHBENCH_DATA`, which defaults to `data/` in the
- * checkout — the same directory `data/runs` already hangs off, and on the
- * cluster the `wrathbench-data` PVC at `/wrathbench/data`.
- */
-export function configDbPath(env: Record<string, string | undefined> = Bun.env): string {
-  const explicit = env["WRATHBENCH_CONFIG_DB"];
-  if (explicit !== undefined && explicit.length > 0) return explicit;
-  const data = env["WRATHBENCH_DATA"];
-  if (data !== undefined && data.length > 0) return join(data, "config.sqlite");
-  return join(resolve(import.meta.dir, "..", ".."), "data", "config.sqlite");
 }
 
 // --------------------------------------------------------- split and render
@@ -298,40 +276,6 @@ export function splitFleet(raw: unknown): ConfigRow[] {
     entries.forEach(([name, entry], n) => rows.push({ key: `${key}/${name}`, ord: n, value: entry, updatedAt: now }));
   }
   return rows;
-}
-
-/**
- * Render rows back to a fleet config document, in `TOP_LEVEL_KEYS` order and,
- * within a collection, in each row's `ord`.
- */
-export function renderFleet(rows: readonly ConfigRow[]): Record<string, unknown> {
-  const byKey = new Map<string, ConfigRow>();
-  for (const r of rows) byKey.set(r.key, r);
-  const out: Record<string, unknown> = {};
-  for (const key of TOP_LEVEL_KEYS) {
-    if (!isCollection(key)) {
-      const row = byKey.get(key);
-      if (row !== undefined) out[key] = row.value;
-      continue;
-    }
-    const members = rows
-      .filter((r) => r.key.startsWith(`${key}/`))
-      .slice()
-      .sort((a, b) => a.ord - b.ord || a.key.localeCompare(b.key));
-    if (members.length === 0) {
-      const empty = byKey.get(key);
-      if (empty !== undefined) out[key] = empty.value;
-      continue;
-    }
-    if (key === "queue") {
-      out[key] = members.map((r) => r.value);
-      continue;
-    }
-    const obj: Record<string, unknown> = {};
-    for (const r of members) obj[r.key.slice(key.length + 1)] = r.value;
-    out[key] = obj;
-  }
-  return out;
 }
 
 /**
@@ -467,20 +411,7 @@ export class ConfigStore {
   }
 
   private select(where: string): ConfigRow[] {
-    let raw: { key: string; ord: number; json: string; updated_at: number }[];
-    try {
-      raw = this.db
-        .query(`SELECT key, ord, json, updated_at FROM config WHERE ${where} ORDER BY ord, key`)
-        .all() as { key: string; ord: number; json: string; updated_at: number }[];
-    } catch (e) {
-      // A store that has never been written has no tables; that is "empty",
-      // not an error a read-only supervisor should die on. ANY other failure
-      // (locked, corrupt, I/O) is rethrown: reading a busy store as "zero
-      // rows" would tell the supervisor every job vanished.
-      if (/no such table/i.test(e instanceof Error ? e.message : String(e))) return [];
-      throw e;
-    }
-    return raw.map((r) => ({ key: r.key, ord: r.ord, value: JSON.parse(r.json) as unknown, updatedAt: r.updated_at }));
+    return selectConfigRows(this.db, where);
   }
 
   /** One document, or undefined. `key` is a row key (`roster/sonnet`). */
@@ -800,47 +731,6 @@ export function openConfigStore(path: string = configDbPath(), opts: OpenOptions
 /** The one line every reader prints for an empty store. */
 export const EMPTY_STORE_HINT =
   "config store empty — seed it: bun wb config seed infra/fleet.example.json, or add entries on /admin";
-
-/**
- * What a read of the store found. Three states, and the difference between the
- * last two is the whole point:
- *
- * - `ok`: rows, rendered to the config document as JSON text. Text, not a
- *   parsed config, because every caller already parses — through `parseFleet`,
- *   or through the viewer's own roster schema — and handing them text leaves
- *   those refusals exactly where they were.
- * - `empty`: the store has zero rows, or no file yet. Real, and legitimate:
- *   a fresh deployment before its one seed. The supervisor acts on it (an
- *   empty board) and says so every tick.
- * - `unreadable`: the store could not be opened or read (locked past the busy
- *   timeout, corrupt, a permissions slip). Transient by assumption: a reader
- *   keeps its last good config and reports the error, and never treats it as
- *   "every job vanished".
- */
-export type FleetRead =
-  | { status: "ok"; path: string; text: string }
-  | { status: "empty"; path: string }
-  | { status: "unreadable"; path: string; error: string };
-
-/**
- * Read the fleet config from the store. The one seam the supervisor, the
- * viewer and the CLI read config through, so "what the fleet runs" is a
- * property of every reader at once.
- */
-export function readFleetConfig(path: string = configDbPath()): FleetRead {
-  let store: ConfigStore | null = null;
-  try {
-    store = openConfigStore(path, { readonly: true });
-    if (store === null) return { status: "empty", path };
-    const rows = store.rows();
-    if (rows.length === 0) return { status: "empty", path };
-    return { status: "ok", path, text: JSON.stringify(renderFleet(rows)) };
-  } catch (e) {
-    return { status: "unreadable", path, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    store?.close();
-  }
-}
 
 /** Whether the store at this path has been seeded (cheap, closes its handle). */
 export function configStoreSeeded(env: Record<string, string | undefined> = Bun.env): boolean {

@@ -39,7 +39,7 @@ import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { bareSessionDir, isBareSessionDir, isBareSessionId, sessionStoreOf } from "./session-store";
 import { harnessOfRun, parseComparability } from "./comparability-tuple";
-import { runCredentialOf } from "./credential-slots";
+import { runCredentialOf } from "./run-credential";
 import { platformOf } from "./platform";
 
 /**
