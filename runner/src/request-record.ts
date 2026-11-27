@@ -58,7 +58,7 @@
  * the CLI's own and is not ours to rebuild, so their records keep `messages`.
  */
 
-import { promptHash } from "./comparability";
+import { promptHash } from "./comparability-tuple";
 import { CONTEXT_POLICY, renderWindow, type ChatMessage, type HistoryMessage } from "./context";
 
 /** The shape version this build writes. It rebuilds this one and version 1 (no fold). */

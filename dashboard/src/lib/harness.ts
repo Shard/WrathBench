@@ -12,14 +12,14 @@
  * unfortunate shared word; both filters coexist.
  *
  * Everything here is pure so it can be tested without a DOM (dashboard/README.md).
- * `harnessSeries` is re-derived rather than imported: `runner/src/comparability.ts`
+ * `harnessSeries` is re-derived rather than imported: `runner/src/comparability-tuple.ts`
  * is not one of the import-free modules the `@viewer/*` alias may cross.
  */
 
 /**
  * The series of a version stamp, or null when the stamp names none.
  *
- * Mirrors `harnessSeries` in `runner/src/comparability.ts`; the cases in
+ * Mirrors `harnessSeries` in `runner/src/comparability-tuple.ts`; the cases in
  * `dashboard/test/harness.test.ts` are the ones that file's own test pins, so a
  * drift shows up as a failing test on this side rather than as two surfaces
  * quietly disagreeing about which group a run is in.

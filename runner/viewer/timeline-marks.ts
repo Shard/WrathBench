@@ -11,32 +11,17 @@
  *   `clips.json` cut before this rule still lists them and still plays; a
  *   reader drops them here rather than drawing them.
  *
- * Pure, with no imports beyond types: the camera in `infra/`, the viewer and
- * the browser bundle all load it.
+ * Pure, with no imports beyond types and the import-free kinds
+ * (`runner/src/mark-kinds.ts`): the camera in `infra/`, the viewer and the
+ * browser bundle all load it.
  */
 
 import type { LevelUpFacts } from "./api-types";
 
-/** What a mark is of. */
-export type MarkKind = "level" | "boss" | "death";
-/** How it is drawn: a chapter divides the run, an event is a tick on it. */
-export type MarkRole = "chapter" | "event";
+import { isChapter, MARK_KINDS, type MarkKind, type MarkRole } from "../src/mark-kinds";
 
-const ROLES: Readonly<Record<MarkKind, MarkRole>> = { level: "chapter", boss: "chapter", death: "event" };
-
-/** Every kind that is marked at all, chapters first. */
-export const MARK_KINDS: readonly MarkKind[] = ["level", "boss", "death"];
-/** The kinds that are chapters. */
-export const CHAPTER_KINDS: readonly MarkKind[] = MARK_KINDS.filter((k) => ROLES[k] === "chapter");
-
-/** A recorded type's role, or null for one that is not marked (`quest`, `zone`, anything unknown). */
-export function markRole(type: string): MarkRole | null {
-  return Object.hasOwn(ROLES, type) ? ROLES[type as MarkKind] : null;
-}
-
-export function isChapter(type: string): boolean {
-  return markRole(type) === "chapter";
-}
+/* The kinds and their roles, from the import-free leaf the camera's layout reads too. */
+export { CHAPTER_KINDS, isChapter, MARK_KINDS, markRole, type MarkKind, type MarkRole } from "../src/mark-kinds";
 
 /** Creature rank 3 is a boss (`creature_template.rank`). */
 export const BOSS_RANK = 3;

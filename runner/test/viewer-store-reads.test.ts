@@ -18,7 +18,8 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../src/trajectory";
-import { STORE_SHARE_MS, coldRuns, createApi, fleetRunIds, heldAccounts, withoutRuns } from "../viewer/api";
+import { STORE_SHARE_MS, createApi } from "../viewer/api";
+import { coldRuns, fleetRunIds, heldAccounts, withoutRuns } from "../viewer/api-fleet";
 import { projectRunFacts } from "../viewer/public-projection";
 import type { FleetResponse, RunsResponse } from "../viewer/api-types";
 import {

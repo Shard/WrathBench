@@ -75,7 +75,10 @@ campaigns, scoring, the ladder, comparability) and **viewer** (the inspector,
 the run pages, the public site). A group that is off is absent, not hidden:
 the chart renders none of its workloads, and the processes that remain read
 `WRATHBENCH_GROUPS` once at start and mount none of its routes, render none of
-its pages and run none of its background work. A viewer-only deployment, for
+its pages and run none of its background work. The viewer does not even load
+an off group's code: its route modules are imported only with the group on,
+and `infra/viewer-boundary.test.ts` holds a viewer-only process to a module
+graph without the agent loop, the drivers, the MCP server or the wiki. A viewer-only deployment, for
 example, reads the sessions its own agents produced with no supervisor and no
 ladder. Which groups are on is deployment config, a chart value, because it
 decides which workloads exist, which the config store cannot; the store keeps

@@ -29,249 +29,21 @@
  *   still share one hash and a steered run visibly does not.
  */
 
-import { z } from "zod";
 import { checkModuleProtocol } from "@wrathbench/sdk";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
-import { driverEntry } from "./drivers";
-import { episodeIdSchema, isTaskEpisode } from "./episodes";
+import { episodeOverrideOf, harnessOf, type RunConfig } from "./config";
+import { isTaskEpisode } from "./episodes";
 import { buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
-import { routingForRun, routingSchema } from "./routing";
-import { agentSchema, servingSchema, SUBJECT_KINDS, type SubjectKind } from "./serving";
+import { routingForRun } from "./routing";
+import type { SubjectKind } from "./serving";
 import type { WikiBundleMeta } from "./wiki";
+import { promptHash, type Comparability, type ServerBuild } from "./comparability-tuple";
 
-/**
- * Harness as the tuple records it: which machinery decided what the model saw
- * each turn. `wrathbench` applies its own context policy (docs/METHODOLOGY.md,
- * "Context policy": event window, hysteretic message window, regenerated
- * per-turn context); `claude-code` is the Claude Code CLI and `codex` the
- * OpenAI Codex CLI, each of which owns its own history and compaction. A tag,
- * never a partition and never a scoring penalty (docs/METHODOLOGY.md, "Harness
- * and driver are separate words"): rows of every harness share the charts, and
- * none mixes two, because a model id runs under one harness (`harnessClash`).
+/*
+ * The tuple's shape and its readers (`comparability-tuple.ts`), re-exported
+ * so a launch, a resume and a test read the whole tuple from here.
  */
-export const harnessSchema = z.enum(HARNESSES);
-
-/** How long a run is allowed to be, in every unit the harness can end it by. */
-export const episodeBudgetSchema = z.object({
-  /** Driver turns. Null = unlimited (a result run). A claude-code turn is not
-   * a fixed-loop turn: one of them has held 168 tool calls. */
-  maxTurns: z.number().int().positive().nullable(),
-  /**
-   * Tool calls for the whole episode; enforced at the MCP boundary by the CLI
-   * drivers. The fixed loop stamps it and does not enforce it — its bound is
-   * `maxTurns` (runner/README.md, "The driver contract"). Null = no
-   * ceiling, which is the policy's `idle: "unlimited"` freeplay lane and
-   * nothing else. It is part of the budget, so a run that moved between a
-   * ceiling and none restamps rather than staying comparable to itself.
-   */
-  maxToolCalls: z.number().int().positive().nullable(),
-  /** Watchdog thresholds as they will actually be evaluated; null = disabled. */
-  idleMs: z.number().int().nonnegative().nullable(),
-  noXpMs: z.number().int().nonnegative().nullable(),
-  episodeMs: z.number().int().nonnegative().nullable(),
-  maxSandboxRestarts: z.number().int().positive(),
-});
-export type EpisodeBudget = z.infer<typeof episodeBudgetSchema>;
-
-/** The module's own build identity, as `/health` reported it at launch/resume. */
-export const serverBuildSchema = z
-  .object({
-    build: z.string(),
-    startedAtMs: z.number(),
-  })
-  .nullable();
-export type ServerBuild = z.infer<typeof serverBuildSchema>;
-
-/**
- * The reference bundle's identity as the tuple annotates it (docs/METHODOLOGY.md,
- * "Episodes, lanes, and evidence"). Every field nullable: this is evidence
- * about the file the run read, and a bundle that cannot describe itself must
- * read as "not recorded" rather than making the whole tuple unparseable.
- */
-export const wikiBundleSchema = z
-  .object({
-    schemaVersion: z.string().nullable(),
-    builtAt: z.string().nullable(),
-    source: z.string().nullable(),
-    eraCutoff: z.string().nullable(),
-  })
-  .nullable();
-
-export const comparabilitySchema = z.object({
-  /** `git describe` of the harness, as `version.ts` resolved it. */
-  harnessVersion: z.string(),
-  /** `sha256:` + the first 16 hex of the rendered system prompt's digest. */
-  promptHash: z.string(),
-  /** Length of that prompt, so a hash mismatch has a visible magnitude. */
-  promptChars: z.number().int().nonnegative(),
-  /** Which loop owned the run. */
-  harness: harnessSchema,
-  /** Reasoning effort, or null for "the field was never sent". */
-  effort: z.string().nullable(),
-  budget: episodeBudgetSchema,
-  /**
-   * Whether an operator objective steered this run. Recorded as a
-   * flag, never as the text: the tuple answers "is this comparable", and a run
-   * with an objective is unscored whatever the objective said.
-   */
-  objective: z.boolean(),
-  /**
-   * Whether the reference surface served wiki coordinates. Absent
-   * on tuples stamped before the field existed; those runs are grouped as
-   * "unrecorded", never as either side.
-   */
-  wikiCoords: z.boolean().optional(),
-  /**
-   * Which reference bundle the run read, off its `meta` table: schema version,
-   * build time, dump, and the era cutoff its prose was taken at. An
-   * *annotation*, not a grouping key of its own — a text-changing rebuild
-   * ships as a patch within the harness series (docs/METHODOLOGY.md, "The
-   * reference bundle"), and this field's build time is what marks the runs
-   * that read the text before it from the runs that read it after.
-   * Note that `sameComparability` compares every stamped field and so is
-   * stricter: a rebuild between launch and resume restamps. Null when there
-   * was no bundle; absent on tuples stamped before the field existed.
-   */
-  wikiBundle: wikiBundleSchema.optional(),
-  /**
-   * The episode tier the run was launched under (`episodes.ts`), or null for a
-   * run assembled flag-by-flag. Absent on tuples stamped before the field
-   * existed; a reader may derive a tier for those (viewer/results.ts) but nothing
-   * rewrites the stored tuple.
-   */
-  episode: episodeIdSchema.nullable().optional(),
-  /**
-   * True when a tier run's effective watchdogs are not its tier's — the run was
-   * launched (or resumed) with an explicit threshold on top of `--episode`. It
-   * still names its tier, but it must not pass as a clean tier run.
-   */
-  episodeOverride: z.boolean().optional(),
-  /**
-   * The worldserver's own build identity, off its `/health` at launch (or
-   * resume-restamp) time. Null when the module was unreachable — this must
-   * never block a launch, so a failed fetch reads the same as "not recorded"
-   * rather than failing the run.
-   */
-  serverBuild: serverBuildSchema,
-  /**
-   * Which backend the aggregator was allowed to route this run to, resolved
-   * exactly as the request sent it (`routing.ts`). A KEY, not an annotation:
-   * routing is stated at launch like `effort`, and two runs of one slug served
-   * by two machines — six have served `glm-5.3-flash` here — are two
-   * conditions of the tuple (operator, 2026-09-16). The ladder reads it as a
-   * fact about the run, not a chart or a row of its own: runs on any provider
-   * share a chart (operator, 2026-11-16; `runner/viewer/condition.ts`).
-   *
-   * An OpenCode Go run stamps `{ via: "OpenCode Go", allowFallbacks: true }`
-   * (`OPENCODE_GO_ROUTING`): Go picks the backend itself and a request cannot
-   * pin one, so the run is unpinned by construction and says so, keyed apart
-   * in the tuple from a pinned run of the same model elsewhere.
-   *
-   * ABSENT, never null, for a run whose request has no routing to state: a
-   * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run. That also
-   * keeps every such run stamping byte-for-byte as it did before the field
-   * existed, so nothing already in flight restamps on resume for a fact that
-   * did not change.
-   */
-  routing: routingSchema.optional(),
-  /**
-   * Present, and `false`, only on a run configured without the reference wiki
-   * (`config.wiki`, issue #61). A KEY, not an annotation: the tool is part of
-   * the fixed harness, so a run that had it and a run that did not are two
-   * conditions and must not share a chart — the same standing `effort` and
-   * `routing` have. The rendered prompt differs too, so `promptHash` already
-   * separates them; this field is what makes the separation readable.
-   *
-   * ABSENT, never `true`, for the ordinary run: the wiki is included by
-   * default, and leaving the field off keeps every run stamped before it
-   * existed byte-for-byte identical to what it stamps now.
-   */
-  wiki: z.literal(false).optional(),
-  /**
-   * The CLI harness's auto-compaction window (`RunConfig.compactWindow`,
-   * claude-code or codex), canonical `100k`…`1M`. A KEY with `effort`'s
-   * standing (operator decisions 2026-10-09, and 2026-10-11 for codex): where
-   * the CLI compacts decides how much history the model
-   * carries and what each turn costs, so a 100k run and an `auto` run are two
-   * conditions and must not share a chart.
-   *
-   * ABSENT, never null, for `auto` — the CLI's own window, which is every
-   * run whose config carries none and every run stamped before the field
-   * existed. Like `routing` and `wiki`, that keeps those tuples byte-for-byte
-   * what they were, so nothing resumes into a `comparability_restamped` for a
-   * fact that did not change. A driver's default window (claude-code's 300k,
-   * operator 2026-11-10) is in the config by the time this is stamped
-   * (`launchCompactWindow`), so a defaulted run carries it here and is never
-   * an `auto` run's row. Readers expose it as `string | null`, null being `auto`.
-   */
-  compactWindow: z.string().nullable().optional(),
-  /**
-   * The agent loop, when it is not the snippet loop (`RunConfig.loop`): the
-   * program loop. A KEY: the model writes and supervises a different thing,
-   * so the two loops are two conditions. ABSENT on the snippet loop, which
-   * keeps every tuple stamped before the field existed byte-for-byte what it
-   * was.
-   */
-  loop: z.literal("program").optional(),
-  /** The program loop's `yield` tool (`RunConfig.yield`). A KEY; absent when off. */
-  yield: z.literal(true).optional(),
-  /**
-   * A local build's weights, quantisation and runtime (`serving.ts`;
-   * operator, 2026-11-14). A KEY with `routing`'s standing: a quantised local
-   * build and the hosted model of one id are two conditions. ABSENT on a
-   * hosted run, so every tuple stamped before it stays what it was.
-   */
-  serving: servingSchema.optional(),
-  /**
-   * What is being tested: `local` (a build the operator serves) or `external`
-   * (an agent loop that is not ours). ABSENT is `hosted`, which is every run
-   * stamped before the field existed but a local one: a reader derives those
-   * from the platform at read time and never writes it back.
-   */
-  subject: z.enum(SUBJECT_KINDS).optional(),
-  /**
-   * A task episode's shape (operator, 2026-11-14): how many agents played it
-   * and how many characters each drove — five of one on `deadmines`, one of
-   * five on `deadmines-solo`. KEYS, so the two arms never pool even if an id
-   * were misread, and stamped from the run's own grant (`config.fanout`,
-   * `config.party`), which `loadRunConfig` has checked against the id.
-   * ABSENT on every other run, so no tuple stamped before them changes.
-   */
-  agents: z.number().int().positive().optional(),
-  characters: z.number().int().positive().optional(),
-  /**
-   * A task episode's pins, as KEYS: the content hash of the definition its id
-   * pins (composition, staging scenario and level, directive, end), and the
-   * hash of the stager's fixtures it was staged from (the scenario and the
-   * members' loadouts), so an edit to either splits the group instead of
-   * pooling across it. `staging` is absent when the launch named none.
-   */
-  task: z.object({ definition: z.string(), staging: z.string().optional() }).strict().optional(),
-  /**
-   * The agent an `external` run declared (`RunConfig.agent`): a KEY of that
-   * harness's own group. ABSENT on every run of ours.
-   */
-  agent: agentSchema.optional(),
-  /**
-   * The model id the provider said it actually served — `claude-sonnet-5` for a
-   * run launched as `sonnet`.
-   *
-   * An **annotation**, in exactly the sense the wiki bundle is one: it answers
-   * "which model was this really", which the roster alias cannot, and it is
-   * evidence rather than a grouping key. It is also the one field here that is
-   * *observed*, not stamped — the CLI resolves the alias at launch and names
-   * the result in its `init` event, minutes after the tuple is written — so it
-   * is filled in once when first seen and is deliberately excluded from
-   * `sameComparability`. Including it would make every resume of an aliased run
-   * emit a `comparability_restamped` record saying nothing.
-   *
-   * Null when nothing named a model; absent on tuples stamped before the field
-   * existed, which the viewer back-fills at read time and never rewrites.
-   */
-  resolvedModel: z.string().nullable().optional(),
-});
-export type Comparability = z.infer<typeof comparabilitySchema>;
+export * from "./comparability-tuple";
 
 /**
  * Read the worldserver's build identity off its `/health`, for the tuple.
@@ -304,33 +76,6 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
   return { build: body.build, startedAtMs: body.startedAtMs };
 }
 
-/**
- * The harness *series* of a version stamp: `harness-0.3-114-gda93f0a-dirty`
- * is series `"0.3"`. Commits within a series are fixes and instrumentation;
- * a minor bump is a change to what the run measures. The scheduler keys its
- * targets on the series of the checkout it runs from (a bump restarts the
- * evidence, a fix commit does not), and the results surface groups
- * by it, labelling rows with the exact versions they hold. Null when the
- * stamp has no recognisable major.minor (the unversioned fallback included),
- * so a reader says "no series" rather than inventing one.
- */
-export function harnessSeries(version: string | null | undefined): string | null {
-  if (version === null || version === undefined) return null;
-  let v = version.trim();
-  // `version.ts` on a host wraps `git describe` as `0.0.0-phase0+g<describe>`;
-  // the container path stamps the describe bare. Both name the same series.
-  const wrapped = /^0\.0\.0-phase0\+g(.+)$/.exec(v);
-  if (wrapped !== null) v = wrapped[1]!;
-  // The runner's own fallback stamps (`0.0.0-phase0...`) name no series.
-  if (v.startsWith("0.0.0")) return null;
-  const m = /^(?:harness-)?v?(\d+)\.(\d+)(?:[.-]|$)/.exec(v);
-  return m === null ? null : `${m[1]}.${m[2]}`;
-}
-
-/** `sha256:<16 hex>` of a string. Truncated: this identifies, it does not seal. */
-export function promptHash(text: string): string {
-  return `sha256:${new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 16)}`;
-}
 
 /**
  * The tuple for a run about to start (or resume) under `config`.
@@ -410,46 +155,4 @@ function taskKeysOf(config: RunConfig): Pick<Comparability, "agents" | "characte
 export function subjectOfConfig(config: Pick<RunConfig, "serving" | "driver">): SubjectKind {
   if (harnessOf(config.driver) === "external") return "external";
   return config.serving !== undefined ? "local" : "hosted";
-}
-
-/**
- * Parse a stored tuple. Anything that does not validate reads as "not
- * recorded": run metadata is a long-lived file written by older builds, and a
- * viewer must never turn a shape it does not know into an error the whole
- * listing pays for.
- */
-export function parseComparability(raw: unknown): Comparability | null {
-  const parsed = comparabilitySchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
-}
-
-/**
- * The harness a run belongs to, from whatever its metadata recorded: the
- * tuple first, then the driver. Null when neither was written.
- */
-export function harnessOfRun(meta: {
-  comparability?: { harness?: string } | null;
-  driver?: string | null;
-}): Harness | null {
-  const stamped = meta.comparability?.harness;
-  if (stamped !== undefined && (HARNESSES as readonly string[]).includes(stamped)) return stamped as Harness;
-  return driverEntry(meta.driver)?.harness ?? null;
-}
-
-/**
- * The tuple minus the fields that are observed rather than stamped.
- *
- * `resolvedModel` is filled in mid-episode from what the driver reports, so a
- * launch tuple and the same run's tuple an hour later differ in it by
- * construction. Comparing on it would turn every resume of an aliased run into
- * a restamp, which is noise in a record whose whole job is signal.
- */
-function stamped(t: Comparability): Omit<Comparability, "resolvedModel"> {
-  const { resolvedModel: _observed, ...rest } = t;
-  return rest;
-}
-
-/** Whether two tuples describe runs that may share a chart. Order-independent. */
-export function sameComparability(a: Comparability, b: Comparability): boolean {
-  return JSON.stringify(stamped(a)) === JSON.stringify(stamped(b));
 }

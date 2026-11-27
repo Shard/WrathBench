@@ -37,6 +37,25 @@ export function hostOfBase(apiBase: string | null | undefined): string | null {
 }
 
 /**
+ * Two api bases name the same endpoint: same origin, same path, trailing slash
+ * ignored. The price sync (`infra/sync-prices.ts`) and the viewer's pricing
+ * both ask it.
+ */
+export function sameBase(a: string | null | undefined, b: string): boolean {
+  if (a === null || a === undefined || a === "") return false;
+  const norm = (u: string): string | null => {
+    try {
+      const url = new URL(u);
+      return `${url.origin.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+    } catch {
+      return null;
+    }
+  };
+  const x = norm(a);
+  return x !== null && x === norm(b);
+}
+
+/**
  * Whether an api base is OpenCode Go, billed apart from Zen's shared tier on
  * the same host. The path is what distinguishes it —
  * `https://opencode.ai/inference/go/openai/v1` (or the older

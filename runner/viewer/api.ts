@@ -3,9 +3,9 @@
  *
  * Split out of `serve.ts` so the routes can be tested without binding a port,
  * and so the boundary is one handler an auditor can read end to end: this
- * file and the route modules it mounts (`api-fleet.ts`, `api-evals.ts`,
- * `api-run.ts`, over `api-tails.ts` and `api-context.ts`). Two rules hold
- * everywhere below:
+ * file and the route modules it mounts (`api-results.ts`, `api-run.ts`, and
+ * with their groups on `api-fleet.ts` and `api-evals.ts`, over `api-tails.ts`
+ * and `api-context.ts`). Two rules hold everywhere below:
  *
  * - **Nothing writes.** Databases open readonly, the runs directory is only
  *   ever listed and read, and there is no route that accepts a body.
@@ -26,7 +26,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json, notFound, withheld } from "./http";
-import { harnessSeries } from "../src/comparability";
+import { harnessSeries } from "../src/comparability-tuple";
 import type { SiteSettings } from "../src/site-settings";
 import { siteInfoField } from "./site-info";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
@@ -79,12 +79,9 @@ import {
   type RunStore,
 } from "./clickhouse";
 import { compressResponse } from "./compress";
-import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
-import { createAdminApi } from "./admin-api";
 import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
-import { ALL_GROUPS, allGroupsOn, groupOfApiPath, type Groups } from "./groups";
-import { e90TokenProfile } from "./drafts";
+import { ADMIN_API_PREFIX, ALL_GROUPS, allGroupsOn, CONFIG_API_PREFIX, groupOfApiPath, type Groups } from "./groups";
 import {
   ART_TILE_CACHE_CONTROL,
   ART_TILE_PUBLIC_CACHE_CONTROL,
@@ -100,27 +97,21 @@ import {
 import { playtimeMs, recordSegments } from "../src/sessions";
 import { RunTotalsScanner, type RunTotals } from "../src/run-totals";
 import type { ApiContext } from "./api-context";
-import { createFleetApi, sharedStore, STORE_SHARE_MS } from "./api-fleet";
+import { sharedStore, STORE_SHARE_MS } from "./shared-store";
 import { createTailCache } from "./api-tails";
-import { createEvalsApi } from "./api-evals";
+import { createResultsApi } from "./api-results";
 import { createRunApi } from "./api-run";
 
-/* The fleet readers moved to `api-fleet.ts`; re-exported here unchanged. */
-export {
-  coldRuns,
-  fleetRunIds,
-  heldAccounts,
-  readFleet,
-  readServerState,
-  SERVER_PHASES,
-  sharedStore,
-  STORE_SHARE_MS,
-  withoutRuns,
-} from "./api-fleet";
+/*
+ * The store's shared reads (`shared-store.ts`), re-exported here unchanged. The
+ * fleet readers are `api-fleet.ts`'s and are imported from there: a static
+ * re-export here would load the runner group's module into every handle.
+ */
+export { sharedStore, STORE_SHARE_MS } from "./shared-store";
 /* The tail cache moved to `api-tails.ts`; its bounds are re-exported here unchanged. */
 export { TAIL_CACHE_BYTES, TAIL_IDLE_MS } from "./api-tails";
-/* The evals builders moved to `api-evals.ts`; re-exported here unchanged. */
-export { withoutEvalFields } from "./api-evals";
+/* The results builder is `api-results.ts`; its eval-field strip is re-exported here unchanged. */
+export { withoutEvalFields } from "./api-results";
 /* The run routes moved to `api-run.ts`; their constants and helpers are re-exported here unchanged. */
 export { entriesWindowAt, POLL_MS, streamStart, TRACK_MEMO_RUNS, TRACK_SETTLE_MS, WINDOW_MAX } from "./api-run";
 
@@ -441,9 +432,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const groups = opts.groups ?? ALL_GROUPS;
   // Never on a public handle: the read-only public site has no write surface.
   const admin = opts.admin === true && !publicMode;
-  // The admin pages' status beside the config they edit (`admin-api.ts`).
+  /*
+   * The admin switch's two surfaces, the config API (`config-api.ts`) and the
+   * admin pages' status beside the config they edit (`admin-api.ts`). Imported
+   * only with the switch on, so a handle without it never loads the write
+   * surface, the credential store or the codex login behind them.
+   */
+  const configApi = admin ? import("./config-api") : null;
   const adminApi = admin
-    ? createAdminApi({ groups, runsDir, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) })
+    ? import("./admin-api").then((m) =>
+        m.createAdminApi({ groups, runsDir, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
+      )
     : null;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
   /**
@@ -961,14 +960,21 @@ export function createApi(opts: ApiOptions): ApiHandle {
     closedWindows,
     traceSegs,
   };
-  // A group that is off is absent: its module is not built (`groups.ts`).
-  const fleetApi = groups.runner ? createFleetApi(ctx) : null;
   /*
-   * The evals group's builders (`api-evals.ts`), built whatever the groups say:
-   * `/api/results` is the viewer's and shares its builder with the ladder. The
-   * group gate at the top of `api` is what keeps the evals routes absent.
+   * A group that is off is absent (`groups.ts`): its route module is never
+   * imported, so neither it nor what it reaches is loaded into this process.
+   * One that is on is imported as the handle is built and awaited by the
+   * first request that asks for it. The runner group's is `api-fleet.ts`, the
+   * evals group's `api-evals.ts`.
    */
-  const { resultsResponse, episodesResponse, dungeonsResponse, campaignsResponse } = createEvalsApi(ctx);
+  const fleetApi = groups.runner ? import("./api-fleet").then((m) => m.createFleetApi(ctx)) : null;
+  const evalsApi = groups.evals ? import("./api-evals").then((m) => m.createEvalsApi(ctx)) : null;
+  /*
+   * The results builder (`api-results.ts`), built whatever the groups say:
+   * `/api/results` is the viewer's and shares its builder with the ladder. The
+   * group gate at the top of `api` is what keeps `/api/ladder` absent.
+   */
+  const { resultsResponse } = createResultsApi(ctx);
   // A run's own routes, the viewer group's.
   const runRoute = createRunApi(ctx);
 
@@ -1023,9 +1029,12 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // A position's status is the character's last `log_status` line, as written.
       return pub({ positions }, projectPositions, positions.map((p) => p.runId));
     }
-    if (path === "/api/episodes") return await episodesResponse();
-    if (path === "/api/campaigns") return await campaignsResponse();
-    if (path === "/api/dungeons") return await dungeonsResponse();
+    // The evals group's routes (`api-evals.ts`); with the group off the gate above has answered.
+    if (evalsApi !== null) {
+      if (path === "/api/episodes") return await (await evalsApi).episodesResponse();
+      if (path === "/api/campaigns") return await (await evalsApi).campaignsResponse();
+      if (path === "/api/dungeons") return await (await evalsApi).dungeonsResponse();
+    }
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
      * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its row
@@ -1038,7 +1047,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (path === "/api/results") return await resultsResponse(url);
     if (path === "/api/ladder") return await resultsResponse(url, true);
     // The runner group's routes (`api-fleet.ts`): `/api/fleet`, `/api/models` and `/api/tools`.
-    const runner = fleetApi === null ? null : await fleetApi(url, path);
+    const runner = fleetApi === null ? null : await (await fleetApi)(url, path);
     if (runner !== null) return runner;
 
     /*
@@ -1088,9 +1097,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * The token profile a config draft's estimate is priced at (`drafts.ts`):
    * the scheduler's own counted-run facts, each run's harness off its row and
    * its tokens off the same totals the listing serves. Built only when the
-   * operator's config page asks for its drafts.
+   * operator's config page asks for its drafts, so `drafts.ts` is imported
+   * here and nowhere else in this file.
    */
   async function e90Profile(): Promise<E90TokenProfileView | null> {
+    const { e90TokenProfile } = await import("./drafts");
     const now = Date.now();
     const roster = fleetRoster();
     const [facts, rows, totals] = await Promise.all([runFacts(now), runRows(now), allTotals()]);
@@ -1146,7 +1157,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
      * write surface should not announce itself. It lives in `config-api.ts`;
      * this is the whole of its presence here.
      */
-    if (admin && path.startsWith(CONFIG_API_PREFIX)) {
+    if (configApi !== null && path.startsWith(CONFIG_API_PREFIX)) {
+      const { handleConfigRequest } = await configApi;
       const res = await handleConfigRequest(req, url, path, {
         ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
         e90Profile,
@@ -1155,8 +1167,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
       if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;
       if (res !== null) return res;
     }
-    if (adminApi !== null) {
-      const res = await adminApi(req, path);
+    // It answers its own prefix and nothing else, so no other path waits on its import.
+    if (adminApi !== null && path.startsWith(ADMIN_API_PREFIX)) {
+      const res = await (await adminApi)(req, path);
       if (res !== null) return res;
     }
 

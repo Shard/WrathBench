@@ -54,10 +54,11 @@ import { clearStoreSecret, SecretRefused, setStoreSecret, storedSecretsAt, store
 import { publishViewFromEnv } from "../../infra/publish-settings";
 import type { AdminCodexLoginView, AdminCredentialView, AdminPublishView, AdminResponse, FleetResponse } from "./api-types";
 import { actorOf } from "./config-api";
-import type { Groups } from "./groups";
+import { ADMIN_API_PREFIX, type Groups } from "./groups";
 import { json } from "./http";
 
-export const ADMIN_API_PREFIX = "/api/admin";
+/* Where the admin pages' status is mounted (`groups.ts`, which a handle reads it from). */
+export { ADMIN_API_PREFIX };
 
 /** A supervisor whose heartbeat is older than this is not up (`HEARTBEAT_STALE_MS`, three ticks). */
 export const FLEET_UP_MS = 3 * 60_000;

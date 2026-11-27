@@ -32,7 +32,7 @@ import {
   type ProbeRun,
   type PublishedCampaign,
 } from "../src/campaigns";
-import { harnessOfRun } from "../src/comparability";
+import { harnessOfRun } from "../src/comparability-tuple";
 import { endConditionsOf, isEndReason, levelTargetOf } from "../src/end-conditions";
 import { DEFAULT_DRIVER } from "../src/drivers";
 import { stampedCompactWindow } from "../src/config";

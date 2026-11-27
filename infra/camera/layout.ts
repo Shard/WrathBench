@@ -20,7 +20,7 @@
  */
 
 import { join } from "node:path";
-import { CHAPTER_KINDS, MARK_KINDS } from "../../runner/viewer/timeline-marks";
+import { CHAPTER_KINDS, MARK_KINDS } from "../../runner/src/mark-kinds";
 
 export const CAMERA_DIR = "camera";
 export const FRAMES_DIR = "frames";
@@ -40,7 +40,8 @@ export const JPEG_QUALITY = 75;
 export const EVENT_TYPES = ["level", "quest", "death", "zone", "boss", "start", "end"] as const;
 export type CameraEventType = (typeof EVENT_TYPES)[number];
 /**
- * The one rule for what a run's timeline marks (`runner/viewer/timeline-marks.ts`),
+ * The one rule for what a run's timeline marks (`runner/viewer/timeline-marks.ts`,
+ * its kinds in `runner/src/mark-kinds.ts`),
  * as the camera reads it. A **moment** is an event whose burst the video
  * keeps and holds: a level, a boss kill, a death. A **chapter** is a moment
  * `clips.json` lists: a level or a boss kill. A death is shown and not

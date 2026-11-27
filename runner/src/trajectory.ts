@@ -37,7 +37,7 @@
 import { appendFileSync, mkdirSync, readFileSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonLine, toJsonSafe } from "@wrathbench/mcp/jsonsafe";
-import type { Comparability } from "./comparability";
+import type { Comparability } from "./comparability-tuple";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { SecretRedactor } from "@wrathbench/mcp/redact";
 import type { SubscriptionUsage } from "./subscription-usage";

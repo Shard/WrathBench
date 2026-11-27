@@ -69,6 +69,7 @@ import {
 import { declaredBillingOf } from "../src/billing";
 import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver } from "../src/drivers";
 import { isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
+import { sameBase } from "../src/platform";
 import type { CostBreakdown, CostCoverage, CostFigure, CostView, RunRow, TokenTotals, UnreportedUsage } from "./api-types";
 
 /** One priced model: dollars per million tokens, with where the figure is from. */
@@ -424,20 +425,8 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * `runner/src/model-cost.ts`'s.
  */
 
-/** Two api bases name the same endpoint: same origin, same path, trailing slash ignored. */
-export function sameBase(a: string | null | undefined, b: string): boolean {
-  if (a === null || a === undefined || a === "") return false;
-  const norm = (u: string): string | null => {
-    try {
-      const url = new URL(u);
-      return `${url.origin.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
-    } catch {
-      return null;
-    }
-  };
-  const x = norm(a);
-  return x !== null && x === norm(b);
-}
+/* Two api bases name the same endpoint (`runner/src/platform.ts`, where the price sync reads it too). */
+export { sameBase };
 
 /** The hand-held endpoint row for a run at a date, or null when no row names its base and id. */
 export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: number | null = null): PriceRow | null {

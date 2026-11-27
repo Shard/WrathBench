@@ -162,7 +162,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -247,10 +247,8 @@ export function childEnv(
   return { ...out, ...(o.extra ?? {}) };
 }
 
-/** Whether a Codex home looks logged in: the CLI keeps the login in auth.json there. */
-export function homeLooksLoggedIn(codexHome: string | undefined): boolean {
-  return codexHome !== undefined && codexHome.length > 0 && existsSync(join(codexHome, "auth.json"));
-}
+/* Whether a Codex home looks logged in, from the leaf the login flow reads it from. */
+export { homeLooksLoggedIn } from "./codex-home";
 
 // ------------------------------------------------------------ failure detect
 

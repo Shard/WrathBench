@@ -66,6 +66,14 @@ export function groupsEnvValue(g: Groups): string {
   return GROUPS.filter((name) => g[name]).join(",");
 }
 
+/**
+ * Where the admin switch's two API surfaces are mounted: the config API
+ * (`config-api.ts`) and the admin pages' status (`admin-api.ts`). Here, so a
+ * handle can tell an admin path from any other without loading either.
+ */
+export const CONFIG_API_PREFIX = "/api/config";
+export const ADMIN_API_PREFIX = "/api/admin";
+
 /** Whether the admin switch is on: `WRATHBENCH_ADMIN=1` and nothing else. */
 export function adminFromEnv(env: Record<string, string | undefined>): boolean {
   return env[ADMIN_ENV] === "1";
@@ -84,7 +92,7 @@ export function adminFromEnv(env: Record<string, string | undefined>): boolean {
  * `/api/results` stays the viewer's: it is the runs index and the run,
  * character and party pages' listing, not the ladder (which is
  * `/api/ladder`). With evals off it defaults to every episode and serves no
- * ladder condition (`withoutEvalFields` in `api-evals.ts`).
+ * ladder condition (`withoutEvalFields` in `api-results.ts`).
  */
 export function groupOfApiPath(path: string): Group | null {
   switch (path) {

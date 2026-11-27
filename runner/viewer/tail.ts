@@ -39,7 +39,7 @@ import { isV1RunDir, sessionDirOfRun, TurnIndex } from "../src/run-reader";
 import { isBareSessionDir } from "../src/session-store";
 import { feedRecordOf, pairStoreCalls, readHeldCall, readRecordRow, RecordFollower, storeCallRecordsOf, type RecordLine, type RecordLoc, type StoreCalls } from "./record-feed";
 import { CodexUsageCorrector } from "../src/codex-usage";
-import { CONTEXT_POLICY } from "../src/context";
+import { EVENT_WINDOW_EXCLUDE } from "../src/ambient-events";
 import {
   HistoryRebuilder,
   isSlimRequest,
@@ -291,7 +291,7 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       // so the operator needs the split, not just the total; a newer one holds
       // only what was rendered and says how much it folded (`folded`, below).
       let ambient = 0;
-      for (const [op, n] of tally) if (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(op)) ambient += n;
+      for (const [op, n] of tally) if (EVENT_WINDOW_EXCLUDE.test(op)) ambient += n;
       if (ambient > 0) base["ambient"] = ambient;
       // The tally is cut at six; an operator reading it must know when there
       // were more kinds than that, or the line reads as the whole story.

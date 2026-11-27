@@ -48,3 +48,96 @@ describe("the viewer boundary", () => {
     expect(viewerImports()).toEqual([]);
   });
 });
+
+/*
+ * A viewer-only process (`WRATHBENCH_GROUPS=viewer`, no admin switch) loads
+ * the viewer and nothing of the runner's: `createApi` (`runner/viewer/api.ts`)
+ * imports each group's route modules with `import()` only when that group, or
+ * the admin switch, is on. This is the module graph such a process loads,
+ * built by Bun's own bundler from the bind (`serve.ts`) and walked over every
+ * edge but those gates, so an import that works its way back into the
+ * process (a static import, a re-export, a dynamic import anywhere else, such
+ * as the local store's collector) shows here.
+ */
+const SERVE = "runner/viewer/serve.ts";
+const API = "runner/viewer/api.ts";
+/** What `api.ts` imports only with a group or the admin switch on. */
+const GATED = [
+  "runner/viewer/api-fleet.ts",
+  "runner/viewer/api-evals.ts",
+  "runner/viewer/config-api.ts",
+  "runner/viewer/admin-api.ts",
+  "runner/viewer/drafts.ts",
+] as const;
+/** What a viewer-only process must never load: the agent loop, the drivers, the model's surface, and the other groups' routes. */
+const FORBIDDEN: readonly RegExp[] = [
+  /^runner\/src\/loop\.ts$/,
+  /^runner\/src\/adapter/,
+  /^runner\/src\/(prompt|tools)\.ts$/,
+  /^wrath-mcp\/mcp\/src\/(index|server)\.ts$/,
+  // All of the sandbox but the import-free snippet rewriter, which the
+  // workspace's file cap (`FILE_MAX_CHARS`, the context policy's) is read beside.
+  /^wrath-mcp\/mcp\/src\/sandbox\/(?!rewrite\.ts$)/,
+  /^wiki\//,
+  /^runner\/viewer\/(admin-api|config-api|drafts|api-fleet|tools|api-evals|campaigns|dungeons|dungeon-marks)\.ts$/,
+];
+/**
+ * How many `runner/src` files a viewer-only process reaches, at most. A
+ * ceiling, not a target: lower it when a cut lands, and a change that raises
+ * it is a change that pulls more of the runner into the viewer.
+ */
+const RUNNER_SRC_CEILING = 48;
+
+interface Edge {
+  path: string;
+  kind: string;
+}
+
+async function viewerGraph(): Promise<Map<string, Edge[]>> {
+  // `packages: "bundle"`: the stack's workspaces are packages, and leaving them
+  // external would hide the MCP server and sandbox behind their names.
+  const built = await Bun.build({ entrypoints: [join(ROOT, SERVE)], target: "bun", metafile: true, packages: "bundle" });
+  if (!built.success || built.metafile === undefined) throw new Error(`bundling ${SERVE} failed: ${built.logs.join("\n")}`);
+  const rel = (p: string): string => relative(ROOT, resolve(process.cwd(), p)).split(sep).join("/");
+  const graph = new Map<string, Edge[]>();
+  for (const [file, input] of Object.entries(built.metafile.inputs)) {
+    graph.set(
+      rel(file),
+      input.imports.filter((i) => i.external !== true).map((i) => ({ path: rel(i.path), kind: i.kind })),
+    );
+  }
+  return graph;
+}
+
+/** Every file reachable from the bind, over every edge `follow` keeps. */
+function reach(graph: ReadonlyMap<string, Edge[]>, follow: (from: string, e: Edge) => boolean): Set<string> {
+  const seen = new Set([SERVE]);
+  const queue = [SERVE];
+  for (let f = queue.shift(); f !== undefined; f = queue.shift()) {
+    for (const e of graph.get(f) ?? []) {
+      if (seen.has(e.path) || !follow(f, e)) continue;
+      seen.add(e.path);
+      queue.push(e.path);
+    }
+  }
+  return seen;
+}
+
+const isGate = (from: string, e: Edge): boolean =>
+  from === API && e.kind === "dynamic-import" && (GATED as readonly string[]).includes(e.path);
+
+describe("a viewer-only process", () => {
+  test("loads none of the runner, the model's surface or the other groups' routes", async () => {
+    const graph = await viewerGraph();
+    // The gates are where this test thinks they are: each is a dynamic import in api.ts.
+    for (const g of GATED) expect((graph.get(API) ?? []).filter((e) => e.path === g).map((e) => e.kind)).toEqual(["dynamic-import"]);
+    // And through them the walk reaches what they hold, so the gates are what keep it out.
+    const everything = reach(graph, () => true);
+    expect(everything.has("runner/viewer/api-fleet.ts")).toBe(true);
+    expect([...everything].some((f) => f.startsWith("wiki/"))).toBe(true);
+
+    const loaded = reach(graph, (from, e) => !isGate(from, e));
+    expect([...loaded].filter((f) => FORBIDDEN.some((r) => r.test(f))).sort()).toEqual([]);
+    expect([...loaded].filter((f) => f.startsWith("runner/src/")).length).toBeLessThanOrEqual(RUNNER_SRC_CEILING);
+  });
+});

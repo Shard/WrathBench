@@ -59,7 +59,7 @@ import {
   TIER_TABLE,
   IDLE_MODES,
 } from "../src/models";
-import { harnessSeries } from "../src/comparability";
+import { harnessSeries } from "../src/comparability-tuple";
 import { canonicalModelId } from "../../infra/model-catalogue";
 import { entryModelIds } from "../src/provider-options";
 import { isEpisodeId } from "../src/episodes";

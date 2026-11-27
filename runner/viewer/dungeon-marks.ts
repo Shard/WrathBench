@@ -13,7 +13,7 @@
 import { join } from "node:path";
 import type { SessionHandle } from "@wrathbench/inspector";
 import type { CharacterMarks } from "./dungeons";
-import { DEADMINES_MAP } from "./dungeons";
+import { DEADMINES_MAP } from "./deadmines";
 import { fanoutSession, fanoutSessions, isFanoutRun, runSession } from "./runs-source";
 
 const KINDS = ["kill", "death", "resurrect", "instance"] as const;

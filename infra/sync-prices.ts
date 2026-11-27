@@ -98,7 +98,7 @@ import { catalogueKeyOf, formatCatalogue, normalizeModelId, parseCatalogue } fro
 import { readFleetConfig } from "../runner/src/config-store";
 import { driverEntry } from "../runner/src/drivers";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
-import { sameBase } from "../runner/viewer/pricing";
+import { sameBase } from "../runner/src/platform";
 
 /** OpenRouter's model catalogue. Public: read with no key, here and by `runner/viewer/drafts.ts`. */
 export const CATALOGUE = "https://openrouter.ai/api/v1/models";
