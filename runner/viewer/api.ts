@@ -80,6 +80,7 @@ import {
 import { compressResponse } from "./compress";
 import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
+import { heldWrite, type WriteHold } from "./write-hold";
 import { ADMIN_API_PREFIX, ALL_GROUPS, allGroupsOn, CONFIG_API_PREFIX, groupOfApiPath, type Groups } from "./groups";
 import {
   ART_TILE_CACHE_CONTROL,
@@ -187,6 +188,14 @@ export interface ApiOptions {
    * handle withholds every one of them.
    */
   sessionStore?: string | null;
+  /**
+   * The admin write hold (`write-hold.ts`): set while this viewer runs a
+   * different build from the fleet, and then every admin write is refused
+   * with its reason while every read is served. Absent is none, which is
+   * every handle outside the cluster image; `serve.ts` reads it off the
+   * environment.
+   */
+  writeHold?: WriteHold | null;
 }
 
 /* The module's /health read moved to `module-health.ts`; its window is re-exported here unchanged. */
@@ -367,6 +376,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const groups = opts.groups ?? ALL_GROUPS;
   // Never on a public handle: the read-only public site has no write surface.
   const admin = opts.admin === true && !publicMode;
+  const writeHold = opts.writeHold ?? null;
   /*
    * The admin switch's two surfaces, the config API (`config-api.ts`) and the
    * admin pages' status beside the config they edit (`admin-api.ts`). Imported
@@ -382,7 +392,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const configApi = admin ? import("./config-api") : null;
   const adminApi = admin
     ? import("./admin-api").then((m) =>
-        m.createAdminApi({ groups, runsDir, moduleHealth, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
+        m.createAdminApi({ groups, runsDir, moduleHealth, writeHold, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
       )
     : null;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
@@ -1088,7 +1098,15 @@ export function createApi(opts: ApiOptions): ApiHandle {
      * are not served at all — a 404, not the 403 `withheld()` gives, because a
      * write surface should not announce itself. It lives in `config-api.ts`;
      * this is the whole of its presence here.
+     *
+     * While this viewer is ahead of the fleet (`write-hold.ts`), every write
+     * to either admin surface is refused here with the reason, before either
+     * handler sees it; reads go through as ever.
      */
+    if (admin) {
+      const held = heldWrite(writeHold, req.method, path);
+      if (held !== null) return held;
+    }
     if (configApi !== null && path.startsWith(CONFIG_API_PREFIX)) {
       const { handleConfigRequest } = await configApi;
       const res = await handleConfigRequest(req, url, path, {

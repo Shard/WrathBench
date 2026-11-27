@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { createApi } from "./api";
+import { writeHoldFromEnv } from "./write-hold";
 import { json } from "./http";
 import { SESSION_STORE_ENV, sessionStoreFromEnv } from "../src/session-store";
 import { clickhouseConfigFromEnv } from "./clickhouse";
@@ -153,6 +154,11 @@ const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] || undefined;
 if (!existsSync(runsDir)) mkdirSync(runsDir, { recursive: true });
 
 const built = existsSync(join(dashboardDir, "index.html"));
+/*
+ * Admin writes are held while this image's build is not the fleet's tag, as
+ * after a viewer release (`write-hold.ts`); reads are served either way.
+ */
+const writeHold = admin ? writeHoldFromEnv(process.env) : null;
 const handle = createApi({
   runsDir,
   tilesDir,
@@ -164,6 +170,7 @@ const handle = createApi({
   groups,
   admin,
   sessionStore,
+  writeHold,
 });
 
 const server = Bun.serve({
@@ -179,7 +186,7 @@ const server = Bun.serve({
 console.log(
   `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir}${sessionStore === null ? "" : `, sessions: ${sessionStore}`}, store:${clickhouse === null ? "local (no CLICKHOUSE_URL)" : clickhouse.url})` +
     `  (hosts: localhost, any IP${allowedHosts.map((h) => `, ${h}`).join("")})` +
-    `  (groups: ${groupsEnvValue(groups)}${admin ? "; admin on" : ""})` +
+    `  (groups: ${groupsEnvValue(groups)}${admin ? `; admin on${writeHold !== null ? `, writes held: viewer ${writeHold.viewer}, fleet ${writeHold.fleet}` : ""}` : ""})` +
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
     (publicMode
       ? tilesPublic
