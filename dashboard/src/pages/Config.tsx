@@ -208,7 +208,7 @@ export default function Config() {
     const s = section();
     return s !== null && !sectionReadsOnly(s);
   };
-  // Why admin writes are held, while this viewer's build is not the fleet's (runner/viewer/write-hold.ts); null when they are not.
+  // Why admin writes are held, while this viewer's build is not the fleet's (viewer/write-hold.ts); null when they are not.
   const heldWhy = (): string | null => {
     const w = admin()?.writes;
     return w !== undefined && !w.ok ? w.why : null;
@@ -696,7 +696,7 @@ function AddEntry(props: { write: Write }) {
 type Notice = { ok: boolean; text: string };
 
 /**
- * New models from the OpenRouter catalogue (`runner/viewer/drafts.ts`): fetch
+ * New models from the OpenRouter catalogue (`viewer/drafts.ts`): fetch
  * on demand, newest first, promote at a chosen tier or ignore. A draft is not
  * config — nothing schedules it — so fetch and ignore take no note and leave
  * no history line; a promotion is a roster write and goes through `write`

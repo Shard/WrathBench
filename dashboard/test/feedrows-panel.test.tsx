@@ -15,7 +15,7 @@ import { render } from "solid-js/web";
 import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { fileURLToPath } from "node:url";
-import type { FeedEntry } from "../../runner/viewer/api-types";
+import type { FeedEntry } from "../../viewer/api-types";
 import { groupFeed, type FeedGroup } from "../src/lib/feedgroup";
 import type { ExpandPreset } from "../src/lib/feedview";
 
@@ -29,7 +29,7 @@ async function load(): Promise<RowsModule> {
     configFile: false,
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

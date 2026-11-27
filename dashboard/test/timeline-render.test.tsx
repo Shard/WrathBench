@@ -12,7 +12,7 @@ import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { runMarks } from "../../runner/viewer/timeline-marks";
+import { runMarks } from "../../viewer/timeline-marks";
 import type { Span } from "../src/lib/timeline";
 import type { TimelineStore } from "../src/lib/timelinestore";
 
@@ -26,7 +26,7 @@ async function load(): Promise<Entry> {
     configFile: false,
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

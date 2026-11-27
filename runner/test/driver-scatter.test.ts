@@ -26,7 +26,7 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dir, "..", "..");
 
 /** Where a driver branch could regrow: the runner, the viewer, the fleet. */
-const SCOPES = ["runner/src", "runner/viewer", "infra"];
+const SCOPES = ["runner/src", "viewer", "infra"];
 
 /** The registry and the adapters: the two places a driver's name belongs. */
 const OWNERS = [

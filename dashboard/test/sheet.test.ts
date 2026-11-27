@@ -13,8 +13,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@wrathbench/inspector/codec/trace";
-import type { ItemSample, TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
-import { projectTraceSegment } from "../../runner/viewer/public-projection";
+import type { ItemSample, TraceItemName, TraceQuestReq, TraceSegment } from "../../viewer/api-types";
+import { projectTraceSegment } from "../../viewer/public-projection";
 import { carried, carriedCount, paperdoll, sheetItems, sheetReading, type InvItem } from "@wrathbench/inspector/views/inventory";
 import { TRACE_MAX_SPEED, traceDrives } from "@wrathbench/inspector/views/playback";
 import { createTraceStore } from "@wrathbench/inspector/views/traceplayer";

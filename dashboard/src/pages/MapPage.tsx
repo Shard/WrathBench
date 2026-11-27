@@ -5,7 +5,7 @@
  * and nothing else: `positions()` is the only thing that fetches, every draw
  * function takes what it draws as an argument, and no draw path asks whether a
  * run is live — a replay mode swaps the feed and this file does not change. And
- * the world→tile transform is imported from `runner/viewer/worldmap.ts` rather
+ * the world→tile transform is imported from `viewer/worldmap.ts` rather
  * than copied; the old page copied it only because a template string cannot
  * import.
  *

@@ -3,7 +3,7 @@
 {{- end }}
 {{- if include "wrathbench.on.viewer" $ }}
 {{/*
-The operator viewer (runner/viewer/serve.ts).
+The operator viewer (viewer/serve.ts).
 
 This is the ONE Ingress in the chart, and it is LAN-only: `ingress.host` is
 the canonical name (first rule, the one dashboards link) and `ingress.extraHosts`
@@ -23,7 +23,7 @@ viewer refuses a non-loopback bind without it (docs/DATA-AND-LEGAL.md). Inside
 a pod the "LAN" is the pod network, fronted by the Ingress above.
 
 The Ingress hosts are also the viewer's Host allowlist
-(WRATHBENCH_VIEWER_ALLOWED_HOSTS, runner/viewer/host-guard.ts, the DNS-rebinding
+(WRATHBENCH_VIEWER_ALLOWED_HOSTS, viewer/host-guard.ts, the DNS-rebinding
 guard): every name the Ingress routes is a name the viewer answers to, and no
 other is, so renaming the viewer is changing `ingress.host` / `extraHosts` and
 nothing else. localhost and IP addresses are always answered, which is what
@@ -105,12 +105,12 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
           workingDir: /wrathbench
-          command: ["bun", "runner/viewer/serve.ts"]
+          command: ["bun", "viewer/serve.ts"]
           env:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- /* With ClickHouse off no CLICKHOUSE_* variable is set, and the
                    viewer lists runs from the in-memory store it builds over the
-                   runs directory (runner/viewer/clickhouse.ts `storeFor`): fine
+                   runs directory (viewer/clickhouse.ts `storeFor`): fine
                    for a small tree, and the only answer that works, since a URL
                    naming a Service the chart did not render fails every listing. */}}
             {{- if include "wrathbench.on.clickhouse" $ }}
@@ -133,7 +133,7 @@ spec:
             # back by this pod.
             {{- include "wrathbench.storeKeyEnv" . | nindent 12 }}
             # What the admin pages say about the deployment around the store
-            # (runner/viewer/admin-api.ts): the variable NAMES the model pods
+            # (viewer/admin-api.ts): the variable NAMES the model pods
             # carry, never a value, and how the publisher is set, never its
             # key pair or anything else from the Secret.
             {{- $keys := .Values.modelKeys | default list }}
@@ -156,7 +156,7 @@ spec:
             {{- end }}
             {{- if $ing.enabled }}
             # The names a browser may address the viewer by: the Ingress hosts.
-            # Any other Host is a 421 (runner/viewer/host-guard.ts).
+            # Any other Host is a 421 (viewer/host-guard.ts).
             - name: WRATHBENCH_VIEWER_ALLOWED_HOSTS
               value: {{ join "," $hosts | quote }}
             {{- end }}

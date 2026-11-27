@@ -15,9 +15,9 @@ import { SessionWriter } from "@wrathbench/mcp/record";
 import { RUN_DB_BUSY_TIMEOUT_MS as RUNNER_RUN_DB_BUSY_TIMEOUT_MS } from "../runner/src/rundb";
 import { HEARTBEAT_DEAD_MS as RUNNER_HEARTBEAT_DEAD_MS, Trajectory } from "../runner/src/trajectory";
 import { ARCHIVE_DIR as VIEWER_ARCHIVE_DIR } from "../runner/src/archive-dir";
-import { clickhouseConfigFromEnv } from "../runner/viewer/clickhouse";
+import { clickhouseConfigFromEnv } from "../viewer/clickhouse";
 import { TURN_KINDS as COLLECTOR_TURN_KINDS, unparseableRow } from "../collector/src/lines";
-import { questsAcrossRestarts } from "../runner/viewer/results";
+import { questsAcrossRestarts } from "../viewer/results";
 import {
   ARCHIVE_DIR,
   DEFAULT_WIDTH,

@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { FleetResponse, FleetServerView } from "../../runner/viewer/api-types";
+import type { FleetResponse, FleetServerView } from "../../viewer/api-types";
 import { HEARTBEAT_STALE_MS } from "../src/lib/fleet";
 import { accountsBusy, serviceStatus, statusRows } from "../src/lib/status";
 

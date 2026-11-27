@@ -3,7 +3,7 @@
  * with its own session record, so the run's own figures name none of them.
  * The inspector's session list picks one, and its character panel shows
  * that one, read through the inspector's API under the session's
- * id (`<run-id>~<Character>`, `runner/viewer/runs-source.ts`). The pick is
+ * id (`<run-id>~<Character>`, `viewer/runs-source.ts`). The pick is
  * the `character` search parameter, so a link names the character it opens
  * on; with none, the first by name.
  *

@@ -26,7 +26,7 @@ import type { EventSummary } from "@wrathbench/mcp";
 import { Scratchpad } from "@wrathbench/mcp";
 import { callTool, type ToolContext } from "../src/tools";
 import { SecretRedactor } from "@wrathbench/mcp";
-import { PROSE_OPCODES, redactProseText, redactProseValue } from "../viewer/redact-prose";
+import { PROSE_OPCODES, redactProseText, redactProseValue } from "../../viewer/redact-prose";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

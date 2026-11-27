@@ -47,7 +47,7 @@ import {
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
 import { parseCredentials } from "../src/credential-slots";
-import { rowOf } from "../viewer/models";
+import { rowOf } from "../../viewer/models";
 import type { EpisodeId } from "../src/episodes";
 import type { Campaign } from "../src/campaigns";
 import type { ProbeRun } from "../src/campaigns";

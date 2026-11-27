@@ -75,7 +75,7 @@ extraction of the four continents takes about 17 s and produces 3636 tiles /
 and the other 70 dungeons and raids 1394 tiles / 40 MiB. A fresh extraction
 of the whole default set takes about 45 s.
 
-The default set is `TILED_MAPS` in `runner/viewer/worldmap.ts`, the same table
+The default set is `TILED_MAPS` in `viewer/worldmap.ts`, the same table
 the dashboard names maps from, so a map with tiles is never drawn under a bare
 number and a named map is never a blank lattice. The instances are in it
 rather than in a list baked on demand: they are small, and a default that is
@@ -126,7 +126,7 @@ The two naming conventions in play are different from each other, so state both:
 - **Input (`md5translate.trs`)**: an entry `map<A>_<B>.blp` has **A = tile
   column, B = tile row** — the same order ADT filenames use.
 - **Output (this tool)**: `<tileRow>_<tileCol>.png` — **row first**, matching
-  `runner/viewer/worldmap.ts`. So the trs entry
+  `viewer/worldmap.ts`. So the trs entry
   `Azeroth\map31_43.blp` becomes `data/minimap/0/43_31.png`.
 
 The transform the viewer must use:
@@ -344,7 +344,7 @@ zoom (`ART_FADE_START_PX` / `ART_FADE_END_PX` in
 look is tuned, the viewer revalidates it instead of caching it for a year.
 The tile publisher uploads the art with the rest of the tiles
 (`infra/cloudflare/README.md`, step 6). The
-spelling is `lodTileName` in `runner/viewer/worldmap.ts`, which the bake,
+spelling is `lodTileName` in `viewer/worldmap.ts`, which the bake,
 the viewer, the publisher and the dashboard all call; it refuses level 0, so
 nothing built on it can write over a native tile.
 
@@ -619,7 +619,7 @@ web/transcode.json                          the transcode's own cache, never ser
   `.png` wherever it does not: an index written before the field, a stale
   one at the edge, or none at all. Every server still answers `.png`. The
   viewer serves the indexed PNG an older transcode left, or the master
-  (`runner/viewer/tiles.ts`), and the bucket keeps the old `.png` objects
+  (`viewer/tiles.ts`), and the bucket keeps the old `.png` objects
   (`infra/cloudflare/README.md`, step 6). So a build and a served tree can
   ship in either order. A transcode removes the indexed PNG natives an
   older one wrote.
@@ -701,7 +701,7 @@ change re-encodes every tile. The steps, in the order the operator runs them:
    restart.
 
 The index is a bitmap per layer and level, one hex row per grid row
-(`runner/viewer/tileindex.ts`), about 3 KB per continent before compression.
+(`viewer/tileindex.ts`), about 3 KB per continent before compression.
 
 - **`cells`** lets the map page skip absent cells: it asks for none of them,
   so a pan no longer turns into a burst of 404s.
@@ -717,10 +717,10 @@ always drawn.
 
 ## Relationship to the viewer
 
-`runner/viewer/worldmap.ts` owns the transform and the served spellings
+`viewer/worldmap.ts` owns the transform and the served spellings
 (`tileName` and `lodTileName` for the masters, `nativeServedName` and
 `lodServedName` for the served WebP), and
-`runner/viewer/tiles.ts` serves both shapes above under `/tiles/<mapId>/`, from
+`viewer/tiles.ts` serves both shapes above under `/tiles/<mapId>/`, from
 the served tree while it is current and from the masters otherwise.
 Both agree with what this tool writes. The orientation in `worldToPixel` could not be verified until an
 extraction rendered a known zone — the Northshire Abbey check above is that

@@ -18,7 +18,7 @@
  */
 
 import type { CameraEvent, CameraEventType } from "./layout";
-import { isBossKill } from "../../runner/viewer/timeline-marks";
+import { isBossKill } from "../../viewer/timeline-marks";
 
 /** An event, at the session record's instant. */
 export interface TimedEvent extends CameraEvent {
@@ -41,7 +41,7 @@ export interface SessionEventRow {
  * The camera event a session row is, or null: a level gained, a death, a boss
  * killed (`isBossKill`: creature rank 3, or one of the five-man bosses, which
  * are elites and named by entry). Those are what a run's timeline marks
- * (`runner/viewer/timeline-marks.ts`), and nothing else is worth a burst: a
+ * (`viewer/timeline-marks.ts`), and nothing else is worth a burst: a
  * turn-in and a zone crossed were events until a real run's video was a
  * solid band of them (operator, 2026-11-16). Only gains are events: a
  * recorder's first reading (a `level` without a `from`) states a baseline and

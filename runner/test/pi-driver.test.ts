@@ -27,9 +27,9 @@ import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SNIPP
 import wrathbenchPromptExtension, { PI_PROMPT_MISSING } from "../src/pi-extension";
 import { piProviderOf } from "../src/providers";
 import { rosterProviderRefusal } from "../src/credential-slots";
-import { priceFor, rosterPriceGap, runCost } from "../viewer/pricing";
-import { projectEntry } from "../viewer/public-projection";
-import { summarize } from "../viewer/tail";
+import { priceFor, rosterPriceGap, runCost } from "../../viewer/pricing";
+import { projectEntry } from "../../viewer/public-projection";
+import { summarize } from "../../viewer/tail";
 import { tokenTotals } from "../src/run-totals";
 import { countRecords } from "../src/models";
 import { EpisodicLog } from "../src/episodic";

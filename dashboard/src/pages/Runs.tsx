@@ -100,7 +100,7 @@ export default function Runs() {
   const page = (): number => clampPage(pageParam(params.page), rows().length);
   const shown = createMemo(() => pageSlice(rows(), page()));
   /*
-   * Freeplay lineage (`runner/viewer/lineage.ts`), so a12 does not read as an unrelated
+   * Freeplay lineage (`viewer/lineage.ts`), so a12 does not read as an unrelated
    * row beside a11. Indexed over everything the server served rather than over
    * the rows on screen: a character that crossed a minor bump has its predecessor
    * outside the shell's series filter, and that is exactly where the reader

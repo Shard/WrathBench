@@ -124,7 +124,7 @@ import { readModelListsSidecar } from "../runner/src/model-lists";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { providerById } from "../runner/src/credential-slots";
 import { credentialIdsOf } from "./run-fleet-state";
-import { rosterPriceGap } from "../runner/viewer/pricing";
+import { rosterPriceGap } from "../viewer/pricing";
 import { catalogueKeyOf } from "./model-catalogue";
 import {
   byNewestStart,
@@ -147,7 +147,7 @@ import {
   holdsWitness,
   verdictForGroups,
 } from "../runner/src/models";
-import { GROUPS_ENV, groupsEnvValue, groupsFromEnv, type Groups } from "../runner/viewer/groups";
+import { GROUPS_ENV, groupsEnvValue, groupsFromEnv, type Groups } from "../viewer/groups";
 
 /**
  * The --status character rows: one per `idle: "unlimited"` ref. Pure.
@@ -611,7 +611,7 @@ export function formatModels(
   now = Date.now(),
   excluded: ReadonlyMap<string, string> = new Map(),
   policy: SchedulingPolicy = { ...DEFAULT_POLICY_FOR_FORMAT },
-  /** The evals group (`runner/viewer/groups.ts`): off, a model that owes a counted run reads as free, as the policy treats it. */
+  /** The evals group (`viewer/groups.ts`): off, a model that owes a counted run reads as free, as the policy treats it. */
   evals = true,
   /** What the tick does with each model this time (`plannedVerdicts`), said after its verdict. */
   planned: ReadonlyMap<string, PlannedVerdict> = new Map(),

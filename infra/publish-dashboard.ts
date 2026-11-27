@@ -2,7 +2,7 @@
 /**
  * Publish the public dashboard snapshot to its bucket (any S3-compatible one).
  *
- * The wiring and nothing else: `renderSnapshot` (runner/viewer/snapshot.ts)
+ * The wiring and nothing else: `renderSnapshot` (viewer/snapshot.ts)
  * makes the artifacts, `publishLoop` (infra/publish-core.ts) decides what to
  * PUT and in what order, and this file turns env and flags into those two
  * calls. Everything testable lives in those modules; this one is exercised by
@@ -20,7 +20,7 @@
  *   WRATHBENCH_PUBLISH_BATCH        default 8; runs projected per upload flush
  *   WRATHBENCH_PUBLISH_FULL_RENDER_MS  default 21600000 (6 h); the longest a cold run goes unrendered
  *   WRATHBENCH_MODULE_URL           optional; names the worldserver build on info.json
- *   WRATHBENCH_GROUPS               the deployment's groups (runner/viewer/groups.ts); unset is all
+ *   WRATHBENCH_GROUPS               the deployment's groups (viewer/groups.ts); unset is all
  *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT, S3_REGION
  *                                   Bun.S3Client's own names, autoloaded from .env; any
  *                                   S3-compatible bucket (infra/publish-settings.ts)
@@ -47,15 +47,15 @@
 
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
-import type { ResultRun } from "../runner/viewer/api-types";
-import { createRenderer, FULL_RENDER_MS } from "../runner/viewer/snapshot";
+import type { ResultRun } from "../viewer/api-types";
+import { createRenderer, FULL_RENDER_MS } from "../viewer/snapshot";
 import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
 import { OG_KEY, renderOgPng } from "./og-render";
 import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
 import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotArtifact, type SnapshotResult } from "./publish-core";
 import { describePublishSettings, publishSettingsFromEnv } from "./publish-settings";
 import { describeFindings, envSecrets, runTokenSecrets, SecretScanner } from "../runner/src/secret-scan";
-import { groupsEnvValue, groupsFromEnv, type Groups } from "../runner/viewer/groups";
+import { groupsEnvValue, groupsFromEnv, type Groups } from "../viewer/groups";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
@@ -96,7 +96,7 @@ const mode = ((): "once" | "loop" => {
 
 if (!existsSync(RUNS_DIR)) fail(`runs directory ${RUNS_DIR} does not exist`);
 /*
- * The deployment's groups (runner/viewer/groups.ts): a group that is off
+ * The deployment's groups (viewer/groups.ts): a group that is off
  * publishes nothing of its own. The publisher is the viewer group's, so with
  * that group off there is nothing for it to do, and it says so rather than
  * publish a site the deployment says it has not got.

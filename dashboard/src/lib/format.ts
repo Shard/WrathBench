@@ -283,7 +283,7 @@ export function listCost(actual: ListedFigure | null | undefined, expected: List
  * from. A subscription run has no metered bill; for claude-code the figure the
  * runner stores is the Claude Agent SDK's own `total_cost_usd` for the session
  * — provider *reported*, and as-if-metered at the same time
- * (`runner/viewer/pricing.ts`, `reported`); codex reports no cost at all, so a
+ * (`viewer/pricing.ts`, `reported`); codex reports no cost at all, so a
  * codex figure is only ever the list-price estimate over its tokens, and so is
  * an OpenCode Go one, whose responses' `usage.cost` is zero inside the
  * allowance. None is an invoice, and the wording must not say it is.

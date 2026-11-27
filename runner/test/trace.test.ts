@@ -31,8 +31,8 @@ import {
   type TraceSegment,
   type TraceState,
 } from "@wrathbench/inspector/codec/trace";
-import { traceSegmentKey } from "../viewer/public-keys";
-import { projectTraceSegment } from "../viewer/public-projection";
+import { traceSegmentKey } from "../../viewer/public-keys";
+import { projectTraceSegment } from "../../viewer/public-projection";
 
 /** A window boundary well inside the epoch-ms range real rows carry. */
 const T0 = 1_760_000_100_000;
@@ -161,7 +161,7 @@ const angDiff = (a: number, b: number): number => {
 describe("public keys module", () => {
   // The codec's own bundling rule is the stack's (`wrath-mcp/scripts/boundary.ts`).
   test("has no runtime imports, so the dashboard can bundle it", async () => {
-    const src = await Bun.file(new URL("../viewer/public-keys.ts", import.meta.url).pathname).text();
+    const src = await Bun.file(new URL("../../viewer/public-keys.ts", import.meta.url).pathname).text();
     // Type-only imports are erased; anything else would follow it into the browser.
     expect(src).not.toMatch(/^\s*import\s+(?!type\b)/m);
     expect(src).not.toMatch(/\brequire\s*\(/);

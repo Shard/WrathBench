@@ -40,7 +40,7 @@ export function scored(runs: readonly ResultRun[]): ResultRun[] {
 /* -------------------------------------------------------------- conditions */
 
 /**
- * The condition a run was played under (`runner/viewer/condition.ts`): the
+ * The condition a run was played under (`viewer/condition.ts`): the
  * served one, or, from a viewer that predates the field, the same derivation
  * over what the row itself carries. Such a row recorded no loop or routing,
  * and reads as the snippet loop with nothing to state, which is what every
@@ -1310,7 +1310,7 @@ export function characterMilestones(attempts: readonly MilestoneAttempt[], trunc
  * It is **an overview of the top characters on freeplay right now** — the
  * whole active field, not a leaderboard of finished evidence. So `scored()` is not applied here, and it is not that a filter was
  * forgotten: every freeplay run is `unscored (episode freeplay)` by definition
- * (`unscoredReason` in `runner/viewer/results.ts`), which is exactly why
+ * (`unscoredReason` in `viewer/results.ts`), which is exactly why
  * `ladderRows` showed this page an empty table. What is dropped instead is a
  * launch that produced nothing — `stillborn`, the scheduler's own notion,
  * decided server-side — and nothing else. Live, paused and ended runs all
@@ -1389,7 +1389,7 @@ function statusOf(r: ResultRun): { status: CharacterStatus; detail: string | nul
 /**
  * Collapse a set of freeplay runs into one row per character.
  *
- * The chain walk itself is `runner/viewer/lineage.ts` — shared with the runs table and
+ * The chain walk itself is `viewer/lineage.ts` — shared with the runs table and
  * the run page, so the field and the inventory cannot disagree about which
  * attempts belong to one character, and written there for the cases production
  * produces (a predecessor the set does not hold, a fork, a malformed cycle).
@@ -1488,7 +1488,7 @@ export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
  *   wall clock would draw the operator's calendar rather than the character's
  *   progress — twelve attempts over a fortnight would be mostly flat gaps;
  * - turns are not usable across a resume. `turnsUsable` in
- *   `runner/viewer/results.ts` exists because a run resumed by an older build
+ *   `viewer/results.ts` exists because a run resumed by an older build
  *   restarts its turn counter, and a cross-attempt axis would be summing
  *   counters that each begin again;
  * - `LevelMark.playtimeMs` is pause-corrected active time from the run's start

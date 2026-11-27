@@ -7,7 +7,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LOD_MAX, MINIMAP_LAYER, TILE_PX, lodTileName } from "../../runner/viewer/worldmap";
+import { LOD_MAX, MINIMAP_LAYER, TILE_PX, lodTileName } from "../../viewer/worldmap";
 import { bakeMap, downsampleQuad } from "../src/bake";
 import { decodePng, encodePng } from "../src/png";
 

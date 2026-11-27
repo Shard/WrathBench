@@ -23,7 +23,7 @@ import { readRunRow } from "../src/run-reader";
 import { beforeAll, describe, expect, test } from "bun:test";
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createApi } from "../viewer/api";
+import { createApi } from "../../viewer/api";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";

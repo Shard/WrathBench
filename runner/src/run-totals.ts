@@ -6,7 +6,7 @@
  *
  * The runner's own, not the viewer's: the collector stores these per run
  * (`collector/src/ingest.ts`) and never imports the viewer. The viewer's
- * incremental reader (`runner/viewer/tail.ts`, `TrajectoryTail`) folds the
+ * incremental reader (`viewer/tail.ts`, `TrajectoryTail`) folds the
  * same records through the same derivations, so it imports them from here
  * and a page and the store cannot disagree about what a record means.
  */

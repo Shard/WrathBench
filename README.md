@@ -35,7 +35,7 @@ flowchart TB
     end
 
     subgraph view["Reading results"]
-        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder"]
+        viewer["Viewer API<br/>viewer: /api,<br/>derivations, ladder"]
         dashboard["Dashboard SPA"]
     end
 
@@ -75,7 +75,7 @@ Each directory has its own README that says what it is for and how to use it.
 | --- | --- |
 | `wrath-mcp/` | The agent stack, a submodule ([Shard/wrath-mcp](https://github.com/Shard/wrath-mcp)) with its own README, licence and docs: the thin AzerothCore module that exposes what a game client could see and do and nothing more, the TypeScript SDK a model's snippets call, and the confined snippet sandbox, MCP server and core tools over it, and the session record every session leaves. |
 | `runner/` | The agent loop: hands a model the SDK in a sandbox, supervises the episode and records the model's side of it, beside the session record the stack writes. |
-| `runner/viewer/` | The read-only API over recorded runs that the dashboard reads. |
+| `viewer/` | The read-only API over recorded runs that the dashboard reads. |
 | `dashboard/` | The web UI over that API, which is also the public site at <https://wrathbench.shard.page>. |
 | `collector/` | Tails recorded runs into ClickHouse so the viewer can answer questions about many runs at once. |
 | `wiki/` | Builds the searchable reference bundle the runner serves to the model, from a locally held wiki dump. |

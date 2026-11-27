@@ -20,7 +20,7 @@ import { DRIVER_LIST } from "../runner/src/drivers";
 import { readRunRow } from "../runner/src/run-reader";
 import { Trajectory } from "../runner/src/trajectory";
 import { OPENROUTER_PRICES } from "./model-catalogue";
-import { priceFor } from "../runner/viewer/pricing";
+import { priceFor } from "../viewer/pricing";
 import { scanRunTotals } from "../runner/src/run-totals";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
 import { recordDrain, traceOfReading, type TraceReading, writeReadings } from "../runner/test/fixtures/v1-session";

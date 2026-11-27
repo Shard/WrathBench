@@ -1518,7 +1518,7 @@ export type Verdict = { verdict: "eval" | "free" | "blocked"; why: string };
 
 /**
  * A verdict as a deployment with the evals group off reads it
- * (`runner/viewer/groups.ts`): owing a counted run is owing nothing, so the
+ * (`viewer/groups.ts`): owing a counted run is owing nothing, so the
  * model is free for its idle work. One rule for the policy's picks and the
  * `--status` table.
  */
@@ -1713,7 +1713,7 @@ export interface NextJobsOptions {
    */
   holding?: ReadonlySet<string>;
   /**
-   * Whether the deployment's evals group is on (`runner/viewer/groups.ts`).
+   * Whether the deployment's evals group is on (`viewer/groups.ts`).
    * Off, the policy picks no scored episode and no campaign work, and a model
    * that would owe a counted run is treated as owing none, so its idle work
    * (an `unlimited` freeplay session) is what it gets. It changes what is

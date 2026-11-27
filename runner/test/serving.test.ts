@@ -5,7 +5,7 @@ import { comparabilityOf, harnessOfRun, subjectOfConfig } from "../src/comparabi
 import { isProbeOnlyDriver, isRosterDriver } from "../src/drivers";
 import { contextSentence } from "../src/prompt";
 import { entryOwnsRun } from "../src/models";
-import { chartGroupOf, conditionKey, conditionOf } from "../viewer/condition";
+import { chartGroupOf, conditionKey, conditionOf } from "../../viewer/condition";
 import { loadRunConfig } from "../src/config";
 
 const BUILD = { weights: "Qwen/Qwen3.8-27B-GGUF", quant: "Q4_K_M", runtime: "LM Studio" };

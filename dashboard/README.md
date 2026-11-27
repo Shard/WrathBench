@@ -19,7 +19,7 @@ Two ways, and they must behave the same.
 viewer you run yourself:
 
 ```
-bun runner/viewer/serve.ts          # terminal 1: the API, on 127.0.0.1:8090
+bun viewer/serve.ts                 # terminal 1: the API, on 127.0.0.1:8090
 bun run dashboard:dev               # terminal 2: http://127.0.0.1:5180
 ```
 
@@ -30,7 +30,7 @@ when the operator's own viewer already owns that port.
 
 ```
 bun run dashboard:build             # writes dashboard/dist
-bun runner/viewer/serve.ts          # http://127.0.0.1:8090
+bun viewer/serve.ts                 # http://127.0.0.1:8090
 ```
 
 The viewer serves `dashboard/dist` when it exists. When it does not there is no
@@ -157,7 +157,7 @@ character's start.
 
 The Deadmines eval is a tab of the ladder page, labelled "deadmines"
 (`?episode=deadmines-solo`), not a tier: its runs are read on the dungeon
-board (`/api/dungeons`, derived in `runner/viewer/dungeons.ts`), and
+board (`/api/dungeons`, derived in `viewer/dungeons.ts`), and
 `/api/ladder` refuses the id. The tab shows the id's table as the viewer
 ordered it, under the shell's series, and above it the scatter's idiom for an
 attempt: one point per row at its best attempt, sharing the table's hover,
@@ -166,7 +166,7 @@ with the tier's row of axis views in its own vocabulary on the same `?view=`
 or to the last boss) against bosses killed is the default; `cost-bosses` is
 the best attempt's cost against bosses killed, and `cost-time` its cost
 against its time to clear for the cleared attempts. The cost is the
-ladder's reading of a run's cost (`runner/viewer/run-cost.ts`), summed over
+ladder's reading of a run's cost (`viewer/run-cost.ts`), summed over
 an attempt's runs. Bosses are counted of the seven on the route to VanCleef,
 and an attempt is cleared when it killed all seven and ended on VanCleef's
 kill; Cookie, off the route, is an optional extra with a column of its own
@@ -490,7 +490,7 @@ action log's counts with what failed and how many hints the harness added. A
 click on the head opens the card as it was; "snippets" and "all" start it
 open. Every other tool's card is short and is drawn whole. The rows are
 `components/FeedRows.tsx`, the one-line readings `lib/feedline.ts`. The feed
-is a window of a thousand entries (`ENTRIES_WINDOW`, `runner/viewer/public-keys.ts`),
+is a window of a thousand entries (`ENTRIES_WINDOW`, `viewer/public-keys.ts`),
 the same in both builds, because folding the actions shortens what a window
 draws, not what it holds: two hundred entries of a walking character were two
 or three turns.

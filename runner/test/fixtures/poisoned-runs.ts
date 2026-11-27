@@ -11,7 +11,7 @@
  *
  * Written as a module rather than inline so the live public-mode handle and
  * the static snapshot renderer can be held to the same fixture; the shape
- * follows `runner/test/snapshot.test.ts`, which keeps its own copy so a change
+ * follows `viewer/test/snapshot.test.ts`, which keeps its own copy so a change
  * to one suite's fixture cannot silently move the other's pinned addresses.
  */
 
@@ -85,7 +85,7 @@ export const SURVIVES = {
 
 /**
  * A container-internal path the model wrote into its own notes: published, but
- * made repo-relative by the scrub (`runner/viewer/scrub-paths.ts`, operator
+ * made repo-relative by the scrub (`viewer/scrub-paths.ts`, operator
  * 2026-09-11). Private mode serves it as written.
  */
 export const CONTAINER_PATH = {

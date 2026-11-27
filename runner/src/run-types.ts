@@ -1,7 +1,7 @@
 /**
  * The run row and the run totals, as the runner's own readers produce them
  * (`run-list.ts`, `run-totals.ts`) and the viewer serves them. The viewer's
- * wire contract (`runner/viewer/api-types.ts`) re-exports every name here, so
+ * wire contract (`viewer/api-types.ts`) re-exports every name here, so
  * the dashboard and the viewer read them where they always did; they live on
  * this side because the runner's core and the collector never import the
  * viewer (`infra/viewer-boundary.test.ts`).

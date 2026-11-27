@@ -7,9 +7,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ResultRun } from "../../runner/viewer/api-types";
+import type { ResultRun } from "../../viewer/api-types";
 import { STALL_PAUSE } from "../../runner/src/lapse";
-import { projectResults } from "../../runner/viewer/public-projection";
+import { projectResults } from "../../viewer/public-projection";
 import {
   COLUMN_TITLES,
   DEFAULT_SORT,

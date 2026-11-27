@@ -1,5 +1,5 @@
 /**
- * The chart's groups and admin switch (runner/viewer/groups.ts, values.yaml
+ * The chart's groups and admin switch (viewer/groups.ts, values.yaml
  * "groups" and "admin"): a group that is off renders none of its workloads and
  * tells the pods that remain through WRATHBENCH_GROUPS, and every group on
  * renders exactly what the chart rendered before groups existed — no

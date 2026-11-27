@@ -27,7 +27,7 @@ export interface RunDirEntry {
    * file appended to within the same millisecond its last pass read it has an
    * unchanged mtime, and a gate on mtime alone would skip those bytes until
    * something else moved the file. The same rule the viewer's own read cache
-   * states in `runner/viewer/runs.ts`.
+   * states in `viewer/runs.ts`.
    *
    * Where the run lives is part of it: archiving is a rename, which keeps
    * every mtime, so without the location a run moved into or out of

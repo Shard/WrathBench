@@ -645,7 +645,7 @@ export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
 
 /**
  * The config as a deployment with the evals group off runs it
- * (`runner/viewer/groups.ts`): every campaign and every scored or probing job
+ * (`viewer/groups.ts`): every campaign and every scored or probing job
  * disabled, so each drains at its episode boundary and nothing resumes under
  * it, exactly as if the operator had switched it off. The policy's own scored
  * picks are the other half (`planPolicyHeld`'s `evals`). Freeplay jobs are left as

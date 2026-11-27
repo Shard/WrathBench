@@ -9,6 +9,7 @@ deps/azerothcore/var
 deps/azerothcore/env
 deps/azerothcore/build*
 runner
+viewer
 wrath-mcp/sdk
 wrath-mcp/mcp
 wrath-mcp/inspector

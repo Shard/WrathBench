@@ -2,7 +2,7 @@
 // docs/PUBLIC-DASHBOARD.md; the cutover runbook is infra/cloudflare/README.md
 // and the day-to-day one is docs/RUNBOOK.md, "Public dashboard". The private
 // dashboard is unaffected — it is still the same bundle served same-origin by
-// runner/viewer over loopback.
+// viewer over loopback.
 //
 // This is the design doc's **Open** shape, adopted 2026-09-11: the app is static
 // assets and nothing else, and the data is a different hostname —

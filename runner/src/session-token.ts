@@ -12,7 +12,7 @@
  * are re-ingested and re-rendered, so each copy strikes it once: the collector
  * from every text it stores (`collector/src/ingest.ts`), and the viewer's
  * public boundary from every public body that carries a run's text
- * (`publicText`, `runner/viewer/api.ts`).
+ * (`publicText`, `viewer/api.ts`).
  *
  * On its own the token is not a capability (the module also wants the run's
  * lease secret or the operator's bearer, `wrath-mcp/module/src/WbManager.cpp`), but it is

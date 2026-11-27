@@ -12,9 +12,9 @@ import { join } from "node:path";
 import { encodePng } from "../minimap/src/png";
 import { bakeMap } from "../minimap/src/bake";
 import { transcodeTree } from "../minimap/src/transcode";
-import { SERVED_DIR, parseTilePath, resolveTileIndex, resolveTilePath } from "../runner/viewer/tiles";
-import { MINIMAP_LAYER, TILE_PX } from "../runner/viewer/worldmap";
-import { parseTileIndex } from "../runner/viewer/tileindex";
+import { SERVED_DIR, parseTilePath, resolveTileIndex, resolveTilePath } from "../viewer/tiles";
+import { MINIMAP_LAYER, TILE_PX } from "../viewer/worldmap";
+import { parseTileIndex } from "../viewer/tileindex";
 import { levelTilePath, nativeFormat } from "../dashboard/src/lib/tiles";
 import {
   TILE_MANIFEST_KEY,

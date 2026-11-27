@@ -256,7 +256,7 @@ Edit it from the **viewer's `/admin` page**, the admin interface ("The admin
 interface"): it and its API exist only on a viewer with the admin switch on,
 which the chart leaves off (`admin.enabled`), and never on the public build.
 The viewer has no login; it answers only to its own names, `localhost` and IP
-addresses (`runner/viewer/README.md`, "Host allowlist"). On the cluster its names are the chart's
+addresses (`viewer/README.md`, "Host allowlist"). On the cluster its names are the chart's
 `viewer.ingress.host` and `extraHosts`; elsewhere they are
 `WRATHBENCH_VIEWER_ALLOWED_HOSTS`. Any other name gets a 421.
 
@@ -277,7 +277,7 @@ bun wb config export > /tmp/fleet.json # to read or diff; never to commit
 `bun wb config` runs `runner/src/config-store.ts` in the runner pod, where
 the store is. A file argument is a path inside the pod, so an export goes to
 stdout and is redirected on your side. The endpoints behind the page are the
-same operations over HTTP (`runner/viewer/README.md`).
+same operations over HTTP (`viewer/README.md`).
 
 ### Steer it
 
@@ -678,7 +678,7 @@ on the row, and the draft stays.
 Nothing calls the model first: whether a slug really answers a tool call is
 what its `t0` trial finds out. A model OpenRouter's catalogue does not carry
 (a claude-code or codex model, the LAN box, Cerebras, OpenCode Go) is added
-with **add a roster entry**. The endpoints are in `runner/viewer/README.md`.
+with **add a roster entry**. The endpoints are in `viewer/README.md`.
 
 An OpenCode Go model is an openai entry with `apiBase`
 `https://opencode.ai/inference/go/openai/v1` (the older
@@ -1654,7 +1654,7 @@ Server identity is `/health`'s `build` and `startedAtMs` (`serverIdentity`,
 ### Groups
 
 A deployment is three groups, each on unless switched off (chart
-`groups.<name>.enabled`; `runner/viewer/groups.ts`):
+`groups.<name>.enabled`; `viewer/groups.ts`):
 
 - **runner**: the fleet supervisor, its run pods, the runner pod and the
   codex home. Off, nothing launches a run.
@@ -1754,7 +1754,7 @@ and `clear` removes it; nothing ever reads one back ("Secrets set from the
 browser"). A Codex home's `re-auth` asks the supervisor to log it in again
 and shows the link and code ("The Codex home"). A refusal seen before a
 secret was replaced no longer reads `auth-failed`. The status comes from
-`GET /api/admin` (`runner/viewer/README.md`), which the chart feeds with the
+`GET /api/admin` (`viewer/README.md`), which the chart feeds with the
 `modelKeys` names and, when there is a publisher, its non-secret settings and
 its state file, mounted read-only.
 

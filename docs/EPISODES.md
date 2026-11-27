@@ -141,7 +141,7 @@ other.
 - **Ends.** `kill-target` on Edwin VanCleef (entry 639), credited to any of
   the party's characters: counted, and cleared when the attempt also killed
   all seven bosses on the route (`DEADMINES_REQUIRED`,
-  `runner/viewer/dungeons.ts`; docs/METHODOLOGY.md, "The Deadmines evals, and
+  `viewer/dungeons.ts`; docs/METHODOLOGY.md, "The Deadmines evals, and
   rung 6"). `episode-limit`: counted, not cleared. A member's `idle` or `tool-call-limit`: counted, not cleared, and
   on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
   `manual`, a fleet stop or offline gap, `harness-error`, `adapter-error` and

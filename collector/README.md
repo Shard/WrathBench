@@ -1,7 +1,7 @@
 # collector
 
 The service that tails the recorded runs under `data/runs/` into ClickHouse.
-It exists for the viewer (`runner/viewer/`), which can then answer a question
+It exists for the viewer (`viewer/`), which can then answer a question
 about a thousand runs with one query instead of a thousand file opens, and for
 `bun wb inspect` (`infra/inspect-run.ts`), which reads a run from it rather
 than walk a live run's files. It runs as a container beside the fleet,
@@ -121,7 +121,7 @@ Not tailed, on purpose:
 - a v1 run's tool calls, results, action log and served batches
   (`session/calls`, all but its moves): the trajectory already holds the
   calls and results as the model saw them, and the run page's feed reads the
-  rest from the files (`runner/viewer/record-feed.ts`).
+  rest from the files (`viewer/record-feed.ts`).
 - the nearby ring (`session/nearby/`): the units around a live character for
   the live map, about 15 minutes of segments that the stack unlinks as they
   age and removes when the session closes.

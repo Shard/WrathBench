@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  // `infra/model-catalogue.json` is imported as data, through infra/model-catalogue.ts.
+  "compilerOptions": { "resolveJsonModule": true },
+  "include": ["*.ts", "test"]
+}

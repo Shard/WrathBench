@@ -33,7 +33,7 @@
  *
  * The Deadmines eval, `deadmines-solo`, is a tab of this page too, labelled
  * "deadmines", and reads something else again: the dungeon board
- * (`/api/dungeons`, derived in `runner/viewer/dungeons.ts`), a row per model
+ * (`/api/dungeons`, derived in `viewer/dungeons.ts`), a row per model
  * condition on its best attempt. Above the table, the scatter's idiom for an
  * attempt (`components/DungeonChart`), with the tier's row of axis views in
  * its own vocabulary (`DUNGEON_VIEWS` in `lib/dungeons.ts`, on the same

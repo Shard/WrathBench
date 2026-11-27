@@ -37,8 +37,8 @@ import {
   type TraceState as WriterState,
 } from "@wrathbench/mcp/record";
 import { TraceRecorder } from "@wrathbench/mcp/record/recorder";
-import type { TraceItemName, TraceQuestReq as ViewerQuestReq, TraceSheet as ViewerSheet, TraceState as ViewerState } from "../viewer/api-types";
-import { projectTraceSegment } from "../viewer/public-projection";
+import type { TraceItemName, TraceQuestReq as ViewerQuestReq, TraceSheet as ViewerSheet, TraceState as ViewerState } from "../../viewer/api-types";
+import { projectTraceSegment } from "../../viewer/public-projection";
 import { sessionKind } from "./fixtures/run-readout";
 import {
   GAP_MS,

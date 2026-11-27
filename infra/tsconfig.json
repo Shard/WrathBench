@@ -11,7 +11,7 @@
   // defines. Same mapping, so the two programs see one set of types.
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "paths": { "@viewer/*": ["../runner/viewer/*"], "@runner/*": ["../runner/src/*"] }
+    "paths": { "@viewer/*": ["../viewer/*"], "@runner/*": ["../runner/src/*"] }
   },
   "include": ["."]
 }

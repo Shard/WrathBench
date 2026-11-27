@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
+import type { AgentPosition, TrackResponse } from "../../viewer/api-types";
 
 /* The reactive build of solid-js stands behind this name for every dashboard
    test; `test/preload-solid.ts` installs it and says why. */

@@ -13,8 +13,8 @@ import { comparabilityOf } from "../src/comparability";
 import { episodeOverrideOf, loadRunConfig } from "../src/config";
 import { EPISODES, EPISODE_IDS, matchesTier, watchdogsFor } from "../src/episodes";
 import { configFromArgs } from "../src/run";
-import type { ResultRun, RunRow } from "../viewer/api-types";
-import { episodeOf, isTierMember, unscoredReason } from "../viewer/results";
+import type { ResultRun, RunRow } from "../../viewer/api-types";
+import { episodeOf, isTierMember, unscoredReason } from "../../viewer/results";
 
 const M = 60_000;
 

@@ -12,7 +12,7 @@ a response team.
 
 - `runner/` — the agent loop, the benchmark's tools and sandbox extension, and
   what the CLI drivers are started with.
-- `runner/viewer/`, `dashboard/` and the publisher — the public static site and
+- `viewer/`, `dashboard/` and the publisher — the public static site and
   the projection that produces it.
 - `infra/` — the images, the chart and the operator tooling.
 
@@ -73,4 +73,4 @@ run's own secrets by value before the model reads it, as a second layer.
 Nothing reaches the public site without passing a secret scan at the
 publisher, which withholds any object carrying a known credential by value or
 a credential-shaped string, and stops the site's update until it is clean
-(`runner/viewer/README.md`, "What it will not serve").
+(`viewer/README.md`, "What it will not serve").

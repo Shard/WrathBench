@@ -27,7 +27,7 @@
  *
  * **Prices** are matched on the id the *provider* bills under, exactly — never
  * through an alias, since the same model is different money on different
- * hosts (`runner/viewer/pricing.ts` says in what order). The one exception is
+ * hosts (`viewer/pricing.ts` says in what order). The one exception is
  * a subscription endpoint's paid run with no endpoint row (an OpenCode Go
  * model OpenCode's listing does not price): a flat plan has no per-host bill,
  * so it reads its entry's OpenRouter row through the alias, as-if-metered
@@ -105,7 +105,7 @@ export interface CatalogueProvider {
   /**
    * An endpoint provider billed as a flat plan (OpenCode Go): its rows are
    * as-if-metered, and the per-response `usage.cost` it reports is the overage
-   * past the allowance, not the run's cost (`runner/viewer/pricing.ts`).
+   * past the allowance, not the run's cost (`viewer/pricing.ts`).
    */
   subscription?: boolean;
   /**
@@ -381,7 +381,7 @@ export function weightsOf(model: string | null | undefined): Weights {
 
 // ------------------------------------------------------------------ prices
 
-/** Every OpenRouter id's windows, flat, as `runner/viewer/pricing.ts` reads them. */
+/** Every OpenRouter id's windows, flat, as `viewer/pricing.ts` reads them. */
 export interface OpenRouterTable {
   /** The day the catalogue was last read, not the day a rate began. */
   asOf: string;

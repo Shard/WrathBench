@@ -14,7 +14,7 @@ import { credentialCandidates, parseCredentials } from "../src/credential-slots"
 import { billingOf } from "../src/model-cost";
 import { DEFAULT_POLICY, outstandingWork, projectModel, type RosterModel } from "../src/models";
 import { configFromArgs } from "../src/run";
-import { rowOf } from "../viewer/models";
+import { rowOf } from "../../viewer/models";
 
 describe("runBilling", () => {
   const cases: { why: string; run: Parameters<typeof runBilling>[0]; want: "free" | "paid" }[] = [

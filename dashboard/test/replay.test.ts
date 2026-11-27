@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
+import type { TrackPoint, TrackResponse } from "../../viewer/api-types";
 import { trackSpan } from "@wrathbench/inspector/views/replay";
 import { positionsAt, runParam } from "../src/lib/replay";
 

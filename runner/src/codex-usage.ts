@@ -24,7 +24,7 @@
  *
  * Two users, one rule: the driver (`adapter-codex.ts`) writes the per-turn
  * delta as `usage` with the thread figure beside it as `usageCumulative`, and
- * the viewer (`runner/viewer/tail.ts`) derives the same delta at read time for
+ * the viewer (`viewer/tail.ts`) derives the same delta at read time for
  * records written before the driver did — told apart by `usageCumulative`
  * being absent. This module imports nothing, so the viewer and the collector
  * can read it without pulling the driver in.

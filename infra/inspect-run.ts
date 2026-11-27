@@ -632,7 +632,7 @@ function fileBackward(path: string, fn: RecFn, to?: number): void {
 
 /**
  * The store's coordinates, or null when none are configured: the viewer's
- * `clickhouseConfigFromEnv` (runner/viewer/clickhouse.ts), copied because this
+ * `clickhouseConfigFromEnv` (viewer/clickhouse.ts), copied because this
  * file imports nothing, and pinned to it by the test. The URL can carry a
  * password, so nothing here ever prints it.
  */
@@ -1824,7 +1824,7 @@ export interface QuestStretch {
  * The recorded count is the running process's own, so it reads zero again
  * after a resume or a sandbox restart; a drop marks one, and the run's count
  * is every stretch's last count added up. The viewer's `questsAcrossRestarts`
- * (`runner/viewer/results.ts`) is the same fold, copied because this file
+ * (`viewer/results.ts`) is the same fold, copied because this file
  * imports nothing, and the test pins the two to the same answer. Null when no
  * sample carried a count.
  */
@@ -1968,7 +1968,7 @@ function scanActivity(path: string, window: Window, token: string | null, cost?:
  * response (`usage.cost`, summed), and the Claude Code CLI's per session
  * (`claude_result.costUsd`, cumulative, so a session's is its largest). No
  * price table is read for this line: the list-price figure is the viewer's
- * (runner/viewer/pricing.ts), and `requests` prices a window's tokens at the
+ * (viewer/pricing.ts), and `requests` prices a window's tokens at the
  * model catalogue's row (`requestPrice`).
  */
 export interface CostTally {
@@ -2182,7 +2182,7 @@ function fmtUsd(usd: number): string {
   return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
 }
 
-/** A run's tokens at one price row: the prompt less its cache at the input rate (runner/viewer/pricing.ts `costOf`). */
+/** A run's tokens at one price row: the prompt less its cache at the input rate (viewer/pricing.ts `costOf`). */
 function listUsd(u: Pick<UsageTotals, "input" | "output" | "cacheRead" | "cacheWrite">, p: RequestPrice): number {
   const read = u.cacheRead ?? 0;
   const write = u.cacheWrite ?? 0;
@@ -2234,7 +2234,7 @@ export function costLine(
       open.unresulted += k.pending.turns.size;
       open.final += k.pending.final;
     }
-    // The CLI's figure alone: the viewer adds the turns no result covered, at list (runner/viewer/pricing.ts `backfilled`).
+    // The CLI's figure alone: the viewer adds the turns no result covered, at list (viewer/pricing.ts `backfilled`).
     const usd =
       cli === null
         ? "no charge reported by the CLI (the viewer prices the tokens at list)"
@@ -4703,7 +4703,7 @@ interface RateWindowRow {
   from?: string;
 }
 
-/** The window in force at `at`: runner/viewer/pricing.ts `windowAt`. */
+/** The window in force at `at`: viewer/pricing.ts `windowAt`. */
 function rateAt(windows: unknown, at: number): RateWindowRow | null {
   if (!Array.isArray(windows) || windows.length === 0) return null;
   let chosen: RateWindowRow | null = null;
@@ -4731,7 +4731,7 @@ function sameBase(a: string | null, b: unknown): boolean {
 
 /**
  * A paid run on an endpoint the catalogue marks `subscription` (OpenCode Go):
- * runner/viewer/pricing.ts `isSubscriptionRun`. A free slug or a declared-free
+ * viewer/pricing.ts `isSubscriptionRun`. A free slug or a declared-free
  * launch on the same base is free, not a subscription's.
  */
 export function subscriptionBase(cat: Record<string, unknown> | null, run: { model: string | null; apiBase: string | null; billing: string | null }): boolean {
@@ -4742,7 +4742,7 @@ export function subscriptionBase(cat: Record<string, unknown> | null, run: { mod
 
 /**
  * The run's price row out of the model catalogue (infra/model-catalogue.json),
- * at the rate window in force at `at`: the part of runner/viewer/pricing.ts
+ * at the rate window in force at `at`: the part of viewer/pricing.ts
  * `priceFor` that names a metered row, matched the same way, and pinned to it
  * by the test. A free slug reads zero; a metered endpoint's row is matched on
  * its base and id; an OpenRouter row on its id, and only for a run on

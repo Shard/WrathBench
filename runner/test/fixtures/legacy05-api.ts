@@ -8,8 +8,8 @@
  */
 
 import { join } from "node:path";
-import { createApi } from "../../viewer/api";
-import { localRunStore } from "../../viewer/clickhouse";
+import { createApi } from "../../../viewer/api";
+import { localRunStore } from "../../../viewer/clickhouse";
 
 /** One handle over a materialised runs directory: the local store, no module, no tiles. */
 export function legacy05Api(runsDir: string, publicMode: boolean): ReturnType<typeof createApi> {

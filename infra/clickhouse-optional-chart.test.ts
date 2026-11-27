@@ -2,7 +2,7 @@
  * `clickhouse.enabled: false` renders a deployment that works without the
  * derived store: no ClickHouse or collector workload, and no CLICKHOUSE_*
  * variable on any pod. The viewer and the publisher choose their run store by
- * whether CLICKHOUSE_URL is set (runner/viewer/clickhouse.ts `storeFor`), so a
+ * whether CLICKHOUSE_URL is set (viewer/clickhouse.ts `storeFor`), so a
  * URL naming a Service the chart did not render would fail every listing, and
  * a CLICKHOUSE_PASSWORD reference would demand a Secret key nothing uses.
  * With it on (the default), the three readers still carry the coordinates.

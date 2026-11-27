@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FeedEntry } from "../../runner/viewer/api-types";
+import type { FeedEntry } from "../../viewer/api-types";
 import { groupFeed } from "../src/lib/feedgroup";
 
 let seq = 0;
@@ -282,7 +282,7 @@ const cards = (gs: Groups): Card[] => gs.filter((g): g is Card => g.kind === "ca
 describe("groupFeed: a store session's calls", () => {
   /**
    * As the viewer serves a session read from a wrath-mcp store
-   * (`runner/viewer/record-feed.ts`): each call's records side by side where
+   * (`viewer/record-feed.ts`): each call's records side by side where
    * it returned, its start in `dispatchTs`, the action log before it. Here the
    * snippet dispatched at 1_000 was still running when the other call
    * (1_100 to 1_200) returned, and errs at 4_000.

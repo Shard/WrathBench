@@ -16,7 +16,7 @@
  *
  * **One source, the public ladder's.** The rows are the `ladder-e90.json` and
  * `ladder-e360.json` artifacts the snapshot renderer makes for the public site
- * (`runner/viewer/snapshot.ts`): with `--base`, read from the published
+ * (`viewer/snapshot.ts`): with `--base`, read from the published
  * generation over plain GET (`httpSource`, the reader `bun wb site verify
  * --base` uses); with `--runs`, rendered from a runs tree exactly as
  * `infra/render-og.ts` renders the social card. Either way the bodies have
@@ -29,7 +29,7 @@
  * rungs are freeplay achievements and on no scored ladder (operator,
  * 2026-11-15), so no record carries one. A cell is one model under one condition (series, episode,
  * harness, effort, compaction window, loop, `yield`, wiki;
- * `runner/viewer/condition.ts`), so a cell never mixes what the methodology
+ * `viewer/condition.ts`), so a cell never mixes what the methodology
  * keeps apart, and like a ladder row it holds a model's runs on every
  * provider (operator, 2026-11-16). The ladder page shows each model's newest
  * condition by default; the export writes every condition, since that is a
@@ -51,7 +51,7 @@
 
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
+import type { ResultRun, ResultsResponse } from "../viewer/api-types";
 import { EPISODES, EPISODE_IDS, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { describeFindings, envSecrets, SecretScanner } from "../runner/src/secret-scan";
@@ -574,7 +574,7 @@ export async function laddersFromPublished(source: AcceptSource): Promise<Map<Ep
 
 /** The scored ladders rendered from a runs tree, as the publisher and the social card render them. */
 async function laddersFromRuns(runsDir: string): Promise<Map<EpisodeId, ResultsResponse>> {
-  const { createRenderer } = await import("../runner/viewer/snapshot");
+  const { createRenderer } = await import("../viewer/snapshot");
   const result = await createRenderer({ runsDir })();
   const out = new Map<EpisodeId, ResultsResponse>();
   for (const ep of SCORED_EPISODES) {

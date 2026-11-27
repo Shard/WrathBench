@@ -12,11 +12,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@wrathbench/inspector/codec/trace";
-import type { TraceAura, TraceSegment, TrackResponse } from "../../runner/viewer/api-types";
+import type { TraceAura, TraceSegment, TrackResponse } from "../../viewer/api-types";
 import { DRAIN_MS, TRAIL_MS, createLiveClock, createTraceStore, ingestTracks, liveCadence, replaySpan } from "@wrathbench/inspector/views/traceplayer";
 import { positionsAt } from "../src/lib/replay";
 import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "@wrathbench/inspector/views/unitframe";
-import { projectTraceSegment } from "../../runner/viewer/public-projection";
+import { projectTraceSegment } from "../../viewer/public-projection";
 
 const RUN = "run-a";
 /** A window boundary, well clear of zero so context reads stay positive. */

@@ -136,7 +136,7 @@ export const comparabilitySchema = z.object({
    * by two machines — six have served `glm-5.3-flash` here — are two
    * conditions of the tuple (operator, 2026-09-16). The ladder reads it as a
    * fact about the run, not a chart or a row of its own: runs on any provider
-   * share a chart (operator, 2026-11-16; `runner/viewer/condition.ts`).
+   * share a chart (operator, 2026-11-16; `viewer/condition.ts`).
    *
    * An OpenCode Go run stamps `{ via: "OpenCode Go", allowFallbacks: true }`
    * (`OPENCODE_GO_ROUTING`): Go picks the backend itself and a request cannot

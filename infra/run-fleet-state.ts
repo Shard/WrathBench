@@ -39,7 +39,7 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
-import type { FleetServerView, FleetWorldView } from "../runner/viewer/api-types";
+import type { FleetServerView, FleetWorldView } from "../viewer/api-types";
 import { IMAGE_RECORD_FILE } from "./run-pod";
 import { episodeRunsInPod } from "./episode-launcher";
 import {

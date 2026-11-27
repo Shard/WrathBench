@@ -50,7 +50,7 @@ describe("the viewer image's ignore list", () => {
   });
 
   test("keeps what the viewer runs", () => {
-    for (const p of ["runner/viewer/serve.ts", "runner/src/session-store.ts", "wrath-mcp/mcp/src/index.ts", "dashboard/src/App.tsx", "package.json", "bun.lock"]) {
+    for (const p of ["viewer/serve.ts", "runner/src/session-store.ts", "wrath-mcp/mcp/src/index.ts", "dashboard/src/App.tsx", "package.json", "bun.lock"]) {
       expect([p, ignored(patterns, p)]).toEqual([p, false]);
     }
   });

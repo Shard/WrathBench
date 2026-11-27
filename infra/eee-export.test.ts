@@ -15,8 +15,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ResultRun, ResultsResponse } from "../runner/viewer/api-types";
-import { projectResults } from "../runner/viewer/public-projection";
+import type { ResultRun, ResultsResponse } from "../viewer/api-types";
+import { projectResults } from "../viewer/public-projection";
 import {
   availabilityOf,
   COLLECTION,

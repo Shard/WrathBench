@@ -22,7 +22,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ART_LAYER, GRID, LOD_MAX, TILE_PX, TILE_SIZE, lodTileName } from "../../runner/viewer/worldmap";
+import { ART_LAYER, GRID, LOD_MAX, TILE_PX, TILE_SIZE, lodTileName } from "../../viewer/worldmap";
 import { type Pixels, downsampleQuad, writeTile } from "./bake";
 import { CELLS, LIQUID_OCEAN, LIQUID_WATER, type MapCells, mapFileName, parseMapFile } from "./mapfile";
 import { MpqChain } from "./mpq";

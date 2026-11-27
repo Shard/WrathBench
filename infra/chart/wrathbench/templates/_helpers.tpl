@@ -568,7 +568,7 @@ template or stamp would carry.
 {{- end -}}
 
 {{/*
-The three groups (runner/viewer/groups.ts; values.yaml "groups") and the
+The three groups (viewer/groups.ts; values.yaml "groups") and the
 workloads each one owns. A group that is off renders none of its workloads,
 whatever the workload's own `enabled` says; on, the workload's own switch
 decides, as it always has. Each helper is "true" or empty, so `if include …`

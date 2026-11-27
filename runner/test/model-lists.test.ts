@@ -28,7 +28,7 @@ import {
   type ModelListsSidecar,
 } from "../src/model-lists";
 import { DEFAULT_POLICY, modelStates, planNextJobs, schedulability, type RosterModel } from "../src/models";
-import { modelsResponse, type RosterRead } from "../viewer/models";
+import { modelsResponse, type RosterRead } from "../../viewer/models";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

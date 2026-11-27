@@ -246,7 +246,7 @@ subscription, so a codex cost is only ever the list-price estimate over its toke
 as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
 prefix the Codex CLI's own slug omits: the lane records `gpt-6-astra` and the catalogue carries
 OpenAI's published list price as `openai/gpt-6-astra`. It is the same synced row an OpenRouter
-run would read; only what it means differs, and `codexPrice` in `runner/viewer/pricing.ts` says
+run would read; only what it means differs, and `codexPrice` in `viewer/pricing.ts` says
 so — an OpenRouter run meters the operator's balance, a codex run bills a flat ChatGPT
 subscription, so the figure there is a comparison and not a bill. It is the operator's decision:
 without it a codex run would have no cost reading at all and would be absent from

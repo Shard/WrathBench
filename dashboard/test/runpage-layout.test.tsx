@@ -18,7 +18,7 @@ import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { CharacterView, ClipsResponse, CostView } from "../../runner/viewer/api-types";
+import type { CharacterView, ClipsResponse, CostView } from "../../viewer/api-types";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -32,7 +32,7 @@ async function load(): Promise<{ cards: CardsModule; cost: CostModule; replay: R
     configFile: false,
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

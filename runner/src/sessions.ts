@@ -8,7 +8,7 @@
  * sessions: a scored run usually one; a run a rate limit paused and the fleet
  * resumed two; a freeplay run the operator paused and resumed in place days
  * later two as well, under one run id. A durable freeplay character is a chain
- * of runs (`runner/viewer/lineage.ts`), so its sessions are every attempt's,
+ * of runs (`viewer/lineage.ts`), so its sessions are every attempt's,
  * in order.
  *
  * Everything that measures a run in time reads these. Playtime is their sum;

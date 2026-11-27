@@ -49,7 +49,7 @@ import {
 } from "../src/reference-program";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { compileSnippet } from "@wrathbench/mcp";
-import { createApi } from "../viewer/api";
+import { createApi } from "../../viewer/api";
 import { STUB_ROUTE, program as stubProgram } from "./fixtures/reference-stub";
 import { writeReadings } from "./fixtures/v1-session";
 import { tempDirs } from "./fixtures/temp-dirs";

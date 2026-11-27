@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { AreaFacts, ResultRun, LevelMark, RunCondition } from "../../runner/viewer/api-types";
+import type { AreaFacts, ResultRun, LevelMark, RunCondition } from "../../viewer/api-types";
 import {
   COST,
   DEFAULT_VIEW,
@@ -28,7 +28,7 @@ import { paretoSteps } from "../src/lib/pareto";
 import { filterBySeries } from "../src/lib/harness";
 import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
 import { chartGroups, defaultLadderRuns, modelEntries, pickChartGroup } from "../src/lib/ladderfilter";
-import { conditionOf } from "../../runner/viewer/condition";
+import { conditionOf } from "../../viewer/condition";
 import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
 import { runBilling, type BillableRun } from "../../runner/src/billing";
 import { effortLabel, fmtPlaytimeTick, windowNote } from "../src/lib/format";

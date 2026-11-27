@@ -141,6 +141,7 @@ COPY --chown=1000:1000 wrath-mcp/sdk/package.json wrath-mcp/sdk/package.json
 COPY --chown=1000:1000 wrath-mcp/mcp/package.json wrath-mcp/mcp/package.json
 COPY --chown=1000:1000 wrath-mcp/inspector/package.json wrath-mcp/inspector/package.json
 COPY --chown=1000:1000 runner/package.json    runner/package.json
+COPY --chown=1000:1000 viewer/package.json    viewer/package.json
 COPY --chown=1000:1000 wiki/package.json      wiki/package.json
 COPY --chown=1000:1000 minimap/package.json   minimap/package.json
 COPY --chown=1000:1000 dashboard/package.json dashboard/package.json

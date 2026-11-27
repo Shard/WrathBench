@@ -91,7 +91,7 @@ export function isReflectTool(name: string | null | undefined): boolean {
  * Whether a turn falls inside one of the run's reflection windows.
  *
  * `[fromTurn, toTurn)`, and a null `toTurn` runs to the end of the run — see
- * `runner/viewer/run-marks.ts`, which owns the convention and the reason for it. A
+ * `viewer/run-marks.ts`, which owns the convention and the reason for it. A
  * feed row with no turn at all (the claude driver's out-of-band records, the
  * MCP server's) is never accented: "we do not know" is not "reflecting".
  */

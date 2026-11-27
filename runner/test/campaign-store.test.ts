@@ -8,10 +8,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { createApi } from "../viewer/api";
-import { readFleetRoster } from "../viewer/models";
-import { campaignsView } from "../viewer/campaigns";
-import { projectCampaigns } from "../viewer/public-projection";
+import { createApi } from "../../viewer/api";
+import { readFleetRoster } from "../../viewer/models";
+import { campaignsView } from "../../viewer/campaigns";
+import { projectCampaigns } from "../../viewer/public-projection";
 import { ConfigRejected, ConfigStore, readFleetConfig } from "../src/config-store";
 import { parseFleet } from "../../infra/run-fleet-config";
 import { definition, publication } from "./fixtures/campaigns";

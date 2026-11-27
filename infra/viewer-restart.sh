@@ -15,7 +15,7 @@
 # release (`bun wb release viewer`, infra/k8s-release-viewer.sh) moves the
 # viewer group's tag alone with the fleet left running, and a full release
 # moves everything. Outside a cluster the viewer is one process you start
-# yourself (runner/viewer/README.md).
+# yourself (viewer/README.md).
 set -Eeuo pipefail
 
 NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"

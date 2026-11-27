@@ -190,7 +190,7 @@ export function replayHref(runId: string): string {
 
 /**
  * The run page a replayed pip opens. A fan-out character's id is its run's,
- * `~` and its name (`runner/viewer/runs-source.ts`), and it opens the run's
+ * `~` and its name (`viewer/runs-source.ts`), and it opens the run's
  * page on that character; any other id is a run's own.
  */
 export function runPageHref(id: string): string {
