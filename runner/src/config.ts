@@ -25,6 +25,7 @@ import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 import { partyConfigSchema } from "./party";
 import { endConditionSchema } from "./end-conditions";
 import { tenantAccountRefusal } from "../../infra/tenant-accounts";
+import { MIN_TOKEN_LENGTH } from "./session-token";
 import {
   DEFAULT_DRIVER,
   DRIVER_LIST,
@@ -942,14 +943,8 @@ export function newRunId(now: Date = new Date()): string {
   return `run-${stamp}`;
 }
 
-/**
- * The minimum length of a session token the module will accept. Shorter tokens
- * are refused with `weak_token`, because a token *is* the authentication for
- * `POST /action` and `DELETE /session`: the old default — the
- * run id, a second-granularity timestamp — was enumerable, so a snippet in one
- * run could drive or tear down a concurrent one.
- */
-export const MIN_TOKEN_LENGTH = 32;
+/* The module's floor on a session token's length, from the leaf that strikes tokens (`session-token.ts`). */
+export { MIN_TOKEN_LENGTH };
 
 /** A fresh session secret: 16 random bytes, 32 hex characters. */
 export function newSessionToken(): string {

@@ -21,8 +21,17 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { MIN_TOKEN_LENGTH } from "./config";
 import { REDACTED } from "@wrathbench/mcp/redact";
+
+/**
+ * The minimum length of a session token the module will accept. Shorter tokens
+ * are refused with `weak_token`, because a token *is* the authentication for
+ * `POST /action` and `DELETE /session`: the old default — the
+ * run id, a second-granularity timestamp — was enumerable, so a snippet in one
+ * run could drive or tear down a concurrent one. Here rather than in
+ * `config.ts`, which re-exports it, so striking a token loads no run config.
+ */
+export const MIN_TOKEN_LENGTH = 32;
 
 /**
  * The token meta.json holds for the run in `dir`, or null when there is none
