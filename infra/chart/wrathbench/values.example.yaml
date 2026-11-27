@@ -10,6 +10,10 @@ image:
   # REQUIRED. The immutable tag infra/build-images.sh produced — `git describe`
   # of the source SHA, e.g. harness-1.0-N-g<sha>. "" and "latest" are refused.
   tag: "harness-1.0-N-g0000000"
+  # Optional. The viewer, publisher and collector's tag when a viewer release
+  # (`bun wb release viewer`) has moved them ahead of the fleet; empty is `tag`.
+  # A full release sets it to its own tag or clears it.
+  viewerTag: ""
   pullPolicy: IfNotPresent
   names:
     worldserver: wrathbench-worldserver

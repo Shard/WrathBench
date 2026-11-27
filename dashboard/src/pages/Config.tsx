@@ -208,6 +208,11 @@ export default function Config() {
     const s = section();
     return s !== null && !sectionReadsOnly(s);
   };
+  // Why admin writes are held, while this viewer's build is not the fleet's (runner/viewer/write-hold.ts); null when they are not.
+  const heldWhy = (): string | null => {
+    const w = admin()?.writes;
+    return w !== undefined && !w.ok ? w.why : null;
+  };
   // A section that writes the fleet's config waits for a seeded store; the site's settings on a pure viewer create one.
   const unseeded = (): boolean => {
     const s = section();
@@ -310,6 +315,14 @@ export default function Config() {
                       <button type="button" onClick={() => void reload()}>
                         reload
                       </button>
+                      <Show when={heldWhy()}>
+                        {(why) => (
+                          <span class="badge warn" title={why()}>
+                            read-only
+                          </span>
+                        )}
+                      </Show>
+
                     </div>
                     <Switch>
                       <Match when={section() === "providers"}>

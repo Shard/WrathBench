@@ -103,12 +103,33 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "wrathbench.image.runner" -}}
 {{ include "wrathbench.registry" . }}/{{ .Values.image.names.runner }}:{{ include "wrathbench.tag" . }}
 {{- end -}}
-{{- /* The viewer's: the slim viewer image when `image.names.viewer` names one, else the runner's. */}}
+{{/*
+The viewer group's tag (values.yaml `image.viewerTag`): the viewer, the
+publisher and the collector run it, and nothing else does. Empty is
+`image.tag`. Only image references read it: WRATHBENCH_HARNESS_VERSION, the
+object labels and the hook Jobs stay on `image.tag`, because they say what the
+FLEET runs, and a viewer release moves only the viewer group.
+*/}}
+{{- define "wrathbench.viewerTag" -}}
+{{- $t := .Values.image.viewerTag | default "" | toString -}}
+{{- if eq $t "" -}}
+{{- include "wrathbench.tag" . -}}
+{{- else if eq $t "latest" -}}
+{{- fail "image.viewerTag must be an immutable tag; \"latest\" is refused — see GitHub issue 7" -}}
+{{- else -}}
+{{- $t -}}
+{{- end -}}
+{{- end -}}
+{{- /* The publisher's and the collector's: the runner image at the viewer group's tag. */}}
+{{- define "wrathbench.image.viewerGroup" -}}
+{{ include "wrathbench.registry" . }}/{{ .Values.image.names.runner }}:{{ include "wrathbench.viewerTag" . }}
+{{- end -}}
+{{- /* The viewer's: the slim viewer image when `image.names.viewer` names one, else the runner's; the viewer group's tag either way. */}}
 {{- define "wrathbench.image.viewer" -}}
 {{- with .Values.image.names.viewer -}}
-{{ include "wrathbench.registry" $ }}/{{ . }}:{{ include "wrathbench.tag" $ }}
+{{ include "wrathbench.registry" $ }}/{{ . }}:{{ include "wrathbench.viewerTag" $ }}
 {{- else -}}
-{{ include "wrathbench.image.runner" . }}
+{{ include "wrathbench.image.viewerGroup" . }}
 {{- end -}}
 {{- end -}}
 

@@ -28,7 +28,14 @@
 #     <command> <tag> <sha>        with WRATHBENCH_TAG and WRATHBENCH_SHA
 #                                  in the environment
 #
-# and is expected to RETURN once the pin has been placed — merged, applied,
+# It pins `image.tag` (and the chart's source revision, where the GitOps repo
+# pins one), and it also sets `image.viewerTag` to the same tag, or clears it:
+# after a viewer release (k8s-release-viewer.sh) that value holds the viewer
+# group on its own tag, and a full release that left it would leave the viewer
+# behind the fleet it reads. The viewer is a pin witness, so such a pin never
+# completes here: the poll below waits on it and then fails, naming it.
+#
+# It is expected to RETURN once the pin has been placed — merged, applied,
 # committed, whatever your GitOps repo means by that. It does NOT have to wait
 # for the cluster to catch up: this script does that itself, by reading what the
 # cluster runs, which is the check that a hook cannot get wrong. A hook that
@@ -102,7 +109,7 @@ while [[ $# -gt 0 ]]; do
     --pin-wait) PIN_WAIT_S="${2:-}"; shift 2 ;;
     --namespace|-n) NAMESPACE="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (--from ${PHASES[*]}, --dry-run, --pin-hook, --helmrelease, --tag, --registry, --no-smoke, --keep-paused, --pin-wait, --namespace, --release)" ;;
   esac
 done
@@ -272,6 +279,7 @@ print_pin_instructions() {
   say "no --pin-hook, so the pin is yours to place. Set:"
   say "    image.tag = ${TAG}"
   say "    commit    = ${SHA}"
+  say "    image.viewerTag = ${TAG}, or cleared (a viewer release may have set it)"
   say "  The chart reads the tag as \`image.tag\` (infra/chart/wrathbench/values.yaml),"
   say "  which your GitOps repo supplies however it supplies values — a HelmRelease's"
   say "  \`values:\`, a values file, or \`helm upgrade --set image.tag=${TAG}\`. If that"
@@ -301,6 +309,9 @@ wait_for_tag() {
     fi
     if (( $(date +%s) >= deadline )); then
       for d in "${PIN_WITNESSES[@]}"; do say "  ${d}: $(tags_of "${d}")"; done
+      if carries_tag "deployment/${RELEASE}-worldserver" "${TAG}" && ! carries_tag "deployment/${RELEASE}-viewer" "${TAG}"; then
+        say "  the worldserver carries ${TAG} and the viewer does not: the pin left image.viewerTag set (a viewer release's). It must be ${TAG} or cleared."
+      fi
       fail "the cluster still does not carry ${TAG} after ${PIN_WAIT_S}s. Nothing was deployed; the fleet is drained with the switch set. When the pin lands: ./infra/k8s-release.sh --from pin"
     fi
     for d in "${PIN_WITNESSES[@]}"; do

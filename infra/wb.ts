@@ -218,6 +218,7 @@ export const ENTRIES: readonly Entry[] = [
   { group: "release", command: "run", summary: "the whole release: build, drain, pin, deploy, resume", ...clusterOnly("infra/k8s-release.sh") },
   { group: "release", command: "build", summary: "build every image at one tag, from the commit", ...onHost("infra/build-images.sh") },
   { group: "release", command: "deploy", summary: "the deploy window alone: drain, wait, smoke, resume", ...clusterOnly("infra/k8s-deploy.sh") },
+  { group: "release", command: "viewer", summary: "the viewer group alone: build, pin image.viewerTag, wait; the fleet runs on", ...clusterOnly("infra/k8s-release-viewer.sh") },
 
   { group: "server", command: "health", summary: "the module's health census, read inside the worldserver", ...clusterOnly("infra/module-health.sh") },
   { group: "server", command: "restart-viewer", summary: "rollout restart the viewer, then check it answers", ...clusterOnly("infra/viewer-restart.sh") },

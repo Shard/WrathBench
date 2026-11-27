@@ -2513,6 +2513,12 @@ export interface AdminResponse {
   modelKeys: string[] | null;
   /** Whether this viewer holds a usable store key, so a secret can be set here; else why not. */
   storeKey: { ok: true } | { ok: false; why: string };
+  /**
+   * Whether this viewer takes admin writes: not while it runs a different
+   * build from the fleet (`write-hold.ts`, after a viewer release), and then
+   * why, as every refused write says it.
+   */
+  writes: { ok: true } | { ok: false; why: string };
   credentials: AdminCredentialView[];
   providers: AdminProviderView[];
   publishing: AdminPublishView;

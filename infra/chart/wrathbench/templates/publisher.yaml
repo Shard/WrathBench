@@ -10,8 +10,9 @@ dashboard ship ahead of any inbound hardening (docs/PUBLIC-DASHBOARD.md).
 
 The runner image, not oven/bun as under compose: compose bind-mounts the repo
 and there is no repo to mount here, so the image that carries it is the only
-option. It does mean a runner-image bump recreates the publisher; the state
-file on the PVC makes that re-upload nothing.
+option. It runs at the viewer group's tag (`image.viewerTag`, else
+`image.tag`), so a viewer release recreates it with the viewer; the state file
+on the PVC makes that re-upload nothing.
 
 No depends_on equivalent and none wanted: it reads data/runs off the PVC, so it
 is useful and correct while the worldserver is down. A deploy window should not
@@ -56,7 +57,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: publisher
-          image: {{ include "wrathbench.image.runner" . }}
+          image: {{ include "wrathbench.image.viewerGroup" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
           workingDir: /wrathbench

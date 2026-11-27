@@ -39,6 +39,7 @@ const SCRIPT = join(REPO_ROOT, "infra", "k8s-release.sh");
  *   FAKE_ROLLOUT_FAIL   `rollout status` exits 1
  *   FAKE_WAIT_FAIL      `kubectl wait` exits 1
  *   FAKE_REPLICAS       what the fleet Deployment reports
+ *   FAKE_TAG_VIEWER     the tag the viewer alone reports (a viewer release's)
  */
 const KUBECTL_SHIM = `#!/usr/bin/env bash
 log() { printf 'kubectl %s\\n' "$1" >> "\${FAKE_LOG}"; }
@@ -69,6 +70,7 @@ case "\${1:-}" in
       printf '%s' "\${n}" > "\${FAKE_LOG}.imagecount"
       (( n > \${FAKE_TAG_FLIP_AFTER:-3} )) || tag="\${FAKE_TAG_BEFORE}"
     fi
+    case "\${obj}" in *-viewer) [[ -n "\${FAKE_TAG_VIEWER:-}" ]] && tag="\${FAKE_TAG_VIEWER}" ;; esac
     case "\${obj}" in
       *worldserver) printf 'reg.example/wrathbench/wrathbench-worldserver:%s' "\${tag}" ;;
       *) printf 'reg.example/wrathbench/wrathbench-runner:%s' "\${tag}" ;;
@@ -114,6 +116,8 @@ interface Case {
   rolloutFails?: boolean;
   waitFails?: boolean;
   replicas?: number;
+  /** The tag the viewer alone reports, as a viewer release leaves it. */
+  viewerTag?: string;
   /** Use `--pin-hook` pointed at the recording hook. */
   withHook?: boolean;
   hookRc?: number;
@@ -185,6 +189,7 @@ function run(c: Case): Result {
       ...(c.rolloutFails === true ? { FAKE_ROLLOUT_FAIL: "1" } : {}),
       ...(c.waitFails === true ? { FAKE_WAIT_FAIL: "1" } : {}),
       FAKE_REPLICAS: String(c.replicas ?? 0),
+      ...(c.viewerTag !== undefined ? { FAKE_TAG_VIEWER: c.viewerTag } : {}),
       ...(c.hookRc !== undefined ? { FAKE_HOOK_RC: String(c.hookRc) } : {}),
       ...(c.buildRc !== undefined ? { FAKE_BUILD_RC: String(c.buildRc) } : {}),
       ...(c.fleetUpdateRc !== undefined ? { FAKE_FLEET_RC: String(c.fleetUpdateRc) } : {}),
@@ -304,9 +309,19 @@ describe("k8s-release.sh", () => {
     const r = run({ clusterTagBefore: "old-tag", flipAfter: 1 });
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain(`image.tag = ${TAG}`);
+    // A viewer release may have left the viewer group on its own tag; a full pin resets it.
+    expect(r.out).toContain(`image.viewerTag = ${TAG}, or cleared`);
     expect(r.out).toContain(`commit    = ${r.sha}`);
     expect(r.out).toContain("image.tag");
     expect(r.out).toContain("--pin-hook");
+  });
+
+  test("a pin that left a viewer release's image.viewerTag never completes, and says which value", () => {
+    const r = run({ viewerTag: "harness-0.9-3-gfeed000" });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("the pin left image.viewerTag set");
+    // Nothing past the pin ran: no deploy window over a viewer behind the fleet.
+    expect(phases(r)).toEqual(["build-images --push", "fleet-update drain"]);
   });
 
   test("the tag poll is a wait, not a look: it keeps reading until the cluster carries the tag", () => {

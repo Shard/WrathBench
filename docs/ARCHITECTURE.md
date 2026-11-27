@@ -86,6 +86,14 @@ deciding what the deployment runs. Switching a group changes what is launched
 and shown, never what a result means: with evals off nothing scored is
 launched, and nothing is counted differently.
 
+The viewer group also deploys as one unit: the viewer, the publisher and the
+collector share a tag of their own (`image.viewerTag`, the fleet's by
+default), so new viewer code can reach the cluster without moving the fleet
+(docs/RUNBOOK.md, "A viewer release"). The collector moves with the viewer
+because the viewer's listings read its tables. The harness stamp stays the
+fleet's, since it says which code produced a run, and the viewer holds admin
+writes while it is ahead, since its parser is not the supervisor's.
+
 What the viewer calls and paints itself is the config store's `site` block,
 not a group: a name, four colour tokens, what `/` opens and the about page's
 text as markdown (`runner/src/site-settings.ts`), so a viewer deployed beside

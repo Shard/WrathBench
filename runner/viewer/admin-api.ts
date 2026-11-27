@@ -63,6 +63,7 @@ import type { ModuleRead } from "./module-health";
 import { actorOf } from "./config-api";
 import { ADMIN_API_PREFIX, type Groups } from "./groups";
 import { json } from "./http";
+import type { WriteHold } from "./write-hold";
 
 /* Where the admin pages' status is mounted (`groups.ts`, which a handle reads it from). */
 export { ADMIN_API_PREFIX };
@@ -80,6 +81,8 @@ export interface AdminApiOptions {
   now?: () => number;
   /** The module's `/health`, the handle's one cached read (`module-health.ts`). Absent reads as no module configured. */
   moduleHealth?: () => Promise<ModuleRead>;
+  /** The write hold the handle enforces (`write-hold.ts`), so the page can say writes are held before one is tried. */
+  writeHold?: WriteHold | null;
 }
 
 /**
@@ -395,6 +398,7 @@ export function createAdminApi(opts: AdminApiOptions): (req: Request, path: stri
       fleet: { up, heartbeatAt },
       modelKeys,
       storeKey: key.key !== null ? { ok: true } : { ok: false, why: key.why },
+      writes: opts.writeHold == null ? { ok: true } : { ok: false, why: opts.writeHold.why },
       credentials: credentialViews({
         stored,
         fleet: fleet ?? {},

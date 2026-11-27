@@ -11,9 +11,11 @@
 #
 # On the cluster the viewer's code is baked into the runner image and Flux owns
 # the tag, so this restarts a wedged process — it does not deploy anything. A
-# viewer that should be serving NEW code needs a new image tag, which is
-# infra/build-images.sh plus a cluster-repo bump. Outside a cluster the viewer
-# is one process you start yourself (runner/viewer/README.md).
+# viewer that should be serving NEW code needs a new image tag: a viewer
+# release (`bun wb release viewer`, infra/k8s-release-viewer.sh) moves the
+# viewer group's tag alone with the fleet left running, and a full release
+# moves everything. Outside a cluster the viewer is one process you start
+# yourself (runner/viewer/README.md).
 set -Eeuo pipefail
 
 NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
@@ -25,7 +27,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --namespace|-n) NAMESPACE="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "viewer-restart: unknown argument $1" >&2; exit 2 ;;
   esac
 done
