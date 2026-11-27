@@ -184,6 +184,10 @@ describe("reads", () => {
 
     const bad = await handle(req("/api/config/site", { method: "PUT", body: JSON.stringify({ name: 3 }) }));
     expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toMatch(/site\.name/);
+    // A refused creating write leaves no empty store behind for another key's write to find.
+    expect(await Bun.file(dbPath).exists()).toBe(false);
+    expect((await handle(req("/api/config/policy", { method: "PUT", body: "{}" }))).status).toBe(409);
 
     const ok = await handle(req("/api/config/site", { method: "PUT", body: JSON.stringify({ name: "Mine" }) }));
     expect(ok.status).toBe(200);

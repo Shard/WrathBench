@@ -31,6 +31,7 @@ import {
   ConfigStore,
   DraftRefused,
   configDbPath,
+  validateFleet,
   type AuditRow,
 } from "../src/config-store";
 import { parseCredentials, type Credential } from "../src/credential-slots";
@@ -168,6 +169,17 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
   }
   if (!present && method !== "GET" && !createsStore(rest, method, opts)) {
     return json({ error: noStoreError(dbPath, opts) }, 409);
+  }
+  if (!present && method !== "GET") {
+    // The creating write is judged before the file exists: a refused one leaves no empty store behind.
+    const body = await readJson(req.clone() as Request);
+    if (body === MALFORMED) return json({ error: "request body is not JSON" }, 400);
+    try {
+      validateFleet({ [rest]: body });
+    } catch (e) {
+      if (e instanceof ConfigRejected) return json({ error: e.message, key: rest }, 400);
+      throw e;
+    }
   }
   if (!present && method === "GET") {
     if (rest === "" ) {

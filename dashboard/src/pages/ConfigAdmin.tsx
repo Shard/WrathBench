@@ -803,19 +803,23 @@ export function QueueSection(props: { config: Record<string, unknown>; keys: rea
 
 /** A copy button that is there only where it can work; the text it copies stays selectable either way. */
 export function CopyButton(props: { text: string }) {
-  const [copied, setCopied] = createSignal(false);
+  // What the button says: copy, then whether it worked. A refusal (a denied permission) says so rather than nothing.
+  const [said, setSaid] = createSignal<"copy" | "copied" | "select to copy">("copy");
   return (
     <Show when={canCopy(typeof window === "undefined" ? undefined : window)}>
       <button
         type="button"
         onClick={() => {
-          void navigator.clipboard.writeText(props.text).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1_500);
-          });
+          navigator.clipboard.writeText(props.text).then(
+            () => {
+              setSaid("copied");
+              setTimeout(() => setSaid("copy"), 1_500);
+            },
+            () => setSaid("select to copy"),
+          );
         }}
       >
-        {copied() ? "copied" : "copy"}
+        {said()}
       </button>
     </Show>
   );
@@ -911,13 +915,10 @@ export function WrathMcpSection(props: { admin: AdminResponse | undefined }) {
                           {(l) => (
                             <StatusRow name="limits" title="what the module refuses past, per lease and in all; 0 is off">
                               <For each={LIMIT_ROWS.filter((r) => l()[r.key] !== undefined)}>
-                                {(r, i) => (
-                                  <>
-                                    {i() > 0 ? " · " : ""}
-                                    <span title={r.setting}>
-                                      <span class="dim">{r.label}</span> {fmtLimit(l()[r.key]!, r.bytes === true)}
-                                    </span>
-                                  </>
+                                {(r) => (
+                                  <div title={r.setting}>
+                                    <span class="dim">{r.label}</span> {fmtLimit(l()[r.key]!, r.bytes === true)}
+                                  </div>
                                 )}
                               </For>
                             </StatusRow>
