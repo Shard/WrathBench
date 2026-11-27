@@ -21,8 +21,8 @@ A run is live when it has neither a termination nor a pause (skill
 ## Safe while runs are live
 
 - `bun wb inspect …`: every view (skill `run-forensics`)
-- `bun wb fleet status|dry-run|state`, and `--dry-run` on `fleet graceful` and
-  `release run`, which print the plan and change nothing
+- `bun wb fleet status|dry-run|state`, and `--dry-run` on `fleet graceful`,
+  `release run` and `release viewer`, which print the plan and change nothing
 - `bun wb config get [key]`, `config audit [n]`, `config export` with no file
   argument
 - `bun wb server health`; `bun wb server log-retention` without `--apply`
@@ -39,7 +39,7 @@ A run is live when it has neither a termination nor a pause (skill
   module change reaches it only in a release, whose window drains the fleet
   first.
 - `bun wb fleet graceful|force|drain|resume|clear-model`
-- `bun wb release run|deploy`, `bun wb server restart-viewer`, `--apply` on
+- `bun wb release run|deploy|viewer`, `bun wb server restart-viewer`, `--apply` on
   log retention. `release build --push` rolls nothing but publishes images:
   only as part of a release the operator asked for.
 - `bun wb config set|patch|delete|seed|credentials add|edit|disable|secrets set|clear|move-credential`,

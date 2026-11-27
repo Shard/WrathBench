@@ -788,6 +788,7 @@ On the cluster the code is baked into the images, so the first question is
 | the config store (`/admin` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
 | any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The release's pin rolls the viewer with the other Deployments; `bun wb server restart-viewer` only kicks a wedged one. |
+| code only the viewer, the publisher or the collector needs: a dashboard page, a viewer route, the public projection | a **viewer release** (`bun wb release viewer`, "A viewer release"), with the fleet left running, when the range since the fleet's tag touches neither the chart, the config store nor the collector's schema. The fleet's code arrives with the next full release. |
 | anything the supervisor reads only at start: its own code, its env, a credential's secret | a fleet pod restart. A release does one; the two recipes below do one without a release. |
 
 `fleet-update.sh` does not build or pin an image: new code reaches the fleet
@@ -1376,6 +1377,60 @@ attempt on the next tick; one with it keeps the paused party, listed and not
 resumed while the campaign is disabled, so run the smokes once that attempt
 has finished, or end it deliberately first.
 
+#### A viewer release
+
+A full release drains first, and a drain can wait hours on a scored run. A
+change that only the viewer group runs (the viewer, the publisher and the
+collector) does not need that: the chart gives the group its own tag,
+`image.viewerTag`, which defaults to `image.tag`, and a viewer release moves
+that one value.
+
+```
+bun wb release viewer --dry-run                          # the fleet's tag, the range, the plan
+bun wb release viewer --viewer-pin-hook <your viewer hook>
+bun wb release viewer --from pin                         # restart at the pin
+```
+
+It reads the fleet's tag off the worldserver, builds the runner image at this
+checkout's tag, has the hook set `image.viewerTag`, waits for the three
+Deployments to carry it and roll, and fails loudly if the worldserver, runner
+or fleet left the fleet's tag. Nothing drains, gates, smokes or resumes, and
+the harness stamp every pod carries stays the fleet's tag.
+
+The viewer then runs newer code than the fleet, so three rules keep that safe:
+
+- **It refuses a range it cannot carry.** The chart stays at the fleet's
+  revision, so a range that changes `infra/chart/` is refused, as is one that
+  changes the config store (`runner/src/config-store.ts`,
+  `runner/src/store-secrets.ts`) or the collector's schema
+  (`collector/schema.sql`), which the fleet's side shares. So is a checkout
+  that does not contain the fleet's commit: a viewer older than the fleet
+  would read records newer than its code. Those go out as a full release.
+- **Admin writes are held.** While the viewer's build is not the fleet's, every
+  write on the `/admin` page or `/api/config` is refused with the reason, and
+  the page shows `read-only`: the viewer's copy of the config parser could
+  accept what the supervisor refuses. Reads are served. `bun wb config` in the
+  runner pod still writes, with the fleet's own code.
+- **The pages read older records.** A field a page wants that the fleet does
+  not write yet reads as absent until the full release, which is the backwards
+  compatibility the viewer already keeps for every older run.
+
+Pages that compute fleet facts in the viewer (the tools, the scheduler's
+verdict) show the newer build's answer while runs get the fleet's, until the
+full release. A viewer pin is still a Helm upgrade, so the chart's
+`db-import` and `bootstrap` hook Jobs run on it, at the fleet's tag, against
+the live realm; `templates/jobs.yaml` says why each step is a no-op there.
+Watch them on the first viewer release (`kubectl -n wrathbench get jobs`):
+dbimport's log should find every database up to date, and bootstrap's should
+find the runner account already matching and create nothing.
+
+The next full release puts the group back on one tag: its pin also sets
+`image.viewerTag` to its tag or clears it (`infra/README.md`, "Releasing on
+Kubernetes"). For the public site, a viewer release rolls the publisher, so a
+change to the data the SPA reads goes out as `bun wb release viewer`, then
+`bun wb site verify` after the publisher's next pass, then `bun wb site ship`
+from the same checkout.
+
 #### Holding the fleet for a CLI-env or sandbox change
 
 The gate and the suite's smokes drive the module with a scripted client. They
@@ -1478,8 +1533,12 @@ it back: a deploy never leaves the fleet stopped, and after a failure the
 fleet's own preflight gate blocks spawning until a build passes.
 
 The script does not change the image tag and does not roll back: a rollback
-is reverting `image.tag` where the pin lives to the previous immutable tag,
-and the script says so when it fails. The supervisor writes `running` over
+is reverting `image.tag` where the pin lives to the previous immutable tag
+(and the chart revision with it, and `image.viewerTag` to that tag or empty),
+and the script says so when it fails. A viewer release rolls back alone, by
+reverting `image.viewerTag`, or by `bun wb release viewer` from a checkout at
+the fleet's tag, which builds nothing and puts the group back on the fleet's
+images. The supervisor writes `running` over
 any window phase it finds on file when it boots, which is the acknowledgement
 of a `failed` notice.
 
@@ -1698,6 +1757,10 @@ secret was replaced no longer reads `auth-failed`. The status comes from
 `GET /api/admin` (`runner/viewer/README.md`), which the chart feeds with the
 `modelKeys` names and, when there is a publisher, its non-secret settings and
 its state file, mounted read-only.
+
+After a viewer release, until the full release that follows it, every write
+here is refused with the reason and the page shows `read-only` ("A viewer
+release").
 
 ### Changing the config shape
 

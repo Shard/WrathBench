@@ -1,6 +1,6 @@
 ---
 name: release
-description: Releasing WrathBench to the cluster with `bun wb release` — whether a change needs a release at all, how to time it around live runs, what to do before the pin, and what to check after the resume. Use when the operator asks for a release or a deploy, when a merged change has to reach the fleet (any code, a module pointer bump, a CLI pin, a chart change), and when a release stopped part-way.
+description: Releasing WrathBench to the cluster with `bun wb release` — whether a change needs a release at all or can go as a viewer release, how to time it around live runs, what to do before the pin, and what to check after the resume. Use when the operator asks for a release or a deploy, when a merged change has to reach the fleet (any code, a module pointer bump, a CLI pin, a chart change), and when a release stopped part-way.
 ---
 
 # Release
@@ -18,6 +18,19 @@ published, neither with a release. Any code, the chart, a CLI pin or a
 `wrath-mcp` pointer bump needs one (`docs/RUNBOOK.md`, "Updating the live
 fleet", has the table). The public site's bundle ships apart, with
 `bun wb site ship`.
+
+**A viewer release, when the change is the viewer group's alone.** A change
+that only the viewer, the publisher or the collector runs (a dashboard page,
+a viewer route, the public projection) can go out as `bun wb release viewer
+--viewer-pin-hook <hook>`, with no drain and the fleet live
+(`docs/RUNBOOK.md`, "A viewer release"). Run `--dry-run` first: it names the
+fleet's tag, and refuses a range since it that touches `infra/chart/`, the
+config store or `collector/schema.sql`, or a checkout that does not contain
+the fleet's commit; those wait for a full release. It is still a fleet write
+and still the operator's call, like any release. After it, admin writes are
+held until the next full release (`bun wb config` in the runner pod still
+writes), and that release's pin must reset `image.viewerTag`, or its tag poll
+fails on the viewer. Never hand `--viewer-pin-hook` the full release's hook.
 
 ## Before
 
@@ -80,7 +93,13 @@ bun wb release run --from <phase>            # restart where it stopped
    PROBE and fails at character creation on the name.
 4. A publisher change: `bun wb site verify` after the new publisher's first
    pass, from a checkout at the released commit, since the verifier is this
-   checkout's code.
+   checkout's code. If the SPA reads what the publisher now writes, `bun wb
+   site ship` from that same checkout after the verify.
+5. After a viewer release: the viewer, publisher and collector are on the new
+   tag and the worldserver, runner and fleet are not (the script checks and
+   says so), and on the first one the `db-import` and `bootstrap` hook Jobs
+   completed without changing anything (`docs/RUNBOOK.md`, "A viewer
+   release").
 
 A smoke that fails after the resume found a defect in a live build: tell the
 operator; reverting the pin is another release.

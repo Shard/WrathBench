@@ -2,9 +2,16 @@
 # Ship the dashboard to the public site.
 #
 #   bun wb site ship               tests, snapshot-mode build, wrangler deploy, restore the private build
-#   bun wb site ship --publisher   … and restart the snapshot publisher (needed after runner/viewer changes)
+#   bun wb site ship --publisher   … and restart the snapshot publisher on the image it already runs
 #   bun wb site ship --tiles       … and upload changed minimap tiles first
 #   bun wb site ship --skip-tests
+#
+# --publisher restarts the publisher's pod and ships no code: on the cluster
+# the publisher runs the viewer group's image, so new publisher or viewer API
+# code reaches it only with a new tag. A change to the data the SPA reads goes
+# out as `bun wb release viewer` (or a full release), then `bun wb site verify`
+# after the publisher's next pass, then this script from the same checkout
+# (docs/RUNBOOK.md, "A viewer release").
 #
 # The site is the **Open** shape docs/PUBLIC-DASHBOARD.md describes: the app is
 # `wrathbench.shard.page`, served as static assets with no Worker in the read

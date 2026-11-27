@@ -18,7 +18,11 @@ read or change one.
 On Kubernetes the viewer is the `wrathbench-viewer` Deployment behind the
 cluster's own Ingress; its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
-rather than a restart. `bun wb server restart-viewer`
+rather than a restart: a full release, or a viewer release
+(`bun wb release viewer`, docs/RUNBOOK.md "A viewer release"), which moves the
+viewer, the publisher and the collector to their own tag with the fleet left
+running. While the viewer's build is not the fleet's, admin writes are held
+(`write-hold.ts`). `bun wb server restart-viewer`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
 `/api/info` on `$WRATHBENCH_VIEWER_URL` — it kicks a wedged process, it does not
 deploy anything. Its readiness probe reads `/api/ready`, which answers on

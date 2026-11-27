@@ -657,7 +657,10 @@ whatever does that for you. It is run as
 <command> <tag> <sha>          with WRATHBENCH_TAG and WRATHBENCH_SHA set
 ```
 
-and only has to return once the pin is *placed*. It does not have to wait for
+and pins `image.tag` (with the chart's source revision, if your GitOps repo
+pins one) and also sets `image.viewerTag` to the same tag or clears it, since a
+viewer release (below) may have left the viewer group on its own tag. It
+only has to return once the pin is *placed*. It does not have to wait for
 the cluster: the `pin` phase does that itself, by reading the image tag the
 worldserver, runner and viewer Deployments actually run and then waiting out every
 rollout. That is the check a hook cannot get wrong, and the one a release needs
@@ -682,6 +685,41 @@ with one short real run per driver. It is an option for a change that could
 break every run of a driver at launch, never the default; module smokes run
 after the resume, with the fleet live (docs/RUNBOOK.md, "The lean path" and
 "Holding the fleet for a CLI-env or sandbox change").
+
+### A viewer release
+
+```
+bun wb release viewer --dry-run
+bun wb release viewer --viewer-pin-hook <your viewer hook>
+```
+
+`bun wb release viewer` is `infra/k8s-release-viewer.sh`: new code for the
+viewer, the publisher and the collector with the fleet left running, for a
+change that only they run (docs/RUNBOOK.md, "A viewer release"). It checks
+that this tree descends from the fleet's tag and that the range touches
+neither the chart, the config store nor the collector's schema, builds the
+runner image alone (`build-images.sh --only runner`), pins, and waits; it never
+drains, smokes or resumes. The viewer group keeps the runner image under its
+own tag: it is the image all three already run, built and guarded the same
+way, so only the code inside it moves. A viewer on the slim viewer image
+(`image.names.viewer`) is refused rather than pinned to a tag nobody built.
+
+**Its hook is a separate flag with a separate contract**, so that a hook
+written for a full release can never pin the fleet from here:
+
+```
+<command>          no arguments; WRATHBENCH_VIEWER_TAG and WRATHBENCH_FLEET_TAG set,
+                   WRATHBENCH_TAG and WRATHBENCH_SHA unset
+```
+
+It sets `image.viewerTag` to `WRATHBENCH_VIEWER_TAG` and nothing else: never
+`image.tag`, never the chart's source revision, which stays at the fleet's
+(that is why a range with a chart change is refused). `--pin-hook` is refused
+by this script, and a full-release hook pointed at `--viewer-pin-hook` gets
+no tag and no commit to pin. If the fleet's side moves anyway, the wait sees
+the worldserver, runner or fleet leave the fleet's tag and fails; that
+detects, and cannot undo, so the separate hook is the guard. With no hook the
+script prints the one value to set and waits, as the full release does.
 
 ## Verifying without a full boot
 
