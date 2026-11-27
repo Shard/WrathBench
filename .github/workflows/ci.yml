@@ -58,7 +58,7 @@ jobs:
       - name: Install (frozen)
         run: bun install --frozen-lockfile
 
-      # Fast to slow, so a bad type or a stale doc fails before the 3k-test suite.
+      # Fast to slow, so a bad type or a stale doc fails before the full suite.
       - name: Typecheck
         run: bun run typecheck
 

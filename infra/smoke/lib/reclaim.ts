@@ -26,10 +26,6 @@ import type { ModuleReply, ModuleRequest } from "./module";
 import { probeName } from "./name";
 import { smokeSubToken } from "./session";
 
-// The request helper itself is lib/module.ts's; the reply type is re-exported
-// here only because infra/smoke-reclaim.test.ts imports it from this file.
-export type { ModuleReply } from "./module";
-
 type Sleep = (ms: number) => Promise<void>;
 const bunSleep: Sleep = (ms) => Bun.sleep(ms);
 
