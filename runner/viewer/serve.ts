@@ -133,8 +133,12 @@ const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
  * contains no tile whatever this says.
  */
 const tilesPublic = process.env["WRATHBENCH_VIEWER_TILES_PUBLIC"] === "1";
-/** Module /health for the worldserver build on /api/info; unreachable is fine (null). */
-const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086";
+/**
+ * Module /health for the worldserver build on /api/info and the admin page's
+ * wrath-mcp status; unreachable is fine (null). Unset is tried at the
+ * module's loopback default (`createApi`), and read there as not configured.
+ */
+const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] || undefined;
 /*
  * The fleet config `/api/models` reads its roster from is the config store
  * (`WRATHBENCH_CONFIG_DB`, else `$WRATHBENCH_DATA/config.sqlite`), the same
@@ -155,7 +159,7 @@ const handle = createApi({
   dashboardDir: built ? dashboardDir : undefined,
   publicMode,
   tilesPublic,
-  moduleUrl,
+  ...(moduleUrl !== undefined ? { moduleUrl } : {}),
   allowedHosts,
   groups,
   admin,

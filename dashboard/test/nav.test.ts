@@ -1,6 +1,6 @@
 /** The top bar's order is the brief's: about last, no home item, and no fleet — it moved into the status popout. */
 import { describe, expect, test } from "bun:test";
-import { CONFIG_NAV, NAV, groupsOf, linkable, navItems, surface } from "../src/lib/nav";
+import { ADMIN_NAV, NAV, groupsOf, linkable, navItems, surface } from "../src/lib/nav";
 
 describe("NAV", () => {
   test("about is last", () => {
@@ -23,37 +23,37 @@ describe("NAV", () => {
 });
 
 /**
- * The operator's config page is not in `NAV` at all: the routes behind it are
+ * The operator's admin page is not in `NAV` at all: the routes behind it are
  * mounted only with the admin switch on, and a reader who cannot use it should
  * not be told it exists.
  */
 describe("navItems", () => {
   test("a public build, a public viewer or a private one without admin gets the reader's bar, unchanged", () => {
     expect(navItems({ admin: false })).toEqual(NAV);
-    expect(NAV.some((n) => n.href === "/config")).toBe(false);
+    expect(NAV.some((n) => n.href === "/admin")).toBe(false);
   });
 
-  test("an operator gets config, and about is still last", () => {
+  test("an operator gets admin, and about is still last", () => {
     const items = navItems({ admin: true });
-    expect(items).toContain(CONFIG_NAV);
+    expect(items).toContain(ADMIN_NAV);
     expect(items.at(-1)?.href).toBe("/about");
     expect(items.length).toBe(NAV.length + 1);
   });
 
   test("the reader's items keep their order either way", () => {
-    expect(navItems({ admin: true }).filter((n) => n.href !== "/config")).toEqual([...NAV]);
+    expect(navItems({ admin: true }).filter((n) => n.href !== "/admin")).toEqual([...NAV]);
   });
 
   test("an off group's pages are not in the bar", () => {
     const viewerOnly = { runner: false, evals: false, viewer: true };
     expect(navItems({ admin: false, groups: viewerOnly }).map((n) => n.href)).toEqual(["/map", "/runs"]);
-    expect(navItems({ admin: true, groups: viewerOnly }).map((n) => n.href)).toEqual(["/map", "/runs", "/config"]);
+    expect(navItems({ admin: true, groups: viewerOnly }).map((n) => n.href)).toEqual(["/map", "/runs", "/admin"]);
     expect(navItems({ admin: false, groups: { runner: true, evals: false, viewer: true } }).map((n) => n.href)).toEqual(["/map", "/runs", "/models"]);
   });
 });
 
 /**
- * The header badge and the config nav item are one derivation, so they cannot
+ * The header badge and the admin nav item are one derivation, so they cannot
  * disagree about which site a reader is on.
  */
 describe("surface", () => {
@@ -72,10 +72,10 @@ describe("surface", () => {
     expect(surface(false, undefined)).toBeNull();
   });
 
-  test("the config item exists exactly where the badge says ADMIN", () => {
+  test("the admin item exists exactly where the badge says ADMIN", () => {
     for (const info of [{ publicMode: true }, { publicMode: false }, { publicMode: false, admin: true as const }, undefined]) {
       const admin = surface(false, info) === "ADMIN";
-      expect(navItems({ admin }).includes(CONFIG_NAV)).toBe(admin);
+      expect(navItems({ admin }).includes(ADMIN_NAV)).toBe(admin);
     }
   });
 });
@@ -107,9 +107,9 @@ describe("linkable", () => {
     expect(linkable(off("evals"), "/models#claude-a")).toBe(true);
   });
 
-  test("the viewer's own pages always link, and config never does", () => {
+  test("the viewer's own pages always link, and admin never does", () => {
     expect(linkable(off("evals"), "/runs")).toBe(true);
     expect(linkable(off("runner"), "/run/abc")).toBe(true);
-    expect(linkable({}, "/config")).toBe(false);
+    expect(linkable({}, "/admin")).toBe(false);
   });
 });

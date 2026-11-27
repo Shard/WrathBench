@@ -26,10 +26,9 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json, notFound, withheld } from "./http";
-import { harnessSeries } from "../src/comparability-tuple";
 import type { SiteSettings } from "../src/site-settings";
 import { siteInfoField } from "./site-info";
-import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
+import { moduleHealthReader, worldserverOf } from "./module-health";
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import type {
   ClipsResponse,
@@ -137,9 +136,11 @@ export interface ApiOptions {
   tilesPublic?: boolean;
   /**
    * Where the module answers /health, for the `worldserver` identity on
-   * /api/info. Defaults to loopback; the compose network does not publish the
-   * port to the host, so a host-side viewer reports `null` unless it is given
-   * a reachable URL.
+   * /api/info and the admin page's wrath-mcp status. Absent is the module's
+   * default on loopback, tried as such (the admin page reads a failure there
+   * as no module configured); the compose network does not publish the port
+   * to the host, so a host-side viewer reports `null` unless it is given a
+   * reachable URL.
    */
   moduleUrl?: string;
   /**
@@ -188,40 +189,8 @@ export interface ApiOptions {
   sessionStore?: string | null;
 }
 
-/** How long one /health answer (or one failure) stands in for the next. */
-export const HEALTH_CACHE_MS = 10_000;
-
-/**
- * Read the worldserver's build identity off /health, tolerating a server that
- * is down (null) or a module that predates the field (null). One fetch per
- * cache window however many browsers poll.
- */
-function worldserverIdentity(moduleUrl: string): () => Promise<ApiInfoResponse["worldserver"]> {
-  let cached: { at: number; value: ApiInfoResponse["worldserver"] } | undefined;
-  let inflight: Promise<ApiInfoResponse["worldserver"]> | undefined;
-  const read = async (): Promise<ApiInfoResponse["worldserver"]> => {
-    try {
-      const res = await fetch(`${moduleUrl}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(2_000) });
-      if (!res.ok) return null;
-      const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
-      if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;
-      return { build: o.build, startedAtMs: o.startedAtMs };
-    } catch {
-      return null;
-    }
-  };
-  return async () => {
-    if (cached !== undefined && Date.now() - cached.at < HEALTH_CACHE_MS) return cached.value;
-    if (inflight === undefined) {
-      inflight = read().then((value) => {
-        cached = { at: Date.now(), value };
-        inflight = undefined;
-        return value;
-      });
-    }
-    return inflight;
-  };
-}
+/* The module's /health read moved to `module-health.ts`; its window is re-exported here unchanged. */
+export { HEALTH_CACHE_MS } from "./module-health";
 
 /** Where the inspector's API is mounted on a private handle. */
 export const INSPECTOR_BASE = "/api/inspector";
@@ -298,16 +267,6 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
   return id;
 }
 
-/**
- * How long one series census stands in for the next.
- *
- * Minutes, not seconds: a new series appears on a deploy, never on a tick, and
- * the census opens the run metadata for every run on disk. `/api/info` is the
- * route every open tab polls — the one whose build id is already memoised for
- * exactly that reason.
- */
-export const SERIES_CACHE_MS = 300_000;
-
 /** How long `/api/highlight` is held: it reads every listed run's `camera/clips.json`. */
 const HIGHLIGHT_CACHE_MS = 15_000;
 
@@ -331,30 +290,6 @@ export const RESULT_RUNS_CACHE_MS = 15_000;
 /** `/api/info`'s `previewSeries`, spread in: the field when the store's `site` block names one, nothing otherwise. */
 export function previewSeriesField(site: SiteSettings): { previewSeries?: string } {
   return site.previewSeries === undefined ? {} : { previewSeries: site.previewSeries };
-}
-
-/**
- * The harness series present in the run directory, newest first, with counts.
- *
- * The shell's global series selector needs this before any page has
- * fetched rows of its own, so it rides on `/api/info`. Cached on a window
- * because that route is polled by every open tab and the answer changes only
- * when a run starts; the census reads run metadata, never a trajectory.
- */
-export function harnessSeriesCensus(rows: readonly { harnessVersion: string | null }[]): { series: string; runs: number }[] {
-  const counts = new Map<string, number>();
-  for (const r of rows) {
-    const s = harnessSeries(r.harnessVersion);
-    if (s === null) continue;
-    counts.set(s, (counts.get(s) ?? 0) + 1);
-  }
-  return [...counts]
-    .map(([series, runs]) => ({ series, runs }))
-    .sort((a, b) => {
-      const [am, an] = a.series.split(".").map((n) => Number.parseInt(n, 10));
-      const [bm, bn] = b.series.split(".").map((n) => Number.parseInt(n, 10));
-      return (bm! - am!) || (bn! - an!);
-    });
 }
 
 /**
@@ -438,10 +373,16 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * only with the switch on, so a handle without it never loads the write
    * surface, the credential store or the codex login behind them.
    */
+  /*
+   * The module's /health, one cached read (`module-health.ts`): `/api/info`'s
+   * worldserver identity, and the admin page's wrath-mcp status off the same
+   * fetch.
+   */
+  const moduleHealth = moduleHealthReader(opts.moduleUrl);
   const configApi = admin ? import("./config-api") : null;
   const adminApi = admin
     ? import("./admin-api").then((m) =>
-        m.createAdminApi({ groups, runsDir, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
+        m.createAdminApi({ groups, runsDir, moduleHealth, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
       )
     : null;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
@@ -486,19 +427,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
-  // The series census for /api/info, on a window: every open tab polls that
-  // route, and the answer only moves when a run starts.
-  let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
   // The home page's clip, on a short window: it reads every listed run's camera directory.
   let highlightCache: { at: number; value: HighlightResponse } | undefined;
-  const seriesCensus = async (): Promise<{ series: string; runs: number }[]> => {
-    const now = Date.now();
-    if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
-      seriesCache = { at: now, value: harnessSeriesCensus(await runRows(now)) };
-    }
-    return seriesCache.value;
-  };
-  const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
+  const worldserver = async (): Promise<ApiInfoResponse["worldserver"]> => worldserverOf(await moduleHealth());
 
   /** Each run's closed trace windows, for its track (see `release` for why it is never dropped). */
   const closedWindows = closedWindowsMemo();
@@ -989,7 +920,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
-        harnessSeries: await seriesCensus(),
+        // The evals group's (`api-evals.ts`): with it off the dashboard draws no series selector.
+        ...(evalsApi !== null ? { harnessSeries: await (await evalsApi).seriesCensus() } : {}),
         // Only when the store's `site` block names one, so a deployment without it serves the body it did.
         ...previewSeriesField(fleetRoster().site),
         // The deployment's name, theme, home and about, likewise only when set.
@@ -1162,6 +1094,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const res = await handleConfigRequest(req, url, path, {
         ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
         e90Profile,
+        groups,
       });
       // Anything but a read may have changed the roster: the next poll reads it afresh.
       if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;

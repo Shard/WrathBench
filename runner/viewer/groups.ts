@@ -21,7 +21,7 @@
  * deployment runs; this says what the deployment is.
  *
  * The admin switch (`admin.enabled`, `WRATHBENCH_ADMIN=1`) mounts the
- * operator's write surface: the config API and the admin pages. Off, which is
+ * operator's write surface: the config API and the admin page. Off, which is
  * the chart's default, a viewer has no write route at all. A public handle
  * never has it, whatever the switch says.
  */
@@ -68,7 +68,7 @@ export function groupsEnvValue(g: Groups): string {
 
 /**
  * Where the admin switch's two API surfaces are mounted: the config API
- * (`config-api.ts`) and the admin pages' status (`admin-api.ts`). Here, so a
+ * (`config-api.ts`) and the admin page's status (`admin-api.ts`). Here, so a
  * handle can tell an admin path from any other without loading either.
  */
 export const CONFIG_API_PREFIX = "/api/config";
@@ -112,7 +112,7 @@ export function groupOfApiPath(path: string): Group | null {
 
 /**
  * The group a dashboard page belongs to, by its first path segment, or null
- * for the viewer's own pages. The config page is the admin switch's, not a
+ * for the viewer's own pages. The admin page is the admin switch's, not a
  * group's (`isAdminPage`).
  */
 export function groupOfPage(pathname: string): Group | null {
@@ -132,10 +132,14 @@ export function groupOfPage(pathname: string): Group | null {
   }
 }
 
-/** Whether a page is part of the admin interface. */
+/**
+ * Whether a page is part of the admin interface: `/admin`, and `/config`,
+ * its old name, which only redirects there. Both are gated alike, so a viewer
+ * without the switch mounts neither and a public build never redirects.
+ */
 export function isAdminPage(pathname: string): boolean {
   const head = `/${pathname.split("/")[1] ?? ""}`;
-  return head === "/config";
+  return head === "/admin" || head === "/config";
 }
 
 /**

@@ -1,6 +1,6 @@
 /* Entry point. Routing only — every page is lazy so the first paint is small. */
 
-import { Navigate, Route, Router, useLocation } from "@solidjs/router";
+import { Navigate, Route, Router, useLocation, useParams } from "@solidjs/router";
 import { lazy } from "solid-js";
 import { render } from "solid-js/web";
 import { Layout } from "./components/Layout";
@@ -45,7 +45,7 @@ const About = lazy(() => import("./pages/About"));
 const Models = lazy(() => import("./pages/Models"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 /* Operator-only; the page itself withholds on the public build. */
-const Config = lazy(() => import("./pages/Config"));
+const Admin = lazy(() => import("./pages/Config"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 /** `/results` was renamed `/runs`. A redirect, so a bookmarked link still lands. */
@@ -66,6 +66,13 @@ function DungeonsRedirect() {
 function EpisodesRedirect() {
   const location = useLocation();
   return <Navigate href={`/about${location.search}`} />;
+}
+
+/** `/config` became `/admin`: the section and the query come along. */
+function ConfigRedirect() {
+  const location = useLocation();
+  const params = useParams<{ section?: string }>();
+  return <Navigate href={`/admin${params.section !== undefined ? `/${encodeURIComponent(params.section)}` : ""}${location.search}`} />;
 }
 
 /* Each route starts its page's first requests as soon as it matches (`lib/routepreload.ts`). */
@@ -98,7 +105,9 @@ render(
       <Route path="/campaigns" component={Campaigns} preload={preload.campaigns} />
       {/* One campaign version: the index row's own page. */}
       <Route path="/campaigns/:id/:version" component={Campaigns} preload={preload.campaigns} />
-      <Route path="/config/:section?" component={Config} />
+      <Route path="/admin/:section?" component={Admin} />
+      {/* The config page became the admin page; old links land on the same section. Admin-gated alike (`isAdminPage`). */}
+      <Route path="/config/:section?" component={ConfigRedirect} />
       <Route path="*" component={NotFound} />
     </Router>
   ),

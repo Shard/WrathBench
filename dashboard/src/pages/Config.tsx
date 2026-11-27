@@ -1,5 +1,6 @@
 /**
- * The fleet config, edited from the viewer.
+ * The admin page (`/admin`, once `/config`): the agent stack's status and how
+ * to connect an agent, and the config store, edited from the viewer.
  *
  * The store and its API landed earlier; this page is a client of them
  * and invents nothing. Every write renders the WHOLE candidate config and runs
@@ -24,11 +25,14 @@
  * operator can actually hit — a second operator, or the CLI in a pod — and
  * leaves a genuinely simultaneous pair racing, which is what the API allows.
  *
- * **Sections.** One section at a time, each its own route (`/config/<id>`,
+ * **Sections.** One section at a time, each its own route (`/admin/<id>`,
  * `CONFIG_SECTIONS` in lib/admin.ts) so it can be linked to, under one shell
  * that stays mounted across them: the document survives a switch with no
  * refetch. A section whose group is off is absent,
  * and a route naming none this deployment has goes to the first that is.
+ * The read-only ones (wrath-mcp, deployment, history) render with no store;
+ * a writing one waits for a seeded store, but the site's settings on a
+ * deployment with no runner group, whose first save creates it.
  *
  * **Attribution.** None asked for: the audit table records a write from here
  * as the viewer's, with when and the before and after. Asking who and why on
@@ -43,8 +47,8 @@ import { SNAPSHOT_MODE } from "../api/client";
 import { ConfigError, configApi, type AuditRow, type ConfigResponse } from "../api/config-client";
 import { Collapsible } from "../components/Collapsible";
 import { InfoHint } from "../components/InfoHint";
-import { CampaignsSection, DeploymentSection, FreeplaySection, ProvidersSection, QueueSection } from "./ConfigAdmin";
-import { sectionOf, sectionOfKey, sectionsShown, type ConfigSectionId } from "../lib/admin";
+import { CampaignsSection, CopyButton, DeploymentSection, FreeplaySection, ProvidersSection, QueueSection, WrathMcpSection } from "./ConfigAdmin";
+import { sectionNeedsSeed, sectionOf, sectionOfKey, sectionReadsOnly, sectionsShown, type ConfigSectionId } from "../lib/admin";
 import {
   BILLINGS,
   DRAFT_FILTERS,
@@ -126,17 +130,24 @@ export default function Config() {
     }
   };
 
+  /*
+   * The document and the status load side by side, each on its own: a store
+   * that does not read costs the sections that write, never the wrath-mcp
+   * section or the deployment, and a status that does not read costs only
+   * its columns.
+   */
   const reload = async (): Promise<void> => {
+    const status = configApi.admin().catch(() => undefined);
+    void status.then((a) => {
+      if (a !== undefined) setAdmin(a);
+    });
     try {
       const next = await configApi.config();
       setDoc(next);
       setLoadError(undefined);
-      if (next.seeded) {
-        setAudit((await configApi.audit(50)).audit);
-        await reloadDrafts();
-      }
-      // Its own failure costs the status columns, never the page.
-      setAdmin(await configApi.admin().catch(() => undefined));
+      setAudit((await configApi.audit(50)).audit);
+      // Drafts are the roster's: only where there is a store and a runner to promote them for.
+      if (next.seeded && (await status)?.groups.runner !== false) await reloadDrafts();
     } catch (e) {
       setLoadError(e);
     }
@@ -189,137 +200,156 @@ export default function Config() {
 
   const params = useParams<{ section?: string }>();
   // Every group until /api/admin says otherwise: a deep link is not bounced before it has loaded.
-  const shown = createMemo(() => sectionsShown(admin()?.groups ?? ALL_GROUPS));
-  const section = createMemo(() => sectionOf(params.section, admin()?.groups ?? ALL_GROUPS));
-  // The sections that write show the version and a reload; deployment and history only read.
-  const writes = (): boolean => section() !== "deployment" && section() !== "history";
+  const groups = () => admin()?.groups ?? ALL_GROUPS;
+  const shown = createMemo(() => sectionsShown(groups()));
+  const section = createMemo(() => sectionOf(params.section, groups()));
+  // The sections that write show the version and a reload; the rest only read.
+  const writes = (): boolean => {
+    const s = section();
+    return s !== null && !sectionReadsOnly(s);
+  };
+  // A section that writes the fleet's config waits for a seeded store; the site's settings on a pure viewer create one.
+  const unseeded = (): boolean => {
+    const s = section();
+    return s !== null && doc()?.seeded === false && sectionNeedsSeed(s, groups());
+  };
 
   return (
     <div class="page">
       <h1>
-        config{" "}
-        <InfoHint text="The live fleet config, as the store holds it. Every write is validated against the whole config by the parser the supervisor reads it with, and takes effect on its next 60 s re-read: nothing restarts." />
+        admin{" "}
+        <InfoHint text="The deployment's own page: the agent stack's status and how to connect an agent, and the config store's settings. Every write is validated against the whole config by the parser the supervisor reads it with, and takes effect on its next 60 s re-read: nothing restarts." />
       </h1>
 
       {/*
         Three states, not two. The public build and a public viewer withhold
         the routes outright; a private viewer with no store answers 200 and
-        says so, and the repair is a command an operator can run.
+        says so, and only the sections that write wait for one.
       */}
       <Show
         when={!SNAPSHOT_MODE && !(loadError() instanceof ConfigError && (loadError() as ConfigError).status === 404)}
         fallback={<p class="dim">{SNAPSHOT_WITHHELD_TEXT}</p>}
       >
         <Show when={section() === null && shown().length > 0}>
-          <Navigate href={`/config/${shown()[0]!.id}`} />
+          <Navigate href={`/admin/${shown()[0]!.id}`} />
         </Show>
 
-        <Show when={loadError() !== undefined}>
-          <div class="banner bad">{refusal(loadError())}</div>
-        </Show>
         <Show when={banner() !== null}>
           <div class="banner bad">{banner()}</div>
         </Show>
 
-        <Show when={doc()} fallback={<Show when={loadError() === undefined}><p class="dim">loading…</p></Show>}>
-          {(body) => (
-            <Show
-              when={body().seeded}
-              fallback={
-                <div class="banner warn">
-                  No config store at <code>{body().path}</code> yet — the file is still the config.
-                  Seed it with <code>bun wb config seed</code>.
-                </div>
-              }
-            >
-              <div class="configpage">
-                <nav class="confignav">
-                  <For each={shown()}>
-                    {(s) => (
-                      <A href={`/config/${s.id}`} activeClass="on">
-                        {s.label}
-                      </A>
+        <div class="configpage">
+          <nav class="confignav">
+            <For each={shown()}>
+              {(s) => (
+                <A href={`/admin/${s.id}`} activeClass="on">
+                  {s.label}
+                </A>
+              )}
+            </For>
+          </nav>
+          <div>
+            <Switch>
+              <Match when={section() === "wrath-mcp"}>
+                <WrathMcpSection admin={admin()} />
+              </Match>
+              <Match when={section() === "deployment"}>
+                <DeploymentSection admin={admin()} />
+              </Match>
+              <Match when={section() === "history"}>
+                <h3 class="section">history</h3>
+                <AuditPanel rows={audit()} />
+                <Show when={doc()?.seeded === true}>
+                  <h3 class="section">
+                    export{" "}
+                    <InfoHint text="The store is the only fleet config; the active config is operational state and is never committed. Export renders it to a document for reading or for diffing against an earlier export." />
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void configApi
+                        .export()
+                        .then((r) => setExported(r.text))
+                        .catch((e: unknown) => setBanner(refusal(e)));
+                    }}
+                  >
+                    export as JSON
+                  </button>
+                  <Show when={exported()}>
+                    {(text) => (
+                      <div class="detail">
+                        <CopyButton text={text()} />
+                        <pre class="mono scroller">{text()}</pre>
+                      </div>
                     )}
-                  </For>
-                </nav>
-                <div>
-                  <Show when={writes()}>
+                  </Show>
+                </Show>
+              </Match>
+            </Switch>
+
+            {/* The sections that write: each needs the document, and the fleet's a seeded store. */}
+            <Show when={writes()}>
+              <Show when={loadError() !== undefined}>
+                <div class="banner bad">{refusal(loadError())}</div>
+              </Show>
+              <Show when={doc()} fallback={<Show when={loadError() === undefined}><p class="dim">loading…</p></Show>}>
+                {(body) => (
+                  <Show
+                    when={!unseeded()}
+                    fallback={
+                      <div class="banner warn">
+                        No config store at <code>{body().path}</code> yet.
+                        <Show when={groups().runner}>
+                          {" "}Seed it with <code>bun wb config seed</code>.
+                        </Show>
+                      </div>
+                    }
+                  >
                     <div class="configbar">
                       <span class="dim mono">v{body().version}</span>
                       <button type="button" onClick={() => void reload()}>
                         reload
                       </button>
                     </div>
+                    <Switch>
+                      <Match when={section() === "providers"}>
+                        <ProvidersSection admin={admin()} config={body().config} write={write} refreshAdmin={refreshAdmin} />
+                        <RawRows keys={keysOf("providers")} value={body().config} write={write} />
+                      </Match>
+                      <Match when={section() === "roster"}>
+                        <h3 class="section">roster</h3>
+                        <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
+                        <AddEntry write={write} />
+                        <Drafts body={drafts()} error={draftsError()} write={write} reload={reloadDrafts} />
+                      </Match>
+                      <Match when={section() === "freeplay"}>
+                        <FreeplaySection config={body().config} write={write} />
+                      </Match>
+                      <Match when={section() === "campaigns"}>
+                        <CampaignsSection config={body().config} write={write} />
+                        <RawRows keys={keysOf("campaigns")} value={body().config} write={write} />
+                      </Match>
+                      <Match when={section() === "queue"}>
+                        <QueueSection config={body().config} keys={body().keys} write={write} />
+                        <RawRows keys={keysOf("queue")} value={body().config} write={write} />
+                      </Match>
+                      <Match when={section() === "policy"}>
+                        <RawRows keys={keysOf("policy")} value={body().config} write={write} title="policy" />
+                      </Match>
+                      <Match when={section() === "site"}>
+                        <h3 class="section" title="the deployment's name, theme, home page and about page, as /api/info serves them; the public site's too">
+                          site
+                        </h3>
+                        {/* Offered whether or not the row exists: on a pure viewer its first save creates the store. */}
+                        <JsonEditor rowKey="site" value={body().config} write={write} open />
+                      </Match>
+                    </Switch>
                   </Show>
-
-                  <Switch>
-                    <Match when={section() === "providers"}>
-                      <ProvidersSection admin={admin()} config={body().config} write={write} refreshAdmin={refreshAdmin} />
-                      <RawRows keys={keysOf("providers")} value={body().config} write={write} />
-                    </Match>
-                    <Match when={section() === "roster"}>
-                      <h3 class="section">roster</h3>
-                      <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
-                      <AddEntry write={write} />
-                      <Drafts body={drafts()} error={draftsError()} write={write} reload={reloadDrafts} />
-                    </Match>
-                    <Match when={section() === "freeplay"}>
-                      <FreeplaySection config={body().config} write={write} />
-                    </Match>
-                    <Match when={section() === "campaigns"}>
-                      <CampaignsSection config={body().config} write={write} />
-                      <RawRows keys={keysOf("campaigns")} value={body().config} write={write} />
-                    </Match>
-                    <Match when={section() === "queue"}>
-                      <QueueSection config={body().config} keys={body().keys} write={write} />
-                      <RawRows keys={keysOf("queue")} value={body().config} write={write} />
-                    </Match>
-                    <Match when={section() === "policy"}>
-                      <RawRows keys={keysOf("policy")} value={body().config} write={write} title="policy" />
-                    </Match>
-                    <Match when={section() === "deployment"}>
-                      <DeploymentSection admin={admin()} />
-                    </Match>
-                    <Match when={section() === "history"}>
-                      <h3 class="section">history</h3>
-                      <AuditPanel rows={audit()} />
-                      <h3 class="section">
-                        export{" "}
-                        <InfoHint text="The store is the only fleet config; the active config is operational state and is never committed. Export renders it to a document for reading or for diffing against an earlier export." />
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void configApi
-                            .export()
-                            .then((r) => setExported(r.text))
-                            .catch((e: unknown) => setBanner(refusal(e)));
-                        }}
-                      >
-                        export as JSON
-                      </button>
-                      <Show when={exported()}>
-                        {(text) => (
-                          <div class="detail">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void navigator.clipboard?.writeText(text());
-                              }}
-                            >
-                              copy
-                            </button>
-                            <pre class="mono scroller">{text()}</pre>
-                          </div>
-                        )}
-                      </Show>
-                    </Match>
-                  </Switch>
-                </div>
-              </div>
+                )}
+              </Show>
             </Show>
-          )}
-        </Show>
+          </div>
+        </div>
       </Show>
     </div>
   );
@@ -904,7 +934,7 @@ function DraftRow(props: {
 }
 
 /** One row key as raw JSON. Plain on purpose — the roster is the ergonomic surface. */
-function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; write: Write }) {
+function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; write: Write; open?: boolean }) {
   const current = (): unknown => {
     const slash = props.rowKey.indexOf("/");
     if (slash < 0) return props.value[props.rowKey];
@@ -914,9 +944,12 @@ function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; wri
     if (typeof head === "object" && head !== null) return (head as Record<string, unknown>)[name];
     return undefined;
   };
-  const [text, setText] = createSignal(editorText(current()));
+  // A row the store does not hold yet (the site's settings before their first save) starts as an empty object.
+  const initial = (): string => editorText(current() === undefined ? {} : current());
+  const [text, setText] = createSignal(initial());
   const [message, setMessage] = createSignal<string | null>(null);
-  const [open, setOpen] = createSignal(false);
+  // Where it starts: the site's settings, alone in their section, start open.
+  const [open, setOpen] = createSignal(props.open === true);
 
   const save = async (): Promise<void> => {
     let body: unknown;
@@ -957,7 +990,7 @@ function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; wri
           <button type="button" onClick={() => void save()}>
             save {props.rowKey}
           </button>{" "}
-          <button type="button" onClick={() => { setText(editorText(current())); setMessage(null); }}>
+          <button type="button" onClick={() => { setText(initial()); setMessage(null); }}>
             revert
           </button>
         </div>

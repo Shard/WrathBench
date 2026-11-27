@@ -303,7 +303,7 @@ pre.cite { font-size: var(--fs-sm); color: var(--dim); overflow-x: auto; margin:
 h1 { font-size: var(--fs-xl); margin: 4px 0 8px; font-weight: 700; }
 /* Section headings, a step up from where they were so the h1 is not alone in
    being read as a heading — still plainly below it. A class rather than
-   `h2.section`, so the run page's breadcrumb h1 and the config page's h3s take
+   `h2.section`, so the run page's breadcrumb h1 and the admin page's h3s take
    the same treatment without a copy of it. The `.section` after `h1` in source
    order is what lets `h1.section` keep the breadcrumb's size. */
 .section { font-size: var(--fs-base); margin: 20px 0 8px; font-weight: 700;
@@ -1163,7 +1163,7 @@ button.update:hover { background: var(--panel); }
 .characterhead h1 { font-size: var(--fs-xl); margin: 0 0 2px; font-weight: 600; }
 .characterhead .dim { font-size: var(--fs-sm); }
 
-/* ------------------------------------------------------------ config page
+/* ------------------------------------------------------------ admin page
  * The operator's write surface. The first page with text inputs
  * and a textarea, so the rules for those live here rather than globally: the
  * rest of the dashboard reads, and a global `input` rule would style the

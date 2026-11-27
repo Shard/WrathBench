@@ -53,14 +53,14 @@ export function Layout(props: ParentProps) {
   });
   const snapshot = snapshotSource === null ? null : snapshotShell(snapshotSource);
   /*
-   * Which site this is. One derivation for the badge and the config nav item
+   * Which site this is. One derivation for the badge and the admin nav item
    * (`lib/nav.ts`), so the two can never disagree; null until `/api/info` has
    * settled on a private build, and nothing is drawn in the meantime.
    */
   const which = (): ReturnType<typeof surface> => surface(SNAPSHOT_MODE, feeds.info.latest);
   /*
    * What the deployment is made of (`@viewer/groups`): an off group's pages
-   * are not in the bar and not routed, and the config page only with the
+   * are not in the bar and not routed, and the admin page only with the
    * admin switch on. A page that belongs to a group or to admin waits for
    * `/api/info` before it renders, so a deployment without it never draws it
    * on the way to the not-found page.
@@ -108,7 +108,7 @@ export function Layout(props: ParentProps) {
             {(w) => (
               <sup
                 class={`surface ${w().toLowerCase()}`}
-                title={w() === "ADMIN" ? "the operator's own view: the config page is live here" : "the published preview: no config page, and no write surface at all"}
+                title={w() === "ADMIN" ? "the operator's own view: the admin page is live here" : "the published preview: no admin page, and no write surface at all"}
               >
                 {w()}
               </sup>
@@ -117,7 +117,7 @@ export function Layout(props: ParentProps) {
         </div>
         <nav>
           {/*
-            The operator's config page is in the bar only on a private build
+            The operator's admin page is in the bar only on a private build
             served by a private viewer — the routes behind it are not mounted
             in public mode, and `=== false` rather than `!publicMode` keeps the
             link from flashing on before the first `/api/info` settles.

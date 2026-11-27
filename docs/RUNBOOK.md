@@ -252,7 +252,7 @@ the store to a document for reading or diffing, never for committing.
   tick, and `--status` leads with the `config REJECTED` banner. A transient
   read failure never reads as "every job vanished".
 
-Edit it from the **viewer's `/config` page**, the admin interface ("The admin
+Edit it from the **viewer's `/admin` page**, the admin interface ("The admin
 interface"): it and its API exist only on a viewer with the admin switch on,
 which the chart leaves off (`admin.enabled`), and never on the public build.
 The viewer has no login; it answers only to its own names, `localhost` and IP
@@ -281,7 +281,7 @@ same operations over HTTP (`runner/viewer/README.md`).
 
 ### Steer it
 
-Edit the config, on the `/config` page (with the admin switch on) or with the CLI. Nothing to restart.
+Edit the config, on the `/admin` page (with the admin switch on) or with the CLI. Nothing to restart.
 The unit you steer is the **job**: a roster entry (or a rotation of several),
 an episode and a repeat count, on one account — pinned to it when the job
 names an `account`, otherwise on whichever pool account is free, and on the
@@ -336,7 +336,7 @@ while a `chatgpt` one does. An entry that puts one on OpenRouter or another
 endpoint, its own or any provider's in its `providers` list, is refused as the
 entry, and a store write of one is refused outright, so it is written as that
 subscription's entry instead. A deployment without the subscription may run
-the family on an endpoint. The config page's drafts never offer a model a
+the family on an endpoint. The admin page's drafts never offer a model a
 promotion could not write: no Claude model under a claude credential, and no
 ChatGPT model under a chatgpt one.
 
@@ -489,7 +489,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               run whose ref no longer names its model is; a freeplay character carries on in its
               next session. Targets, one character per model and the freeplay character are the
               entry's, whichever provider ran it. Each provider is checked as the entry it launches
-              as, and one that cannot be refuses the entry, named by its credential. The config page
+              as, and one that cannot be refuses the entry, named by its credential. The admin page
               shows the list read-only; edit it with `bun wb config set roster/<name>` (operator,
               2026-11-16).
             `campaignOnly` — `true` or absent. The entry is held from the scored lane, as a
@@ -573,7 +573,7 @@ site        { previewSeries?, name?, theme?, home?, about? } or absent: what the
             (`previewSeries` included) on read, so none is written before that release is out.
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
             publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
-            `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
+            `patch`, `delete`, the /admin page and a reseed all refuse the prefix, and a second
             publish with a different hash is refused ("Probe campaigns"). A seeded document may
             carry them only exactly as the store holds them (an export, restored), so a fresh
             store gets its definitions by publishing them, then seeding the rest.
@@ -648,7 +648,7 @@ campaign borrows an entry without removing it from the schedule.
 
 #### Adding a model
 
-New OpenRouter models arrive as **drafts** from the `/config` page. **fetch
+New OpenRouter models arrive as **drafts** from the `/admin` page. **fetch
 new models** reads the public OpenRouter catalogue once, with no credential,
 and proposes every tool-calling model the roster does not already run and
 nobody has ignored, free and paid, newest first. A second fetch adds only
@@ -785,7 +785,7 @@ On the cluster the code is baked into the images, so the first question is
 
 | What you changed | How it lands |
 | --- | --- |
-| the config store (`/config` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
+| the config store (`/admin` page or `bun wb config`) | the **next tick** (60s). Hot-reloaded; every write is validated, and a config the running code refuses is complained about and ignored. |
 | the wiki bundle | the next episode spawn: it is on the data volume. |
 | any code: `runner/`, `wrath-mcp/sdk/`, `wrath-mcp/mcp/`, `infra/`, `wrath-mcp/module/`, `dashboard/` | a **release** (`bun wb release run`, "Deploy window"). A stack change in `wrath-mcp/` merges in wrath-mcp first and ships as a pointer bump here (`infra/PINS.md`). A run in flight keeps the code it started with. The release's pin rolls the viewer with the other Deployments; `bun wb server restart-viewer` only kicks a wedged one. |
 | anything the supervisor reads only at start: its own code, its env, a credential's secret | a fleet pod restart. A release does one; the two recipes below do one without a release. |
@@ -1627,7 +1627,8 @@ database) is in no group.
 
 ### The admin interface
 
-The `/config` page and every write route the viewer has. Off by default
+The `/admin` page (once `/config`, which redirects there) and every write
+route the viewer has. Off by default
 (chart `admin.enabled`; `WRATHBENCH_ADMIN=1` for a hand-run viewer), so a
 deployment that does not turn it on has no write route at all; the chart
 refuses it with the viewer off, and `serve.ts` refuses it together with
@@ -1638,11 +1639,21 @@ It is one more client of the config store, beside `bun wb config`: every
 write goes through `/api/config` and `parseFleet`, is refused with the
 supervisor's own sentence, and lands in `config_audit` as the viewer's,
 with nothing asked. It is one section at a time, each its own address
-(`/config/<section>`), listed down the side (a row across the top on a
+(`/admin/<section>`), listed down the side (a row across the top on a
 phone); a section whose group is off is absent, and every store row's raw
-editor sits in the section of the table that edits it:
+editor sits in the section of the table that edits it. The read-only
+sections render with no store; a writing one waits for a seeded store, but
+the site's settings on a deployment with no runner group, whose first save
+creates it:
 
-- **providers** (`/config/providers`): every credential with its health, and
+- **wrath-mcp** (`/admin/wrath-mcp`), first in every deployment: the module as
+  its `/health` answers the viewer (an allowlist of its fields: build,
+  protocol, uptime, whether the world loaded, sessions and leases, the
+  limits), whether the viewer holds the port secret (by its variable's name),
+  the session store's sessions with the stack each reports, and the command
+  or `mcpServers` entry that connects an agent, with placeholders for the
+  account, the secret and the paths.
+- **providers** (`/admin/providers`): every credential with its health, and
   its non-secret fields edited in place: add one (provider, the env var NAME
   its secret is in, slots, billing, a budget), edit those of an existing one
   (its id and provider stay; a new provider is a new credential), enable or
@@ -1668,8 +1679,10 @@ editor sits in the section of the table that edits it:
   definition with its assignments. Publishing a definition stays the CLI's
   ("Probe campaigns").
 - **queue**: enable, disable or remove a job, or add one.
-- **policy**: the remaining rows (`policy`, `accounts`, `preflight`) as raw
-  JSON.
+- **policy**: the remaining fleet rows (`policy`, `accounts`, `preflight`) as
+  raw JSON; the runner group's.
+- **site**: the deployment's name, theme, home and about (`site`) as raw
+  JSON, in every deployment.
 - **deployment**: the groups and how publishing is set, read-only, with the
   chart key on each row.
 - **history**: the audit table and the export.

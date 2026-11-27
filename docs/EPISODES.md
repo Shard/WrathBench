@@ -201,7 +201,7 @@ and is informational only.
 
 - **A published version is never edited.** The store refuses a second publish
   of the same key with a different hash, and no generic write path (the
-  config CLI's `set`/`patch`/`delete`, the `/config` page, a reseed) can touch
+  config CLI's `set`/`patch`/`delete`, the `/admin` page, a reseed) can touch
   the prefix. A cell whose meaning changes under the same id re-scopes every
   run already recorded against it: class-probe's `nightelf-hunter` cell did
   exactly that before definitions were versioned. A change is a new version.

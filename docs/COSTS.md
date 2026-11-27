@@ -5,7 +5,7 @@ carries no per-episode resource tables, pricing table or platform reliability
 counts: such a snapshot goes stale the moment a series re-arms. Cost
 surfaces belong in the UI, and the viewer has them: actual and expected cost
 on the run page, and cost columns on the run, model and fleet listings. A
-model not yet run gets one projected figure, on its draft on the `/config` page
+model not yet run gets one projected figure, on its draft on the `/admin` page
 (docs/RUNBOOK.md, "Adding a model"): the catalogue's list price applied to the
 median counted e90's tokens. It is labelled an estimate because it is the
 extrapolation from another model's token shape that the first rule below warns

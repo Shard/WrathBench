@@ -902,10 +902,18 @@ events read it.
 
 The fleet config is the sqlite store `docs/RUNBOOK.md`, "Where the config
 lives", describes (`runner/src/config-store.ts`); an edit here is live one tick
-later with no restart. The UI over these endpoints is the dashboard's `/config`
-page (`dashboard/src/pages/Config.tsx`, with its sections in `ConfigAdmin.tsx`).
-Its nav link appears only on a private build served by a viewer with the admin
-switch on, which is the same condition these routes are mounted under.
+later with no restart. The UI over these endpoints is the dashboard's `/admin`
+page (`dashboard/src/pages/Config.tsx`, with its sections in `ConfigAdmin.tsx`;
+`/config` redirects there). Its nav link appears only on a private build served
+by a viewer with the admin switch on, which is the same condition these routes
+are mounted under.
+
+A write needs a store, and only a seed creates one (`bun wb config seed`), with
+one exception: on a deployment with no runner group, which has no roster to
+seed, the first `PUT` or `PATCH` of `site` creates it, validated as any write
+is. With the runner on, a store holding only a site would refuse a plain seed
+and stop reading as empty to the supervisor, so there the first write stays the
+seed's.
 
 A *key* is a row: `roster/<name>`, `campaigns/<name>`, `credentials/<id>`,
 `queue/<n>`, or one of the singletons `_notes`, `preflight`, `accounts`,
@@ -978,7 +986,7 @@ the whole entry with the key omitted for a clear.
 
 ### The admin routes (the admin switch)
 
-`GET /api/admin` (`admin-api.ts`) is what the admin pages show beside the
+`GET /api/admin` (`admin-api.ts`) is what the admin page shows beside the
 config they edit; any other method on it is a 405 that points at the config
 API. It carries the groups; every credential the store holds, joined
 by id to the supervisor's status off `fleet-state.json` (whether its variable
@@ -991,6 +999,24 @@ while no supervisor is up unless the store or the chart already says what is
 wrong; the providers a credential may name; and how publishing is
 set, with the publisher's last flip, held passes and secret-scan withholds off
 its state file.
+
+`wrathMcp` is the agent stack, in every deployment. `module` is the module's
+`/health` (`module-health.ts`), the one cached read `/api/info`'s `worldserver`
+also comes off, read with the port secret and passed on as an allowlist of
+fields, each only when it has its type: `url` (the viewer's own route, its
+userinfo stripped), `ok`, `worldLoaded`, `build`, `protocol`, `startedAtMs`,
+`uptimeMs`, `sessions`, `leases` and the named `limits`; never the body, so
+the drop census, the world load and anything a later module adds stay behind.
+A 503 is read too, for a world that did not load whole. When there is no
+answer, `moduleError` says why: `unset` (no `WRATHBENCH_MODULE_URL`, and
+nothing at the loopback default), `unreachable`, or `refused` (a 401: the
+viewer's secret is missing or wrong). `secret` names the variable the port
+secret is read from and whether it is set, never its value. `store` is the
+session store's sessions that reached the world, as the runs page lists them:
+how many, how many are live (`ended` null and `live.json`'s heartbeat inside
+the listing's live window), the stack each reports, and each live one by its
+viewer id, character and stack; never a directory's name, a fingerprint, or
+an `owner` or `group` label. Null when the viewer reads no store.
 
 It says nothing a viewer cannot know. "Set" is a secret the config store
 holds that opens with this viewer's key, else the supervisor's word, unknown

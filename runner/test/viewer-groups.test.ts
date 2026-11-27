@@ -77,7 +77,10 @@ describe("WRATHBENCH_GROUPS", () => {
     for (const p of ["/api/runs", "/api/results", "/api/positions", "/api/info", "/api/run/x"]) expect(groupOfApiPath(p)).toBeNull();
     const viewerOnly: Groups = { runner: false, evals: false, viewer: true };
     for (const p of ["/", "/map", "/runs", "/run/x", "/character/x", "/party/x"]) expect(pageMounted(p, viewerOnly, false)).toBe(true);
-    for (const p of ["/fleet", "/models", "/ladder", "/campaigns/x/1", "/about", "/config"]) expect(pageMounted(p, viewerOnly, false)).toBe(false);
+    for (const p of ["/fleet", "/models", "/ladder", "/campaigns/x/1", "/about", "/admin", "/config"]) expect(pageMounted(p, viewerOnly, false)).toBe(false);
+    // The admin page, and its old name that only redirects there: both the switch's, never a group's.
+    expect(pageMounted("/admin/wrath-mcp", viewerOnly, true)).toBe(true);
+    expect(pageMounted("/admin", ALL_GROUPS, false)).toBe(false);
     expect(pageMounted("/config", ALL_GROUPS, true)).toBe(true);
     expect(pageMounted("/config", ALL_GROUPS, false)).toBe(false);
     // A deployment's own about page (`site.about`) is mounted whatever evals says; nothing else moves.
@@ -107,6 +110,17 @@ describe("the viewer's routes", () => {
     expect("groups" in projectInfo(all)).toBe(false);
     const pub = (await (await get(handle({ runner: false, evals: true, viewer: true }, true), "/api/info")).json()) as ApiInfoResponse;
     expect(pub.groups).toEqual({ runner: false, evals: true, viewer: true });
+  });
+
+  test("/api/info carries the series census only with evals on, in its place among the keys", async () => {
+    const all = (await (await get(handle(), "/api/info")).json()) as ApiInfoResponse;
+    expect(all.harnessSeries).toEqual([]);
+    expect(Object.keys(all).slice(0, 6)).toEqual(["service", "publicMode", "dashboard", "dashboardBuild", "worldserver", "harnessSeries"]);
+    for (const groups of [{ runner: true, evals: false, viewer: true }, { runner: false, evals: false, viewer: true }]) {
+      const info = (await (await get(handle(groups), "/api/info")).json()) as ApiInfoResponse;
+      expect("harnessSeries" in info).toBe(false);
+      expect("harnessSeries" in projectInfo(info)).toBe(false);
+    }
   });
 });
 

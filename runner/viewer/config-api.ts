@@ -31,6 +31,7 @@ import {
   ConfigStore,
   DraftRefused,
   configDbPath,
+  validateFleet,
   type AuditRow,
 } from "../src/config-store";
 import { parseCredentials, type Credential } from "../src/credential-slots";
@@ -52,7 +53,7 @@ import {
   type DraftRecord,
 } from "./drafts";
 import { json } from "./http";
-import { CONFIG_API_PREFIX } from "./groups";
+import { CONFIG_API_PREFIX, type Groups } from "./groups";
 
 /* The prefix everything here hangs off (`groups.ts`, which a handle reads it from). */
 export { CONFIG_API_PREFIX };
@@ -78,6 +79,12 @@ export interface ConfigApiOptions {
    * the runs the viewer already serves; absent, no draft carries an estimate.
    */
   e90Profile?: () => Promise<E90TokenProfileView | null>;
+  /**
+   * The deployment's groups (`groups.ts`). With the runner off, the first
+   * write of the site's settings creates the store (`createsStore`). Absent
+   * is the fleet's rule: only a seed creates it.
+   */
+  groups?: Groups;
 }
 
 export interface ConfigResponse {
@@ -97,6 +104,29 @@ export interface ConfigResponse {
 export interface ConfigExportResponse {
   bytes: number;
   text: string;
+}
+
+/**
+ * The keys a write may create the store with: the deployment's own settings,
+ * which every deployment has, where every other key is a fleet's.
+ */
+export const STORE_CREATING_KEYS: readonly string[] = ["site"];
+
+/**
+ * Whether this write may create an absent store: one of `STORE_CREATING_KEYS`,
+ * put or patched, on a deployment with no runner group. With the runner on the
+ * first write stays the seed's: a store holding a site already would refuse a
+ * plain `bun wb config seed`, and the supervisor would stop reading it as empty.
+ */
+function createsStore(rest: string, method: string, opts: ConfigApiOptions): boolean {
+  return opts.groups !== undefined && !opts.groups.runner && (method === "PUT" || method === "PATCH") && STORE_CREATING_KEYS.includes(rest);
+}
+
+/** What a write that needs a store says when there is none, by what this deployment can do about it. */
+function noStoreError(dbPath: string, opts: ConfigApiOptions): string {
+  return opts.groups !== undefined && !opts.groups.runner
+    ? `no config store at ${dbPath} yet — this deployment has no runner group, so its first write is the site's settings, which creates it`
+    : `no config store at ${dbPath} — seed it first: bun wb config seed infra/fleet.example.json`;
 }
 
 export function actorOf(req: Request): { actor: string; note?: string } {
@@ -128,18 +158,30 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
    * write does not create it either — seeding is `bun wb config seed`, an
    * operator action with the example behind it, and an empty store would be a
    * fleet config that says nothing.
+   *
+   * One write does, on a deployment with no runner group: the site's settings
+   * (`createsStore`). Such a deployment has no roster to seed, and `site` is
+   * all its store holds, validated as any write is.
    */
   const present = existsSync(dbPath);
   if (rest === DRAFTS_ROUTE || rest.startsWith(`${DRAFTS_ROUTE}/`)) {
     return await handleDrafts(req, method, rest.slice(DRAFTS_ROUTE.length).replace(/^\//, ""), dbPath, present, opts);
   }
-  if (!present && method !== "GET") {
-    return json(
-      { error: `no config store at ${dbPath} — seed it first: bun wb config seed infra/fleet.example.json` },
-      409,
-    );
+  if (!present && method !== "GET" && !createsStore(rest, method, opts)) {
+    return json({ error: noStoreError(dbPath, opts) }, 409);
   }
-  if (!present) {
+  if (!present && method !== "GET") {
+    // The creating write is judged before the file exists: a refused one leaves no empty store behind.
+    const body = await readJson(req.clone() as Request);
+    if (body === MALFORMED) return json({ error: "request body is not JSON" }, 400);
+    try {
+      validateFleet({ [rest]: body });
+    } catch (e) {
+      if (e instanceof ConfigRejected) return json({ error: e.message, key: rest }, 400);
+      throw e;
+    }
+  }
+  if (!present && method === "GET") {
     if (rest === "" ) {
       return json({ config: {}, keys: [], version: 0, path: dbPath, seeded: false } satisfies ConfigResponse);
     }
@@ -306,9 +348,7 @@ async function handleDrafts(
   if (method !== "POST" || !["fetch", "ignore", "unignore", "promote"].includes(verb)) {
     return json({ error: `${method} ${where} is not a draft route` }, 405);
   }
-  if (!present) {
-    return json({ error: `no config store at ${dbPath} — seed it first: bun wb config seed infra/fleet.example.json` }, 409);
-  }
+  if (!present) return json({ error: noStoreError(dbPath, opts) }, 409);
 
   if (verb === "fetch") {
     // The network first, the store after: no write handle is held across the call.

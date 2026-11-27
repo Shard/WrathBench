@@ -79,7 +79,7 @@ inside the client is what keeps a fast poller off the network.
 bun wb dashboard shots --out <dir>                    # private-*.png and public-*.png, and facts.json
 bun wb dashboard shots --run <run-dir> --path /runs --viewport 390x844
 bun wb dashboard shots --serve                        # the same stack, no browser: URLs until Ctrl-C
-bun wb dashboard shots --seed --site private --path /config/providers   # an admin section over a seeded config
+bun wb dashboard shots --seed --site private --path /admin/providers    # an admin section over a seeded config
 bun wb dashboard shots --groups viewer                # a deployment with only the viewer group on
 ```
 
@@ -109,7 +109,7 @@ home or about) in its config store. For states that need clicks, import `startRi
 **Groups and the admin switch** decide which pages exist (`@viewer/groups`):
 the shell reads `/api/info` (or a snapshot's `info.json`), drops an off
 group's pages from the bar and answers them with the not-found page, and
-shows the config page and the ADMIN badge only with the admin switch on. A
+shows the admin page and the ADMIN badge only with the admin switch on. A
 page that belongs to a group or to admin waits for `/api/info` before it
 renders, so a deployment without it never draws it on the way. The status
 badge and the fleet feed are the runner group's; the homepage's ladder is the
@@ -616,7 +616,7 @@ the rest of the suite does not need a DOM.
 
 ## Conventions
 
-- Nothing here writes but the admin config page (`src/api/config-client.ts`),
+- Nothing here writes but the admin page (`src/api/config-client.ts`),
   against routes the viewer mounts only with the admin switch on; every other
   client method is a read.
 - Paths are root-relative, so the same code runs behind the dev proxy and
