@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Glob } from "bun";
 import type { FleetServerView } from "../runner/viewer/api-types";
-import { SERVER_PHASES } from "../runner/viewer/api";
+import { SERVER_PHASES } from "../runner/viewer/api-fleet";
 import { deployWindowOpen, serverBanner } from "../dashboard/src/lib/fleet";
 import { WINDOW_PHASES } from "./run-fleet-state";
 

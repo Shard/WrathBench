@@ -52,9 +52,10 @@ import {
   type DraftRecord,
 } from "./drafts";
 import { json } from "./http";
+import { CONFIG_API_PREFIX } from "./groups";
 
-/** The prefix everything here hangs off. */
-export const CONFIG_API_PREFIX = "/api/config";
+/* The prefix everything here hangs off (`groups.ts`, which a handle reads it from). */
+export { CONFIG_API_PREFIX };
 
 /** The draft routes, under the prefix (`drafts.ts`). Ids travel in bodies, never in the path. */
 export const DRAFTS_ROUTE = "proposed";

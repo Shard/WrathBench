@@ -16,7 +16,7 @@ import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
 import { creatureNamesOf, partyDetailOf } from "./party-marks";
 import { bossKillsOf, isBossKill } from "./timeline-marks";
-import { DEADMINES_BOSSES } from "./dungeons";
+import { DEADMINES_BOSSES } from "./deadmines";
 import {
   projectEntries,
   projectRunDetail,
