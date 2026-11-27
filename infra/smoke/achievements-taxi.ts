@@ -44,7 +44,7 @@
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleSession } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
@@ -76,16 +76,8 @@ function fail(msg: string): never {
 
 const req = moduleRequest(BASE);
 
-async function createSession(): Promise<any> {
-  // Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
-  const r = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 3, class: 1 });
-  if (r.status !== 200 || !r.json?.inWorld) fail(`session failed: ${JSON.stringify(r.json)}`);
-  return r.json;
-}
-async function endSession(): Promise<void> {
-  const r = await req("DELETE", "/session", { token: TOKEN });
-  if (r.status !== 200) fail(`session delete failed: ${JSON.stringify(r.json)}`);
-}
+// Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
+const { create: createSession, end: endSession } = moduleSession(req, { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 3, class: 1 }, fail);
 
 const events: any[] = [];
 let selfGuid = "";

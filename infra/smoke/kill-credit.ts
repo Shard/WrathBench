@@ -73,7 +73,7 @@
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction, moduleSession } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
@@ -304,16 +304,7 @@ async function tryFace(x: number, y: number): Promise<void> {
  * path when the character does not exist yet. Human Paladin, the class the
  * fight's timings were measured against.
  */
-async function createSession(): Promise<any> {
-  const session = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 2 });
-  if (session.status !== 200 || !session.json?.inWorld) fail(`session failed: ${JSON.stringify(session.json)}`);
-  return session.json;
-}
-
-async function endSession(): Promise<void> {
-  const del = await req("DELETE", "/session", { token: TOKEN });
-  if (del.status !== 200) fail(`session delete failed: ${JSON.stringify(del.json)}`);
-}
+const { create: createSession, end: endSession } = moduleSession(req, { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 2 }, fail);
 
 /**
  * The fixture boot, shared with travel.ts. Budgets are a suite member's, not

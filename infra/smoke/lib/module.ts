@@ -82,6 +82,30 @@ export function moduleAction(request: ModuleRequest, token: string, fail: (msg: 
   };
 }
 
+/**
+ * A raw smoke's own session: `create` is `POST /session` (which creates the
+ * character through CMSG_CHAR_CREATE when it does not exist) and must land in
+ * world, `end` is `DELETE /session`; either failing goes through the smoke's
+ * own `fail`.
+ */
+export function moduleSession(
+  request: ModuleRequest,
+  o: { token: string; account: string; character: string; race: number; class: number },
+  fail: (msg: string) => never,
+): { create(): Promise<any>; end(): Promise<void> } {
+  return {
+    async create() {
+      const r = await request("POST", "/session", { token: o.token, account: o.account, character: o.character, race: o.race, class: o.class });
+      if (r.status !== 200 || !r.json?.inWorld) fail(`session failed: ${JSON.stringify(r.json)}`);
+      return r.json;
+    },
+    async end() {
+      const r = await request("DELETE", "/session", { token: o.token });
+      if (r.status !== 200) fail(`session delete failed: ${JSON.stringify(r.json)}`);
+    },
+  };
+}
+
 /** `GET /health`'s body with the smoke's credential; rejects when it is not JSON. */
 export function moduleHealth(base: string = moduleBase()): Promise<any> {
   return fetch(`${base}/health`, { headers: authHeaders() }).then((r) => r.json());
