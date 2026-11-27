@@ -15,7 +15,8 @@ import { ConfigRejected, ConfigStore, DraftRefused, isConfigKey, proposedKey, sp
 import { readFleetConfig, renderFleet } from "../../runner/src/config-read";
 import { DEFAULT_POLICY, type SchedulingPolicy } from "../../runner/src/models";
 import type { RunFact } from "../../runner/src/run-fact";
-import type { E90TokenProfileView, TokenTotals } from "../api-types";
+import type { TokenTotals } from "../api-types";
+import type { E90TokenProfileView } from "../api-types-admin";
 import {
   CATALOGUE_URL,
   CatalogueError,

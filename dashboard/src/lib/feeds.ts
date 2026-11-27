@@ -9,7 +9,8 @@
  */
 
 import { createContext, useContext } from "solid-js";
-import type { ApiInfoResponse, FleetResponse } from "@viewer/api-types";
+import type { ApiInfoResponse } from "@viewer/api-types";
+import type { FleetResponse } from "@viewer/api-types-runner";
 import { api } from "../api/client";
 import { type Poll, poll } from "./poll";
 import { SERIES_LATEST, type SeriesChoice, readSeriesPref, seriesParam, writeSeriesPref } from "./harness";

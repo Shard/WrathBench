@@ -165,7 +165,7 @@ import { readModelListsSidecar } from "../runner/src/model-lists";
 import { K8sClient } from "./k8s-client";
 import { ensureSharedCamera, readCameraTemplate, reapCameras } from "./camera-pods";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
-import type { FleetWorldView } from "../viewer/api-types";
+import type { FleetWorldView } from "../viewer/api-types-runner";
 import { fleetWorldViews, mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, WorldStore, WORLDS_DIR } from "./world";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";

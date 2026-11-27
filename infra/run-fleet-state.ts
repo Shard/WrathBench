@@ -38,7 +38,7 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
-import type { FleetServerView, FleetWorldView } from "../viewer/api-types";
+import type { FleetServerView, FleetWorldView } from "../viewer/api-types-runner";
 import { IMAGE_RECORD_FILE } from "./run-pod";
 import { episodeRunsInPod } from "./episode-launcher";
 import { runFactCache, type RunPodsMode, type WorldsMode } from "../runner/src/models";

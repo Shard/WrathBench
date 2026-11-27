@@ -208,7 +208,7 @@ describe("public mode is projected everywhere", () => {
    */
   test("no /api route emits a body outside the projection helper", () => {
     const dir = join(import.meta.dir, "..");
-    const files = readdirSync(dir).filter((f) => f === "api.ts" || (f.startsWith("api-") && f.endsWith(".ts") && f !== "api-types.ts"));
+    const files = readdirSync(dir).filter((f) => f === "api.ts" || (f.startsWith("api-") && f.endsWith(".ts") && !f.startsWith("api-types")));
     expect(files).toContain("api-run.ts");
     for (const f of files) expect(readFileSync(join(dir, f), "utf8")).not.toContain("return json(body);");
   });

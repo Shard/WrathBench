@@ -16,7 +16,7 @@
 import { defaultLoopOf } from "../runner/src/config";
 import { DEFAULT_DRIVER } from "../runner/src/drivers";
 import { toolsFor, type ProgramTools, type ToolDef } from "../runner/src/tools";
-import type { ToolsResponse, ToolView } from "./api-types";
+import type { ToolsResponse, ToolView } from "./api-types-runner";
 
 /**
  * A launch's default on the default driver (the fixed harness's): the program

@@ -26,20 +26,9 @@ import { describe, expect, test } from "bun:test";
 import { PUBLIC_ATTRIBUTION } from "../src/lib/attribution";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  ApiInfoResponse,
-  CampaignsResponse,
-  EpisodeIdView,
-  EpisodesResponse,
-  FleetResponse,
-  HarnessView,
-  ModelsResponse,
-  PositionsResponse,
-  ResultRun,
-  ResultsResponse,
-  RunDetailResponse,
-  TrackResponse,
-} from "../../viewer/api-types";
+import type { ApiInfoResponse, EpisodeIdView, HarnessView, PositionsResponse, ResultRun, ResultsResponse, RunDetailResponse, TrackResponse } from "../../viewer/api-types";
+import type { CampaignsResponse, EpisodesResponse } from "../../viewer/api-types-evals";
+import type { FleetResponse, ModelsResponse } from "../../viewer/api-types-runner";
 import { emptyNearbyWindow } from "@wrathbench/inspector/codec/nearby";
 import { PUBLIC_NEARBY_KEY } from "@viewer/public-keys";
 import { ApiError } from "../src/api/client";

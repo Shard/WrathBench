@@ -24,7 +24,7 @@ import { redactRawLine, redactSecrets } from "../tail";
 import { readRun } from "../../runner/src/run-list";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 import { defsBlock, definition, seedPublished } from "../../runner/test/fixtures/campaigns";
-import type { CampaignsResponse } from "../api-types";
+import type { CampaignsResponse } from "../api-types-evals";
 
 const tempDir = tempDirs();
 

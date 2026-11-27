@@ -9,7 +9,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { AgentPosition, ResultRun, RunDetailResponse, Square, TrackPoint, TrackResponse } from "../../viewer/api-types";
+import type { AgentPosition, ResultRun, RunDetailResponse, TrackPoint, TrackResponse } from "../../viewer/api-types";
+import type { Square } from "../../viewer/api-types-evals";
 import { squareHref } from "../src/lib/campaigns";
 import { createRoot, createSignal } from "solid-js";
 import { createMapState } from "../src/lib/mapstate";

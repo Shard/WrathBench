@@ -882,7 +882,9 @@ their response shapes are `api.ts`, the route modules it mounts
 and, imported only with their group or switch on, `api-fleet.ts` the
 runner's, `api-evals.ts` the evals', `config-api.ts` and `admin-api.ts` the
 admin switch's; over the tail cache `api-tails.ts` and the shared
-`api-context.ts`), and `api-types.ts`; anything that is not a route is the
+`api-context.ts`), and `api-types.ts` with a file of each group's own beside
+it (`api-types-runner.ts`, `api-types-evals.ts`, `api-types-admin.ts`, along
+the same seams); anything that is not a route is the
 built SPA, or the not-built notice when there is none.
 
 ### The inspector's API

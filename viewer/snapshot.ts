@@ -76,29 +76,9 @@ import { createApi, type ApiHandle } from "./api";
 import { withoutRuns } from "./api-fleet";
 import { lineageIndex } from "./lineage";
 import { EPISODE_IDS, isTaskEpisode } from "../runner/src/episodes";
-import type {
-  ClipsResponse,
-  VideoPartView,
-  HighlightResponse,
-  ApiInfoResponse,
-  CampaignsResponse,
-  EntriesResponse,
-  ToolsResponse,
-  DungeonsResponse,
-  EpisodesResponse,
-  FleetResponse,
-  LiveNearby,
-  ModelsResponse,
-  NearbyWindow,
-  PositionsResponse,
-  ResultsResponse,
-  ResultRun,
-  RunDetailResponse,
-  RunListRow,
-  RunsResponse,
-  TraceSegment,
-  TrackResponse,
-} from "./api-types";
+import type { ClipsResponse, VideoPartView, HighlightResponse, ApiInfoResponse, EntriesResponse, LiveNearby, NearbyWindow, PositionsResponse, ResultsResponse, ResultRun, RunDetailResponse, RunListRow, RunsResponse, TraceSegment, TrackResponse } from "./api-types";
+import type { CampaignsResponse, DungeonsResponse, EpisodesResponse } from "./api-types-evals";
+import type { ToolsResponse, FleetResponse, ModelsResponse } from "./api-types-runner";
 import { unpackSegs } from "@wrathbench/inspector/codec/trace";
 import { clipMediaKey, traceSegmentKey, ENTRIES_WINDOW, PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 import {

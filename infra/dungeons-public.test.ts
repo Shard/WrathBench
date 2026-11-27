@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { renderSnapshot } from "../viewer/snapshot";
 import { verifyPublication } from "./publish-accept";
-import type { DungeonsResponse, EpisodesResponse } from "../viewer/api-types";
+import type { DungeonsResponse, EpisodesResponse } from "../viewer/api-types-evals";
 import { DUNGEON_SOLO_CLEARED_RUN, DUNGEON_SOLO_RUN, FANOUT_LIVE_RUN, FANOUT_RUN, writeFixture } from "./shots/fixture";
 
 const SOLO = [DUNGEON_SOLO_RUN, DUNGEON_SOLO_CLEARED_RUN];

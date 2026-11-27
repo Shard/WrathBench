@@ -22,7 +22,8 @@ import { createApi } from "../api";
 import { STORE_SHARE_MS } from "../shared-store";
 import { coldRuns, fleetRunIds, heldAccounts, withoutRuns } from "../api-fleet";
 import { projectRunFacts } from "../public-projection";
-import type { FleetResponse, RunsResponse } from "../api-types";
+import type { RunsResponse } from "../api-types";
+import type { FleetResponse } from "../api-types-runner";
 import {
   clickhouseStore,
   localRunStore,

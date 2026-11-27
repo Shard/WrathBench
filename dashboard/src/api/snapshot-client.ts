@@ -35,32 +35,9 @@
  */
 
 import { PUBLIC_ATTRIBUTION } from "../lib/attribution";
-import type {
-  ApiInfoResponse,
-  ClipsResponse,
-  HighlightResponse,
-  CampaignsResponse,
-  DungeonsResponse,
-  CharacterResponse,
-  CharacterStatePoint,
-  ToolsResponse,
-  EntriesResponse,
-  EpisodeIdView,
-  EpisodesResponse,
-  FleetResponse,
-  HarnessView,
-  ModelsResponse,
-  PositionsResponse,
-  ResultsResponse,
-  RunDetailResponse,
-  ScratchpadResponse,
-  SnapshotEnvelope,
-  TraceIndexResponse,
-  TraceSegment,
-  LiveNearby,
-  NearbyWindow,
-  TrackResponse,
-} from "@viewer/api-types";
+import type { ApiInfoResponse, ClipsResponse, HighlightResponse, CharacterResponse, CharacterStatePoint, EntriesResponse, EpisodeIdView, HarnessView, PositionsResponse, ResultsResponse, RunDetailResponse, ScratchpadResponse, SnapshotEnvelope, TraceIndexResponse, TraceSegment, LiveNearby, NearbyWindow, TrackResponse } from "@viewer/api-types";
+import type { CampaignsResponse, DungeonsResponse, EpisodesResponse } from "@viewer/api-types-evals";
+import type { ToolsResponse, FleetResponse, ModelsResponse } from "@viewer/api-types-runner";
 import type { PublicFleetResponse, PublicRunsResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
 /*

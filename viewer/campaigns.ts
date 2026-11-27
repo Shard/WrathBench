@@ -36,7 +36,8 @@ import { harnessOfRun } from "../runner/src/comparability-tuple";
 import { endConditionsOf, isEndReason, levelTargetOf } from "../runner/src/end-conditions";
 import { DEFAULT_DRIVER } from "../runner/src/drivers";
 import { stampedCompactWindow } from "../runner/src/config";
-import type { ArmSummary, CampaignView, ResultRun, Square } from "./api-types";
+import type { ResultRun } from "./api-types";
+import type { ArmSummary, CampaignView, Square } from "./api-types-evals";
 
 /** The roster and the campaign blocks, as this builder needs them (`RosterRead`). */
 export interface CampaignsRoster {

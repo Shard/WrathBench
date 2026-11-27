@@ -9,7 +9,7 @@
  * the table and the detail panel cannot word the same fact two ways.
  */
 
-import type { ModelEpisodeView, ModelRowView, ModelRunView, ModelStatusView, TierView } from "@viewer/api-types";
+import type { ModelEpisodeView, ModelRowView, ModelRunView, ModelStatusView, TierView } from "@viewer/api-types-runner";
 import { fmtCost, listCost } from "./format";
 import type { CharacterRow } from "./ladder";
 import { AUTO_WINDOW } from "./runs";

@@ -42,7 +42,8 @@ import { rosterEntryRefusal } from "../runner/src/roster-refusal";
 import { poolSizeOf } from "../runner/src/account-pool";
 import { parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { harnessVersion } from "../runner/src/version";
-import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
+import type { EpisodeIdView, HarnessView } from "./api-types";
+import type { ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types-runner";
 import { readRosterBase, windowOf, type RosterBase, type RosterNames } from "./roster";
 import { redactSecrets } from "./tail";
 

@@ -10,12 +10,8 @@ import { harnessSeries } from "../runner/src/comparability-tuple";
 import { EPISODE_LIST, hasBoard } from "../runner/src/episodes";
 import { isNotAModelRun } from "../runner/src/drivers";
 import { badEvidenceReason, countedRun } from "../runner/src/lapse";
-import type {
-  CampaignsResponse,
-  DungeonsResponse,
-  EpisodesResponse,
-  ResultRun,
-} from "./api-types";
+import type { ResultRun } from "./api-types";
+import type { CampaignsResponse, DungeonsResponse, EpisodesResponse } from "./api-types-evals";
 import { campaignsView } from "./campaigns";
 import { fullRosterOf } from "./models";
 import { boardsOf, DUNGEON_BOARD_VERSION } from "./dungeons";

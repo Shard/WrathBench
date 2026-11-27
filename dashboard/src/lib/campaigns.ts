@@ -16,7 +16,7 @@
  */
 
 import { characterLabel } from "@runner/characters";
-import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewer/api-types";
+import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewer/api-types-evals";
 import { effortLabel, fmtDuration, fmtEstimate, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
 import { partyHref } from "./party";
 

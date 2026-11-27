@@ -18,7 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../api";
 import { ConfigStore, splitFleet } from "../../runner/src/config-store";
-import type { CampaignsResponse, ResultsResponse, RunDetailResponse, RunsResponse } from "../api-types";
+import type { ResultsResponse, RunDetailResponse, RunsResponse } from "../api-types";
+import type { CampaignsResponse } from "../api-types-evals";
 import { checkedIn, defsBlock, definition, seedPublished } from "../../runner/test/fixtures/campaigns";
 
 const dirs: string[] = [];

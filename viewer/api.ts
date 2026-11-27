@@ -30,23 +30,8 @@ import type { SiteSettings } from "../runner/src/site-settings";
 import { siteInfoField } from "./site-info";
 import { moduleHealthReader, worldserverOf } from "./module-health";
 import { HARNESSES, isNotAModelRun } from "../runner/src/drivers";
-import type {
-  ClipsResponse,
-  HighlightResponse,
-  ApiInfoResponse,
-  CostFigure,
-  E90TokenProfileView,
-  ResultRun,
-  CharacterResponse,
-  CharacterStatePoint,
-  HarnessView,
-  RunListRow,
-  RunRow,
-  RunsResponse,
-  StateItemsRow,
-  StatePoint,
-  TokenTotals,
-} from "./api-types";
+import type { ClipsResponse, HighlightResponse, ApiInfoResponse, CostFigure, ResultRun, CharacterResponse, CharacterStatePoint, HarnessView, RunListRow, RunRow, RunsResponse, StateItemsRow, StatePoint, TokenTotals } from "./api-types";
+import type { E90TokenProfileView } from "./api-types-admin";
 import { resultRunOf } from "./results";
 import { readRosterBase, type RosterBase } from "./roster";
 import type { RunFact } from "../runner/src/run-fact";

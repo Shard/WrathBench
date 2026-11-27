@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAdminApi } from "../admin-api";
 import { createApi } from "../api";
-import type { AdminResponse } from "../api-types";
+import type { AdminResponse } from "../api-types-admin";
 import { codexLoginDir } from "../../runner/src/codex-login";
 import { ConfigStore } from "../../runner/src/config-store";
 import { readStoreSecret, STORE_KEY_ENV } from "../../runner/src/store-secrets";

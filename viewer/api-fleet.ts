@@ -10,16 +10,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json } from "./http";
 import { HARNESSES } from "../runner/src/drivers";
-import type {
-  FleetAccountView,
-  FleetJobView,
-  FleetPausedView,
-  FleetRunFacts,
-  FleetResponse,
-  FleetServerView,
-  FleetSessionView,
-  ModelsResponse,
-} from "./api-types";
+import type { FleetAccountView, FleetJobView, FleetPausedView, FleetRunFacts, FleetResponse, FleetServerView, FleetSessionView, ModelsResponse } from "./api-types-runner";
 import { fullRosterOf, modelsResponse } from "./models";
 import { modelStates, outstandingWork } from "../runner/src/models";
 import { toolsResponse } from "./tools";

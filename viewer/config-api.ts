@@ -31,7 +31,7 @@ import { configDbPath } from "../runner/src/config-read";
 import { parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { parsePolicyBlock } from "../runner/src/models";
 import type { RoutingSpec } from "../runner/src/routing";
-import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types";
+import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types-admin";
 import {
   CatalogueError,
   bodyError,

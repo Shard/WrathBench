@@ -48,7 +48,7 @@ import { isQuotaRefusal, readLauncherSettings, ROSTER_PID_LABEL } from "./run-po
 import { WORLDS_SECRET_ENV } from "./episode-launcher";
 import { worldsOf, type WorldsSetting } from "./run-fleet-credentials";
 import { readCameraTemplate, startWorldCamera } from "./camera-pods";
-import type { FleetWorldView } from "../viewer/api-types";
+import type { FleetWorldView } from "../viewer/api-types-runner";
 import { dbPassword } from "./db-env";
 
 // ------------------------------------------------------------------ names

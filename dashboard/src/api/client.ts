@@ -1,7 +1,8 @@
 /**
  * The typed client over the viewer's read-only API.
  *
- * Every shape here comes from `viewer/api-types.ts`, which the viewer
+ * Every shape here comes from `viewer/api-types.ts` and the group files beside
+ * it (`api-types-runner.ts`, `api-types-evals.ts`), which the viewer
  * itself imports — the two sides share one declaration rather than each keeping
  * a copy that drifts. Nothing in this file writes: there is no method that
  * sends a body, because there is no route that takes one.
@@ -10,30 +11,9 @@
  * same-origin off the Bun viewer. That is why there is no CORS anywhere.
  */
 
-import type {
-  ApiInfoResponse,
-  CharacterResponse,
-  ClipsResponse,
-  HighlightResponse,
-  LatestFrameResponse,
-  EntriesResponse,
-  EpisodeIdView,
-  EpisodesResponse,
-  CampaignsResponse,
-  DungeonsResponse,
-  ToolsResponse,
-  ResultsResponse,
-  FleetResponse,
-  HarnessView,
-  ModelsResponse,
-  PositionsResponse,
-  RunDetailResponse,
-  NearbyWindow,
-  ScratchpadResponse,
-  TraceIndexResponse,
-  TraceSegment,
-  TrackResponse,
-} from "@viewer/api-types";
+import type { ApiInfoResponse, CharacterResponse, ClipsResponse, HighlightResponse, LatestFrameResponse, EntriesResponse, EpisodeIdView, ResultsResponse, HarnessView, PositionsResponse, RunDetailResponse, NearbyWindow, ScratchpadResponse, TraceIndexResponse, TraceSegment, TrackResponse } from "@viewer/api-types";
+import type { EpisodesResponse, CampaignsResponse, DungeonsResponse } from "@viewer/api-types-evals";
+import type { ToolsResponse, FleetResponse, ModelsResponse } from "@viewer/api-types-runner";
 import type { FeedCadence } from "@wrathbench/inspector/views/traceplayer";
 import { ENTRIES_WINDOW } from "@viewer/public-keys";
 import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
@@ -53,18 +33,6 @@ export type {
   EntriesResponse,
   EventsServedEntry,
   EpisodeIdView,
-  EpisodeTierView,
-  EpisodesResponse,
-  ArmSummary,
-  CampaignsResponse,
-  DungeonsResponse,
-  DungeonRowView,
-  DungeonAttemptView,
-  DungeonBoardView,
-  CampaignView,
-  Square,
-  ToolsResponse,
-  ToolView,
   ResultsResponse,
   ResultRun,
   RunCondition,
@@ -72,13 +40,6 @@ export type {
   TrackPoint,
   TrackResponse,
   FeedEntry,
-  FleetResponse,
-  ModelEpisodeView,
-  ModelLastErrorView,
-  ModelRowView,
-  ModelRunView,
-  ModelStatusView,
-  ModelsResponse,
   PositionsResponse,
   RunDetailResponse,
   RunListRow,
@@ -94,6 +55,29 @@ export type {
   TokenTotals,
   TpsFacts,
 } from "@viewer/api-types";
+export type {
+  ToolsResponse,
+  ToolView,
+  FleetResponse,
+  ModelEpisodeView,
+  ModelLastErrorView,
+  ModelRowView,
+  ModelRunView,
+  ModelStatusView,
+  ModelsResponse,
+} from "@viewer/api-types-runner";
+export type {
+  EpisodeTierView,
+  EpisodesResponse,
+  ArmSummary,
+  CampaignsResponse,
+  DungeonsResponse,
+  DungeonRowView,
+  DungeonAttemptView,
+  DungeonBoardView,
+  CampaignView,
+  Square,
+} from "@viewer/api-types-evals";
 import type { PublicRunsResponse } from "@viewer/public-projection";
 
 /** Thrown for any non-2xx. Carries the status so a page can tell 404 from 500. */

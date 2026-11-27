@@ -26,7 +26,8 @@ import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
 import { Trajectory, readMeta } from "../src/trajectory";
-import type { ComparabilityView, EpisodeTierView } from "../../viewer/api-types";
+import type { ComparabilityView } from "../../viewer/api-types";
+import type { EpisodeTierView } from "../../viewer/api-types-evals";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
 const _toView: ComparabilityView = {} as Comparability;

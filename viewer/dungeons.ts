@@ -47,7 +47,8 @@ import { conditionKey } from "./condition";
 import { canonicalModelId } from "../infra/model-catalogue";
 import { type CostedRun, runCostReading } from "./run-cost";
 import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../runner/src/episodes";
-import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
+import type { ResultRun } from "./api-types";
+import type { DungeonAttemptView, DungeonBoardView, DungeonRowView } from "./api-types-evals";
 import { DEADMINES_END_ENTRY, DEADMINES_EXTRA_ENTRY, DEADMINES_REQUIRED } from "./deadmines";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
