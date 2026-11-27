@@ -19,19 +19,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  comparabilityOf,
-  fetchServerBuild,
-  parseComparability,
-  promptHash,
-  sameComparability,
-  type Comparability, harnessSeries } from "../src/comparability";
+import { comparabilityOf, fetchServerBuild } from "../src/comparability";
+import { parseComparability, promptHash, sameComparability, type Comparability, harnessSeries } from "../src/comparability-tuple";
 import { ModuleProtocolError } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
 import { Trajectory, readMeta } from "../src/trajectory";
-import type { ComparabilityView, EpisodeTierView } from "../../viewer/api-types";
+import type { ComparabilityView } from "../../viewer/api-types";
+import type { EpisodeTierView } from "../../viewer/api-types-evals";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
 const _toView: ComparabilityView = {} as Comparability;

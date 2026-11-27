@@ -10,8 +10,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { harnessSeries } from "../runner/src/comparability";
-import { chooseLauncher, EPISODE_TERM_GRACE_MS, episodeRunsInPod, parseLaunchSpec, type EpisodeLaunch } from "./episode-launcher";
+import { harnessSeries } from "../runner/src/comparability-tuple";
+import { chooseLauncher, EPISODE_TERM_GRACE_MS, episodeRunsInPod, parseLaunchSpec, type EpisodeLaunch, episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { K8sClient, K8sError, type Pod, type PodEnvVar, type PodStatus } from "./k8s-client";
 import { rosterCanHoldPod, rosterEpisodeInFlight } from "./run-fleet-state";
 import {
@@ -38,7 +38,6 @@ import {
 } from "./run-pod";
 import { RUN_POD_KEY, runPodsOf, SlotBook } from "./run-fleet-credentials";
 import { tempDirs } from "./temp-dirs";
-import { episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
 import { RUN_POD_STAMP_ENV } from "../runner/src/drivers";
 import { loadRunConfig, newSessionToken } from "../runner/src/config";
 import { LAUNCH_CONTEXT_ENV, launchContextOf, launchOwners } from "../runner/src/launch-context";

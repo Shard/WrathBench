@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CHILD_TERM_GRACE_MS, episodeArgv, episodeFlags, forCycle, harnessVersion, inContainer, planFreshLaunch, resolve, type RosterSpec } from "./run-roster";
-import { harnessSeries } from "../runner/src/comparability";
+import { harnessSeries } from "../runner/src/comparability-tuple";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 

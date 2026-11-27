@@ -76,7 +76,7 @@
 import type { SQL } from "bun";
 import { connect as connectModule, guidKey, type WrathClient } from "@wrathbench/sdk";
 import { isEvalPoolAccountName } from "../../runner/src/account-pool";
-import { isValidCharacterName } from "../../runner/src/config";
+import { isValidCharacterName } from "../../runner/src/character-name";
 import { MODULE_SECRET } from "../smoke/lib/auth";
 import { characterNames, type FixtureContext } from "../smoke/lib/fixture";
 import { moduleBase } from "../smoke/lib/module";

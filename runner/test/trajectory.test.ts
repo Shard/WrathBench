@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
-import { RUN_TURNS, TurnIndex } from "../src/run-reader";
+import { RUN_TURNS, TurnIndex } from "../src/trace-samples";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { tempDirs } from "./fixtures/temp-dirs";
 

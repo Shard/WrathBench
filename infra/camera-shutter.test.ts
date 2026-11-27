@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle } from "@wrathbench/inspector";
-import { DEADMINES_BOSSES } from "../viewer/dungeons";
+import { DEADMINES_BOSSES } from "../viewer/deadmines";
 import { cameraEventOf, Shutter, type Kept, type SessionEventRow, type TimedEvent } from "./camera/shutter";
 
 const BOSSES = new Set(DEADMINES_BOSSES);

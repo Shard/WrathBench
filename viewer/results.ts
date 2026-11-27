@@ -22,7 +22,8 @@
 
 import { runBilling } from "../runner/src/billing";
 import { harnessSeries } from "../runner/src/comparability-tuple";
-import { DRIVER_STAMPS, isDriver } from "../runner/src/config";
+import { DRIVER_STAMPS } from "../runner/src/config";
+import { isDriver } from "../runner/src/drivers";
 import { badEvidenceReason } from "../runner/src/lapse";
 import { stillbornOf } from "../runner/src/run-fact";
 import { EPISODES } from "../runner/src/episodes";
@@ -52,7 +53,8 @@ import type {
 import { conditionOf } from "./condition";
 import { itemSamplesOf } from "../runner/src/run-list";
 import { encodeInventory } from "@wrathbench/inspector/codec/inventory";
-import { activeMsUntil, type ActiveSegment } from "../runner/src/sessions";
+import { activeMsUntil } from "../runner/src/sessions";
+import type { ActiveSegment } from "../runner/src/run-types";
 import type { MilestoneInstants } from "../runner/src/run-totals";
 import { EXPANSION_MAPS } from "./worldmap";
 

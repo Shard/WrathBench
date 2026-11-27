@@ -29,24 +29,9 @@ import { json, notFound, withheld } from "./http";
 import type { SiteSettings } from "../runner/src/site-settings";
 import { siteInfoField } from "./site-info";
 import { moduleHealthReader, worldserverOf } from "./module-health";
-import { HARNESSES, isNotAModelRun } from "../runner/src/config";
-import type {
-  ClipsResponse,
-  HighlightResponse,
-  ApiInfoResponse,
-  CostFigure,
-  E90TokenProfileView,
-  ResultRun,
-  CharacterResponse,
-  CharacterStatePoint,
-  HarnessView,
-  RunListRow,
-  RunRow,
-  RunsResponse,
-  StateItemsRow,
-  StatePoint,
-  TokenTotals,
-} from "./api-types";
+import { HARNESSES, isNotAModelRun } from "../runner/src/drivers";
+import type { ClipsResponse, HighlightResponse, ApiInfoResponse, CostFigure, ResultRun, CharacterResponse, CharacterStatePoint, HarnessView, RunListRow, RunRow, RunsResponse, StateItemsRow, StatePoint, TokenTotals } from "./api-types";
+import type { E90TokenProfileView } from "./api-types-admin";
 import { resultRunOf } from "./results";
 import { readRosterBase, type RosterBase } from "./roster";
 import type { RunFact } from "../runner/src/run-fact";
@@ -67,7 +52,7 @@ import { attachSessionStore, isBareSessionId } from "../runner/src/session-store
 import { fanoutLead, fanoutReadings } from "../runner/src/run-reader";
 import { clipsView, pickHighlight } from "./camera";
 import { readStateItems, readStates } from "./runs";
-import { isValidRunId, LIVE_WINDOW_MS, readRun, runDir } from "../runner/src/run-list";
+import { isValidRunId, readRun, runDir } from "../runner/src/run-list";
 import {
   factOf,
   runRowOf,
@@ -95,25 +80,12 @@ import {
   tileValidators,
 } from "./tiles";
 import { playtimeMs, recordSegments } from "../runner/src/sessions";
-import { RunTotalsScanner, type RunTotals } from "../runner/src/run-totals";
+import type { RunTotals } from "../runner/src/run-totals";
 import type { ApiContext } from "./api-context";
 import { sharedStore, STORE_SHARE_MS } from "./shared-store";
 import { createTailCache } from "./api-tails";
 import { createResultsApi } from "./api-results";
 import { createRunApi } from "./api-run";
-
-/*
- * The store's shared reads (`shared-store.ts`), re-exported here unchanged. The
- * fleet readers are `api-fleet.ts`'s and are imported from there: a static
- * re-export here would load the runner group's module into every handle.
- */
-export { sharedStore, STORE_SHARE_MS } from "./shared-store";
-/* The tail cache moved to `api-tails.ts`; its bounds are re-exported here unchanged. */
-export { TAIL_CACHE_BYTES, TAIL_IDLE_MS } from "./api-tails";
-/* The results builder is `api-results.ts`; its eval-field strip is re-exported here unchanged. */
-export { withoutEvalFields } from "./api-results";
-/* The run routes moved to `api-run.ts`; their constants and helpers are re-exported here unchanged. */
-export { entriesWindowAt, POLL_MS, streamStart, TRACK_MEMO_RUNS, TRACK_SETTLE_MS, WINDOW_MAX } from "./api-run";
 
 export interface ApiOptions {
   runsDir: string;
@@ -197,9 +169,6 @@ export interface ApiOptions {
    */
   writeHold?: WriteHold | null;
 }
-
-/* The module's /health read moved to `module-health.ts`; its window is re-exported here unchanged. */
-export { HEALTH_CACHE_MS } from "./module-health";
 
 /** Where the inspector's API is mounted on a private handle. */
 export const INSPECTOR_BASE = "/api/inspector";

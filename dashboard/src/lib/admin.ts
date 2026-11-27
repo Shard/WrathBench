@@ -7,16 +7,8 @@
  */
 
 import type { Groups } from "@viewer/groups";
-import type {
-  AdminCodexLoginView,
-  AdminCredentialView,
-  AdminProviderView,
-  CredentialFix,
-  CredentialHealth,
-  HealthState,
-  ModuleLimitKey,
-  WrathMcpModuleError,
-} from "@viewer/api-types";
+import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, ModuleLimitKey, WrathMcpModuleError } from "@viewer/api-types-admin";
+import type { CredentialFix, CredentialHealth, HealthState } from "@viewer/api-types-runner";
 
 /** A budget's kind on the form; `none` writes no budget, which is the provider's default. */
 export type BudgetKind = "none" | "usage" | "spend" | "runs";

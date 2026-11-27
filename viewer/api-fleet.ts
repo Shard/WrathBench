@@ -9,17 +9,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json } from "./http";
-import { HARNESSES } from "../runner/src/config";
-import type {
-  FleetAccountView,
-  FleetJobView,
-  FleetPausedView,
-  FleetRunFacts,
-  FleetResponse,
-  FleetServerView,
-  FleetSessionView,
-  ModelsResponse,
-} from "./api-types";
+import { HARNESSES } from "../runner/src/drivers";
+import type { FleetAccountView, FleetJobView, FleetPausedView, FleetRunFacts, FleetResponse, FleetServerView, FleetSessionView, ModelsResponse } from "./api-types-runner";
 import { fullRosterOf, modelsResponse } from "./models";
 import { modelStates, outstandingWork } from "../runner/src/models";
 import { toolsResponse } from "./tools";
@@ -156,9 +147,6 @@ export function coldRuns(rows: readonly RunListingRow[], now: number): Set<strin
   }
   return out;
 }
-
-/* The store's shared reads moved to `shared-store.ts`, which every handle builds; re-exported here unchanged. */
-export { sharedStore, STORE_SHARE_MS } from "./shared-store";
 
 /** Keyed by the union, so the compiler holds this set to `FleetServerView["phase"]` both ways. */
 const SERVER_PHASE_KEYS: Record<FleetServerView["phase"], true> = {

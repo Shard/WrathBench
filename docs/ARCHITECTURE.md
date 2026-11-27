@@ -337,7 +337,8 @@ freely, by relative path as the collector does, and neither the runner's core no
 imports from `viewer/`, types included (`infra/viewer-boundary.test.ts`).
 What both sides read lives in `runner/src/`: the run listing (`run-list.ts`),
 a trajectory's totals (`run-totals.ts`, the scanner the collector stores),
-their types (`run-types.ts`, re-exported by the wire contract `api-types.ts`),
+their types (`run-types.ts`, re-exported by the wire contract `api-types.ts`,
+whose other groups' shapes are in `api-types-runner.ts`, `-evals.ts` and `-admin.ts` beside it),
 a run's sessions, the race and class names and the archive directory's name.
 So the code a model sees never moves when a viewer module does, and the
 viewer deploys alone.
@@ -638,7 +639,7 @@ launch (`shared` without one) — and a directory
 holding only those is not a run: a fresh launch onto it proceeds and
 overwrites them, where anything else there refuses the launch.
 
-**What it reads back** (`readRunFact`, `runner/src/models.ts`, is the
+**What it reads back** (`readRunFact`, `runner/src/run-fact.ts`, is the
 reference reader). `meta.json`: `harnessVersion`, `startedAt`,
 `config.{model, effort, compactWindow, account, character, token, campaign,
 campaignVersion, cell, arm, ref, credential, extra, watchdogs, world}`,

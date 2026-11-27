@@ -31,8 +31,6 @@
 
 import type { ActiveSegment } from "./run-types";
 
-export type { ActiveSegment };
-
 /** The record kinds that open or close an active segment. */
 export const SEGMENT_MARKS = new Set(["meta", "resume", "pause", "termination"]);
 

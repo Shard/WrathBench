@@ -20,7 +20,9 @@ import { charactersFrom, liveCharactersFrom, planResumes, resumeNotBefore } from
 import { formatCharacters } from "./run-fleet-status";
 import { backoffMs } from "./run-roster";
 import { loadRunConfig, type PauseReason } from "../runner/src/config";
-import { byNewestStart, DEFAULT_POLICY, newestStarted, projectModel, readRunFact, type RosterModel, type RunFact } from "../runner/src/models";
+import { byNewestStart, DEFAULT_POLICY, newestStarted, projectModel } from "../runner/src/models";
+import { readRunFact, type RunFact } from "../runner/src/run-fact";
+import type { RosterModel } from "../runner/src/roster-entry";
 import { Trajectory, type RunMeta } from "../runner/src/trajectory";
 
 const NOW = 1_800_000_000_000;

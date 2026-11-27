@@ -13,7 +13,8 @@
  * derivation is asserted in `test/status.test.ts` rather than in a DOM.
  */
 
-import type { ApiInfoResponse, FleetResponse } from "@viewer/api-types";
+import type { ApiInfoResponse } from "@viewer/api-types";
+import type { FleetResponse } from "@viewer/api-types-runner";
 import { HEARTBEAT_STALE_MS, deployWindowOpen, etaHours, heartbeatAge, supervisorAlive } from "./fleet";
 import { fmtAge, fmtDuration, stamp } from "./format";
 import { displayError } from "./errors";

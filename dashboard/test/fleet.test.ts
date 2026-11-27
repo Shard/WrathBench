@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetJobView, FleetResponse, FleetRunFacts, FleetServerView, RunListRow } from "../../viewer/api-types";
+import type { RunListRow } from "../../viewer/api-types";
+import type { FleetJobView, FleetResponse, FleetRunFacts, FleetServerView } from "../../viewer/api-types-runner";
 import type { FleetRow } from "../src/lib/fleet";
 import {
   FLEET_COLUMNS,

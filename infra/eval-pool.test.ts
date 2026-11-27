@@ -14,7 +14,8 @@ import { evalPoolAccountNames, isEvalPoolAccountName } from "../runner/src/accou
 import { defsBlock, definition, PARTY_MEMBERS, partyDefinition } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig, type FleetJob } from "./run-fleet-config";
 import { evalPoolDraw, evalPoolTaken, fillEntries, jobSpawn, planResumes } from "./run-fleet-plan";
-import { DEFAULT_POLICY, type RunFact } from "../runner/src/models";
+import { DEFAULT_POLICY } from "../runner/src/models";
+import type { RunFact } from "../runner/src/run-fact";
 import { planOf } from "./fixtures/tick";
 
 const STAMP = "20261114";

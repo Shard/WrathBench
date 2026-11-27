@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ModelRowView } from "../../viewer/api-types";
+import type { ModelRowView } from "../../viewer/api-types-runner";
 import { MODEL_COLUMNS, columnClass, modelRunCost, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, modelTableRows, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {

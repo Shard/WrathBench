@@ -34,8 +34,6 @@ import { fanoutConfigOf, partyConfigOf, type PartyMember } from "./party";
 import { isTaskEpisode } from "./episodes";
 import { PROBE_SHAPE_FLAGS } from "./run-flags";
 
-export { PROBE_SHAPE_FLAGS } from "./run-flags";
-
 /** A launch the rule refuses. The message is the operator's whole notice. */
 export class CampaignLaunchError extends Error {
   constructor(message: string) {

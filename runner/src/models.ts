@@ -56,14 +56,14 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver, isNotAModelRun, isProbeOnlyDriver, probeOnlyRefusal } from "./drivers";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, defaultLoopOf, harnessOf, isDriver, isTokenEnvName, isUnscoredDriverName, type Driver, type Harness } from "./config";
+import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver, isNotAModelRun, isProbeOnlyDriver, probeOnlyRefusal, DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./drivers";
+import { defaultLoopOf, isUnscoredDriverName } from "./config";
 import { EPISODE_IDS, EPISODES, isLevelEpisode, isScoredEpisode, isTaskEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, partyAttempt, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, countedRun, neverStale, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
+import { countedRun, neverStale, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
-import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
+import { platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { canonicalModelId } from "../../infra/model-catalogue";
 import { entryModelIds, type ProviderOption } from "./provider-options";
@@ -73,49 +73,6 @@ import type { ServingSpec } from "./serving";
 import { goneReason, modelGoneOf, readModelListsSidecar, type ModelGone, type ModelListsSidecar } from "./model-lists";
 import { readRunFact, readRunFacts, runFactCacheVersion, stillbornOf, type RunFact } from "./run-fact";
 import { entryOwnsWindow, IDLE_MODES, ownedWindows, TIERS, type IdleMode, type RosterIdentity, type RosterModel, type Tier } from "./roster-entry";
-
-/*
- * One run's fact — `readRunFact`, the record-count scanner, the trajectory's
- * verdict and the walk over a runs tree — lives in `run-fact.ts`, which a
- * reader loads without the scheduler; re-exported here unchanged.
- */
-export {
-  accountsOfRun,
-  cacheableFact,
-  countModelResponses,
-  countRecords,
-  countRecordsCached,
-  LADDER_EXEMPT_PAUSES,
-  LIVE_WINDOW_MS,
-  MODEL_RESPONSE_RECORD,
-  onPauseLadder,
-  PAUSE_RECORD,
-  pauseCountsOnLadder,
-  readFleetRuns,
-  readRunFact,
-  readRunFacts,
-  RecordCountScanner,
-  RESUME_RECORD,
-  RUN_FACT_SETTLE_MS,
-  runFactCacheVersion,
-  runFactKey,
-  stillbornOf,
-  tallyRecords,
-  tallyRecordsCached,
-  TERMINATION_TAIL_BYTES,
-  terminationOfTrajectory,
-  utcDay,
-  verdictOfTrajectory,
-  type CountCache,
-  type CountEntry,
-  type ReadAt,
-  type RecordTally,
-  type RunFact,
-  type RunReading,
-  type ScanReads,
-  type TrajectoryVerdict,
-  type UnstampedRun,
-} from "./run-fact";
 
 // ----------------------------------------------------------------- policy
 
@@ -134,26 +91,6 @@ export const POLICY_EPISODES: readonly ScoredEpisodeId[] = ["e90", "e360", "dead
  * attempt numbers) and so a freeplay extra is reported like any other.
  */
 export const STATS_EPISODES: readonly EpisodeId[] = EPISODE_IDS;
-
-/**
- * The ladder a model climbs, named once here. A tier is a statement
- * of **how much evidence** a model gets, denominated in runs, and it is the
- * only thing that sets a run count: there is no per-entry override and no
- * per-billing table, so "how many runs does this model get" has exactly one
- * answer and it is the word in the config.
- *
- * The table lives in code, not in the fleet config, for the reason promotion is a
- * threshold rather than a judgement: a budget that every model is
- * held to alike is a recorded decision, and a bespoke volume is a NAMED tier
- * added here, reviewed like an episode id — never a number edited into one
- * model's entry at 03:00.
- *
- * Money is deliberately not modelled. A tier is denominated in runs; a spend
- * cap is a credential's `spend` budget (`runner/src/credential-slots.ts`), its own
- * thing beside the tier. Minting `t0a`/`t0b` to approximate dollars is the accretion this
- * table exists to stop.
- */
-export { TIERS, type Tier } from "./roster-entry";
 
 export interface TierSpec {
   /** The counted runs this tier buys, per scored episode. Zero: not eligible. */
@@ -309,22 +246,6 @@ export function ineligibleWhy(
   }
   return `its tier buys no ${ep} runs`;
 }
-
-/**
- * What a model does with an account when it has no counted runs left to earn.
- *
- * Two values, not three. `characters` used to mean "another scored run of an
- * eligible tier with the next race/class in a code-side cycle", and it was the
- * wrong shape for what it was doing: sampling start states is exploration, so
- * putting it in a SCORED episode meant an unscored question was being asked in
- * the scored lane, with the cell chosen by a counter that meant something else
- * (how many extras this model had made). It is a probe campaign now, where
- * the cells are named in the config and the runs are unscored.
- *
- * - `none` — nothing. The default, and what a paid model wants.
- * - `unlimited` — a freeplay session, unscored, governed by its idle watchdog.
- */
-export { IDLE_MODES, type IdleMode } from "./roster-entry";
 
 export interface SchedulingPolicy {
   /** The level a counted e90 must reach to promote the model up its tier (operator, 2026-11-15). */
@@ -534,12 +455,6 @@ export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error"
 
 // ----------------------------------------------------------------- inputs
 
-/* A roster entry as the projection needs it: `roster-entry.ts`, re-exported here unchanged. */
-export type { RosterModel } from "./roster-entry";
-
-/* What a job holds of the roster, and why a name is outside the policy: `roster-entry.ts`, re-exported here unchanged. */
-export { pinnedRefs, policyExclusion, policyRefs, type PolicyJob, type PolicyRoster } from "./roster-entry";
-
 /** Operator overrides the supervisor persists (`fleet-models.json`). */
 export interface ModelsSidecar {
   version: 1;
@@ -743,13 +658,6 @@ export interface HeldPick {
   why: string;
 }
 
-/** An account that exists but is taken, and (where known) who is holding it. */
-export interface BusyAccount {
-  account: string;
-  /** The run id or job name on it; absent when the caller cannot name one. */
-  by?: string;
-}
-
 /** `run.ts --resume` refused because the run has a live owner (EX_TEMPFAIL): nothing was written. */
 export const RESUME_REFUSED_EXIT = 75;
 
@@ -802,12 +710,6 @@ export function driverOf(r: { name: string; driver?: string }): Driver {
   if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of ${DRIVERS.join("|")}`);
   return d;
 }
-
-/** A completed run that is safe scoring evidence for its target. */
-// The set of "not the model's fault" terminations lives with the lapse rule,
-// because the viewer's scored-ness predicate reads it too and the two must
-// not drift. Re-exported here so every existing importer is unchanged.
-export { NOT_THE_MODELS_FAULT } from "./lapse";
 
 /**
  * When a run last showed a sign of life: its pause mark when it has one, else
@@ -933,9 +835,6 @@ export function isNoProgress(f: RunFact): boolean {
   return f.terminationReason !== null && NO_PROGRESS_REASONS.has(f.terminationReason);
 }
 
-/* What a run and a roster entry must share for the run to be that entry's: `roster-entry.ts`, re-exported here unchanged. */
-export type { RosterIdentity } from "./roster-entry";
-
 /** Whether an entry's build and a run's are one: equal blocks, or a run whose caller cannot say. */
 function servingMatches(entry: RosterIdentity, run: RosterIdentity): boolean {
   if (run.serving === undefined) return true;
@@ -952,9 +851,6 @@ function probeOnlyIdentity(x: RosterIdentity): boolean {
   if (x.driver == null && x.harness == null) return isProbeOnlyDriver(DEFAULT_DRIVER);
   return eitherHas({ driver: x.driver, harness: x.harness }, (d) => d.probeOnly);
 }
-
-/* Which runs an entry's declared window owns: `roster-entry.ts`, re-exported here unchanged. */
-export { entryOwnsWindow, ownedWindows, rosterWindowKey } from "./roster-entry";
 
 /**
  * Whether a run is a roster entry's: same model, same effort, and a CLI

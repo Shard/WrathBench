@@ -26,18 +26,12 @@
  */
 
 import { existsSync } from "node:fs";
-import {
-  ConfigRejected,
-  ConfigStore,
-  DraftRefused,
-  configDbPath,
-  validateFleet,
-  type AuditRow,
-} from "../runner/src/config-store";
+import { ConfigRejected, ConfigStore, DraftRefused, validateFleet, type AuditRow } from "../runner/src/config-store";
+import { configDbPath } from "../runner/src/config-read";
 import { parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { parsePolicyBlock } from "../runner/src/models";
 import type { RoutingSpec } from "../runner/src/routing";
-import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types";
+import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types-admin";
 import {
   CatalogueError,
   bodyError,
@@ -54,9 +48,6 @@ import {
 } from "./drafts";
 import { json } from "./http";
 import { CONFIG_API_PREFIX, type Groups } from "./groups";
-
-/* The prefix everything here hangs off (`groups.ts`, which a handle reads it from). */
-export { CONFIG_API_PREFIX };
 
 /** The draft routes, under the prefix (`drafts.ts`). Ids travel in bodies, never in the path. */
 export const DRAFTS_ROUTE = "proposed";

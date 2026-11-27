@@ -26,7 +26,7 @@
  * A single-character run's session id is its run's id, which is also what
  * every packed window carries as `run`. A fan-out character's is the run id,
  * `~` and the character's name, and its windows carry that: `~` never occurs
- * in a run id (`isValidRunId` in `runs.ts` allows letters, digits, `.`, `_`
+ * in a run id (`isValidRunId` in `run-list.ts` allows letters, digits, `.`, `_`
  * and `-`), so the split is unambiguous, and it needs no escaping in a URL
  * path (`FANOUT_SEP`, `run-reader.ts`). A fan-out run's own id opens
  * nothing, since no one character is the run, and its sessions are listed
@@ -40,18 +40,22 @@
  * login) names one. The stack's own bin keys a bare store by that id and
  * stays as it is. The viewer serves its handle as the operator; nothing it
  * serves is scoped to a user.
+ *
+ * The last of four run readers: `runner/src/run-reader.ts` and
+ * `runner/src/run-list.ts` read a run's own records and a runs directory for
+ * every reader, and `runs.ts` a run's series for the viewer's routes; this one
+ * is a run read as a session, which only the inspector's API and the views it
+ * serves ask for, so it is the viewer's.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
 import type { SessionFile } from "@wrathbench/mcp/record";
-import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, sessionDirOfRun, SESSIONS_DIR } from "../runner/src/run-reader";
+import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, sessionDirOfRun } from "../runner/src/run-reader";
 import { listBareSessions, sessionStoreOf, type BareSession } from "../runner/src/session-store";
 import { legacy05Session } from "./legacy05-source";
 import { runDir } from "../runner/src/run-list";
-
-export { FANOUT_SEP, fanoutSessionId, SESSIONS_DIR };
 
 /** The session record's directory inside a run directory (`runner/src/session-record.ts`). */
 export const SESSION_DIR = "session";

@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ConfigStore } from "../../runner/src/config-store";
-import type { DraftFetchResponse, DraftsResponse, E90TokenProfileView } from "../api-types";
+import type { DraftFetchResponse, DraftsResponse, E90TokenProfileView } from "../api-types-admin";
 import { createApi } from "../api";
 import { ACTOR_HEADER, NOTE_HEADER, handleConfigRequest, type ConfigApiOptions } from "../config-api";
 import { CATALOGUE_URL, draftDocument } from "../drafts";

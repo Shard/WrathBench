@@ -41,14 +41,6 @@ import { characterSamplesOf, fanoutCharacters, fanoutSessionDir, fanoutSessionId
  */
 export const POSITION_WINDOW_MS = 600_000;
 
-/**
- * One agent, at one moment. The `ts` is the state sample's, not the read's —
- * the client ages pips off it, and a replay feed will supply the sample time
- * from the trajectory in exactly the same way.
- */
-/* The shape lives in `api-types.ts`, the contract the dashboard imports too. */
-export type { AgentPosition } from "./api-types";
-
 /** Which columns a run's `state` table actually has (schema drift is normal). */
 function stateColumns(db: Database): Set<string> {
   try {
@@ -245,7 +237,7 @@ export async function readLatestMove(runsDir: string, runId: string): Promise<Mo
   }
 }
 
-/** `readQuestCounts` (`runs.ts`) over an open database: every sample's quest count, oldest first. */
+/** Every sample's quest count in an open `run.sqlite`, oldest first. */
 function questCountsIn(db: Database, runId: string): { questsCompleted: number | null }[] {
   if (!stateColumns(db).has("quests_completed")) return [];
   const rows = db

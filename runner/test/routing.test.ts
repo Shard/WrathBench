@@ -21,7 +21,8 @@ import {
   routingLabel,
 } from "../src/routing";
 import { OpenAiChatAdapter } from "../src/adapter";
-import { comparabilityOf, sameComparability } from "../src/comparability";
+import { comparabilityOf } from "../src/comparability";
+import { sameComparability } from "../src/comparability-tuple";
 import { loadRunConfig } from "../src/config";
 
 describe("the default routing", () => {

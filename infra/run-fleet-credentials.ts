@@ -44,7 +44,7 @@ import {
 } from "../runner/src/credential-health";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { episodeRunsInPod } from "./episode-launcher";
-import { utcDay, type RunFact } from "../runner/src/models";
+import { utcDay, type RunFact } from "../runner/src/run-fact";
 import { isOpenCodeGoBase } from "../runner/src/platform";
 import { asProvider } from "../runner/src/provider-options";
 import { GoUsagePoller, goUsageUrl, type GoFetch } from "../runner/src/opencode-go";

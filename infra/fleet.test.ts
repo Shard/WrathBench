@@ -1,7 +1,7 @@
 import { planOf, snapshotOf, type RunningJob } from "./fixtures/tick";
 import { planTick } from "./run-fleet-plan";
 import { SUBSCRIPTION_FAMILIES } from "../runner/src/drivers";
-import { providerOfModel } from "../runner/src/credential-slots";
+import { providerOfModel, parseCredentials } from "../runner/src/credential-slots";
 import { launchRouting } from "../runner/test/fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import {
@@ -129,23 +129,24 @@ import {
   publishedVersion,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
-import { parseCredentials } from "../runner/src/credential-slots";
-import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, TIERS, TIER_TABLE, modelStates, planNextJobs, schedulability, wantsIdle, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
-import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
+import { DEFAULT_POLICY, isStandingPause, TIER_TABLE, modelStates, planNextJobs, schedulability, wantsIdle, type ModelState, type SchedulingPolicy, entryOwnsRun, isCounted } from "../runner/src/models";
+import { IDLE_MODES, TIERS, type RosterModel } from "../runner/src/roster-entry";
+import type { RunFact } from "../runner/src/run-fact";
+import { campaignSquares, campaignWork, type Campaign, parseCampaigns } from "../runner/src/campaigns";
 import { EPISODE_IDS, EPISODES, watchdogsFor, type EpisodeId } from "../runner/src/episodes";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessClash, loadRunConfig } from "../runner/src/config";
-import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
-import { parseCampaigns } from "../runner/src/campaigns";
+import { ConfigStore } from "../runner/src/config-store";
+import { readFleetConfig, type FleetRead } from "../runner/src/config-read";
 import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
 import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, planFreshLaunch, recordUnlaunched, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import { refusedEpisode } from "./episode-launcher";
 import { runPodsOf, SlotBook } from "./run-fleet-credentials";
-import { entryOwnsRun, isCounted, readRunFacts } from "../runner/src/models";
+import { readRunFacts } from "../runner/src/run-fact";
 import { listRuns } from "../runner/src/run-list";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";

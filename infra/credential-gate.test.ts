@@ -8,13 +8,15 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { isStaleRun, liveCredentials, modelStates, readRunFact, utcDay, type ModelState, type RunFact } from "../runner/src/models";
+import { isStaleRun, liveCredentials, modelStates, type ModelState } from "../runner/src/models";
+import { readRunFact, utcDay, type RunFact } from "../runner/src/run-fact";
 import { loadRunConfig } from "../runner/src/config";
 import { Trajectory, type RunMeta } from "../runner/src/trajectory";
 import { parseCredentials } from "../runner/src/credential-slots";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../viewer/public-projection";
-import type { EntrySummary, FleetResponse, ResumeHoldCode } from "../viewer/api-types";
+import type { EntrySummary } from "../viewer/api-types";
+import type { FleetResponse, ResumeHoldCode } from "../viewer/api-types-runner";
 import { parseFleet, planResumes, resumeNotBefore, rosterModels, type FleetConfig } from "./run-fleet";
 import { planOf } from "./fixtures/tick";
 import type { JobSpawn } from "./run-fleet-config";

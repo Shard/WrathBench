@@ -44,14 +44,6 @@ export function sessionDirOf(runDir: string): string {
   return join(runDir, SESSION_DIR);
 }
 
-/**
- * Where a fan-out run keeps its records: one session directory per
- * character, `sessions/<Character>/`, named by the character as the server
- * spells it (Shard/wrath-mcp#29). A run has `session/` or `sessions/`, never
- * both: one agent with one character is `session/`, exactly as it was.
- */
-export { SESSIONS_DIR };
-
 export function characterSessionDir(runDir: string, character: string): string {
   // A name is letters only; anything else never becomes a path (`run-reader.ts` owns the rule its readers resolve by).
   const dir = fanoutSessionDir(runDir, character);

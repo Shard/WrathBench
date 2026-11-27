@@ -13,7 +13,8 @@
  * rows keep their maths in `format.ts`.
  */
 
-import type { FleetJobView, FleetPausedView, FleetResponse, FleetRunFacts, FleetServerView, TpsFacts } from "@viewer/api-types";
+import type { TpsFacts } from "@viewer/api-types";
+import type { FleetJobView, FleetPausedView, FleetResponse, FleetRunFacts, FleetServerView } from "@viewer/api-types-runner";
 import { fmtDuration, fmtTps, listCost, modelDisplay, type ListCost } from "./format";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */

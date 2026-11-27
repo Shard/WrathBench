@@ -20,7 +20,8 @@ import { createApi } from "../api";
 import { ConfigStore, splitFleet } from "../../runner/src/config-store";
 import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster } from "../models";
 import { rosterNameOf } from "../roster";
-import type { ModelsResponse, RunDetailResponse } from "../api-types";
+import type { RunDetailResponse } from "../api-types";
+import type { ModelsResponse } from "../api-types-runner";
 
 const SENTINEL = "sentinel-bearer-9d31ff";
 const NOW = 1_800_000_000_000;

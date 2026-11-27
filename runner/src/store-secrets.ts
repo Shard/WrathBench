@@ -42,7 +42,8 @@
 import { Database } from "bun:sqlite";
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { configDbPath, CONFIG_DB_BUSY_TIMEOUT_MS, DEFAULT_ACTOR, type ConfigStore, type PutOptions } from "./config-store";
+import { DEFAULT_ACTOR, type ConfigStore, type PutOptions } from "./config-store";
+import { configDbPath, CONFIG_DB_BUSY_TIMEOUT_MS } from "./config-read";
 import { CREDENTIAL_PROVIDERS, isProviderEnvName } from "./credential-slots";
 
 /** The env var holding the store key. From the deployment's Secret, optional. */

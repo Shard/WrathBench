@@ -9,7 +9,7 @@
 
 import { json } from "./http";
 import { EPISODES, EPISODE_IDS, isTaskEpisode } from "../runner/src/episodes";
-import { HARNESSES } from "../runner/src/config";
+import { HARNESSES } from "../runner/src/drivers";
 import type { EpisodeIdView, ResultsResponse, ResultRun } from "./api-types";
 import { scriptedReferenceLines } from "./scripted-reference";
 import { projectResults } from "./public-projection";

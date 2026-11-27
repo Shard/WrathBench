@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { cliBaseEnv, readLines } from "./adapter-shared";
 import { homeLooksLoggedIn } from "./codex-home";
-import { configDbPath } from "./config-store";
+import { configDbPath } from "./config-read";
 import { isCredentialId, providerById, type Credential } from "./credential-slots";
 
 /** How long a device code stays good, and so how long a login may wait for it. */

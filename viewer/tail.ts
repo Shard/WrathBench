@@ -35,7 +35,8 @@ import type {
 } from "./api-types";
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
-import { isV1RunDir, sessionDirOfRun, TurnIndex } from "../runner/src/run-reader";
+import { isV1RunDir, sessionDirOfRun } from "../runner/src/run-reader";
+import { TurnIndex } from "../runner/src/trace-samples";
 import { isBareSessionDir } from "../runner/src/session-store";
 import { feedRecordOf, pairStoreCalls, readHeldCall, readRecordRow, RecordFollower, storeCallRecordsOf, type RecordLine, type RecordLoc, type StoreCalls } from "./record-feed";
 import { CodexUsageCorrector } from "../runner/src/codex-usage";
@@ -89,46 +90,6 @@ export const MAX_TEXT = 2000;
 /** Max array elements kept in a generic summary. */
 const MAX_ARRAY = 8;
 
-/*
- * The summary, usage and totals shapes live in `api-types.ts` — the type-only
- * contract the dashboard imports too — and are re-exported here unchanged.
- */
-export type {
-  AchievementFacts,
-  AreaFacts,
-  DeathFacts,
-  DeathSite,
-  EntrySummary,
-  LevelUpFacts,
-  LevelUpMark,
-  ReflectionWindowView,
-  ReportedUsage,
-  SpellFacts,
-  SpellLearnMark,
-  TalentFacts,
-  TalentSpendMark,
-  TaxiFacts,
-  TokenTotals,
-  TpsFacts,
-  TrackTravelMark,
-  TradeFacts,
-  TradeMarkView,
-} from "./api-types";
-/* The record-by-record marks moved to `run-marks.ts`; re-exported here unchanged. */
-export {
-  areaNamesOf,
-  groupMarkOf,
-  HEARTHSTONE_ITEM_NAME,
-  HEARTHSTONE_SPELL_ID,
-  instanceMarkOf,
-  killMarkOf,
-  reflectMarkOf,
-  reflectionWindowsFrom,
-  travelMarksOf,
-  type ReflectionWindow,
-  type ReflectMark,
-} from "./run-marks";
-
 function clip(s: string, max = MAX_TEXT): { text: string; clipped: boolean } {
   if (s.length <= max) return { text: s, clipped: false };
   return { text: `${s.slice(0, max)}\n… ${s.length - max} more characters`, clipped: true };
@@ -166,7 +127,6 @@ function shrink(value: unknown, out: { clipped: boolean }, depth = 0): unknown {
   }
   return value;
 }
-
 
 interface OpenAiToolCall {
   function?: { name?: unknown; arguments?: unknown };

@@ -2,7 +2,7 @@
  * The run's heartbeat: the one small file a runner rewrites while its process
  * lives, and what every reader decides a live owner by. Its own module so a
  * reader (the scheduler's run facts, the viewer) need not load the trajectory
- * writer to know whether a run has an owner; `trajectory.ts` re-exports it.
+ * writer to know whether a run has an owner.
  *
  * The proof that a run has a live owner. A trajectory's mtime cannot be that
  * proof: a run waiting on a slow provider, or a model in a long reflect, writes

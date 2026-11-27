@@ -19,36 +19,9 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  ApiInfoResponse,
-  CampaignsResponse,
-  ComparabilityView,
-  CostFigure,
-  CostView,
-  DeathFacts,
-  EpisodesResponse,
-  FleetAccountView,
-  FleetJobView,
-  FleetResponse,
-  FleetServerView,
-  ModelRowView,
-  ModelRunView,
-  ModelsResponse,
-  PartyDetailView,
-  PositionsResponse,
-  ResultRun,
-  ResultsResponse,
-  RunDetailResponse,
-  RunListRow,
-  RunRow,
-  RunsResponse,
-  TokenTotals,
-  TrackInventory,
-  TrackResponse,
-  TraceIndexResponse,
-  TraceInvRow,
-  TraceSegment,
-} from "../api-types";
+import type { ApiInfoResponse, ComparabilityView, CostFigure, CostView, DeathFacts, PartyDetailView, PositionsResponse, ResultRun, ResultsResponse, RunDetailResponse, RunListRow, RunRow, RunsResponse, TokenTotals, TrackInventory, TrackResponse, TraceIndexResponse, TraceInvRow, TraceSegment } from "../api-types";
+import type { CampaignsResponse, EpisodesResponse } from "../api-types-evals";
+import type { FleetAccountView, FleetJobView, FleetResponse, FleetServerView, ModelRowView, ModelRunView, ModelsResponse } from "../api-types-runner";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,

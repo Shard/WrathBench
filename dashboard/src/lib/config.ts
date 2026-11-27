@@ -28,7 +28,7 @@
  * at the bottom, for the same reason: what a promotion sends is decided here.
  */
 
-import type { DraftFetchResponse, DraftPriceView, DraftPromoteBody, E90TokenProfileView } from "@viewer/api-types";
+import type { DraftFetchResponse, DraftPriceView, DraftPromoteBody, E90TokenProfileView } from "@viewer/api-types-admin";
 import { fmtTokens } from "./format";
 
 /** The tiers a roster entry may carry. The policy names them; these are the ones the page offers. */

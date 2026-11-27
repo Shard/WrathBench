@@ -14,7 +14,8 @@
 
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
 import { num } from "../runner/src/values";
-import type { ApiInfoResponse, ModuleLimitKey, ModuleLimits, WrathMcpModuleError, WrathMcpModuleView } from "./api-types";
+import type { ApiInfoResponse } from "./api-types";
+import type { ModuleLimitKey, ModuleLimits, WrathMcpModuleError, WrathMcpModuleView } from "./api-types-admin";
 
 /** How long one /health answer (or one failure) stands in for the next. */
 export const HEALTH_CACHE_MS = 10_000;

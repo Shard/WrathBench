@@ -14,7 +14,8 @@ import { formatEndedRun } from "./run-fleet-status";
 import type { CampaignFile } from "../runner/src/campaign-file";
 import { runPodsOf, type FleetGoUsage, type SlotBook, type CredentialGate, type WorldsSetting } from "./run-fleet-credentials";
 import type { Credential } from "../runner/src/credential-slots";
-import type { RunFact, UnstampedRun, ModelsSidecar } from "../runner/src/models";
+import type { ModelsSidecar } from "../runner/src/models";
+import type { RunFact, UnstampedRun } from "../runner/src/run-fact";
 import type { ModelListsSidecar } from "../runner/src/model-lists";
 
 /** The supervisor's memory the tick reads and writes; `main()` owns it. */

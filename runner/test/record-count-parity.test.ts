@@ -17,15 +17,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { appendFileSync, closeSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  MODEL_RESPONSE_RECORD,
-  PAUSE_RECORD,
-  pauseCountsOnLadder,
-  RecordCountScanner,
-  type ReadAt,
-  type RecordTally,
-  RESUME_RECORD,
-} from "../src/models";
+import { MODEL_RESPONSE_RECORD, PAUSE_RECORD, pauseCountsOnLadder, RecordCountScanner, type ReadAt, type RecordTally, RESUME_RECORD } from "../src/run-fact";
 
 // ------------------------------------------------- the byte loop, as it was
 

@@ -16,8 +16,10 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, newSessionToken, type TerminationReason } from "../src/config";
-import { readRunFacts, runFactCache, runFactKey, RUN_FACT_SETTLE_MS, type RunFact } from "../src/models";
-import { HEARTBEAT_FILE, Trajectory } from "../src/trajectory";
+import { runFactCache } from "../src/models";
+import { readRunFacts, runFactKey, RUN_FACT_SETTLE_MS, type RunFact } from "../src/run-fact";
+import { Trajectory } from "../src/trajectory";
+import { HEARTBEAT_FILE } from "../src/heartbeat";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

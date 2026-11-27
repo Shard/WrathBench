@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../api";
 import { displayUrl, moduleHealthReader, moduleView } from "../module-health";
-import type { AdminResponse, ApiInfoResponse } from "../api-types";
+import type { ApiInfoResponse } from "../api-types";
+import type { AdminResponse } from "../api-types-admin";
 import { bareSessionId } from "../../runner/src/session-store";
 
 const roots: string[] = [];

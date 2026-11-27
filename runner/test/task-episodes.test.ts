@@ -29,7 +29,8 @@ import { configFromArgs } from "../src/run";
 import { taskDefinition, taskDefinitionProblem, taskHash } from "../src/task-episodes";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { countedFact } from "./fixtures/counted-fact";
-import { DEFAULT_POLICY, projectModel, schedulability, type RosterModel } from "../src/models";
+import { DEFAULT_POLICY, projectModel, schedulability } from "../src/models";
+import type { RosterModel } from "../src/roster-entry";
 import { withoutUnpublishedEpisodes } from "../../viewer/public-projection";
 
 const tempDir = tempDirs();

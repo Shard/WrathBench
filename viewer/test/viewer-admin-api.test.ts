@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../api";
 import { credentialViews } from "../admin-api";
-import type { AdminResponse } from "../api-types";
+import type { AdminResponse } from "../api-types-admin";
 import { ConfigStore } from "../../runner/src/config-store";
 
 const roots: string[] = [];

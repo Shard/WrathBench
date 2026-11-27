@@ -35,8 +35,9 @@ import {
 } from "../src/character-archive";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, newSessionToken } from "../src/config";
-import { readRunFact } from "../src/models";
-import { HEARTBEAT_FILE, readMeta, Trajectory } from "../src/trajectory";
+import { readRunFact } from "../src/run-fact";
+import { readMeta, Trajectory } from "../src/trajectory";
+import { HEARTBEAT_FILE } from "../src/heartbeat";
 import { tarEnd, tarHeader, tarPadding, TarReader } from "../src/ustar";
 import { ARCHIVE_DIR } from "../src/archive-dir";
 import { tempDirs } from "./fixtures/temp-dirs";

@@ -11,9 +11,9 @@
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { EntriesResponse } from "../../viewer/api-types";
+import type { EntriesResponse, EntrySummary } from "../../viewer/api-types";
 import { projectEntries } from "../../viewer/public-projection";
-import { TrajectoryTail, type EntrySummary } from "../../viewer/tail";
+import { TrajectoryTail } from "../../viewer/tail";
 import { scanRunTotals } from "../src/run-totals";
 import { replayFile } from "../src/replay";
 import { turnIndexOf } from "../src/run-reader";

@@ -11,7 +11,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetResponse, RunsResponse } from "../../viewer/api-types";
+import type { RunsResponse } from "../../viewer/api-types";
+import type { FleetResponse } from "../../viewer/api-types-runner";
 import { ApiError, createClient, LIVE_TTL_MS, sweepExpired } from "../src/api/client";
 
 interface Call {

@@ -1,7 +1,6 @@
 /**
  * The Deadmines by creature entry and map: what a run page's boss marks and
- * the camera read, as well as the dungeon board (`dungeons.ts`, which
- * re-exports this). A leaf, so a run page does not load the board and the
+ * the camera read, as well as the dungeon board (`dungeons.ts`). A leaf, so a run page does not load the board and the
  * campaigns behind it.
  */
 

@@ -47,14 +47,12 @@ import { conditionKey } from "./condition";
 import { canonicalModelId } from "../infra/model-catalogue";
 import { type CostedRun, runCostReading } from "./run-cost";
 import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../runner/src/episodes";
-import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, ResultRun } from "./api-types";
+import type { ResultRun } from "./api-types";
+import type { DungeonAttemptView, DungeonBoardView, DungeonRowView } from "./api-types-evals";
 import { DEADMINES_END_ENTRY, DEADMINES_EXTRA_ENTRY, DEADMINES_REQUIRED } from "./deadmines";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
 export const DUNGEON_BOARD_VERSION = 4;
-
-/* The Deadmines' bosses and map, from the leaf a run page and the camera read them from. */
-export { DEADMINES_BOSSES, DEADMINES_END_ENTRY, DEADMINES_EXTRA_ENTRY, DEADMINES_MAP, DEADMINES_REQUIRED } from "./deadmines";
 
 /** One character's milestones, as its session record's `events` stream holds them. */
 export interface CharacterMarks {

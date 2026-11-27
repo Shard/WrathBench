@@ -8,32 +8,15 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  CAPACITY_BACKOFF_MS,
-  CODEX_EFFORTS,
-  CODEX_ITEM_BODY_CHARS,
-  DISABLED_FEATURES,
-  capacityBackoffMs,
-  childEnv,
-  codexArgs,
-  codexItemRecord,
-  codexToolCallRecord,
-  codexStatedReset,
-  codexEffortRefusal,
-  detectCodexFailure,
-  homeLooksLoggedIn,
-  isCapacityRefusal,
-  normalizeCodexUsage,
-  PROGRAM_TOOL_TIMEOUT_SEC,
-  parseCodexEvent,
-  retriesAtCapacity,
-  runCodexEpisode,
-  tomlString,
-} from "../src/adapter-codex";
+import { CAPACITY_BACKOFF_MS, CODEX_EFFORTS, CODEX_ITEM_BODY_CHARS, DISABLED_FEATURES, capacityBackoffMs, childEnv, codexArgs, codexItemRecord, codexToolCallRecord, codexStatedReset, codexEffortRefusal, detectCodexFailure, isCapacityRefusal, PROGRAM_TOOL_TIMEOUT_SEC, parseCodexEvent, retriesAtCapacity, runCodexEpisode, tomlString } from "../src/adapter-codex";
+import { homeLooksLoggedIn } from "../src/codex-home";
+import { normalizeCodexUsage } from "../src/codex-usage";
 import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { readCodexThread } from "../src/codex-rollout";
-import { comparabilityOf, harnessOfRun } from "../src/comparability";
-import { HARNESSES, harnessOf, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
+import { comparabilityOf } from "../src/comparability";
+import { harnessOfRun } from "../src/comparability-tuple";
+import { isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
+import { HARNESSES, harnessOf } from "../src/drivers";
 import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";

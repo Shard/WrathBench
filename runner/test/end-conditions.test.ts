@@ -17,7 +17,8 @@ import {
   levelTargetOf,
   type EndMilestone,
 } from "../src/end-conditions";
-import { isCounted, type RunFact } from "../src/models";
+import { isCounted } from "../src/models";
+import type { RunFact } from "../src/run-fact";
 import { Watchdogs } from "../src/watchdogs";
 import { checkedIn, definition, partyDefinition } from "./fixtures/campaigns";
 

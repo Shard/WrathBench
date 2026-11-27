@@ -41,7 +41,7 @@
 
 import { A, Navigate, useParams } from "@solidjs/router";
 import { For, Match, Show, Switch, createMemo, createSignal, onMount } from "solid-js";
-import type { AdminResponse, DraftView, DraftsResponse } from "@viewer/api-types";
+import type { AdminResponse, DraftView, DraftsResponse } from "@viewer/api-types-admin";
 import { ALL_GROUPS } from "@viewer/groups";
 import { SNAPSHOT_MODE } from "../api/client";
 import { ConfigError, configApi, type AuditRow, type ConfigResponse } from "../api/config-client";

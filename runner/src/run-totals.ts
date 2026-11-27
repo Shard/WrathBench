@@ -36,7 +36,8 @@ import type {
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp/record";
-import { isV1RunDir, milestoneOfEvent, sessionDirOfRun, TurnIndex } from "./run-reader";
+import { isV1RunDir, milestoneOfEvent, sessionDirOfRun } from "./run-reader";
+import { TurnIndex } from "./trace-samples";
 import { CodexUsageCorrector } from "./codex-usage";
 import { driverEntry } from "./drivers";
 import { messageChars, requestStatsOf } from "./request-stats";

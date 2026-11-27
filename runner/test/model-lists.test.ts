@@ -27,7 +27,8 @@ import {
   type ModelListSource,
   type ModelListsSidecar,
 } from "../src/model-lists";
-import { DEFAULT_POLICY, modelStates, planNextJobs, schedulability, type RosterModel } from "../src/models";
+import { DEFAULT_POLICY, modelStates, planNextJobs, schedulability } from "../src/models";
+import type { RosterModel } from "../src/roster-entry";
 import { modelsResponse, type RosterRead } from "../../viewer/models";
 import { tempDirs } from "./fixtures/temp-dirs";
 

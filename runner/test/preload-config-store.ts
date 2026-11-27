@@ -1,7 +1,7 @@
 /**
  * Tests never read the operator's live config store.
  *
- * `readFleetConfig` (runner/src/config-store.ts) reads the config store at
+ * `readFleetConfig` (runner/src/config-read.ts) reads the config store at
  * `WRATHBENCH_CONFIG_DB` (else `$WRATHBENCH_DATA/config.sqlite`, else the
  * checkout's `data/config.sqlite`) and nothing else — which would quietly make
  * every fixture that expects an empty board assert against the operator's real

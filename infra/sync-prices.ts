@@ -95,7 +95,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { catalogueKeyOf, formatCatalogue, normalizeModelId, parseCatalogue } from "./model-catalogue";
-import { readFleetConfig } from "../runner/src/config-store";
+import { readFleetConfig } from "../runner/src/config-read";
 import { driverEntry } from "../runner/src/drivers";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { sameBase } from "../runner/src/platform";

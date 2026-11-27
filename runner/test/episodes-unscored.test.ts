@@ -16,7 +16,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { EPISODE_IDS, EPISODES, matchesTier, type EpisodeId } from "../src/episodes";
-import { POLICY_EPISODES, TIER_TABLE, TIERS, projectModel, DEFAULT_POLICY, type RosterModel } from "../src/models";
+import { POLICY_EPISODES, TIER_TABLE, projectModel, DEFAULT_POLICY } from "../src/models";
+import { TIERS, type RosterModel } from "../src/roster-entry";
 import { countedFact } from "./fixtures/counted-fact";
 
 const unscored: readonly EpisodeId[] = EPISODE_IDS.filter((id) => !EPISODES[id].scored);

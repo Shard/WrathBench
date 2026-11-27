@@ -75,30 +75,9 @@ import type { ModelListsSidecar } from "../runner/src/model-lists";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import type { ResumeHoldCode } from "../runner/src/credential-health";
 import type { Credential } from "../runner/src/credential-slots";
-import {
-  accountsOfRun,
-  byNewestStart,
-  entryOwnsRun,
-  type HeldPick,
-  inSeries,
-  lastActivityOf,
-  type ModelState,
-  newestStarted,
-  type NextJob,
-  planNextJobs,
-  type RunFact,
-  rosterWindowKey,
-  type SchedulingPolicy,
-  staleForMs,
-  ineligibleWhy,
-  liveCredentials,
-  type ModelsSidecar,
-  modelSiblings,
-  modelStates,
-  sameModel,
-  TIER_TABLE,
-  type UnstampedRun,
-} from "../runner/src/models";
+import { byNewestStart, entryOwnsRun, type HeldPick, inSeries, lastActivityOf, type ModelState, newestStarted, type NextJob, planNextJobs, type SchedulingPolicy, staleForMs, ineligibleWhy, liveCredentials, type ModelsSidecar, modelSiblings, modelStates, sameModel, TIER_TABLE } from "../runner/src/models";
+import { accountsOfRun, type RunFact, type UnstampedRun } from "../runner/src/run-fact";
+import { rosterWindowKey } from "../runner/src/roster-entry";
 
 export const TICK_MS = 60_000;
 /** A heartbeat older than this means the supervisor is gone, not merely quiet. */

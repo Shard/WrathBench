@@ -17,7 +17,8 @@
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createApi, streamStart } from "../api";
+import { createApi } from "../api";
+import { streamStart } from "../api-run";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();

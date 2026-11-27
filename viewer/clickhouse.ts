@@ -38,7 +38,8 @@ import { harnessOfRun, parseComparability } from "../runner/src/comparability-tu
 import { platformOf } from "../runner/src/platform";
 import type { RunFact } from "../runner/src/run-fact";
 import type { RunTotals } from "../runner/src/run-totals";
-import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } from "../runner/src/run-list";
+import { campaignFieldsOf, closeBareSession, itemSamplesOf } from "../runner/src/run-list";
+import { LIVE_WINDOW_MS } from "../runner/src/run-fact";
 import { runCredentialOf } from "../runner/src/run-credential";
 import { fanoutLead, parseFanoutSessionId } from "../runner/src/run-reader";
 import { sessionStoreOf } from "../runner/src/session-store";

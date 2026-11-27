@@ -24,7 +24,7 @@ import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../api";
 import { createRenderer, type SnapshotResult } from "../snapshot";
-import { REFERENCE_STAMP, STUB_STAMP } from "../../runner/src/config";
+import { REFERENCE_STAMP, STUB_STAMP } from "../../runner/src/drivers";
 import { SEG_MS, windowOf } from "@wrathbench/inspector/codec/trace";
 import { emptyState, publishPass, traceSegmentPath, type ObjectStore } from "../../infra/publish-core";
 import { verifyPublication } from "../../infra/publish-accept";

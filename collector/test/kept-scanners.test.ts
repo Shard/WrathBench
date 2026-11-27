@@ -19,7 +19,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readRunFact } from "../../runner/src/models";
+import { readRunFact } from "../../runner/src/run-fact";
 import { Trajectory } from "../../runner/src/trajectory";
 import { RunTotalsScanner } from "../../runner/src/run-totals";
 import { Collector } from "../src/collector";

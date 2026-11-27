@@ -47,8 +47,6 @@ import {
   type Billing,
 } from "./model-cost";
 
-export type { Billing };
-
 /** What a stored run records about who served it. */
 export interface BillableRun {
   model: string | null;

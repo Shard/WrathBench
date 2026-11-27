@@ -1,9 +1,15 @@
 /**
  * A run's series off disk, read-only: its state samples, its bag's items, its
- * move intents and its scratchpad, for the viewer's direct reads. Nothing here
- * ever writes. The run listing these read beside (`listRuns`, `readRun`,
- * `runDir`) is the runner's, `runner/src/run-list.ts`, because the runner's
- * core reads it too and never imports the viewer.
+ * move intents and its scratchpad, for the viewer's run and map routes
+ * (`api.ts`, `api-run.ts`). Nothing here ever writes.
+ *
+ * The third of four run readers, and the thinnest: it maps what
+ * `runner/src/run-reader.ts` (one run's records) and `runner/src/run-list.ts`
+ * (a runs directory) read onto the wire shapes, and opens a run's moves
+ * through `runs-source.ts` (the inspector's `SessionSource`). The viewer's, not
+ * the runner's, because it returns `api-types.ts` shapes and reads through the
+ * session source, neither of which the runner's core may import; and one
+ * module rather than its two callers, so the state row's one mapping stays one.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -12,7 +18,7 @@ import type { MoveIntentView, StateItemsRow, StatePoint } from "./api-types";
 import { moves } from "@wrathbench/inspector";
 import { fanoutSession, runSession } from "./runs-source";
 import { characterSamplesOf, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, readStateSamples } from "../runner/src/run-reader";
-import { num, openReadonly, runDir, runPath, stateColumns } from "../runner/src/run-list";
+import { num, openReadonly, runDir, runPath } from "../runner/src/run-list";
 
 /** A state row's columns as a `StatePoint`: the one mapping both homes go through. */
 function statePointOfRow(r: Record<string, unknown>): StatePoint {
@@ -40,10 +46,6 @@ function statePointOfRow(r: Record<string, unknown>): StatePoint {
   };
 }
 
-/**
- * A run's state samples, oldest first: a v1 run's folded from its trace
- * (`trace-samples.ts`), a 0.5 run's its run.sqlite `state` rows.
- */
 /** A fan-out character's samples, by its session id (`<run-id>~<Character>`); null for an id that is not one. */
 function characterSamples(runsDir: string, id: string): Record<string, unknown>[] | null {
   const named = parseFanoutSessionId(id);
@@ -52,6 +54,10 @@ function characterSamples(runsDir: string, id: string): Record<string, unknown>[
   return dir === null || !isFanoutRunDir(dir) ? [] : (characterSamplesOf(dir, named.character) as unknown as Record<string, unknown>[]);
 }
 
+/**
+ * A run's state samples, oldest first: a v1 run's folded from its trace
+ * (`trace-samples.ts`), a 0.5 run's its run.sqlite `state` rows.
+ */
 export function readStates(runsDir: string, runId: string): StatePoint[] {
   const character = characterSamples(runsDir, runId);
   if (character !== null) return character.map(statePointOfRow);
@@ -65,30 +71,6 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       unknown
     >[];
     return rows.map(statePointOfRow);
-  } catch {
-    return [];
-  } finally {
-    db.close();
-  }
-}
-
-/**
- * One run's recorded quest counts, oldest first, for the map feed to total
- * across restarts (`questsAcrossRestarts`) the way the run page does. Two
- * columns rather than `readStates`, which the feed would pay `items` for on
- * every poll; empty where the schema predates the column.
- */
-export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint, "questsCompleted">[] {
-  const dir = runPath(runsDir, runId);
-  if (isV1RunDir(dir)) return readStateSamples(dir, runId).map((r) => ({ questsCompleted: num(r["quests_completed"]) }));
-  const db = openReadonly(dir);
-  if (db === null) return [];
-  try {
-    if (!stateColumns(db).has("quests_completed")) return [];
-    const rows = db
-      .query(`SELECT quests_completed AS q FROM state WHERE run_id = ? AND quests_completed IS NOT NULL ORDER BY ts`)
-      .all(runId) as { q: unknown }[];
-    return rows.map((r) => ({ questsCompleted: num(r.q) }));
   } catch {
     return [];
   } finally {

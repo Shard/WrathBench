@@ -229,7 +229,7 @@ sample says nothing about the run. Within a process it only grows, so the
 run's count is summed across every drop (`questsAcrossRestarts`, a lower bound
 by whatever a stretch completed after its last sample) everywhere a reader is
 shown it: `/api/run/<id>` and the results rows, the map feed (each live run's
-counts read off its samples, `readQuestCounts`), and the
+counts read off its samples), and the
 replay track, whose every point carries the run's count up to it from the same
 fold (`questTally`), so the end of a replay reads what the run page does. Only
 the fleet listing's row is the newest sample, which on a resumed run is the
@@ -882,7 +882,9 @@ their response shapes are `api.ts`, the route modules it mounts
 and, imported only with their group or switch on, `api-fleet.ts` the
 runner's, `api-evals.ts` the evals', `config-api.ts` and `admin-api.ts` the
 admin switch's; over the tail cache `api-tails.ts` and the shared
-`api-context.ts`), and `api-types.ts`; anything that is not a route is the
+`api-context.ts`), and `api-types.ts` with a file of each group's own beside
+it (`api-types-runner.ts`, `api-types-evals.ts`, `api-types-admin.ts`, along
+the same seams); anything that is not a route is the
 built SPA, or the not-built notice when there is none.
 
 ### The inspector's API

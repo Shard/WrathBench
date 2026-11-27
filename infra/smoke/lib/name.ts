@@ -10,7 +10,7 @@
  * name began `Bqeee…`, and the full-arc deploy smoke rolled back the 0.5
  * worldserver deploy on it. Random letters, re-rolled while a triple exists.
  */
-import { isValidCharacterName } from "../../../runner/src/config";
+import { isValidCharacterName } from "../../../runner/src/character-name";
 
 export function probeName(prefix: string): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz";

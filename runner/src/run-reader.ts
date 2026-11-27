@@ -32,6 +32,13 @@
  *
  * Read-only throughout: a database opens read-only through `openRunDb`, and a
  * busy or missing file reads as nothing recorded, never as an error.
+ *
+ * The first of four run readers, each over the one before: this, one run's own
+ * records; `run-list.ts`, a runs directory; `viewer/runs.ts`, a run's series
+ * as the viewer's routes serve them; and `viewer/runs-source.ts`, the
+ * inspector's `SessionSource`. This and the listing are the runner's because
+ * the scorer, the collector and the scheduler read them and never import the
+ * viewer; the other two are the viewer's because they return its wire shapes.
  */
 
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
@@ -42,8 +49,6 @@ import { openRunDb, RUN_DB_FILE } from "./rundb";
 import { isBareSessionDir } from "./session-store";
 import { TraceSampler, TurnIndex, type StateSample } from "./trace-samples";
 import { num } from "./values";
-
-export { RUN_TURNS, TurnIndex, type StateSample } from "./trace-samples";
 
 /** The session record's directory inside a run directory (`session-record.ts`). */
 const SESSION_DIR = "session";

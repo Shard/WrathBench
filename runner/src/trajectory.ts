@@ -41,7 +41,8 @@ import type { Comparability } from "./comparability-tuple";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { SecretRedactor } from "@wrathbench/mcp/redact";
 import type { SubscriptionUsage } from "./subscription-usage";
-import { latestReading, RUN_TURNS, runRowOfMeta, turnIndexOf, wakeCountOf } from "./run-reader";
+import { latestReading, runRowOfMeta, turnIndexOf, wakeCountOf } from "./run-reader";
+import { RUN_TURNS } from "./trace-samples";
 
 /**
  * One item on a state sample: a client-cache name, its stack count, worn or
@@ -740,8 +741,3 @@ export function readMeta(dir: string): RunMeta | null {
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf8")) as RunMeta;
 }
-
-// ------------------------------------------------------------- heartbeat
-
-/* The run's heartbeat lives in `heartbeat.ts`, which readers load without the writer; re-exported here unchanged. */
-export { HEARTBEAT_DEAD_MS, HEARTBEAT_EVERY_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner, startHeartbeat } from "./heartbeat";

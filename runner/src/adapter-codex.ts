@@ -168,8 +168,8 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
 import { MessageQueue, cliBaseEnv, readLines, signalGroup } from "./adapter-shared";
-import { DEFAULT_CODEX_HOME_ENV, harnessOf, threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
-import { entryOf } from "./drivers";
+import { threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { DEFAULT_CODEX_HOME_ENV, harnessOf, entryOf } from "./drivers";
 import { isEpisodeId, isScoredEpisode } from "./episodes";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { ThreadContext } from "./context";
@@ -181,7 +181,7 @@ import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUs
 import { SUBSCRIPTION_PAUSE } from "./lapse";
 import { launchContextOf } from "./launch-context";
 import { SubscriptionUsageTracker, describeWindows, newestCredentialUsage, thresholdsOf, usageKeyOf } from "./subscription-usage";
-import { CODEX_SYSTEM_PROMPT, buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
+import { buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -246,9 +246,6 @@ export function childEnv(
   if (home !== undefined && home.length > 0) out[DEFAULT_CODEX_HOME_ENV] = home;
   return { ...out, ...(o.extra ?? {}) };
 }
-
-/* Whether a Codex home looks logged in, from the leaf the login flow reads it from. */
-export { homeLooksLoggedIn } from "./codex-home";
 
 // ------------------------------------------------------------ failure detect
 
@@ -318,10 +315,6 @@ export function detectCodexFailure(text: string | undefined | null): CodexFailur
 
 /** Exec JSONL envelopes we act on. Loose: an unknown field must never break a run. */
 const eventSchema = z.looseObject({ type: z.string() });
-
-// `CodexUsage` and `normalizeCodexUsage` live in `codex-usage.ts`, beside the
-// per-turn delta rule the viewer shares; re-exported for the driver's readers.
-export { normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 
 /**
  * The CLI's own retry notice — `Reconnecting... 2/5 (…)`, `Reconnecting...
@@ -1690,6 +1683,3 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     await shutdown();
   }
 }
-
-/** The codex render of the fixed prompt, for tests and the README. */
-export { CODEX_SYSTEM_PROMPT };

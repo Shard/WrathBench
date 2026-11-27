@@ -36,8 +36,8 @@
 
 import { isEndReason } from "./end-conditions";
 import { z } from "zod";
-import { DEFAULT_DRIVER, driverHasCompactWindow, launchLoopOf, refuseTenantAccount, runsProgramLoop } from "./config";
-import { entryOf, isDriver } from "./drivers";
+import { driverHasCompactWindow, launchLoopOf, refuseTenantAccount, runsProgramLoop } from "./config";
+import { DEFAULT_DRIVER, entryOf, isDriver } from "./drivers";
 import type { RunPodsMode } from "./models";
 import {
   CAMPAIGN_NAME,

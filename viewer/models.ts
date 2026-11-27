@@ -33,31 +33,17 @@ import { join } from "node:path";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { entryBilling } from "../runner/src/billing";
 import { configDbPath } from "../runner/src/config-read";
-import {
-  DEFAULT_POLICY,
-  LADDER_MS,
-  countsTowardTarget,
-  isCounted,
-  parsePolicyBlock,
-  entryOwnsRun,
-  sameModel,
-  ownedWindows,
-  platformOf,
-  schedulability,
-  verdictForGroups,
-  schedulableView,
-  type ModelState,
-  type SchedulingPolicy,
-  type RunFact,
-  TIER_TABLE,
-} from "../runner/src/models";
+import { DEFAULT_POLICY, LADDER_MS, countsTowardTarget, isCounted, parsePolicyBlock, entryOwnsRun, sameModel, platformOf, schedulability, verdictForGroups, schedulableView, type ModelState, type SchedulingPolicy, TIER_TABLE } from "../runner/src/models";
+import { ownedWindows } from "../runner/src/roster-entry";
+import type { RunFact } from "../runner/src/run-fact";
 import { harnessSeries } from "../runner/src/comparability-tuple";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../runner/src/campaigns";
 import { rosterEntryRefusal } from "../runner/src/roster-refusal";
 import { poolSizeOf } from "../runner/src/account-pool";
 import { parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { harnessVersion } from "../runner/src/version";
-import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
+import type { EpisodeIdView, HarnessView } from "./api-types";
+import type { ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types-runner";
 import { readRosterBase, windowOf, type RosterBase, type RosterNames } from "./roster";
 import { redactSecrets } from "./tail";
 

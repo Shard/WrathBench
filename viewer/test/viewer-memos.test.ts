@@ -11,7 +11,9 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { TAIL_IDLE_MS, TRACK_SETTLE_MS, createApi } from "../api";
+import { createApi } from "../api";
+import { TAIL_IDLE_MS } from "../api-tails";
+import { TRACK_SETTLE_MS } from "../api-run";
 import { type RunStore, localRunStore } from "../clickhouse";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 

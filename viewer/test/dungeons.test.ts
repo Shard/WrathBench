@@ -6,8 +6,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY, projectModel, type RunFact } from "../../runner/src/models";
-import { attemptOf, boardOf, boardsOf, compareAttempts, costOf, DEADMINES_BOSSES, DEADMINES_REQUIRED, wipesOf, type CharacterMarks, type DungeonRun } from "../dungeons";
+import { DEFAULT_POLICY, projectModel } from "../../runner/src/models";
+import type { RunFact } from "../../runner/src/run-fact";
+import { attemptOf, boardOf, boardsOf, compareAttempts, costOf, wipesOf, type CharacterMarks, type DungeonRun } from "../dungeons";
+import { DEADMINES_BOSSES, DEADMINES_REQUIRED } from "../deadmines";
 import { projectDungeons } from "../public-projection";
 import type { CostFigure, ResultRun } from "../api-types";
 

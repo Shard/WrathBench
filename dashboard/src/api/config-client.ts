@@ -20,7 +20,7 @@
  * build reads a bucket. The page checks both before it renders anything.
  */
 
-import type { AdminResponse, DraftFetchResponse, DraftPromoteBody, DraftStatusResponse, DraftsResponse } from "@viewer/api-types";
+import type { AdminResponse, DraftFetchResponse, DraftPromoteBody, DraftStatusResponse, DraftsResponse } from "@viewer/api-types-admin";
 
 /**
  * One line of the change history, as `/api/config/audit` serves it.

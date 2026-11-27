@@ -11,13 +11,8 @@ import { join } from "node:path";
 
 import { StubAdapter } from "../src/adapter";
 import { claudeArgs } from "../src/adapter-claude";
-import {
-  loadRunConfig,
-  OBJECTIVE_STAMP,
-  STUB_STAMP,
-  unscoredStamp,
-  watchdogOverrideSchema,
-} from "../src/config";
+import { loadRunConfig, OBJECTIVE_STAMP, unscoredStamp, watchdogOverrideSchema } from "../src/config";
+import { STUB_STAMP } from "../src/drivers";
 import { runLoop } from "../src/loop";
 import { SYSTEM_PROMPT, WORLD_SECTION, buildSystemPrompt, contextSentence, objectiveSection, SNIPPET_DELTA_SENTENCE } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";

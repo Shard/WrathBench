@@ -38,7 +38,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle } from "@wrathbench/inspector";
-import { DEADMINES_BOSSES } from "../../viewer/dungeons";
+import { DEADMINES_BOSSES } from "../../viewer/deadmines";
 import { assembleRun } from "./assemble";
 import { CameraClient, INVISIBLE_LUA, luaString, subjectDistanceLua, WORLD_ONLY_LUA, type ClientStatus } from "./client";
 import { forwardLoopback } from "./forward";

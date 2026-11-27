@@ -8,13 +8,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import {
-  MIN_TOKEN_LENGTH,
-  loadRunConfig,
-  newRunId,
-  newSessionToken,
-  resolveSessionToken,
-} from "../src/config";
+import { loadRunConfig, newRunId, newSessionToken, resolveSessionToken } from "../src/config";
+import { MIN_TOKEN_LENGTH } from "../src/session-token";
 import { Trajectory, readMeta } from "../src/trajectory";
 import { tempDirs } from "./fixtures/temp-dirs";
 

@@ -15,7 +15,8 @@ import { join } from "node:path";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { ConfigStore } from "../../runner/src/config-store";
 import { configFromArgs } from "../../runner/src/run";
-import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi, entriesWindowAt } from "../api";
+import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi } from "../api";
+import { entriesWindowAt } from "../api-run";
 import { harnessSeriesCensus } from "../api-evals";
 import { readFleet } from "../api-fleet";
 import { type RunStore, localRunStore } from "../clickhouse";
@@ -23,7 +24,7 @@ import { redactRawLine, redactSecrets } from "../tail";
 import { readRun } from "../../runner/src/run-list";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 import { defsBlock, definition, seedPublished } from "../../runner/test/fixtures/campaigns";
-import type { CampaignsResponse } from "../api-types";
+import type { CampaignsResponse } from "../api-types-evals";
 
 const tempDir = tempDirs();
 

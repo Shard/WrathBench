@@ -31,19 +31,14 @@
 
 import { checkModuleProtocol } from "@wrathbench/sdk";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { episodeOverrideOf, harnessOf, type RunConfig } from "./config";
+import { episodeOverrideOf, type RunConfig } from "./config";
+import { harnessOf } from "./drivers";
 import { isTaskEpisode } from "./episodes";
 import { buildSystemPrompt, programPromptOf, steeringOf } from "./prompt";
 import { routingForRun } from "./routing";
 import type { SubjectKind } from "./serving";
 import type { WikiBundleMeta } from "./wiki";
 import { promptHash, type Comparability, type ServerBuild } from "./comparability-tuple";
-
-/*
- * The tuple's shape and its readers (`comparability-tuple.ts`), re-exported
- * so a launch, a resume and a test read the whole tuple from here.
- */
-export * from "./comparability-tuple";
 
 /**
  * Read the worldserver's build identity off its `/health`, for the tuple.
@@ -75,7 +70,6 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
   if (typeof body.build !== "string" || typeof body.startedAtMs !== "number") return null;
   return { build: body.build, startedAtMs: body.startedAtMs };
 }
-
 
 /**
  * The tuple for a run about to start (or resume) under `config`.

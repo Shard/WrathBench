@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { parseFleet, type FleetConfig, type FleetJob, type JobSpawn } from "./run-fleet-config";
 import { attemptPastTaken, fillEntries, planTick, spawnsOnlyEnded } from "./run-fleet-plan";
 import { planOf, snapshotOf, type RunningJob } from "./fixtures/tick";
-import type { RunFact } from "../runner/src/models";
+import type { RunFact } from "../runner/src/run-fact";
 
 const NOW = Date.UTC(2026, 10, 18, 12);
 const H = 3_600_000;

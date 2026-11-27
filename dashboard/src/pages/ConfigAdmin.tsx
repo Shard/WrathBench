@@ -18,7 +18,7 @@
 
 import { A } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
-import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, AdminResponse, WrathMcpModuleView, WrathMcpView } from "@viewer/api-types";
+import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, AdminResponse, WrathMcpModuleView, WrathMcpView } from "@viewer/api-types-admin";
 import { configApi } from "../api/config-client";
 import { InfoHint } from "../components/InfoHint";
 import { STACK_URL } from "../lib/repo";

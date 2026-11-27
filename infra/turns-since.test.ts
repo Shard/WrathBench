@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, readSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ReadAt } from "../runner/src/models";
+import type { ReadAt } from "../runner/src/run-fact";
 import { earlySaturation, launchOffset, turnsSince, type Uncounted } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 

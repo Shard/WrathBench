@@ -13,7 +13,7 @@ import { toolsFor } from "../../runner/src/tools";
 import { createApi } from "../api";
 import { projectTools } from "../public-projection";
 import { TOOL_EXAMPLES, TOOL_RETURNS, servedTools, toolsResponse } from "../tools";
-import type { ToolsResponse } from "../api-types";
+import type { ToolsResponse } from "../api-types-runner";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();

@@ -14,7 +14,7 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig, type PauseReason } from "../src/config";
-import { LADDER_EXEMPT_PAUSES, onPauseLadder, pauseCountsOnLadder, readRunFact, readRunFacts, tallyRecords, tallyRecordsCached, type CountCache } from "../src/models";
+import { LADDER_EXEMPT_PAUSES, onPauseLadder, pauseCountsOnLadder, readRunFact, readRunFacts, tallyRecords, tallyRecordsCached, type CountCache } from "../src/run-fact";
 import { readMeta, Trajectory, type RunMeta } from "../src/trajectory";
 
 /** One segment: the turns it made, the pause that ended it, and a turn flushed after the pause. */

@@ -43,7 +43,8 @@ import { parseFleet, rosterModels, type FleetConfig } from "../../infra/run-flee
 import type { ConfigStore } from "./config-store";
 import { credentialCandidates, isCredentialId } from "./credential-slots";
 import { DEFAULT_DRIVER, driverEntry } from "./drivers";
-import { liveOwnerOf, matchesRoster, readRunFact } from "./models";
+import { liveOwnerOf, matchesRoster } from "./models";
+import { readRunFact } from "./run-fact";
 import type { CredentialMove } from "./trajectory";
 import { ARCHIVE_DIR } from "./archive-dir";
 
