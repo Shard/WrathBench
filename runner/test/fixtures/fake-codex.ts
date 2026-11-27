@@ -13,14 +13,8 @@
  *                turn, then `turn.completed` with usage, exit 0.
  *   limit        `turn.failed` with the CLI's usage-limit message, exit 1 (the
  *                turn's rollout is written first when $WB_FAKE_ROLLOUT says).
- *   rate-limit   `error` with rate-limit wording, exit 1.
- *   auth         `error` with the spent-refresh-token message, exit 1.
  *   policy       `turn.failed` with the CLI's own fallback sentence for a
  *                misalignment stop ("…misalignment policy violation.").
- *   policy-custom
- *                every turn fails with a server-worded policy stop that names
- *                neither: what exec cannot classify without typed errors.
- *   context      `turn.failed` with a blown-context-window message.
  *   retry-429    an `error` retry notice ("Reconnecting... 1/5 (… 429 …)"),
  *                then the turn completes normally.
  *   retry-exhausted
@@ -322,23 +316,9 @@ switch (mode) {
     fail("turn.failed", Bun.env["WB_FAKE_LIMIT_TEXT"] ?? "You’ve hit your usage limit. Try again later.");
     saveRecord();
     process.exit(1);
-  case "rate-limit":
-    fail("error", "Rate limit reached for gpt-5.5. Please try again later.");
-    process.exit(1);
-  case "auth":
-    fail("error", "Your access token could not be refreshed because your refresh token was already used. Run `codex login` again.");
-    process.exit(1);
   case "policy":
     // The CLI's own fallback sentence (codex-api responses_error.rs).
     fail("turn.failed", "This request was blocked due to a misalignment policy violation.");
-    process.exit(1);
-  case "policy-custom":
-    // A server-worded stop: no "misalignment", no "policy violation".
-    fail("turn.failed", "This task was halted by an automated safety review and cannot continue.");
-    saveRecord();
-    process.exit(1);
-  case "context":
-    fail("turn.failed", "The conversation exceeds the model's context window and could not be compacted.");
     process.exit(1);
   case "retry-429":
     fail("error", "Reconnecting... 1/5", "unexpected status 429 Too Many Requests: rate limit reached");

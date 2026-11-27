@@ -72,11 +72,6 @@ export function worldToPixel(x: number, y: number): PixelPoint {
   return { px: t.col * TILE_PX, py: t.row * TILE_PX };
 }
 
-/** The inverse of `worldToPixel`. */
-export function pixelToWorld(px: number, py: number): { x: number; y: number } {
-  return tileToWorld(py / TILE_PX, px / TILE_PX);
-}
-
 /** The file name convention the extraction writes and the tile route serves. */
 export function tileName(row: number, col: number): string {
   return `${row}_${col}.png`;
@@ -154,27 +149,6 @@ export function lodServedName(layer: LodLayer, z: number, row: number, col: numb
  */
 export function nativeServedName(row: number, col: number): string {
   return `${row}_${col}.webp`;
-}
-
-/**
- * The inclusive tile range covering a pixel rectangle, clamped to the grid.
- *
- * The renderer asks this what to fetch so a zoomed-out view never requests the
- * whole 64×64 pyramid, and a panned-off-world view never requests tile −3.
- */
-export function visibleTiles(
-  px0: number,
-  py0: number,
-  px1: number,
-  py1: number,
-): { row0: number; col0: number; row1: number; col1: number } {
-  const clamp = (v: number): number => Math.min(GRID - 1, Math.max(0, v));
-  return {
-    row0: clamp(Math.floor(py0 / TILE_PX)),
-    col0: clamp(Math.floor(px0 / TILE_PX)),
-    row1: clamp(Math.floor(py1 / TILE_PX)),
-    col1: clamp(Math.floor(px1 / TILE_PX)),
-  };
 }
 
 /** Outland and Northrend: the continents past the first two, which freeplay milestone 7 reads. */
