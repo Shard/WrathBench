@@ -434,7 +434,7 @@ export interface State {
 }
 
 /** The named states, for the runs the rig picked: a state whose run is missing is left out. */
-export function defaultStates(live: string | null, ended: string | null, liveCharacter: string | null): State[] {
+function defaultStates(live: string | null, ended: string | null, liveCharacter: string | null): State[] {
   const states: State[] = [{ name: "home", path: "/", wait: "main" }];
   if (live !== null) states.push({ name: "run-live", path: `/run/${encodeURIComponent(live)}`, wait: "main" });
   states.push({ name: "map-live", path: "/map", wait: "canvas" });
@@ -448,7 +448,7 @@ export function defaultStates(live: string | null, ended: string | null, liveCha
 }
 
 /** A path as a shot name: `/run/x?y=1` → `path-run-x-y-1`. */
-export function pathName(path: string): string {
+function pathName(path: string): string {
   const slug = path.replace(/^\/+/, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return `path-${slug === "" ? "root" : slug}`.slice(0, 80);
 }
@@ -475,7 +475,7 @@ export const USAGE = `usage: bun infra/dashboard-shots.ts [--out DIR] [--run DIR
                                    [--viewport WxH] [--scheme dark|light] [--settle MS] [--real-wowhead] [--serve]
                                    [--groups runner,evals,viewer] [--seed] [--no-admin] [--site-config FILE] [--sessions STORE]`;
 
-export function parseCli(argv: readonly string[], now = new Date()): Cli | { error: string } {
+function parseCli(argv: readonly string[], now = new Date()): Cli | { error: string } {
   const c: Cli = {
     out: join(tmpdir(), `wrathbench-shots-${now.toISOString().replace(/[:.]/g, "-")}`),
     runs: [],

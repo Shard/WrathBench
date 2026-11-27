@@ -54,7 +54,7 @@ export function seriesPresent(
 }
 
 /** The newest of a list of series, or null when there are none. */
-export function latestSeries(available: readonly string[]): string | null {
+function latestSeries(available: readonly string[]): string | null {
   return available.length === 0 ? null : [...available].sort(compareSeriesDesc)[0]!;
 }
 

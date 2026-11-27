@@ -265,7 +265,7 @@ export function defaultStageRequest(over: Partial<Pick<StageRequest, "party" | "
 }
 
 /** Worn-bag targets: each staged bag into the first bag slot (19-22) nothing occupies. Pure. */
-export function bagTargets(rows: readonly InventoryRow[], bags: readonly StockLine[]): EquipTarget[] {
+function bagTargets(rows: readonly InventoryRow[], bags: readonly StockLine[]): EquipTarget[] {
   const taken = new Set(rows.filter((r) => r.bag === 0 && r.slot >= 19 && r.slot <= 22).map((r) => r.slot));
   const out: EquipTarget[] = [];
   for (const b of bags) {
@@ -279,7 +279,7 @@ export function bagTargets(rows: readonly InventoryRow[], bags: readonly StockLi
 }
 
 /** Item counts by entry across a bag view. */
-export function countByItem(items: readonly { itemId: number | undefined; count: number | undefined }[]): Map<number, number> {
+function countByItem(items: readonly { itemId: number | undefined; count: number | undefined }[]): Map<number, number> {
   const out = new Map<number, number>();
   for (const it of items) if (it.itemId !== undefined) out.set(it.itemId, (out.get(it.itemId) ?? 0) + (it.count ?? 1));
   return out;
@@ -557,7 +557,7 @@ const USAGE = "usage: bun infra/fixtures/stage-party.ts --request <-|file>   |  
 
 export type CliArgs = { kind: "request"; source: string } | { kind: "example" };
 
-export function parseCliArgs(argv: readonly string[]): CliArgs {
+function parseCliArgs(argv: readonly string[]): CliArgs {
   if (argv.length === 1 && argv[0] === "--example") return { kind: "example" };
   if (argv.length === 2 && argv[0] === "--request" && argv[1]) return { kind: "request", source: argv[1] };
   throw new Error(USAGE);

@@ -67,7 +67,7 @@ function slotOf(r: Pick<ResultRun, "party">): number {
 }
 
 /** The rows of one party, in member order. */
-export function partyRowsOf(runs: readonly ResultRun[], id: string): ResultRun[] {
+function partyRowsOf(runs: readonly ResultRun[], id: string): ResultRun[] {
   return runs
     .filter((r) => r.party?.id === id)
     .sort((a, b) => slotOf(a) - slotOf(b) || a.party!.member.localeCompare(b.party!.member));
@@ -209,7 +209,7 @@ function mergedKills(parts: readonly { member: string; party: PartyDetailView }[
  * the last transfer's destination, or before the first one the map it left.
  * Null for a member that made none.
  */
-export function mapAt(instances: readonly PartyInstanceMark[], ts: number): number | null {
+function mapAt(instances: readonly PartyInstanceMark[], ts: number): number | null {
   let map: number | null = instances[0]?.from ?? null;
   for (const i of instances) {
     if (i.ts > ts) break;

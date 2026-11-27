@@ -52,7 +52,7 @@ import { SoapError, soapFromEnv, type SoapClient } from "./fixtures/soap.ts";
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
 /** Where the worldserver sees the exchange directory (the chart's mount of the `characters` subPath, plus `pdump`). */
-export const SERVER_PDUMP_DIR = "/azerothcore/env/dist/characters/pdump";
+const SERVER_PDUMP_DIR = "/azerothcore/env/dist/characters/pdump";
 
 /** A character name the core would take, and nothing a console line could be split on. */
 const NAME = /^[A-Za-z]{2,12}$/;
@@ -63,12 +63,12 @@ export function charactersDir(env: Record<string, string | undefined> = process.
 }
 
 /** A file argument: a bare name is in the characters directory, anything with a `/` is as given. */
-export function archivePath(arg: string, env: Record<string, string | undefined> = process.env): string {
+function archivePath(arg: string, env: Record<string, string | undefined> = process.env): string {
   return arg.includes("/") ? resolve(arg) : join(charactersDir(env), arg);
 }
 
 /** `<run-id>-20261023T101500Z.tar.gz`. */
-export function defaultArchiveName(runId: string, now: number): string {
+function defaultArchiveName(runId: string, now: number): string {
   return `${runId}-${new Date(now).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}.tar.gz`;
 }
 
@@ -218,7 +218,7 @@ const USAGE = `usage: bun infra/character-archive.ts <command>
 
 A file named without a "/" is in the characters directory ($WRATHBENCH_CHARACTERS_DIR, else data/characters).`;
 
-export async function main(argv: readonly string[], env: Record<string, string | undefined> = process.env): Promise<number> {
+async function main(argv: readonly string[], env: Record<string, string | undefined> = process.env): Promise<number> {
   const args = [...argv];
   const flag = (name: string): string | undefined => {
     const i = args.indexOf(name);

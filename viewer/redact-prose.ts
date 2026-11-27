@@ -59,7 +59,7 @@ export interface ProseShape {
  * Enumerated from `wrath-mcp/sdk/src/protocol.ts`. Names (`title`, `name`, `subject`)
  * are deliberately absent from every `redact` list.
  */
-export const PROSE_SHAPES: readonly ProseShape[] = [
+const PROSE_SHAPES: readonly ProseShape[] = [
   // Quest template: log text. `title` stays; `requiredNpcOrGo[].text` is the
   // objective's own sentence. The SDK keeps the same template as `QuestInfo`
   // (`state.quests`), where the wire's `objectives` is `objectivesText`.
@@ -116,7 +116,7 @@ const BY_OPCODE: ReadonlyMap<string, ProseShape[]> = (() => {
 })();
 
 /** The opcodes whose payload is replaced whole when it cannot be parsed. */
-export const PROSE_OPCODES: ReadonlySet<string> = new Set(BY_OPCODE.keys());
+const PROSE_OPCODES: ReadonlySet<string> = new Set(BY_OPCODE.keys());
 
 /** Apply one shape's paths to a fresh copy of `o`. Missing fields stay missing. */
 function applyShape(o: Record<string, unknown>, shape: ProseShape): Record<string, unknown> {
@@ -178,7 +178,7 @@ export function redactProseValue(v: unknown): unknown {
  * Every key any shape above redacts, bare (`pages[]` and `list[].key` give
  * `pages` and `key`), for the cut-fragment fallbacks.
  */
-export const PROSE_KEYS: readonly string[] = [
+const PROSE_KEYS: readonly string[] = [
   ...new Set(
     PROSE_SHAPES.flatMap((s) =>
       s.redact.map((path) => {

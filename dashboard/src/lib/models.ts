@@ -65,7 +65,7 @@ export function highestTierOf(row: Pick<ModelRowView, "tier" | "declaredTier">):
  * the roster in. The name breaks ties so the table is stable across polls
  * rather than reshuffling every 30 seconds on the server's iteration order.
  */
-export function compareModelRows(a: ModelRowView, b: ModelRowView): number {
+function compareModelRows(a: ModelRowView, b: ModelRowView): number {
   const byTier = TIER_RANK[highestTierOf(b)] - TIER_RANK[highestTierOf(a)];
   return byTier !== 0 ? byTier : a.name.localeCompare(b.name);
 }

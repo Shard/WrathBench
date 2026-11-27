@@ -216,9 +216,9 @@ async function connect(): Promise<SQL> {
  * while worlds are live, and a world whose row is gone takes no client login
  * (a camera's, a spectator's) until it ends. Kept as it is, flag and all.
  * The same rule as world.ts's REALM_MIN, REALM_MAX and WORLD_ID_RE, inlined
- * because this Job imports nothing of the fleet's; a test holds them equal.
+ * because this Job imports nothing of the fleet's.
  */
-export function isWorldRealm(row: { id: number; name: string }): boolean {
+function isWorldRealm(row: { id: number; name: string }): boolean {
   return Number.isInteger(row.id) && row.id >= 2 && row.id <= 254 && /^WrathBench w[a-z2-7]{10}$/.test(row.name);
 }
 
@@ -462,7 +462,7 @@ function harnessAccountName(raw: string): string | { error: string } {
  * comma-separated, blanks around a name ignored, uppercased and deduplicated.
  * Unset or empty is none.
  */
-export function extraAccountsOf(env: Record<string, string | undefined>): { names: string[] } | { error: string } {
+function extraAccountsOf(env: Record<string, string | undefined>): { names: string[] } | { error: string } {
   const names: string[] = [];
   for (const part of (env["WRATHBENCH_EXTRA_ACCOUNTS"] ?? "").split(",")) {
     const raw = part.trim();

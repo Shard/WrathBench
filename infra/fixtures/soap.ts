@@ -92,7 +92,7 @@ function element(xml: string, tag: string): string | undefined {
 }
 
 /** Read one SOAP response into a result or a refusal. Pure; the tests drive it with a fake server. */
-export function parseSoapResponse(status: number, body: string): { ok: true; result: string } | { ok: false; refusal: SoapRefusal } {
+function parseSoapResponse(status: number, body: string): { ok: true; result: string } | { ok: false; refusal: SoapRefusal } {
   if (status === 401) return { ok: false, refusal: { kind: "unauthorized", status, message: "the SOAP account or its password was refused" } };
   if (status === 403) {
     return { ok: false, refusal: { kind: "not_admin", status, message: "the SOAP account is below SEC_ADMINISTRATOR (gmlevel 3); SOAP runs nothing for it" } };

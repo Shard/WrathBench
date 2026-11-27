@@ -48,7 +48,7 @@ import type { TrackCore } from "./api-tails";
  * window and leave a hole in the private page's "load earlier".
  */
 export const POLL_MS = 1000;
-export const WINDOW_MAX = ENTRIES_WINDOW;
+const WINDOW_MAX = ENTRIES_WINDOW;
 
 /** The five-man bosses known by entry: elites by rank, so the rank alone does not say (`isBossKill`). */
 const NAMED_BOSSES: ReadonlySet<number> = new Set(DEADMINES_BOSSES);
@@ -60,7 +60,7 @@ const NAMED_BOSSES: ReadonlySet<number> = new Set(DEADMINES_BOSSES);
  * and most of what came after. Clamped to the run, so a time before the first
  * entry is the first window and one past the last is the tail.
  */
-export function entriesWindowAt(entries: readonly { ts: number }[], at: number, limit: number): number {
+function entriesWindowAt(entries: readonly { ts: number }[], at: number, limit: number): number {
   let lo = 0;
   let hi = entries.length - 1;
   let found = 0;

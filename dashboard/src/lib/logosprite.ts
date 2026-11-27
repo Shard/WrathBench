@@ -37,7 +37,7 @@ export interface LogoSymbol {
 const DROPPED = new Set(["xmlns", "width", "height", "style", "viewBox"]);
 
 /** One packaged SVG as a symbol. Throws on anything that is not one `<svg>` element with a viewBox. */
-export function symbolOf(svg: string, where: string): LogoSymbol {
+function symbolOf(svg: string, where: string): LogoSymbol {
   const m = /^\s*<svg\s([^>]*)>([\s\S]*)<\/svg>\s*$/.exec(svg);
   if (m === null) throw new Error(`${where}: not a single <svg> element`);
   const attrs = [...m[1]!.matchAll(/([\w:-]+)="([^"]*)"/g)].map(([, k, v]) => [k!, v!] as const);

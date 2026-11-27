@@ -122,7 +122,7 @@ export interface ClientOptions {
  * longer window would be staleness this path invents rather than staleness it
  * inherits.
  */
-export const LIVE_TTL_MS = 4_000;
+const LIVE_TTL_MS = 4_000;
 
 /** The live API's positions, as the map's delay reads them (`liveCadence`). */
 const LIVE_FEED_CADENCE: FeedCadence = { renderMs: 0, cacheMs: LIVE_TTL_MS };

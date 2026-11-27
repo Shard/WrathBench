@@ -19,7 +19,7 @@ import { ApiError, SNAPSHOT_MODE } from "../api/client";
 export const SNAPSHOT_ERROR_TEXT = "Couldn't load this view — the snapshot may be mid-refresh";
 export const SNAPSHOT_RETRYING = "; retrying…";
 /** A run the current snapshot does not publish: not a refresh, and no retry will find it. */
-export const SNAPSHOT_MISSING_TEXT = "This run isn't published in the current snapshot.";
+const SNAPSHOT_MISSING_TEXT = "This run isn't published in the current snapshot.";
 /** A route the public build withholds by design. */
 export const SNAPSHOT_WITHHELD_TEXT = "Not available on the public site.";
 

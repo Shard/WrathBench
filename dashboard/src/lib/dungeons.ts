@@ -242,7 +242,7 @@ export function dungeonPoints(rows: readonly DungeonRowView[], view: DungeonView
  * first tick at or past the latest point, since the last tick is the axis's
  * end and `timeTicks` may stop short of it.
  */
-export function clearTimeTicks(maxMs: number): number[] {
+function clearTimeTicks(maxMs: number): number[] {
   const ticks = timeTicks(Math.max(60_000, maxMs));
   const step = ticks.length > 1 ? ticks[1]! - ticks[0]! : 60_000;
   while (ticks[ticks.length - 1]! < maxMs) ticks.push(ticks[ticks.length - 1]! + step);
@@ -250,7 +250,7 @@ export function clearTimeTicks(maxMs: number): number[] {
 }
 
 /** The bosses axis: every count from none to all seven, so a step is a boss. */
-export const bossTicks = (): number[] => Array.from({ length: BOSS_NAMES.size + 1 }, (_, i) => i);
+const bossTicks = (): number[] => Array.from({ length: BOSS_NAMES.size + 1 }, (_, i) => i);
 
 /**
  * The points whose labels stand: the front of the cleared points and the

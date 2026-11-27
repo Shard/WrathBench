@@ -64,8 +64,8 @@ export interface OgTagOptions {
 export const OG_IMAGE_KEY = "v1/og.png";
 
 /** The card's title and blurb, which are the page's own — one sentence, unchanged. */
-export const OG_TITLE = "WrathBench — an agent workbench for World of Warcraft";
-export const OG_DESCRIPTION =
+const OG_TITLE = "WrathBench — an agent workbench for World of Warcraft";
+const OG_DESCRIPTION =
   "An agent workbench for World of Warcraft: AI models play WotLK through a TypeScript SDK on a private AzerothCore server.";
 /** What the picture is, for a reader who cannot see it. */
 export const OG_IMAGE_ALT =

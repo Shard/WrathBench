@@ -845,9 +845,9 @@ export interface Fixture {
   close(): void;
 }
 
-export const LIVE_RUN_2 = "fixture-live-2";
-export const LIVE_RUN_3 = "fixture-live-3";
-export const LIVE_RUN_4 = "fixture-live-4";
+const LIVE_RUN_2 = "fixture-live-2";
+const LIVE_RUN_3 = "fixture-live-3";
+const LIVE_RUN_4 = "fixture-live-4";
 
 /**
  * A camera's output for a run, in the contract's layout: `camera/clips.json`

@@ -181,7 +181,7 @@ interface CellKey {
  * providers are one record. A dimension at its default adds nothing, so a
  * record written before the dimension existed keeps its id.
  */
-export function evaluationIdOf(k: CellKey): string {
+function evaluationIdOf(k: CellKey): string {
   const parts = [COLLECTION, k.series, k.episode, k.harness, k.model, k.effort ?? "default"];
   if (k.compactWindow !== null) parts.push(`compact-${k.compactWindow}`);
   if (k.loop === "program") parts.push("loop-program");
@@ -255,7 +255,7 @@ function pathComponent(value: string): string | null {
 }
 
 /** `data/<collection>/<developer>/<model>/<uuid>.json`, the developer being the id's prefix and the rest flattened. */
-export function datastorePath(modelId: string, uuid: string): string | null {
+function datastorePath(modelId: string, uuid: string): string | null {
   const [dev, ...rest] = modelId.split("/");
   const developer = pathComponent(dev ?? "");
   const parts = rest.map(pathComponent);
@@ -271,7 +271,7 @@ function deploymentOf(runs: readonly ResultRun[]): "externally_managed" | "unkno
 }
 
 /** EEE's `model_availability` names for the catalogue's three weights verdicts. */
-export const MODEL_AVAILABILITY: Readonly<Record<Weights, "open_weights" | "closed_weights" | "unknown">> = {
+const MODEL_AVAILABILITY: Readonly<Record<Weights, "open_weights" | "closed_weights" | "unknown">> = {
   open: "open_weights",
   closed: "closed_weights",
   unknown: "unknown",
@@ -282,7 +282,7 @@ export const MODEL_AVAILABILITY: Readonly<Record<Weights, "open_weights" | "clos
  * the recorded slug, which is the spelling an entry may list instead (`-free`
  * on an OpenCode Zen id is part of the slug, not a suffix the catalogue strips).
  */
-export function availabilityOf(id: string, recorded: string): (typeof MODEL_AVAILABILITY)[Weights] {
+function availabilityOf(id: string, recorded: string): (typeof MODEL_AVAILABILITY)[Weights] {
   const w = weightsOf(id);
   return MODEL_AVAILABILITY[w !== "unknown" ? w : weightsOf(recorded)];
 }
@@ -604,7 +604,7 @@ export interface Args {
   bundle: string | null;
 }
 
-export function parseArgs(argv: readonly string[]): Args | { error: string } {
+function parseArgs(argv: readonly string[]): Args | { error: string } {
   const a: Args = { base: null, runs: null, series: undefined, includeFree: false, out: null, bundle: null };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]!;

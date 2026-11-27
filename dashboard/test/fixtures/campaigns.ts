@@ -22,7 +22,7 @@ const CONTROL = "harbor.example.test/wrathbench/runner:harness-0.5-920-gaaaaaaa"
 const BRANCH = "harbor.example.test/wrathbench/runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /** A square with nothing in it yet; tests spread over it. */
-export function square(column: string, over: Partial<Square> = {}): Square {
+function square(column: string, over: Partial<Square> = {}): Square {
   return {
     column,
     runs: 0,

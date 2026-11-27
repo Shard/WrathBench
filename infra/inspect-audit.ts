@@ -151,7 +151,7 @@ export interface Reduced {
   lines: string[];
 }
 
-export function parseReduced(text: string): Reduced {
+function parseReduced(text: string): Reduced {
   const r: Reduced = { files: 0, bytes: 0, records: 0, first: null, last: null, counts: [], matched: null, lines: [] };
   const num = (s: string | undefined): number | null => (s === undefined || s === "-" ? null : Number(s));
   for (const line of text.split("\n")) {

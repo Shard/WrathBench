@@ -623,7 +623,7 @@ export function nearbyFindings(key: string, body: Record<string, unknown>, live:
 /* ---------------------------------------------------------- re-projection --- */
 
 /** Sort keys recursively, so a compare is about content and never about order. */
-export function canonical(value: unknown): unknown {
+function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value === null || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};

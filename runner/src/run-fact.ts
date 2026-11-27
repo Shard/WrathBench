@@ -47,7 +47,7 @@ export const RESUME_RECORD = "resume";
  * the lane gate. Every other pause — a provider's refusal, a dead login, a CLI
  * failing on its host, a stalled observation — is on the ladder.
  */
-export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, PARTY_PAUSE]);
+const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, PARTY_PAUSE]);
 
 /** Whether a pause of this reason cools on the backoff ladder and counts toward its streak. */
 export function onPauseLadder(reason: unknown): boolean {

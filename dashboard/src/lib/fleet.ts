@@ -325,7 +325,7 @@ const MODELS_SHOWN = 2;
  * with the full list in the cell's title. A job with no models resolved falls
  * back to the ref itself, which is what it was called.
  */
-export function jobModelLabel(job: Pick<FleetJobView, "ref" | "models">): string {
+function jobModelLabel(job: Pick<FleetJobView, "ref" | "models">): string {
   const models = job.models.map(modelDisplay);
   if (models.length === 0) return job.ref;
   if (models.length <= MODELS_SHOWN) return models.join(", ");

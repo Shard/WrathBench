@@ -212,7 +212,7 @@ export function representativeEfforts<E extends EffortEntry>(rows: readonly E[])
  * (`27b`, `a12b`) is not a version, and neither is a date (`0731`,
  * `20251001`): four digits or more ends a version and never starts one.
  */
-export function modelVersion(model: string | null | undefined): number[] | null {
+function modelVersion(model: string | null | undefined): number[] | null {
   const tokens = baseSlug(model ?? "").split("-");
   for (let i = 0; i < tokens.length; i++) {
     const m = /^[a-z]*(\d+(?:\.\d+)*)$/.exec(tokens[i]!);

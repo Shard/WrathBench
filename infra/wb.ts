@@ -487,7 +487,7 @@ export function plan(entry: Entry, opts: Options, args: readonly string[]): Plan
 
 // ------------------------------------------------------------------ help
 
-export function topHelp(opts: Options): string {
+function topHelp(opts: Options): string {
   const lines = [
     "usage: bun wb [--local] [-n <namespace>] [--release <name>] <group> <command> [args…]",
     "",
@@ -509,7 +509,7 @@ export function topHelp(opts: Options): string {
   return lines.join("\n");
 }
 
-export function groupHelp(group: string, opts: Options): string {
+function groupHelp(group: string, opts: Options): string {
   const clusterOpts: Options = { ...opts, target: "cluster" };
   const localOpts: Options = { ...opts, target: "local" };
   const lines = [`usage: bun wb ${group} <command> [args…]`, "", `${GROUPS[group]}.`, ""];

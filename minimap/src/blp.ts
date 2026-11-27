@@ -40,7 +40,7 @@ export interface BlpImage {
   rgba: Uint8Array;
 }
 
-export function parseHeader(data: Uint8Array): BlpHeader {
+function parseHeader(data: Uint8Array): BlpHeader {
   if (data.byteLength < HEADER_SIZE) throw new Error("BLP too short for header");
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
   if (v.getUint32(0, false) !== 0x424c5032) throw new Error("not a BLP2 file");

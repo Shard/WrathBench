@@ -67,7 +67,7 @@ export function killEntriesOf(ends: readonly EndCondition[]): number[] {
  * for a kill whose victim this character's unit cache never held. Undefined
  * for any other guid.
  */
-export function creatureEntryOfGuid(guid: string): number | undefined {
+function creatureEntryOfGuid(guid: string): number | undefined {
   try {
     const g = BigInt(guid);
     const high = Number(g >> 48n);

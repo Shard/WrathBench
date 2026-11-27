@@ -389,7 +389,7 @@ export const CODEX_ITEM_BODY_CHARS = 4_000;
  * names no field of it. The trajectory scrubs it of the run's secrets as it
  * scrubs every record.
  */
-export function codexItemRecord(turn: number, item: Record<string, unknown>): { t: "codex_item"; [key: string]: unknown } {
+function codexItemRecord(turn: number, item: Record<string, unknown>): { t: "codex_item"; [key: string]: unknown } {
   const json = JSON.stringify(item);
   const type = item["type"];
   return {
@@ -416,7 +416,7 @@ function cut(key: string, text: string | null): Record<string, unknown> {
  * reduced to its size. Trajectory only, like `codex_item`: nothing of it
  * reaches the model, and the public projection names no field of it.
  */
-export function codexToolCallRecord(turn: number, c: CodexToolCall): { t: "codex_tool_call"; [key: string]: unknown } {
+function codexToolCallRecord(turn: number, c: CodexToolCall): { t: "codex_tool_call"; [key: string]: unknown } {
   return {
     t: "codex_tool_call",
     turn,

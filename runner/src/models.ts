@@ -324,7 +324,7 @@ export function parseWorldsMode(raw: unknown, where: string): WorldsMode {
   return raw as WorldsMode;
 }
 
-export const RUN_PODS_MODES = ["off", "probes"] as const;
+const RUN_PODS_MODES = ["off", "probes"] as const;
 export type RunPodsMode = (typeof RUN_PODS_MODES)[number];
 
 export function parseRunPodsMode(raw: unknown, where: string): RunPodsMode {

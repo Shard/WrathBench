@@ -99,7 +99,7 @@ export interface UnloadedReport {
 }
 
 /** The latest tool result in the window, or undefined before the first. */
-export function lastToolResult(messages: readonly ChatMessage[]): string | undefined {
+function lastToolResult(messages: readonly ChatMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;
     if (m.role === "assistant") return undefined;
@@ -109,7 +109,7 @@ export function lastToolResult(messages: readonly ChatMessage[]): string | undef
 }
 
 /** The program's report out of a snippet result's console, or undefined when the tick made none. */
-export function parseReport(text: string | undefined): TickReport | UnloadedReport | undefined {
+function parseReport(text: string | undefined): TickReport | UnloadedReport | undefined {
   if (text === undefined) return undefined;
   const lines = text.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {

@@ -189,7 +189,7 @@ export function renderTileManifest(manifest: TileManifest, now: number): string 
  * Split the local set against the manifest. Pure, so the whole decision is
  * testable without a bucket or a disk full of PNGs.
  */
-export function planTileUploads(local: LocalTile[], manifest: TileManifest, hashes: Map<string, string>): TilePlan {
+function planTileUploads(local: LocalTile[], manifest: TileManifest, hashes: Map<string, string>): TilePlan {
   const upload: LocalTile[] = [];
   const unchanged: LocalTile[] = [];
   for (const tile of local) {

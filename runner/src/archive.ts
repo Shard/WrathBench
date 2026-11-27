@@ -85,7 +85,7 @@ export function runActivityAge(dir: string, now: number): number | null {
  * only place the fleet names a run. Only recent records count: a job log
  * holds every run the job ever started.
  */
-export function recentFleetRunIds(runsDir: string, now: number, windowMs = HELD_MS): Set<string> {
+function recentFleetRunIds(runsDir: string, now: number, windowMs = HELD_MS): Set<string> {
   const out = new Set<string>();
   let names: string[];
   try {
@@ -237,7 +237,7 @@ export interface RunIdPlan {
  * duplicates are dropped — renaming the same directory twice would throw on
  * the second and read as a failure that never happened.
  */
-export function parseRunIds(value: string): string[] {
+function parseRunIds(value: string): string[] {
   const text = value.startsWith("@") ? readFileSync(value.slice(1), "utf8") : value;
   const out: string[] = [];
   for (const raw of text.split(/[,\n]/)) {

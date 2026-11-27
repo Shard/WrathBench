@@ -60,7 +60,7 @@ import {
 /** The video's frame rate; every frame's time on screen is a whole number of these. */
 export const VIDEO_FPS = 8;
 /** The event's own frame stays on screen this many video frames longer (one second). */
-export const HOLD_TICKS = 8;
+const HOLD_TICKS = 8;
 /** Of an event's burst, the frames this long before its moment are kept whole… */
 export const BURST_LEAD_MS = 8_000;
 /** …and this long after; the rest of the burst is thinned like interval frames. */
@@ -73,7 +73,7 @@ export const TIMEMAP_TOLERANCE_MS = 2_000;
 const BURST_GAP_MS = 5_000;
 
 /** A frame as the video shows it: for `ticks` video frames. */
-export interface Shot {
+interface Shot {
   frame: FrameLine;
   ticks: number;
   /** The first shot of a moment's window: its detail goes on screen here, and a chapter opens if it is one. */
@@ -137,7 +137,7 @@ export function planShots(all: readonly FrameLine[], o: { intervalMs: number }):
 }
 
 /** The shots cut into parts: a part closes when the next frame would take it past `PART_MS` of run time. Pure. */
-export function splitParts(shots: readonly Shot[], partMs: number = PART_MS): Shot[][] {
+function splitParts(shots: readonly Shot[], partMs: number = PART_MS): Shot[][] {
   const parts: Shot[][] = [];
   for (const s of shots) {
     const cur = parts.at(-1);
@@ -204,7 +204,7 @@ export function timelineOf(part: readonly Shot[], index: number, offset: number,
  * kept around it puts every dropped frame within `tolerance` of its own run
  * time. The first and last points always stay. Pure.
  */
-export function compactTimemap(points: readonly TimemapPoint[], tolerance: number = TIMEMAP_TOLERANCE_MS): TimemapPoint[] {
+function compactTimemap(points: readonly TimemapPoint[], tolerance: number = TIMEMAP_TOLERANCE_MS): TimemapPoint[] {
   if (points.length <= 2) return points.map((p) => [p[0], p[1]]);
   const out: TimemapPoint[] = [[points[0]![0], points[0]![1]]];
   let a = 0;
@@ -255,7 +255,7 @@ export function subtitlesOf(seconds: number, details: PartTimeline["details"], m
 }
 
 /** The concat demuxer's list: each frame for its whole number of video frames. */
-export function concatListOf(part: readonly Shot[], dir: string): string {
+function concatListOf(part: readonly Shot[], dir: string): string {
   const quote = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
   const rows = part.map((s) => `file ${quote(join(dir, s.frame.file))}\nduration ${(s.ticks / VIDEO_FPS).toFixed(4)}`);
   // The demuxer ignores the last entry's duration unless the file is listed again.

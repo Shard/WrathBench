@@ -119,7 +119,7 @@ export function capEntryText(text: string): { text: string; truncated: boolean }
 }
 
 /** One entry as `read_log` prints it. Unobserved stamps render as `?`. */
-export function formatEntry(e: EpisodicEntry): string {
+function formatEntry(e: EpisodicEntry): string {
   const level = typeof e.level === "number" ? `L${e.level}` : "L?";
   const zone = e.zone !== undefined && e.zone.length > 0 ? e.zone : "?";
   return `[turn ${e.turn}, ${level}, ${zone}] ${e.text}`;

@@ -294,7 +294,7 @@ export function runLinesLayout(lines: readonly EntryLine[], box: ChartBox): RunL
 }
 
 /** The vertical pitch of spread pucks: one puck and its separation ring, edge to edge. */
-export const MARK_PITCH = 2 * MARK_RING_R;
+const MARK_PITCH = 2 * MARK_RING_R;
 
 /**
  * Where each puck is drawn, vertically: at its own end when that is clear,
@@ -310,7 +310,7 @@ export const MARK_PITCH = 2 * MARK_RING_R;
  * a stack of coins — the separation ring still marks each edge — rather than
  * leave the plot.
  */
-export function spreadMarks(marks: readonly { cx: number; cy: number }[], box: ChartBox): number[] {
+function spreadMarks(marks: readonly { cx: number; cy: number }[], box: ChartBox): number[] {
   const ys = marks.map((m) => m.cy);
   const top = box.y1 + MARK_RING_R;
   const floor = box.y0 - MARK_RING_R;

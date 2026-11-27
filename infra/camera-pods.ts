@@ -54,7 +54,7 @@ export function readCameraTemplate(env: Record<string, string | undefined> = pro
   }
 }
 
-export function cameraPodName(template: Pod, world: string): string {
+function cameraPodName(template: Pod, world: string): string {
   return `${template.metadata.generateName ?? "camera-"}${world}`;
 }
 
@@ -74,7 +74,7 @@ export interface CameraPodOptions {
 }
 
 /** The template with this camera filled in. */
-export function buildCameraPod(template: Pod, o: CameraPodOptions): Pod {
+function buildCameraPod(template: Pod, o: CameraPodOptions): Pod {
   if (!/^(shared|w[a-z2-7]{10})$/.test(o.world)) throw new Error(`camera pod: ${JSON.stringify(o.world)} is not a world`);
   if (!/^[A-Za-z0-9.-]+:\d+$/.test(o.target)) throw new Error(`camera pod: ${JSON.stringify(o.target)} is not host:port`);
   const pod = structuredClone(template);

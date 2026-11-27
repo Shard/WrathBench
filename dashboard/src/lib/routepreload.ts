@@ -31,11 +31,11 @@ import type { Groups } from "@viewer/groups";
 import { episodeParam } from "./episodes";
 import { groupsOf } from "./nav";
 
-/** The homepage's ladder tier: `HOME_EPISODE` in `lib/homeladder.ts`, restated to keep that module out of the entry chunk (a test holds them equal). */
-export const HOME_PRELOAD_EPISODE = "e90";
+/** The homepage's ladder tier: `HOME_EPISODE` in `lib/homeladder.ts`, restated to keep that module out of the entry chunk. */
+const HOME_PRELOAD_EPISODE = "e90";
 
 /** What a preload reads of the router's arguments. */
-export interface PreloadArgs {
+interface PreloadArgs {
   params: Readonly<Record<string, string | undefined>>;
   location: { query: Readonly<Record<string, string | string[] | undefined>> };
   intent: string;

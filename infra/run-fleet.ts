@@ -562,7 +562,7 @@ async function spawnSmoke(smoke: PreflightSmoke, deadline: number): Promise<Pref
  * end so the record names every script that failed, not just the first.
  * Results are reported in config order. Pure apart from the injected runner.
  */
-export async function runPreflight(
+async function runPreflight(
   pf: FleetPreflight,
   server: ServerIdentity,
   run: SmokeRunner = spawnSmoke,

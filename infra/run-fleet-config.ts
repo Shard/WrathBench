@@ -751,7 +751,7 @@ export function fail(msg: string): never {
  * Roster-policy and shape checks for roster entries. `where` names the
  * entry's home (`roster:<name>`) for the error message.
  */
-export function validateEntries(where: string, entries: unknown): RosterSpec[] {
+function validateEntries(where: string, entries: unknown): RosterSpec[] {
   if (!Array.isArray(entries)) fail(`${where}: entries must be a JSON array`);
   const out: RosterSpec[] = [];
   for (const e of entries as RosterSpec[]) {
@@ -876,7 +876,7 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
  * Parse the optional top-level `preflight` block. Absent means "disabled with
  * no smokes" — an older config keeps working unchanged.
  */
-export function parsePreflight(raw: unknown): FleetPreflight {
+function parsePreflight(raw: unknown): FleetPreflight {
   if (raw === undefined) return DEFAULT_PREFLIGHT;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config: preflight must be a JSON object");

@@ -38,7 +38,7 @@ import { EPISODES, isEpisodeId } from "./episodes";
 export const STALE_FALLBACK_MS = 12 * 60 * 60_000;
 
 /** Pause reasons that are the provider's doing, and therefore the model's problem. */
-export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", "rate-limited", "provider-unresponsive"]);
+const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", "rate-limited", "provider-unresponsive"]);
 
 /**
  * The pause a run takes when its observation stops arriving: the sandbox

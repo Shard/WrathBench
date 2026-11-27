@@ -78,7 +78,7 @@ export function lastCallOfLine(line: string): CodexLastCall | undefined {
  * the chunk starts mid-file: its first line is then a fragment and is skipped.
  * A malformed or unusable line is passed over for the one before it.
  */
-export function lastCallOfText(text: string, partialHead: boolean): CodexLastCall | undefined {
+function lastCallOfText(text: string, partialHead: boolean): CodexLastCall | undefined {
   const lines = text.split("\n");
   if (partialHead) lines.shift();
   for (let k = lines.length - 1; k >= 0; k--) {
@@ -275,7 +275,7 @@ export function rateLimitsOfLine(line: string): UsageWindow[] | undefined {
  * It is the model the CLI asked for; a mid-turn reroute by the server is not
  * persisted (exec prints it on stdout, where the driver records it).
  */
-export function turnModelOfLine(line: string): string | undefined {
+function turnModelOfLine(line: string): string | undefined {
   if (!line.includes('"turn_context"')) return undefined;
   let rec: unknown;
   try {
@@ -356,7 +356,7 @@ const TOOL_ITEM_TYPES = new Set(["custom_tool_call", "custom_tool_call_output", 
  * `input_image` part (what `view_image` returns) as its type and the length
  * of its URL, never the image itself.
  */
-export function toolOutputOf(raw: unknown): unknown {
+function toolOutputOf(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw ?? null;
   return raw.map((part: unknown) => {
     if (part === null || typeof part !== "object") return part;

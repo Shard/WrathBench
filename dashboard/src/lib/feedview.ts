@@ -58,7 +58,7 @@ export type ExpandPreset = (typeof EXPAND_PRESETS)[number];
  * purpose: the preset is four choices a reader makes in one click, not a
  * per-type matrix.
  */
-export type BlockKind =
+type BlockKind =
   /** The model's own reply text. */
   | "response"
   /** A tool call's input and its result — snippet code, args, output — and whether a snippet's card is open at all. */
@@ -94,7 +94,7 @@ export const EXPAND_LABELS: Record<ExpandPreset, string> = {
  * without scrolling past console dumps to find it, and it is one click from
  * either neighbour.
  */
-export const EXPAND_DEFAULT: ExpandPreset = "responses";
+const EXPAND_DEFAULT: ExpandPreset = "responses";
 
 const EXPAND_KEY = "wrathbench.runview.expand";
 

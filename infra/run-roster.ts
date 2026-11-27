@@ -373,7 +373,7 @@ const RUNNER_ENTRY = join(REPO_ROOT, "runner", "src", "run.ts");
 // a different error).
 
 /** True when this process runs inside the runner image, not on the host. */
-export function inContainer(env: Record<string, string | undefined> = process.env): boolean {
+function inContainer(env: Record<string, string | undefined> = process.env): boolean {
   return env["WRATHBENCH_IN_CONTAINER"] === "1";
 }
 
@@ -808,7 +808,7 @@ export function ignoredStart(entry: Pick<RosterSpec, "race" | "class" | "chooseS
 }
 
 /** The dry run's start phrase for one spec: what the run starts as, from where, and what of the entry's it ignores. */
-export function startLine(s: Pick<Resolved, "race" | "class" | "chooseStart" | "startFrom" | "startIgnored" | "episode">): string {
+function startLine(s: Pick<Resolved, "race" | "class" | "chooseStart" | "startFrom" | "startIgnored" | "episode">): string {
   const what = s.chooseStart
     ? "race and class chosen by the model at createSession (the entry's chooseStart)"
     : `race ${s.race}, class ${s.class} fixed by ${
@@ -1000,7 +1000,7 @@ export function isTainted(defers: number): boolean {
 }
 
 /** Human-readable rungs for --help and the dry-run plan ("1m/3m/.../6h"). */
-export function ladder(rungs: readonly number[]): string {
+function ladder(rungs: readonly number[]): string {
   return rungs
     .map((m) => (m >= 60 * 60_000 ? `${m / (60 * 60_000)}h` : `${m / 60_000}m`))
     .join("/");
@@ -1008,7 +1008,7 @@ export function ladder(rungs: readonly number[]): string {
 
 export const DEFER_LADDER = ladder(DEFER_BACKOFF_MS);
 export const RESUME_LADDER = ladder(RESUME_BACKOFF_MS);
-export const DEFER_TAINT_AFTER = DEFER_BACKOFF_MS.length + 1;
+const DEFER_TAINT_AFTER = DEFER_BACKOFF_MS.length + 1;
 
 /**
  * What a loop cycle should do with one spec, given its defer state.

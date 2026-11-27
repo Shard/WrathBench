@@ -16,7 +16,7 @@
  */
 
 /** The manifest's URL for a snapshot base, exactly as the snapshot client builds it. */
-export function manifestUrl(base: string): string {
+function manifestUrl(base: string): string {
   return `${base.trim().replace(/\/+$/, "")}/v1/manifest.json`;
 }
 

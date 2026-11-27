@@ -41,9 +41,9 @@ export function failAndExit(msg: string): never {
 /** JSON that survives a bigint (guids, money). */
 export const show = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x));
 
-export type Verdict = "PASS" | "FAIL" | "SKIP" | "INFO";
+type Verdict = "PASS" | "FAIL" | "SKIP" | "INFO";
 
-export interface Checks {
+interface Checks {
   /** Every verdict so far, in order. */
   results: { verdict: Verdict; name: string; detail: string }[];
   report(verdict: Verdict, name: string, detail: string): void;

@@ -27,7 +27,7 @@ import { isRecord } from "../runner/src/values";
  * How much of the index's end is read. A line is about 100 bytes, so this holds
  * well over a hundred; a frame is looked for only among them.
  */
-export const TAIL_BYTES = 16 * 1024;
+const TAIL_BYTES = 16 * 1024;
 /** A frame larger than this is not a 1280×720 still; it is not served. */
 export const FRAME_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -58,7 +58,7 @@ function openPlain(path: string): number | null {
  * newline yet is kept, since a JSON object cut short does not parse and is
  * dropped there; the first line of a window that starts mid-file is not.
  */
-export function tailLines(path: string, bytes = TAIL_BYTES): string[] {
+function tailLines(path: string, bytes = TAIL_BYTES): string[] {
   const fd = openPlain(path);
   if (fd === null) return [];
   try {

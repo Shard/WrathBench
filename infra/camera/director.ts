@@ -61,7 +61,7 @@ export const IDLE_CHECK_MS = 15_000;
 /** With no subject, how often the director says it is idle, so a quiet log reads as idle and not as hung. */
 export const IDLE_LOG_MS = 30 * 60_000;
 /** Out of the world this long and still not back in: `STUCK:`, and again each time this long passes. */
-export const STUCK_MS = 5 * 60_000;
+const STUCK_MS = 5 * 60_000;
 /** Between a left `run()` and the next login attempt. */
 export const RETRY_MS = 15_000;
 /** The default for `CAMERA_RESTART_MINUTES`: the shortest OOM seen on the reference node was 76 min after a client start. */
@@ -72,7 +72,7 @@ export const QUIT_WAIT_MS = 30_000;
  * A 1280×720 JPEG at q75 under this is a flat field (a black frame is about
  * 25 KB; a scene is 100 KB and up): a frame not drawn yet, never kept.
  */
-export const MIN_FRAME_BYTES = 32_000;
+const MIN_FRAME_BYTES = 32_000;
 /**
  * After the zone text is up, how long to watch for the intro cinematic a new
  * character's first login plays. It starts a fade and a frame after the loading
@@ -86,7 +86,7 @@ export const CINEMATIC_WAIT_MS = 5_000;
  * foggy scene under the blank threshold varies in size from frame to frame,
  * so it never counts.
  */
-export const BLANK_RELOG_MS = 3 * 60_000;
+const BLANK_RELOG_MS = 3 * 60_000;
 /**
  * Stops a cinematic only while one plays. `StopCinematic()` on a cinematic the
  * client has latched but not yet started leaves its fade-out at black for good,

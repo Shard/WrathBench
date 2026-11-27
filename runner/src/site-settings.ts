@@ -47,8 +47,8 @@ export interface SiteSettings {
 }
 
 const SERIES = /^\d+\.\d+$/;
-export const NAME_MAX = 40;
-export const ABOUT_MAX = 20_000;
+const NAME_MAX = 40;
+const ABOUT_MAX = 20_000;
 export const HOME_MAX = 200;
 const HEX = /^#[0-9a-fA-F]{6}$/;
 /** A path in the site: segments of unreserved characters, then an optional plain query. */

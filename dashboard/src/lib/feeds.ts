@@ -60,7 +60,7 @@ export interface Feeds {
  * build that was current when it loaded. A null on either side is "cannot
  * tell" and never stale — an unidentifiable build must not nag.
  */
-export function isStaleBuild(first: string | null | undefined, current: string | null | undefined): boolean {
+function isStaleBuild(first: string | null | undefined, current: string | null | undefined): boolean {
   if (first === null || first === undefined) return false;
   if (current === null || current === undefined) return false;
   return first !== current;
