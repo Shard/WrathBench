@@ -35,6 +35,7 @@
  */
 
 import type { EntrySummary } from "./api-types";
+import { isRecord } from "../src/values";
 
 /** The placeholder a redacted value leaves behind, so its absence is visible. */
 export const REDACTED_PROSE = "[redacted]";
@@ -116,10 +117,6 @@ const BY_OPCODE: ReadonlyMap<string, ProseShape[]> = (() => {
 
 /** The opcodes whose payload is replaced whole when it cannot be parsed. */
 export const PROSE_OPCODES: ReadonlySet<string> = new Set(BY_OPCODE.keys());
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
 
 /** Apply one shape's paths to a fresh copy of `o`. Missing fields stay missing. */
 function applyShape(o: Record<string, unknown>, shape: ProseShape): Record<string, unknown> {

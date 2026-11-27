@@ -202,12 +202,6 @@ export const LOCAL_PRICE: PriceRow = {
   note: "local — served from the operator's own hardware, no marginal token cost",
 };
 
-/**
- * The free/local/paid split is a model property decided once in
- * `runner/src/model-cost.ts` (the scheduler reads the same verdict);
- * the predicates are re-exported so existing callers keep their names.
- */
-export { isFreeSlug, isLocalBase } from "../src/model-cost";
 
 /*
  * Open-model prices, synced from OpenRouter rather than typed in.
@@ -425,8 +419,6 @@ function isCliReported(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * `runner/src/model-cost.ts`'s.
  */
 
-/* Two api bases name the same endpoint (`runner/src/platform.ts`, where the price sync reads it too). */
-export { sameBase };
 
 /** The hand-held endpoint row for a run at a date, or null when no row names its base and id. */
 export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: number | null = null): PriceRow | null {

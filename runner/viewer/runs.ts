@@ -14,14 +14,6 @@ import { fanoutSession, runSession } from "./runs-source";
 import { characterSamplesOf, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, readStateSamples } from "../src/run-reader";
 import { num, openReadonly, runDir, runPath, stateColumns } from "../src/run-list";
 
-/*
- * The row and sample shapes live in `api-types.ts` — the type-only contract the
- * dashboard imports too — and are re-exported here so every existing importer
- * of this module keeps working.
- */
-export type { ComparabilityView, RunRow, StatePoint } from "./api-types";
-
-
 /** A state row's columns as a `StatePoint`: the one mapping both homes go through. */
 function statePointOfRow(r: Record<string, unknown>): StatePoint {
   return {

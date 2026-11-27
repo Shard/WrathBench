@@ -1,11 +1,10 @@
 /**
  * What a reader needs to know about a recorded request's prompt — its message
  * count, system and prompt characters — off either shape of the `request`
- * record (`request-record.ts`, which re-exports all of this unchanged). Its
- * own module because these read a record and nothing else: the run totals
- * (`run-totals.ts`), which the collector and the viewer derive from every
- * trajectory, need them and not the context renderer the rebuild of a slim
- * request is made of.
+ * record (`request-record.ts`). Its own module because these read a record
+ * and nothing else: the run totals (`run-totals.ts`), which the collector and
+ * the viewer derive from every trajectory, need them and not the context
+ * renderer the rebuild of a slim request is made of.
  */
 
 /** What a reader needs to know about a request record's prompt, either shape. */

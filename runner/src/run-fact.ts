@@ -25,6 +25,7 @@ import { ARCHIVE_DIR } from "./archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt } from "./heartbeat";
 import type { RunFactCache } from "./run-fact-cache";
 import { servingSchema, type ServingSpec } from "./serving";
+import { num } from "./values";
 
 /** The trajectory record the loop appends for a model turn (archive-dir.ts). */
 export const MODEL_RESPONSE_RECORD = "response";
@@ -258,9 +259,6 @@ export const LIVE_WINDOW_MS = 120_000;
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 
-function num(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
 function str(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }

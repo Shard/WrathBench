@@ -21,6 +21,7 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMES_DIR, FRAMES_INDEX, frameFile } from "../../infra/camera/layout";
 import { cameraDir, isoOrNull, plain } from "./camera";
+import { isRecord } from "../src/values";
 
 /**
  * How much of the index's end is read. A line is about 100 bytes, so this holds
@@ -36,8 +37,6 @@ export interface LatestFrame {
   /** When the camera took it, ISO. */
   t: string;
 }
-
-const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /** Open a plain file without following a link, or null. */
 function openPlain(path: string): number | null {

@@ -60,10 +60,8 @@
 
 import { promptHash } from "./comparability-tuple";
 import { CONTEXT_POLICY, renderWindow, type ChatMessage, type HistoryMessage } from "./context";
+/* A request record's stats and its shape test are `request-stats.ts`'s, which a reader of records loads without the context. */
 import { isSlimRequest, requestStats } from "./request-stats";
-
-/* A request record's stats and its shape test are `request-stats.ts`'s, which a reader of records loads without the context; re-exported here unchanged. */
-export { isSlimRequest, messageChars, requestStats, requestStatsOf, type RequestStats } from "./request-stats";
 
 /** The shape version this build writes. It rebuilds this one and version 1 (no fold). */
 export const SLIM_REQUEST_VERSION = 2;

@@ -25,13 +25,8 @@
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ChatMessage } from "./context";
-import {
-  HistoryRebuilder,
-  isSlimRequest,
-  rebuildSlimRequest,
-  slimRequest,
-  systemTextMatches,
-} from "./request-record";
+import { HistoryRebuilder, rebuildSlimRequest, slimRequest, systemTextMatches } from "./request-record";
+import { isSlimRequest } from "./request-stats";
 
 export interface RequestVerdict {
   /** 1-based line of the request in `trajectory.jsonl`. */

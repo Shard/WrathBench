@@ -42,6 +42,7 @@ import { LIVE_WINDOW_MS, campaignFieldsOf, closeBareSession, itemSamplesOf } fro
 import { runCredentialOf } from "../src/run-credential";
 import { fanoutLead, parseFanoutSessionId } from "../src/run-reader";
 import { sessionStoreOf } from "../src/session-store";
+import { num } from "../src/values";
 
 // ------------------------------------------------------------- the row shapes
 
@@ -458,9 +459,6 @@ export function clickhouseErrorMessage(status: number, body: string): string {
 
 // ----------------------------------------------------------------- the mapping
 
-function num(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
 function str(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }

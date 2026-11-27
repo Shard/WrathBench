@@ -41,6 +41,7 @@ import { platformOf } from "./platform";
 import { openRunDb, RUN_DB_FILE } from "./rundb";
 import { isBareSessionDir } from "./session-store";
 import { TraceSampler, TurnIndex, type StateSample } from "./trace-samples";
+import { num } from "./values";
 
 export { RUN_TURNS, TurnIndex, type StateSample } from "./trace-samples";
 
@@ -162,7 +163,6 @@ export interface RunRowRecord {
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 function readJson(path: string): Record<string, unknown> | null {
   try {

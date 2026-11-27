@@ -42,6 +42,7 @@ import { driverEntry } from "./drivers";
 import { messageChars, requestStatsOf } from "./request-stats";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
 import { SEGMENT_MARKS, segmentsFrom, type SegmentMark } from "./sessions";
+import { num } from "./values";
 
 const NEWLINE = 0x0a;
 
@@ -170,7 +171,6 @@ export function claudeTurnUsage(rec: Record<string, unknown>): ClaudeTurnUsage |
   const raw = rec["usageRaw"];
   if (raw === null || typeof raw !== "object") return null;
   const u = raw as Record<string, unknown>;
-  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const completion = num(u["output_tokens"]);
   if (completion === null) return null;
   let iterations: number[] = [];
