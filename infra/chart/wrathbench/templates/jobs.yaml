@@ -18,6 +18,27 @@ every upgrade, not just the install:
 
 Weights order them: db-import (0) then bootstrap (10). before-hook-creation
 deletion is what keeps the second upgrade from colliding with the first Job.
+
+A viewer release (`image.viewerTag` alone, infra/k8s-release-viewer.sh) is a
+Helm upgrade too, so both run on it, with the fleet and the realm live. Helm
+runs post-upgrade hooks on every upgrade, changed or not, and skipping them
+would leave a values pin made while the viewer is ahead (a bigger pool, say)
+unconverged. They are kept on `image.tag`, never
+the viewer group's tag, so they run the fleet's code, which already converged
+this database, against the values it converged on. That makes each step a
+no-op: dbimport finds no update it has not applied, the realmlist upsert
+writes the values the row already holds and never touches the columns the
+worldserver keeps (flag, population), the prune finds no row it has not
+already removed and keeps every world's (`isWorldRealm`), the runner
+account's verifier matches so it is not rewritten, pool and tenant accounts
+are created only when missing, and the tenant `account_access` delete finds
+none. What a viewer pin does add: the HelmRelease is Ready only after both
+finish (wait-for-db, then dbimport's scan), and a hook that fails fails the
+upgrade, as in any release. If the deployment's Secret or these values
+drifted since the last upgrade, the next upgrade of either kind converges
+them; that is not new, but on a viewer pin it lands with runs live.
+`infra/viewer-tag-chart.test.ts` holds both Jobs byte-identical when only the
+viewer group's tag moves.
 */}}
 {{- $ctx := . -}}
 apiVersion: batch/v1

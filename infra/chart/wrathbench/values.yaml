@@ -13,6 +13,15 @@ image:
   # SHA, produced by infra/build-images.sh. `latest` is refused by the chart:
   # a mutable tag is not a deployment source (GitHub issue 7).
   tag: ""
+  # The viewer group's tag: the viewer, the publisher and the collector, the
+  # three workloads `groups.viewer` switches. Empty is `tag`, which is how
+  # every deployment that does not set it runs. A viewer release
+  # (infra/k8s-release-viewer.sh) sets it alone, so new viewer code rolls those
+  # three and nothing else: the fleet, the runner pod, the run pods, the
+  # worldserver and the hook Jobs stay on `tag`, and so does the harness stamp
+  # every pod carries (WRATHBENCH_HARNESS_VERSION). A full release sets it back
+  # to its own tag, or clears it. The same refusal of "" and `latest` applies.
+  viewerTag: ""
   pullPolicy: IfNotPresent
   names:
     worldserver: wrathbench-worldserver

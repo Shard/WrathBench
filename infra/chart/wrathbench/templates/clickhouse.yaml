@@ -394,7 +394,11 @@ spec:
 The collector (collector/README.md): tails data/runs into ClickHouse.
 
 The runner image, not oven/bun as under compose, for the reason the publisher
-gives: compose bind-mounts the repo and there is no repo to mount here.
+gives: compose bind-mounts the repo and there is no repo to mount here. At the
+viewer group's tag, with the viewer it feeds: the viewer's listings read these
+tables, so the two move together. A viewer release that changes schema.sql is
+refused (infra/k8s-release-viewer.sh): `bun wb inspect` reads this store from
+the runner pod, at the fleet's tag.
 
 This service is written to read the runs volume only — it opens each
 run.sqlite readonly and never writes into the tree — but the volume is mounted
@@ -442,7 +446,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: collector
-          image: {{ include "wrathbench.image.runner" . }}
+          image: {{ include "wrathbench.image.viewerGroup" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
           workingDir: /wrathbench
