@@ -41,7 +41,8 @@ import { isBareSessionDir } from "../runner/src/session-store";
 import { feedRecordOf, pairStoreCalls, readHeldCall, readRecordRow, RecordFollower, storeCallRecordsOf, type RecordLine, type RecordLoc, type StoreCalls } from "./record-feed";
 import { CodexUsageCorrector } from "../runner/src/codex-usage";
 import { EVENT_WINDOW_EXCLUDE } from "../runner/src/ambient-events";
-import { HistoryRebuilder, rebuildSlimRequest, slimRequest, systemTextMatches, windowEntryIndices } from "../runner/src/request-record";
+// The request reader, and the context renderer behind it, load only for a slim request (`rebuildRequest`): a recorded run's, never a store session's.
+import type { HistoryRebuilder } from "../runner/src/request-record";
 import { isSlimRequest, messageChars, requestStatsOf } from "../runner/src/request-stats";
 import { MODEL_RESPONSE_RECORD } from "../runner/src/archive-dir";
 import { SEGMENT_MARKS } from "../runner/src/sessions";
@@ -934,6 +935,7 @@ export class TrajectoryTail {
     i: number,
     rec: Record<string, unknown>,
   ): Promise<{ ok: boolean; error?: string; messages?: unknown[] }> {
+    const { HistoryRebuilder, rebuildSlimRequest, slimRequest, systemTextMatches, windowEntryIndices } = await import("../runner/src/request-record");
     const slim = slimRequest(rec);
     if (typeof slim === "string") return { ok: false, error: slim };
     let systemText = slim.systemText;
