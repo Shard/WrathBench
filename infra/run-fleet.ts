@@ -862,7 +862,7 @@ function parseArgs(argv: string[]): {
             "                  records the clear in data/runs/fleet-models.json; the running",
             "                  supervisor picks it up on its next tick. Safe while the fleet runs.",
             "",
-            "The config is the store (runner/src/config-store.ts), edited on the viewer's /config page",
+            "The config is the store (runner/src/config-store.ts), edited on the viewer's /admin page",
             "or with the CLI; there is no file argument. The supervisor's normal home is the fleet",
             "container: the chart's `fleet` Deployment, or the `fleet` compose service on the quickstart",
             "(see docs/RUNBOOK.md). From a checkout, `bun wb fleet status | dry-run | clear-model <name>`",

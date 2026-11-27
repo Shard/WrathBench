@@ -28,20 +28,20 @@ export const NAV: readonly NavItem[] = [
 ] as const;
 
 /**
- * The config page's item. Not in `NAV`: it is the admin interface — the write
- * path into the fleet config — and the routes behind it are mounted only on a
+ * The admin page's item. Not in `NAV`: it is the admin interface — the write
+ * path into the config store — and the routes behind it are mounted only on a
  * viewer with the admin switch on (`@viewer/groups`), never in public mode.
  * A reader who cannot use it should not be told it exists.
  */
-export const CONFIG_NAV: NavItem = { href: "/config", label: "config" };
+export const ADMIN_NAV: NavItem = { href: "/admin", label: "admin" };
 
 /**
  * Which of the surfaces this is, or null when there is no word to show.
  *
- * One derivation for the header badge AND the config nav item, so the badge
+ * One derivation for the header badge AND the admin nav item, so the badge
  * and the page can never disagree about which site a reader is on: ADMIN is
  * the operator's own build talking to a viewer with the admin switch on — the
- * one where the config page exists — and PREVIEW is the public bundle and any
+ * one where the admin page exists — and PREVIEW is the public bundle and any
  * viewer in public mode. A private viewer without the switch claims neither,
  * and nothing is claimed until `/api/info` has settled on a private build, so
  * neither the badge nor the link flickers through the wrong state.
@@ -74,11 +74,11 @@ export function linkable(info: Pick<ApiInfoResponse, "groups" | "site"> | undefi
 
 /**
  * The bar for this deployment: the reader's items whose group is on
- * (`pageMounted`), and the config item where the badge says ADMIN.
+ * (`pageMounted`), and the admin item where the badge says ADMIN.
  *
  * `admin` is `surface(...) === "ADMIN"`, so the bar and the header badge
- * cannot disagree. Config sits before `about`, which stays last: the meta page
- * closes the pages about runs, and config is a page about the fleet.
+ * cannot disagree. Admin sits before `about`, which stays last: the meta page
+ * closes the pages about runs, and admin is a page about the deployment.
  */
 export function navItems(o: { admin: boolean; groups?: Groups; site?: PageSite }): readonly NavItem[] {
   const groups = o.groups ?? ALL_GROUPS;
@@ -86,5 +86,5 @@ export function navItems(o: { admin: boolean; groups?: Groups; site?: PageSite }
   if (!o.admin) return shown.length === NAV.length ? NAV : shown;
   const i = shown.findIndex((n) => n.href === "/about");
   const at = i < 0 ? shown.length : i;
-  return [...shown.slice(0, at), CONFIG_NAV, ...shown.slice(at)];
+  return [...shown.slice(0, at), ADMIN_NAV, ...shown.slice(at)];
 }

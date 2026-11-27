@@ -244,7 +244,7 @@ game:
   enabled: true
 
 # The admin interface: the viewer's config API (every write route it has)
-# and its admin pages, from which the operator edits credentials, the roster,
+# and its admin page, from which the operator edits credentials, the roster,
 # freeplay agents, campaigns and the queue through the config store's own
 # validation (docs/RUNBOOK.md, "The admin interface"). OFF by default: a
 # deployment that does not turn it on has no write route at all. It is
@@ -257,7 +257,7 @@ admin:
 # There is no fleet config value and no ConfigMap: the fleet config is the
 # sqlite store on the data PVC (WRATHBENCH_CONFIG_DB, templates/_helpers.tpl),
 # seeded once from infra/fleet.example.json through the runner pod and edited
-# with `bun wb config` or, with `admin` on, the viewer's /config page from then
+# with `bun wb config` or, with `admin` on, the viewer's /admin page from then
 # on. The chart ships no copy of it.
 
 # Realm identity. Not secret; the account credentials are.

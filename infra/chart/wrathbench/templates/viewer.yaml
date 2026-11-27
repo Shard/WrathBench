@@ -237,7 +237,7 @@ spec:
             # The config store (WRATHBENCH_CONFIG_DB in harnessEnv), the only
             # fleet config: the one WRITABLE data mount on the viewer, and it
             # has to be. It is the operator's edit surface (/api/config and the
-            # /config page, operator-only and not mounted in public mode), and
+            # /admin page, operator-only and not mounted in public mode), and
             # even the reads need it: a readonly sqlite handle still creates
             # the -wal/-shm sidecars beside the file, so a readOnly mount would
             # make every config read a 500.

@@ -124,17 +124,9 @@ including `ps`, `logs` and `down`. `down` keeps the world, and `down -v`
 throws it away. To run the game server without the viewer, name `authserver
 worldserver` after `up -d`.
 
-The config store starts absent, and the admin pages write only to a store
-that exists. Create it once by setting the site's name:
-
-```
-docker compose --env-file .env -f infra/compose.reference.yml exec viewer \
-  bun runner/src/config-store.ts set site '{"name":"My WrathBench"}'
-```
-
-The viewer's error message for a missing store suggests `bun wb config seed`.
-That command targets the cluster, and it seeds a fleet roster that a pure
-viewer has no use for.
+The admin page (http://127.0.0.1:8090/admin) shows the module's status, the
+recorded sessions and the command that connects an agent. The config store
+starts absent; the first save of the site's settings there creates it.
 
 Then connect an agent. With Claude Code, run this in the directory you will
 start it from, because the registration is per directory. Fill in the secret
@@ -503,7 +495,7 @@ the fleet sidesteps that collision.
 
 The config store is the whole answer to "what is running right now" —
 `docs/RUNBOOK.md`, "Where the config lives"; `bun wb config` and, with the
-chart's `admin.enabled`, the viewer's `/config` page are where it is read and
+chart's `admin.enabled`, the viewer's `/admin` page are where it is read and
 edited, and `infra/fleet.example.json` is the shape.
 Its unit of work is the **job**: a roster entry (or a rotation of
 several), an episode tier, a repeat count, run as one `run-roster` process on

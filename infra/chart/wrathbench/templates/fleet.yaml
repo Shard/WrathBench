@@ -6,7 +6,7 @@ one replica, Recreate, always — two supervisors on one config is a night of
 account_in_use.
 
 Steering is the config store on the data PVC (WRATHBENCH_CONFIG_DB in
-harnessEnv), the only fleet config: edit it on the viewer's /config page or
+harnessEnv), the only fleet config: edit it on the viewer's /admin page or
 with `config-store.ts` through the runner pod, and the supervisor's next
 60-second re-read picks it up. Nothing here rolls on a config change, and no
 ConfigMap is involved — a fresh cluster seeds the store once from

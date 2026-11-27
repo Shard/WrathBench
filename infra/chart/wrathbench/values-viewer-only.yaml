@@ -48,7 +48,8 @@ publisher:
 # (docs/RUNBOOK.md) is set in the pod itself:
 #   kubectl exec deploy/wrathbench-viewer -- \
 #     bun runner/src/config-store.ts set site '{"name":"…"}'
-# On serves the config pages to anyone who can reach the Ingress, which is
+# On serves the admin page, where the site settings can be set too (its first
+# save creates the store), to anyone who can reach the Ingress, which is
 # unauthenticated by design.
 admin:
   enabled: false

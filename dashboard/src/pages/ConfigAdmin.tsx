@@ -1,7 +1,9 @@
 /**
- * The admin page's sections beside the roster (GitHub issue #427): the
- * providers (credentials with their health), freeplay agents, campaigns, the
- * queue, and the deployment's groups and publishing. Each is one more client of the
+ * The admin page's sections beside the roster (GitHub issue #427): the agent
+ * stack (wrath-mcp: the module's status, the store's sessions and how to
+ * connect an agent), the providers (credentials with their health), freeplay
+ * agents, campaigns, the queue, and the deployment's groups and publishing.
+ * Each writing one is one more client of the
  * config store: every write goes through the page's `write` (the version
  * check) to `/api/config`, where `parseFleet` judges
  * the whole candidate config, so a refusal here is the supervisor's own
@@ -14,13 +16,25 @@
  * supervisor, and the page shows the link and the one-time code it waits on.
  */
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, AdminResponse } from "@viewer/api-types";
+import { A } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
+import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, AdminResponse, WrathMcpModuleView, WrathMcpView } from "@viewer/api-types";
 import { configApi } from "../api/config-client";
+import { InfoHint } from "../components/InfoHint";
+import { STACK_URL } from "../lib/repo";
 import {
+  AGENT_MODULE_URL,
+  CONNECT_FORMS,
   EMPTY_CREDENTIAL,
   GROUP_ROWS,
+  LIMIT_ROWS,
+  MODULE_SECRET_ENV,
   QUEUE_EPISODES,
+  canCopy,
+  connectSnippet,
+  fmtLimit,
+  moduleErrorText,
+  type ConnectForm,
   campaignDoc,
   campaignRows,
   credentialDoc,
@@ -43,7 +57,7 @@ import {
   type NewCredentialForm,
   type NewJobForm,
 } from "../lib/admin";
-import { fmtWhen, stamp } from "../lib/format";
+import { fmtDuration, fmtWhen, stamp } from "../lib/format";
 
 type Write = (fn: () => Promise<unknown>) => Promise<string | null>;
 
@@ -784,6 +798,217 @@ export function QueueSection(props: { config: Record<string, unknown>; keys: rea
         </button>
       </div>
     </>
+  );
+}
+
+/** A copy button that is there only where it can work; the text it copies stays selectable either way. */
+export function CopyButton(props: { text: string }) {
+  const [copied, setCopied] = createSignal(false);
+  return (
+    <Show when={canCopy(typeof window === "undefined" ? undefined : window)}>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard.writeText(props.text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1_500);
+          });
+        }}
+      >
+        {copied() ? "copied" : "copy"}
+      </button>
+    </Show>
+  );
+}
+
+/** One status row: a key with its hover, a value, and a dim detail. */
+function StatusRow(props: { name: string; title: string; children: JSX.Element; detail?: JSX.Element }) {
+  return (
+    <tr>
+      <td class="mono" title={props.title}>
+        {props.name}
+      </td>
+      <td>{props.children}</td>
+      <td class="dim">{props.detail}</td>
+    </tr>
+  );
+}
+
+/**
+ * The agent stack: the module as its `/health` answers the viewer, the
+ * sessions the viewer reads from the store, and how to connect an agent.
+ * Read-only; every deployment has it, store or no store.
+ */
+export function WrathMcpSection(props: { admin: AdminResponse | undefined }) {
+  const [form, setForm] = createSignal<ConnectForm>("claude");
+  const snippet = (): string => connectSnippet(form());
+  return (
+    <Show when={props.admin} fallback={<p class="dim">loading…</p>}>
+      {(a) => {
+        const w = (): WrathMcpView => a().wrathMcp;
+        const m = (): WrathMcpModuleView | null => w().module;
+        return (
+          <>
+            <h3 class="section" title="the module as its /health answers this viewer, with the port secret, and the sessions this viewer reads; read here, configured in mod_wrathbench.conf and the viewer's environment">
+              status
+            </h3>
+            <div class="scroller">
+              <table class="configtable">
+                <tbody>
+                  <StatusRow
+                    name="module"
+                    title="whether the module answers this viewer's /health"
+                    detail={
+                      <Show when={m()}>
+                        {(mm) => (
+                          <span class="mono" title="the viewer's own route to the module, which an agent does not use">
+                            {mm().url}
+                          </span>
+                        )}
+                      </Show>
+                    }
+                  >
+                    <Show
+                      when={m()}
+                      fallback={
+                        <Show when={w().moduleError}>
+                          {(e) => (
+                            <span class={e() === "unset" ? "dim" : "err"} title={moduleErrorText(e(), w().secret.env).title}>
+                              {moduleErrorText(e(), w().secret.env).word}
+                            </span>
+                          )}
+                        </Show>
+                      }
+                    >
+                      {(mm) => (mm().ok ? <span class="ok">ok</span> : <span class="err" title="it answered 503: the world did not load whole">not ready</span>)}
+                    </Show>
+                  </StatusRow>
+                  <StatusRow name="port secret" title="what the viewer authenticates /health with; its value is never shown">
+                    <span class="mono">{w().secret.env}</span>{" "}
+                    {w().secret.set ? <span class="ok">set</span> : <span class="warn">not set</span>}
+                  </StatusRow>
+                  <Show when={m()}>
+                    {(mm) => (
+                      <>
+                        <StatusRow name="build" title="the build stamp the module was compiled with">
+                          <span class="mono">{mm().build ?? "—"}</span>
+                        </StatusRow>
+                        <StatusRow name="protocol" title="the wire protocol version the module speaks; the SDK checks it on connect">
+                          <span class="mono">{mm().protocol ?? "—"}</span>
+                        </StatusRow>
+                        <StatusRow name="uptime" title="since the worldserver process started">
+                          <span title={mm().startedAtMs !== null ? `started ${stamp(mm().startedAtMs)}` : ""}>{fmtDuration(mm().uptimeMs)}</span>
+                        </StatusRow>
+                        <StatusRow name="world" title="whether the world loaded whole at startup; a world that did not serves nothing until a restart">
+                          {mm().worldLoaded === null ? <span class="dim">?</span> : mm().worldLoaded ? <span class="ok">loaded</span> : <span class="err">not loaded</span>}
+                        </StatusRow>
+                        <StatusRow name="sessions" title="live bench sessions, then leases held, on the whole module">
+                          <span class="mono">
+                            {mm().sessions ?? "?"} / {mm().leases ?? "?"}
+                          </span>
+                        </StatusRow>
+                        <Show when={mm().limits}>
+                          {(l) => (
+                            <StatusRow name="limits" title="what the module refuses past, per lease and in all; 0 is off">
+                              <For each={LIMIT_ROWS.filter((r) => l()[r.key] !== undefined)}>
+                                {(r, i) => (
+                                  <>
+                                    {i() > 0 ? " · " : ""}
+                                    <span title={r.setting}>
+                                      <span class="dim">{r.label}</span> {fmtLimit(l()[r.key]!, r.bytes === true)}
+                                    </span>
+                                  </>
+                                )}
+                              </For>
+                            </StatusRow>
+                          )}
+                        </Show>
+                      </>
+                    )}
+                  </Show>
+                  <Show
+                    when={w().store}
+                    fallback={
+                      <StatusRow name="session store" title="the wrath-mcp sessions this viewer reads beside its runs (WRATHBENCH_SESSION_STORE)">
+                        <span class="dim">none</span>
+                      </StatusRow>
+                    }
+                  >
+                    {(s) => (
+                      <>
+                        <StatusRow name="recorded" title="sessions in the session store whose character entered the world, live and ended, as the runs page lists them">
+                          <span class="mono">{s().sessions}</span>
+                        </StatusRow>
+                        <StatusRow name="live" title="open, with a heartbeat in the last two minutes">
+                          <span class={s().live > 0 ? "ok mono" : "mono"}>{s().live}</span>
+                        </StatusRow>
+                        <Show when={s().versions.length > 0}>
+                          <StatusRow name="stack" title="the wrath-mcp release each recorded session reports, with how many">
+                            <For each={s().versions}>
+                              {(v, i) => (
+                                <>
+                                  {i() > 0 ? " · " : ""}
+                                  <span class="mono" title={v.commit ?? "no commit recorded"}>
+                                    {v.version}
+                                  </span>{" "}
+                                  <span class="dim">×{v.sessions}</span>
+                                </>
+                              )}
+                            </For>
+                          </StatusRow>
+                        </Show>
+                        <For each={s().liveSessions}>
+                          {(l) => (
+                            <tr>
+                              <td title="a live session: its run page">
+                                <A href={`/run/${l.id}`}>{l.character}</A>
+                              </td>
+                              <td>
+                                <span class="ok">live</span>{" "}
+                                <span class="dim mono" title={l.commit ?? "no commit recorded"}>
+                                  {l.version}
+                                </span>
+                              </td>
+                              <td />
+
+                            </tr>
+                          )}
+                        </For>
+                      </>
+                    )}
+                  </Show>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 class="section">
+              connect an agent{" "}
+              <InfoHint
+                text={`Run on the worldserver's host, from the directory the agent starts in. Fill in an allowlisted account, the module's port secret (${MODULE_SECRET_ENV}), this checkout's absolute path and the session store this viewer reads. ${AGENT_MODULE_URL} is the module's own port on that host, not the viewer's route to it.`}
+              />
+            </h3>
+            <div class="chips">
+              <For each={CONNECT_FORMS}>
+                {(f) => (
+                  <button type="button" class={form() === f.id ? "on" : ""} onClick={() => setForm(f.id)}>
+                    {f.label}
+                  </button>
+                )}
+              </For>
+              <CopyButton text={snippet()} />
+              <Show when={STACK_URL}>
+                {(u) => (
+                  <a href={`${u()}/blob/master/mcp/README.md#connect-an-mcp-client`} target="_blank" rel="noopener noreferrer" title="wrath-mcp's mcp/README.md: other clients, headless use, and the first prompt">
+                    connect an MCP client
+                  </a>
+                )}
+              </Show>
+            </div>
+            <pre class="mono scroller">{snippet()}</pre>
+          </>
+        );
+      }}
+    </Show>
   );
 }
 

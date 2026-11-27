@@ -12,7 +12,7 @@ bun wb dashboard shots --out <dir> --path /runs --path /models
 bun wb dashboard shots --out <dir> --run <run-dir> [--run <run-dir>]
 bun wb dashboard shots --out <dir> --groups viewer --sessions <store>   # a bare session store beside the runs
 bun wb dashboard shots --serve                             # the stack only: URLs until Ctrl-C
-bun wb dashboard shots --out <dir> --seed --site private --path /config/providers   # an admin page over a seeded store
+bun wb dashboard shots --out <dir> --seed --site private --path /admin/providers    # an admin page over a seeded store
 ```
 
 The private viewer has the admin switch on (`--no-admin` drops it, as the

@@ -7,7 +7,16 @@
  */
 
 import type { Groups } from "@viewer/groups";
-import type { AdminCodexLoginView, AdminCredentialView, AdminProviderView, CredentialFix, CredentialHealth, HealthState } from "@viewer/api-types";
+import type {
+  AdminCodexLoginView,
+  AdminCredentialView,
+  AdminProviderView,
+  CredentialFix,
+  CredentialHealth,
+  HealthState,
+  ModuleLimitKey,
+  WrathMcpModuleError,
+} from "@viewer/api-types";
 
 /** A budget's kind on the form; `none` writes no budget, which is the provider's default. */
 export type BudgetKind = "none" | "usage" | "spend" | "runs";
@@ -116,19 +125,41 @@ export function fixLabel(f: CredentialFix, fmt: (t: number) => string): string {
 
 // ------------------------------------------------------------------ sections
 
-/** The config page's sections, in sidebar order, and the group each belongs to (null: every deployment has it). */
+/**
+ * The admin page's sections, in sidebar order, and the group each belongs to
+ * (null: every deployment has it). The agent stack's comes first: every
+ * deployment drives one. Policy, accounts and preflight are the supervisor's,
+ * so the runner group's; the site's settings are every deployment's.
+ */
 export const CONFIG_SECTIONS = [
+  { id: "wrath-mcp", label: "wrath-mcp", group: null },
   { id: "providers", label: "providers", group: "runner" },
   { id: "roster", label: "roster", group: "runner" },
   { id: "freeplay", label: "freeplay", group: "runner" },
   { id: "campaigns", label: "campaigns", group: "evals" },
   { id: "queue", label: "queue", group: "runner" },
-  { id: "policy", label: "policy", group: null },
+  { id: "policy", label: "policy", group: "runner" },
+  { id: "site", label: "site", group: null },
   { id: "deployment", label: "deployment", group: null },
   { id: "history", label: "history", group: null },
 ] as const satisfies readonly { id: string; label: string; group: keyof Groups | null }[];
 
 export type ConfigSectionId = (typeof CONFIG_SECTIONS)[number]["id"];
+
+/** The sections that only read: no version bar, no reload, and nothing they show needs a store. */
+export function sectionReadsOnly(id: ConfigSectionId): boolean {
+  return id === "wrath-mcp" || id === "deployment" || id === "history";
+}
+
+/**
+ * Whether a section needs a seeded store before it can write: every one that
+ * writes, but the site's settings on a deployment with no runner group, whose
+ * first write creates the store (`runner/viewer/config-api.ts`).
+ */
+export function sectionNeedsSeed(id: ConfigSectionId, groups: Groups): boolean {
+  if (sectionReadsOnly(id)) return false;
+  return !(id === "site" && !groups.runner);
+}
 
 /** The sections a deployment has: a group that is off takes its sections with it. */
 export function sectionsShown(groups: Groups): (typeof CONFIG_SECTIONS)[number][] {
@@ -142,11 +173,13 @@ export function sectionOf(param: string | undefined, groups: Groups): ConfigSect
 
 /**
  * The section a store row key's raw editor sits in: each collection beside the
- * table that edits it, and every other singleton (policy, accounts, preflight)
- * in `policy`. The roster has its own table and no raw editor.
+ * table that edits it, the site's settings in `site`, and every other
+ * singleton (policy, accounts, preflight) in `policy`. The roster has its own
+ * table and no raw editor.
  */
 export function sectionOfKey(key: string): ConfigSectionId {
   const head = key.split("/")[0]!;
+  if (head === "site") return "site";
   if (head === "credentials") return "providers";
   if (head === "campaigns" || head === "campaign-defs") return "campaigns";
   if (head === "queue") return "queue";
@@ -347,4 +380,88 @@ export function secretControlOff(
   if (c.enabled) return "disable it first: no run may be placed on it while the login replaces its token";
   if (c.inUse !== null && c.inUse > 0) return "a run is live on it: disable it and let its runs finish first";
   return null;
+}
+
+// ------------------------------------------------------------------ wrath-mcp
+
+/**
+ * Where an agent reaches the module by default: the module's own loopback
+ * port on the worldserver's host. Not the viewer's route to it, which is the
+ * viewer's network (`worldserver:8086` in a compose), not the agent's.
+ */
+export const AGENT_MODULE_URL = "http://127.0.0.1:8086";
+
+/** The env var the stack's server reads the port secret from: named, never filled. */
+export const MODULE_SECRET_ENV = "WRATHBENCH_MODULE_SECRET";
+
+/** The connect block's two forms: a Claude Code registration, and an `mcpServers` entry any stdio client takes. */
+export const CONNECT_FORMS = [
+  { id: "claude", label: "claude code" },
+  { id: "json", label: "mcpServers" },
+] as const;
+export type ConnectForm = (typeof CONNECT_FORMS)[number]["id"];
+
+/**
+ * The command or entry that connects an agent (wrath-mcp's `mcp/README.md`,
+ * "Connect an MCP client"), with placeholders for what only the operator
+ * knows: the account, the port secret, the checkout and the session store.
+ */
+export function connectSnippet(form: ConnectForm): string {
+  if (form === "claude") {
+    return [
+      "claude mcp add wrath \\",
+      `  -e WRATHBENCH_MODULE_URL=${AGENT_MODULE_URL} \\`,
+      `  -e ${MODULE_SECRET_ENV}=<port secret> \\`,
+      '  -- "$(command -v bun)" <checkout>/wrath-mcp/mcp/src/main.ts \\',
+      "     --account <ACCOUNT> --record-dir <session store>",
+    ].join("\n");
+  }
+  return JSON.stringify(
+    {
+      mcpServers: {
+        wrath: {
+          command: "<path to bun>",
+          args: ["<checkout>/wrath-mcp/mcp/src/main.ts", "--account", "<ACCOUNT>", "--record-dir", "<session store>"],
+          env: { WRATHBENCH_MODULE_URL: AGENT_MODULE_URL, [MODULE_SECRET_ENV]: "<port secret>" },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/** The limits the module states, as the page labels them, with the setting each is (`mod_wrathbench.conf.dist`). */
+export const LIMIT_ROWS: readonly { key: ModuleLimitKey; label: string; setting: string; bytes?: true }[] = [
+  { key: "actionRate", label: "rate", setting: "WrathBench.ActionRate: requests a second per lease" },
+  { key: "actionBurst", label: "burst", setting: "WrathBench.ActionBurst" },
+  { key: "eventsSubscribersPerToken", label: "subscribers", setting: "WrathBench.EventsSubscribersPerToken: /events sockets per lease" },
+  { key: "leases", label: "leases", setting: "WrathBench.MaxLeases" },
+  { key: "connections", label: "connections", setting: "WrathBench.MaxConnections" },
+  { key: "connectionsPerPeer", label: "per peer", setting: "WrathBench.MaxConnectionsPerPeer" },
+  { key: "connectionsPerLease", label: "per lease", setting: "WrathBench.MaxConnectionsPerLease" },
+  { key: "eventsBacklogBytes", label: "backlog", setting: "WrathBench.EventsBacklogBytes: what a subscriber may fall behind by", bytes: true },
+];
+
+/** A limit's value as the page reads it: `0` is off, a byte count in MiB. */
+export function fmtLimit(v: number, bytes = false): string {
+  if (v === 0) return "off";
+  if (bytes && v >= 1024 * 1024) return `${Math.round((v / (1024 * 1024)) * 10) / 10} MiB`;
+  return String(v);
+}
+
+/** Why the module is not shown, as the status cell's word and its hover. */
+export function moduleErrorText(e: WrathMcpModuleError, secretEnv: string): { word: string; title: string } {
+  if (e === "refused") return { word: "refused", title: `the module answered 401: the viewer's ${secretEnv} is unset or is not the port secret` };
+  if (e === "unset") return { word: "not configured", title: "no WRATHBENCH_MODULE_URL is set, and nothing answered at the module's loopback default" };
+  return { word: "unreachable", title: "nothing answered at WRATHBENCH_MODULE_URL within two seconds" };
+}
+
+/**
+ * Whether the copy button can work: the Clipboard API, which a browser serves
+ * only on a secure context. A viewer on a plain-HTTP LAN address has none, and
+ * the block stays selectable instead.
+ */
+export function canCopy(w: { isSecureContext?: boolean; navigator?: { clipboard?: unknown } } | undefined): boolean {
+  return w !== undefined && w.isSecureContext === true && w.navigator?.clipboard !== undefined;
 }

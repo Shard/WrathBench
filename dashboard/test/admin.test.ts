@@ -2,7 +2,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   CONFIG_SECTIONS,
+  CONNECT_FORMS,
   EMPTY_CREDENTIAL,
+  LIMIT_ROWS,
+  canCopy,
+  connectSnippet,
+  fmtLimit,
+  moduleErrorText,
+  sectionNeedsSeed,
+  sectionReadsOnly,
   campaignDoc,
   campaignRows,
   credentialDoc,
@@ -96,7 +104,7 @@ describe("fixLabel", () => {
   });
 });
 
-describe("the config page's sections", () => {
+describe("the admin page's sections", () => {
   const ALL = { runner: true, evals: true, viewer: true };
   test("a route names a section this deployment has, or none", () => {
     expect(sectionOf("providers", ALL)).toBe("providers");
@@ -107,14 +115,61 @@ describe("the config page's sections", () => {
 
   test("a group that is off takes its sections with it; the deployment's own stay", () => {
     expect(sectionsShown(ALL).map((s) => s.id)).toEqual(CONFIG_SECTIONS.map((s) => s.id));
-    expect(sectionsShown({ runner: false, evals: false, viewer: true }).map((s) => s.id)).toEqual(["policy", "deployment", "history"]);
+    expect(sectionsShown({ runner: false, evals: false, viewer: true }).map((s) => s.id)).toEqual(["wrath-mcp", "site", "deployment", "history"]);
+    expect(sectionsShown(ALL)[0]!.id).toBe("wrath-mcp");
   });
 
   test("every store row key's raw editor sits in exactly one section, each collection beside its table", () => {
-    const keys = ["credentials/or-1", "campaigns/deadmines", "campaign-defs/deadmines@4", "queue/0", "policy", "accounts", "preflight", "roster/opus"];
-    expect(keys.map(sectionOfKey)).toEqual(["providers", "campaigns", "campaigns", "queue", "policy", "policy", "policy", "roster"]);
+    const keys = ["credentials/or-1", "campaigns/deadmines", "campaign-defs/deadmines@4", "queue/0", "policy", "accounts", "preflight", "roster/opus", "site"];
+    expect(keys.map(sectionOfKey)).toEqual(["providers", "campaigns", "campaigns", "queue", "policy", "policy", "policy", "roster", "site"]);
     const ids = new Set<string>(CONFIG_SECTIONS.map((s) => s.id));
     for (const k of keys) expect(ids.has(sectionOfKey(k))).toBe(true);
+  });
+
+  test("only the writing sections wait for a seeded store, and the site's not on a deployment with no runner", () => {
+    const viewerOnly = { runner: false, evals: false, viewer: true };
+    for (const id of ["wrath-mcp", "deployment", "history"] as const) {
+      expect(sectionReadsOnly(id)).toBe(true);
+      expect(sectionNeedsSeed(id, ALL)).toBe(false);
+    }
+    expect(sectionNeedsSeed("roster", ALL)).toBe(true);
+    expect(sectionNeedsSeed("site", ALL)).toBe(true);
+    expect(sectionNeedsSeed("site", viewerOnly)).toBe(false);
+  });
+});
+
+describe("the wrath-mcp section", () => {
+  test("the connect block names the agent's own module URL, never the viewer's, and fills in no secret", () => {
+    for (const f of CONNECT_FORMS) {
+      const s = connectSnippet(f.id);
+      expect(s).toContain("http://127.0.0.1:8086");
+      expect(s).toContain("WRATHBENCH_MODULE_SECRET");
+      expect(s).toContain("<port secret>");
+      for (const p of ["<ACCOUNT>", "<checkout>/wrath-mcp/mcp/src/main.ts", "<session store>"]) expect(s).toContain(p);
+      expect(s).not.toContain("worldserver:8086");
+    }
+    expect(connectSnippet("claude").startsWith("claude mcp add wrath \\")).toBe(true);
+    expect(Object.keys((JSON.parse(connectSnippet("json")) as { mcpServers: Record<string, unknown> }).mcpServers)).toEqual(["wrath"]);
+  });
+
+  test("a limit of 0 reads as off, and the backlog in MiB", () => {
+    expect(fmtLimit(0)).toBe("off");
+    expect(fmtLimit(40)).toBe("40");
+    expect(fmtLimit(16_777_216, true)).toBe("16 MiB");
+    expect(LIMIT_ROWS.map((r) => r.key)).toContain("actionRate");
+  });
+
+  test("why the module is not shown, each its own word", () => {
+    expect(moduleErrorText("refused", "WRATHBENCH_MODULE_SECRET").title).toContain("WRATHBENCH_MODULE_SECRET");
+    expect(new Set((["unset", "unreachable", "refused"] as const).map((e) => moduleErrorText(e, "X").word)).size).toBe(3);
+  });
+
+  test("the copy button exists only where the clipboard can work", () => {
+    expect(canCopy({ isSecureContext: true, navigator: { clipboard: {} } })).toBe(true);
+    // A plain-HTTP LAN origin: no secure context, no Clipboard API.
+    expect(canCopy({ isSecureContext: false, navigator: {} })).toBe(false);
+    expect(canCopy({ isSecureContext: true, navigator: {} })).toBe(false);
+    expect(canCopy(undefined)).toBe(false);
   });
 });
 

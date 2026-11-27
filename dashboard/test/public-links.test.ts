@@ -74,7 +74,7 @@ describe("nothing a public reader clicks needs the live viewer", () => {
   });
 
   /*
-   * Config drafts (GitHub issue #66). The /config page is a lazy route in both
+   * Config drafts (GitHub issue #66). The /admin page is a lazy route in both
    * builds, so its chunk ships in the public bundle; what keeps drafts out of
    * the public site is that nothing there can reach them. The server side —
    * a public handle 404s every draft route and the publisher renders none —
