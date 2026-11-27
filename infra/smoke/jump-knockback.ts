@@ -46,6 +46,7 @@ import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { stampedLog } from "./lib/report";
+import { sdkCreateAndLogout } from "./lib/sdk";
 
 const BASE = moduleBase();
 const JUMPER_ACCOUNT = process.env.MODULE_ACCOUNT ?? "SMOKE4";
@@ -79,15 +80,7 @@ function fixtureCtx(account: string, character: string, tag: string): FixtureCon
     fail,
     contendedDeadlineMs: 10_000,
     contendedRetryMs: 5_000,
-    createAndLogout: async () => {
-      const client = await connect({ baseUrl: BASE, token: smokeToken("jump-knockback", { role: tag, id: RUN, suffix: "create" }), secret: MODULE_SECRET });
-      try {
-        await client.createSession({ account, character, race: 1, class: 1 });
-        await client.logout();
-      } finally {
-        client.close();
-      }
-    },
+    createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: smokeToken("jump-knockback", { role: tag, id: RUN, suffix: "create" }), account, character, race: 1, class: 1 }),
   };
   return ctx;
 }

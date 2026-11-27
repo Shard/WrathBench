@@ -49,6 +49,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { fail, stampedLog } from "./lib/report";
+import { sdkCreateAndLogout } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT_A = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -76,15 +77,7 @@ function fixtureFor(account: string, character: string, token: string): FixtureC
     fail,
     contendedDeadlineMs: 10_000,
     contendedRetryMs: 5_000,
-    createAndLogout: async () => {
-      const c = await connect({ baseUrl: BASE, token: `${token}-create`, secret: MODULE_SECRET });
-      try {
-        await c.createSession({ account, character, race: 1, class: 1 });
-        await c.logout();
-      } finally {
-        c.close();
-      }
-    },
+    createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: `${token}-create`, account, character, race: 1, class: 1 }),
   };
 }
 const TOKEN_A = smokeToken("loot-roll", { role: "a", id: RUN });

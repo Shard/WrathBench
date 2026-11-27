@@ -40,6 +40,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { fail, stampedLog } from "./lib/report";
+import { sdkCreateAndLogout } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -67,15 +68,7 @@ const fixtureCtx: FixtureContext = {
   fail,
   contendedDeadlineMs: 10_000,
   contendedRetryMs: 5_000,
-  createAndLogout: async () => {
-    const c = await connect({ baseUrl: BASE, token: smokeSubToken(TOKEN, "create"), secret: MODULE_SECRET });
-    try {
-      await c.createSession({ account: ACCOUNT, character: CHARACTER, race: 3, class: 1 });
-      await c.logout();
-    } finally {
-      c.close();
-    }
-  },
+  createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: smokeSubToken(TOKEN, "create"), account: ACCOUNT, character: CHARACTER, race: 3, class: 1 }),
 };
 await ensureFixtureCharacter(fixtureCtx);
 await applyScenario(fixtureCtx, SCENARIO);

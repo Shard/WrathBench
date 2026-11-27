@@ -58,6 +58,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { stampedLog } from "./lib/report";
+import { createSessionWithBackoff, selfPosition } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -83,25 +84,6 @@ type Vec = { x: number; y: number; z: number };
 const fmt = (p: Vec): string => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
 const dist2d = (a: Vec, b: Vec): number => Math.hypot(a.x - b.x, a.y - b.y);
 
-async function createSessionWithBackoff(client: WrathClient): Promise<void> {
-  // Another probe may hold the single PROBE session; wait it out (up to 20min).
-  const deadline = Date.now() + 20 * 60_000;
-  for (;;) {
-    try {
-      await client.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
-      return;
-    } catch (e) {
-      const msg = String(e instanceof Error ? e.message : e);
-      if (/char_create_failed_code_53/.test(msg)) {
-        fail(`${ACCOUNT} is at the realm's ten-character cap, so ${CHARACTER} cannot be created; delete a spare character or set SMOKE_CHARACTER to one that exists`);
-      }
-      if (!/account_in_use|token_in_use|in use/i.test(msg) || Date.now() > deadline) throw e;
-      log(`  account busy (${msg.slice(0, 80)}); retrying in 60s`);
-      await Bun.sleep(60_000);
-    }
-  }
-}
-
 const fixtureCtx: FixtureContext = {
   base: BASE,
   account: ACCOUNT,
@@ -112,23 +94,13 @@ const fixtureCtx: FixtureContext = {
   createAndLogout: async () => {
     const client = await connect({ baseUrl: BASE, token: smokeToken("edge-drop", { id: RUN, suffix: "create" }), secret: MODULE_SECRET });
     try {
-      await createSessionWithBackoff(client);
+      await createSessionWithBackoff(client, { account: ACCOUNT, character: CHARACTER, log, fail });
       await client.logout();
     } finally {
       client.close();
     }
   },
 };
-
-async function selfPosition(client: WrathClient): Promise<{ map: number } & Vec> {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    const p = client.state.self.position?.value;
-    if (p !== undefined) return p;
-    if (Date.now() > deadline) fail("no self position observed after login");
-    await Bun.sleep(100);
-  }
-}
 
 /** A raw `move_to` and its verdict: no fall estimate, `force` only when asked. */
 async function probe(client: WrathClient, target: MovePoint, force: boolean): Promise<MoveResultData> {
@@ -159,8 +131,8 @@ async function main(): Promise<void> {
   await applyScenario(fixtureCtx, SCENARIO);
   const client = await connect({ baseUrl: BASE, token: smokeToken("edge-drop", { id: RUN }), secret: MODULE_SECRET });
   try {
-    await createSessionWithBackoff(client);
-    const at = await selfPosition(client);
+    await createSessionWithBackoff(client, { account: ACCOUNT, character: CHARACTER, log, fail });
+    const at = await selfPosition(client, fail);
     if (client.state.self.ghost?.value === true) {
       fail(`${CHARACTER} logged in a ghost: an earlier run failed between its death and its reclaim; walk it to its corpse and reclaim before running this again`);
     }
@@ -191,14 +163,14 @@ async function main(): Promise<void> {
     const health = client.state.self.health?.value;
     const judged = await client.moveTo(target, { timeout: MOVE_TIMEOUT_MS });
     if (judged.status === "arrived") {
-      const there = await selfPosition(client);
+      const there = await selfPosition(client, fail);
       log(`NOTE[sdk]: moveTo took the ${(-raw.dz).toFixed(1)}y fall on its own (health ${health?.current}/${health?.max}); arrived at ${fmt(there)}: ${judged.hint ?? ""}`);
       if (dist2d(there, target) > 5) fail(`moveTo arrived ${dist2d(there, target).toFixed(1)}y from the target`);
       log("PASS: the living took the edge drop by the SDK's own verdict and arrived; no death, so the ghost legs are not run");
       return;
     }
     if (judged.status !== "drop") fail(`SDK moveTo answered ${judged.status}, want drop (a lethal fall left at the edge): ${judged.hint ?? ""}`);
-    const still = await selfPosition(client);
+    const still = await selfPosition(client, fail);
     if (dist2d(still, at) > 1) fail(`the SDK's refused drop moved the character: ${fmt(still)} from ${fmt(at)}`);
     log(`PASS[sdk]: moveTo left the ${(-raw.dz).toFixed(1)}y fall at the edge: ${judged.hint ?? "(no hint)"}`);
 
@@ -211,7 +183,7 @@ async function main(): Promise<void> {
       log("PASS: the forced edge drop was walked; no death, so the ghost legs are not run");
       return;
     }
-    const corpse = await selfPosition(client);
+    const corpse = await selfPosition(client, fail);
     if (corpse.z > edge.z - DROP_MIN_DZ) fail(`died at ${fmt(corpse)}, not below the edge ${fmt(edge)}`);
     if (Math.abs(corpse.z - landingZ) > 5) log(`NOTE[forced]: the body lies at z ${corpse.z.toFixed(1)}, the drop named z ${landingZ.toFixed(1)}`);
     log(`PASS[forced]: walked off the edge and the server's fall killed the character at ${fmt(corpse)} (${forced.status})`);
@@ -219,14 +191,14 @@ async function main(): Promise<void> {
     // 4. The ghost: release, and the move down from wherever the release put it.
     await client.repop();
     if (!(await until(() => client.state.self.ghost?.value === true, 10_000))) fail("no ghost flag after repop");
-    const ghost = await selfPosition(client);
+    const ghost = await selfPosition(client, fail);
     log(`released to ${fmt(ghost)}, ${dist2d(ghost, corpse).toFixed(0)}y from the corpse and ${(ghost.z - corpse.z).toFixed(0)}y above it`);
     // Above the corpse, the ghost walks the plateau back to the rim first (a
     // whole mesh route from 1298), so its edge is the living's own.
     if (ghost.z - corpse.z > DROP_MIN_DZ && dist2d(ghost, EDGE_SKETTIS_RIM) > 3) {
       const back = await client.moveTo({ ...EDGE_SKETTIS_RIM }, { timeout: MOVE_TIMEOUT_MS });
       if (back.status !== "arrived") log(`NOTE[ghost]: the walk back to the rim answered ${back.status}; the move to the corpse goes from where the ghost stands: ${back.hint ?? ""}`);
-      else log(`  the ghost walked back to the rim ${fmt(await selfPosition(client))}`);
+      else log(`  the ghost walked back to the rim ${fmt(await selfPosition(client, fail))}`);
     }
     let run = await client.moveTo({ x: corpse.x, y: corpse.y, z: corpse.z }, { timeout: MOVE_TIMEOUT_MS });
     // The body lies where the fall landed, which may be off the mesh (the leg
@@ -241,7 +213,7 @@ async function main(): Promise<void> {
     } else if (run.status !== "arrived") {
       fail(`the ghost's move down to its corpse answered ${run.status}, want arrived over the edge: ${run.hint ?? ""}`);
     }
-    const near = await selfPosition(client);
+    const near = await selfPosition(client, fail);
     if (run.status === "arrived") log(`PASS[ghost]: the ghost went over the edge and arrived ${dist2d(near, corpse).toFixed(1)}y from its corpse: ${run.hint ?? ""}`);
     if (dist2d(near, corpse) > RECLAIM_RADIUS) fail(`the ghost ended ${dist2d(near, corpse).toFixed(0)}y from its corpse, outside the reclaim radius; it is left a ghost`);
     const reclaim = await client.reclaimCorpse();

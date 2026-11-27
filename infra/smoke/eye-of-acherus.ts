@@ -46,6 +46,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { fail, stampedLog } from "./lib/report";
+import { sdkCreateAndLogout } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -87,15 +88,7 @@ function fixtureFor(character: string, cls: number, suffix: string): FixtureCont
     fail,
     contendedDeadlineMs: 10_000,
     contendedRetryMs: 5_000,
-    createAndLogout: async () => {
-      const c = await connect({ baseUrl: BASE, token: smokeSubToken(TOKEN, suffix), secret: MODULE_SECRET });
-      try {
-        await c.createSession({ account: ACCOUNT, character, race: 1, class: cls });
-        await c.logout();
-      } finally {
-        c.close();
-      }
-    },
+    createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: smokeSubToken(TOKEN, suffix), account: ACCOUNT, character, race: 1, class: cls }),
   };
 }
 const sponsorCtx = fixtureFor(SPONSOR, CLASS_WARRIOR, "sponsor");

@@ -54,8 +54,9 @@ import { accountFixtureName, applyScenario, ensureFixtureCharacter, type Fixture
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
-import { fail, stampedLog } from "./lib/report";
+import { fail, stampedLog, checks, show } from "./lib/report";
 import { until } from "./lib/events";
+import { sdkCreateAndLogout, eventData as data, nextStreamEvent } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "SMOKE4";
@@ -73,23 +74,7 @@ const DUNGEON_HEROIC = 1;
 const started = Date.now();
 const log = stampedLog("stack-wave3", started);
 
-type Verdict = "PASS" | "FAIL" | "SKIP" | "INFO";
-const results: { verdict: Verdict; name: string; detail: string }[] = [];
-function report(verdict: Verdict, name: string, detail: string): void {
-  results.push({ verdict, name, detail });
-  log(`${verdict} ${name}: ${detail}`);
-}
-/** Run one check; a throw is its FAIL, never the smoke's. */
-async function check(name: string, fn: () => Promise<[Verdict, string]> | [Verdict, string]): Promise<void> {
-  try {
-    const [verdict, detail] = await fn();
-    report(verdict, name, detail);
-  } catch (e) {
-    report("FAIL", name, String(e instanceof Error ? e.message : e));
-  }
-}
-
-const show = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x));
+const { report, check, totals } = checks(log);
 
 /**
  * The newest seq the cache has folded. Not `events.recent()`: the SDK keeps
@@ -98,17 +83,10 @@ const show = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === 
 const lastSeq = (client: WrathClient): number => client.state.lastSeq;
 
 /** The next event after `from` matching, or undefined on timeout. */
-async function nextEvent(client: WrathClient, from: number, match: (e: StreamEvent) => boolean, ms = REPLY_MS): Promise<StreamEvent | undefined> {
-  const already = client.events.recent().find((e) => e.seq > from && match(e));
-  if (already !== undefined) return already;
-  try {
-    return await client.events.waitFor((e) => e.seq > from && match(e), { timeout: ms });
-  } catch {
-    return undefined;
-  }
+function nextEvent(client: WrathClient, from: number, match: (e: StreamEvent) => boolean, ms = REPLY_MS): Promise<StreamEvent | undefined> {
+  return nextStreamEvent(client, from, match, ms);
 }
 const isOpcode = (...opcodes: string[]) => (e: StreamEvent) => opcodes.includes(e.opcode);
-const data = (e: StreamEvent | undefined): Record<string, unknown> => (e?.data ?? {}) as Record<string, unknown>;
 
 /** The session still answers: a raw CMSG_QUERY_TIME gets its reply. */
 async function stillAnswers(client: WrathClient): Promise<boolean> {
@@ -132,15 +110,7 @@ const fixtureCtx: FixtureContext = {
   fail,
   contendedDeadlineMs: 10_000,
   contendedRetryMs: 5_000,
-  createAndLogout: async () => {
-    const c = await connect({ baseUrl: BASE, token: smokeSubToken(TOKEN, "create"), secret: MODULE_SECRET });
-    try {
-      await c.createSession({ account: ACCOUNT, character: CHARACTER, race: RACE_HUMAN, class: CLASS_WARRIOR });
-      await c.logout();
-    } finally {
-      c.close();
-    }
-  },
+  createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: smokeSubToken(TOKEN, "create"), account: ACCOUNT, character: CHARACTER, race: RACE_HUMAN, class: CLASS_WARRIOR }),
 };
 
 /** Log in under a fresh sub-token and wait for the fixture's position. */
@@ -363,10 +333,7 @@ try {
   }
   await session?.logout().catch(() => {});
   session?.close();
-  const count = (v: Verdict) => results.filter((r) => r.verdict === v).length;
-  console.log(`totals: ${count("PASS")} pass, ${count("FAIL")} fail, ${count("SKIP")} skip, ${count("INFO")} info`);
-  for (const r of results.filter((x) => x.verdict === "FAIL")) console.log(`  FAIL ${r.name}: ${r.detail}`);
-  const failed = count("FAIL") > 0;
+  const failed = totals();
   console.log(`${failed ? "FAIL" : "PASS"}: stack-wave3 (${((Date.now() - started) / 1000).toFixed(1)}s)`);
   if (failed) process.exitCode = 1;
 }
