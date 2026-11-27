@@ -425,4 +425,38 @@ describe("the verifier on the published units", () => {
       q.done();
     }
   });
+
+  test("windows inline in live.json, as a publisher before the split wrote them, verify clean, and a player planted there is caught", async () => {
+    const inline = (p: Awaited<ReturnType<typeof published>>, plant?: (windows: LiveNearby) => void): void => {
+      const near = JSON.parse(p.bucket.objects.get(NEARBY_PATH)!) as Nearby;
+      p.bucket.objects.delete(NEARBY_PATH);
+      plant?.(near.nearby);
+      p.editLive((live) => {
+        delete live.nearbyKey;
+        live.nearby = near.nearby;
+      });
+    };
+    const clean = await published();
+    try {
+      inline(clean);
+      const report = await verifyPublication(clean.bucket.source, { cache: false });
+      expect(report.missing).toEqual([]);
+      expect(report.findings).toEqual([]);
+    } finally {
+      clean.done();
+    }
+    const planted = await published();
+    try {
+      inline(planted, (windows) => {
+        const w = windows[LIVE_RUN]!;
+        w.ids.push(OTHER);
+        w.ty.push(3);
+      });
+      const report = await verifyPublication(planted.bucket.source, { cache: false });
+      expect(report.findings.every((f) => f.key === LIVE_PATH)).toBe(true);
+      expect(kindsAt(report.findings)).toEqual(["projection-drift", "withheld-field"]);
+    } finally {
+      planted.done();
+    }
+  });
 });

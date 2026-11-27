@@ -519,6 +519,20 @@ describe("a streamed run the secret scan refuses is held back, and the rest of t
     expect(named(store)["runB"]).toBe("v1/run/runB/v1/entries.json");
     expect(under(store, "v1/run/runB/v2/")).toEqual([]);
   });
+
+  test("with a delay, the held-back run keeps the version its held pass names", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const DELAY = 10;
+    await publishPass(renderer([{ id: "runB", ver: "v1" }]), store, state, { scan, delayMs: DELAY, now: () => 0 });
+    // Rendered while the first pass is still held: runB's kept version is that pass's.
+    const report = await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }]), store, state, { scan, delayMs: DELAY, now: () => 20 });
+    expect(report.heldBack).toEqual(["runB"]);
+    expect(state.secretScan?.heldBack).toEqual([{ runId: "runB", version: "v2", kept: "v1" }]);
+    await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }]), store, state, { scan, delayMs: DELAY, now: () => 40 });
+    expect(named(store)["runB"]).toBe("v1/run/runB/v1/entries.json");
+    expect(under(store, "v1/run/runB/")).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/entries.json", "v1/run/runB/v1/track.json"]);
+  });
 });
 
 // ------------------------------------------- a skipped run after a failed pass
@@ -1324,5 +1338,20 @@ describe("a delayed pass", () => {
     // Nothing a held pass names was pruned: g2's and g3's objects are all there.
     for (const v of ["2", "3"]) expect(store.objects.has(`v1/run/a/${v}/detail.json`)).toBe(true);
     expect(store.objects.has("v1/snap/g2/runs.json")).toBe(true);
+  });
+
+  test("a failed write leaves the pass held, and the next pass writes only what did not land", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("g1", [{ id: "a", ver: "1" }]), store, state, { delayMs: DELAY, now: () => 0 });
+    store.failPuts.add(MANIFEST_PATH);
+    await expect(publish(snapshot("g2", [{ id: "a", ver: "2" }]), store, state, { delayMs: DELAY, now: () => DELAY })).rejects.toBeInstanceOf(PublishError);
+    expect(state.held?.map((h) => h.gen)).toEqual(["g1", "g2"]);
+    store.failPuts.clear();
+    store.reset();
+    await publish(snapshot("g3", [{ id: "a", ver: "3" }]), store, state, { delayMs: DELAY, now: () => DELAY + 1 });
+    // live.json landed last time; only the manifest is left of g1.
+    expect(store.puts().filter((p) => p === LIVE_PATH || p === MANIFEST_PATH)).toEqual([MANIFEST_PATH]);
+    expect(state.lastGen).toBe("g1");
   });
 });

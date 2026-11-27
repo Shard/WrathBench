@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatStateSummary, type SnapshotLike } from "../src/context";
-import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
+import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv, type HarnessNotice } from "../src/sandbox/host";
 import type { ActionHintNote } from "@wrathbench/mcp";
 import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "@wrathbench/mcp";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -207,6 +207,17 @@ describe("sandbox evaluation", () => {
     // lazy respawn: the next snippet gets a fresh, working runtime
     const after = await host.evalSnippet("typeof precious");
     expect(after.value).toBe(JSON.stringify("undefined"));
+  }, 15_000);
+
+  test("child dying between snippets still produces the notice before the next eval", async () => {
+    const host = makeHost();
+    await host.evalSnippet("setTimeout(() => process.exit(3), 50);");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(host.totalRestarts).toBe(1);
+    expect(host.drainNotices().some((n) => n.kind === "sandbox_restarted")).toBe(true);
+    const res = await host.evalSnippet("1 + 1");
+    expect(res.ok).toBe(true);
+    expect(res.value).toBe("2");
   }, 15_000);
 
   test("a background rejection or uncaught exception is reported, never fatal", async () => {
@@ -499,7 +510,21 @@ describe("cooperative abort on timeout", () => {
         }
         return new Response("not found", { status: 404 });
       },
-      websocket: { message() {} },
+      websocket: {
+        // The module's state on a subscribe: without the character's own position `createSession` waits out its bound.
+        open(ws) {
+          ws.send(
+            JSON.stringify({
+              seq: 0,
+              opcode: "WB_SESSION_STATE",
+              opcodeId: 0xff03,
+              ts: Date.now(),
+              data: { character: "Fenwick", guid: "7", inWorld: true, map: 0, x: -6240, y: 331, z: 383, o: 0, level: 1 },
+            }),
+          );
+        },
+        message() {},
+      },
     });
     return {
       url: `http://127.0.0.1:${server.port}`,
@@ -668,7 +693,9 @@ describe("cooperative abort on timeout", () => {
       "const c = new AbortController(); sdk.events.waitFor(() => false, { timeout: 10_000, signal: c.signal });\n" +
         "c.abort(new Error('mine')); await sleep(100);",
     );
-    const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+    // The notice is its own message from the child and can land a beat after the result.
+    const notes: HarnessNotice[] = [];
+    await eventually(() => notes.push(...host.drainNotices().filter((n) => n.kind === "session_note")) > 0);
     expect(notes).toHaveLength(1);
     expect(notes[0]!.text).toContain("unhandled promise rejection");
     expect(notes[0]!.text).toContain("mine");

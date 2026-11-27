@@ -2091,6 +2091,33 @@ describe("pause and resume across a fleet stop", () => {
     }
   });
 
+  test("a paused probe on a pinned arm waits, listed, while run pods are off, and resumes on its arm once they are on", () => {
+    // The launcher would refuse the resume before the run moved, and the pause
+    // would stand: so the run is neither resumed as a child process nor ended.
+    const twoArms = definition({ id: "race-probe", version: 2, cells: [{ id: "orc-warrior", race: 2, class: 1 }], arms: [{ id: "a", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-1" }, { id: "b", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-2" }] });
+    const j = joined([twoArms], { "race-probe": { version: 2, assignments: [{ model: "glm" }] } });
+    const onArm = paused({
+      runId: "fleet-glm-race-probe-orc-warrior-z-ai-glm-5-2-free-20261009-a3",
+      model: "z-ai/glm-5.2:free",
+      account: "RUNNER3",
+      episode: "probing",
+      episodeMs: 12 * H,
+      campaign: "race-probe",
+      campaignVersion: 2,
+      cell: "orc-warrior",
+      ref: "glm",
+      arm: "a",
+      pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: 5 * H },
+    });
+    const podsOff = { ...config(), campaigns: j.campaigns };
+    const waiting = planResumes({ runs: [onArm], config: podsOff, running: new Map(), held, now: NOW });
+    expect(waiting.resume).toEqual([]);
+    expect(waiting.end).toEqual([]);
+    expect(waiting.listed[0]?.why).toContain('arm a pins an image and runs only in a run pod; policy.runPods is "off"');
+    const podsOn = { ...podsOff, policy: { ...podsOff.policy, runPods: "probes" as const } };
+    expect(planResumes({ runs: [onArm], config: podsOn, running: new Map(), held, now: NOW }).resume.map((r) => r.job.probe?.arm)).toEqual(["a"]);
+  });
+
   test("only a probe a run pod ran resumes across harness series, and only while run pods are on", () => {
     // A pod's image.json is what pins a resume to the build it started on.
     // campaign.json alone pins nothing: with run pods off, or for a probe that

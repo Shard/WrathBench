@@ -17,7 +17,8 @@
  * uncaught throw in a computation stops every computation after it, and the
  * page sat on the dead replay until a reload. The rule here is that no
  * expression narrows a signal by assertion: every read of the track, the
- * selection or the route goes through a `Show` accessor or a default.
+ * selection or the route goes through a `Show` accessor or a default, and
+ * `test/playbar-swap.test.tsx` performs the swap against a DOM to hold it.
  *
  * The live link is an anchor rather than a button with a handler: the swap is
  * owned by the page's route effect, so the control needs no logic of its own,

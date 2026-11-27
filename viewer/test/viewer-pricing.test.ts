@@ -535,6 +535,21 @@ describe("a codex run, priced under the vendor prefix", () => {
     expect(priceFor({ ...astra, harness: "wrathbench", driver: "openai" })).toBeNull();
   });
 
+  test("gpt-6.1-sol is priced on its own row, never gpt-6-sol's", () => {
+    // Nearly all of a codex run's prompt is cache reads, and the two models
+    // differ there: borrowing the sibling's row misreads the whole run.
+    for (const model of ["gpt-6-sol", "gpt-6.1-sol"]) {
+      const id = `openai/${model}`;
+      const own = syncedPrice(id);
+      expect(own).not.toBeNull();
+      const row = priceFor({ ...astra, model });
+      expect(row?.id).toBe(id);
+      // The rates are the ones the synced list holds under that id.
+      for (const rate of ["input", "output", "cacheRead", "cacheWrite"] as const) expect(row![rate]).toBe(own![rate]);
+    }
+    expect(OPENROUTER_PRICES.models["openai/gpt-6.1-sol"]).not.toBe(OPENROUTER_PRICES.models["openai/gpt-6-sol"]);
+  });
+
   test("a codex model the sync has not seen is told to run the sync, not read as a Claude model", () => {
     const run = { ...astra, model: "gpt-7-unreleased" };
     const c = runCost({ run, tokens: tokens({ promptTokens: 1_000_000 }), reportedUsd: null });
@@ -811,7 +826,8 @@ describe("runCost", () => {
     expect(c.note).not.toContain("upper bound");
     // The date rides the wire, so a display string cannot outlive the rate.
     expect(c.priceId).toBe("claude-sonnet-5");
-    expect(c.asOf).toBe("2026-11-26");
+    expect(c.asOf).toBe(claudePrice("claude-sonnet-5")!.asOf);
+    expect(c.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   test("an unknown model gets no cost and says why", () => {

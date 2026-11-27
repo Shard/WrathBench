@@ -157,7 +157,7 @@ describe("a run row off the store is the run row off the files", () => {
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(await readMoves(runsDir, "run-1")));
   });
 
-  test("a v1 run's intentions are its session record's; the store's copy, when it has one, is the same", async () => {
+  test("a v1 run's intentions are its session record's, and the store's copy is the same", async () => {
     const dir = tmpRoot();
     // No 0.5 move table: the moves are in session/calls, the trajectory's lines their mirror.
     const runDir = writeRun(dir, "run-v1", {}, { v1: true });
@@ -169,7 +169,8 @@ describe("a run row off the store is the run row off the files", () => {
     // The track route takes the store's rows when it has any and the files'
     // otherwise (`trackCoreOf`), so either answer must be this one.
     const fromStore = moveViewsOf(await localRunStore(dir).moveRows("run-v1"));
-    if (fromStore.length > 0) expect(JSON.stringify(fromStore)).toBe(JSON.stringify(files));
+    expect(fromStore).toHaveLength(files.length);
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(files));
   });
 
   test("the totals and the fact come back whole", async () => {

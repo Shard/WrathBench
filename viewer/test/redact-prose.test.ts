@@ -359,6 +359,37 @@ describe("the SDK's option lists", () => {
   });
 });
 
+describe("names survive", () => {
+  // Keeping names is a publication rule: only prose is replaced.
+  const kept: [string, () => string, string[]][] = [
+    [
+      "the SDK's `id:\"…\"` name list, the form its option lists share",
+      () => redactProseText(`error (2ms)\nTypeError: setTarget(guid) got "Kobold", which matches 2 things in view ([17:"${N.npc}", 18:"${N.npc}"])`),
+      [`17:"${N.npc}"`, `18:"${N.npc}"`],
+    ],
+    [
+      "a mail subject and a quest title beside the prose that goes",
+      () =>
+        JSON.stringify(
+          redactProseValue({
+            mail: { mailId: 3, subject: N.subject, body: P.mailBody },
+            log: [{ slot: 0, questId: 7, title: N.quest, objectives: [{ kind: "kill", entry: 6, text: P.objectiveText, required: 8, have: 3, done: false }] }],
+          }),
+        ),
+      [N.subject, N.quest],
+    ],
+    [
+      "a name in a shape that is not prose, whatever its other keys are called",
+      () => JSON.stringify(redactProseValue({ opcode: "SMSG_LOG_XPGAIN", data: { amount: 50, text: "not prose by shape" }, nested: [{ name: N.npc }] })),
+      [N.npc, "not prose by shape"],
+    ],
+  ];
+  test.each(kept)("%s", (_label, render, names) => {
+    const out = render();
+    for (const name of names) expect(out).toContain(name);
+  });
+});
+
 describe("redactGameProse", () => {
   test("touches tool results and a raw batch, nothing else; the reference tool goes whole", () => {
     const base = { i: 1, ts: 1, start: 0, end: 1 };
