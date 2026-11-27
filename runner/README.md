@@ -27,7 +27,7 @@ events, tool calls and the live ring of nearby units, in the format
 registry, context and watchdogs it supplies every dispatcher. It depends on the stack at an exact version
 (`package.json`, `workspace:0.2.0`) and records it in `meta.json` as
 `sdkVersion`. The operator launches it through
-`infra/run-episode.sh` or the fleet supervisor; the viewer (`runner/viewer/`)
+`infra/run-episode.sh` or the fleet supervisor; the viewer (`viewer/`)
 reads what it wrote.
 
 Everything here is model-agnostic. The only per-run variables are the driver
@@ -1307,7 +1307,7 @@ harness bug or an edited record. Records that carry their whole message array
 claude-code, codex and pi request, whose context the CLI owns and which keep
 `messages: [user]` as before — are counted, not rebuilt. A file can hold both:
 a run that started before the slim shape and resumed after it has full records
-then slim ones, and every reader takes either (`runner/viewer/tail.ts` reads a
+then slim ones, and every reader takes either (`viewer/tail.ts` reads a
 slim record's stored counts, and its raw view rebuilds the request through the
 same code). Old trajectories are never rewritten.
 

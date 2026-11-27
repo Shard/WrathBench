@@ -252,7 +252,7 @@ export function snapshotBanner(state: SnapshotState, now: number): SnapshotBanne
  *
  * The artifact is the `episode=all&includeOverrides=1` projection at
  * `harness=all`, so its rows ARE the server's `everything` and the three
- * filters compose here exactly as they do in `runner/viewer/api-results.ts`:
+ * filters compose here exactly as they do in `viewer/api-results.ts`:
  * the harness narrows first (it is a tag on the row, not a partition), then
  * the tier — filtering to a tier means filtering to its *members*, stamped
  * with the id and not overridden, which `includeOverrides` widens.

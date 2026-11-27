@@ -24,6 +24,7 @@ function tree(files: Record<string, string>): string {
     ".bun-version": "1.4.4\n",
     "package.json": pkg({ name: "wrathbench", engines: { bun: "1.4.4" }, devDependencies: { typescript: "7.0.2", "@types/bun": "1.4.4" } }),
     "runner/package.json": pkg({ name: "@wrathbench/runner", dependencies: { "@wrathbench/sdk": "workspace:0.1.0", zod: "4.4.3" } }),
+    "viewer/package.json": pkg({ name: "@wrathbench/viewer", dependencies: { zod: "4.4.3" } }),
     "wiki/package.json": pkg({ name: "@wrathbench/wiki" }),
     "dashboard/package.json": pkg({ name: "@wrathbench/dashboard" }),
     "collector/package.json": pkg({ name: "@wrathbench/collector", dependencies: { zod: "4.4.3" } }),
@@ -116,7 +117,7 @@ describe("the shared pins", () => {
       "wrath-mcp/package.json": pkg({ name: "wrath-mcp", engines: { bun: "1.4.4" }, devDependencies: { typescript: "7.0.3", "@types/bun": "1.4.4" } }),
     });
     expect(checkStackPins(root)).toEqual([
-      "zod is pinned differently: runner/package.json 4.4.3, collector/package.json 4.4.3, wrath-mcp/sdk/package.json 4.5.0, wrath-mcp/mcp/package.json 4.4.3",
+      "zod is pinned differently: runner/package.json 4.4.3, viewer/package.json 4.4.3, collector/package.json 4.4.3, wrath-mcp/sdk/package.json 4.5.0, wrath-mcp/mcp/package.json 4.4.3",
       "typescript is pinned differently: package.json 7.0.2, wrath-mcp/package.json 7.0.3",
     ]);
   });

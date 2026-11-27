@@ -78,7 +78,7 @@ describe("nothing a public reader clicks needs the live viewer", () => {
    * builds, so its chunk ships in the public bundle; what keeps drafts out of
    * the public site is that nothing there can reach them. The server side —
    * a public handle 404s every draft route and the publisher renders none —
-   * is pinned in runner/test/viewer-config-drafts.test.ts.
+   * is pinned in viewer/test/viewer-config-drafts.test.ts.
    */
   test("the public build's client has no draft surface, and the page never asks for one there", () => {
     // The client a public build reads with names no config route at all.

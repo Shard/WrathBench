@@ -638,7 +638,7 @@ victim guid, VanCleef and 628 per member, deaths per member (existing
 records), wall clock from the first `instance entered` to the VanCleef kill,
 and the five termination reasons. A wipe is derivable as five deaths with no
 `resurrect` between them. The scored episodes now read the same signals
-through the dungeon board's derivation (`runner/viewer/dungeons.ts`;
+through the dungeon board's derivation (`viewer/dungeons.ts`;
 docs/METHODOLOGY.md, "The Deadmines evals, and rung 6"), and the recording
 above needed no re-run for it. Milestone
 rung 6 (`dashboard/src/lib/ladder.ts`, `RUNGS` n 6) is no longer this: since

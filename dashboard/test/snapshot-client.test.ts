@@ -13,7 +13,7 @@
  *   asserted on an injected clock rather than a real one.
  * - **Parity.** `/api/results`' query moves client-side, so the filter is
  *   re-run here against a transcription of the server's own rules
- *   (`runner/viewer/api-evals.ts`' `resultsResponse`) rather than against my reading
+ *   (`viewer/api-evals.ts`' `resultsResponse`) rather than against my reading
  *   of them — including the two bookkeeping counts, which are the half a
  *   silently-wrong filter would not show.
  *
@@ -39,7 +39,7 @@ import type {
   ResultsResponse,
   RunDetailResponse,
   TrackResponse,
-} from "../../runner/viewer/api-types";
+} from "../../viewer/api-types";
 import { emptyNearbyWindow } from "@wrathbench/inspector/codec/nearby";
 import { PUBLIC_NEARBY_KEY } from "@viewer/public-keys";
 import { ApiError } from "../src/api/client";
@@ -455,7 +455,7 @@ describe("the memo", () => {
 /* --- results parity --------------------------------------------------- */
 
 /**
- * `runner/viewer/api-evals.ts`' `resultsResponse`, transcribed.
+ * `viewer/api-evals.ts`' `resultsResponse`, transcribed.
  *
  * The oracle is deliberately a second copy of the server's rules rather than a
  * call into `projectResults`: the point of the assertion is that two

@@ -1,7 +1,7 @@
 /**
  * The typed client over the viewer's read-only API.
  *
- * Every shape here comes from `runner/viewer/api-types.ts`, which the viewer
+ * Every shape here comes from `viewer/api-types.ts`, which the viewer
  * itself imports — the two sides share one declaration rather than each keeping
  * a copy that drifts. Nothing in this file writes: there is no method that
  * sends a body, because there is no route that takes one.

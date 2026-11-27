@@ -127,7 +127,7 @@ export interface CliCredential {
   containerRefusal(env: string): string;
 }
 
-/** How a driver's runs are priced (runner/viewer/pricing.ts). */
+/** How a driver's runs are priced (viewer/pricing.ts). */
 export interface DriverCost {
   /**
    * Where a run's actual cost comes from: the provider's charge per response,

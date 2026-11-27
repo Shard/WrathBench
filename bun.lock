@@ -52,6 +52,15 @@
         "zod": "4.6.7",
       },
     },
+    "viewer": {
+      "name": "@wrathbench/viewer",
+      "version": "0.0.0",
+      "dependencies": {
+        "@wrathbench/inspector": "workspace:0.2.0",
+        "@wrathbench/mcp": "workspace:0.2.0",
+        "zod": "4.6.7",
+      },
+    },
     "wiki": {
       "name": "@wrathbench/wiki",
       "version": "0.0.0",
@@ -399,6 +408,8 @@
     "@wrathbench/runner": ["@wrathbench/runner@workspace:runner"],
 
     "@wrathbench/sdk": ["@wrathbench/sdk@workspace:wrath-mcp/sdk"],
+
+    "@wrathbench/viewer": ["@wrathbench/viewer@workspace:viewer"],
 
     "@wrathbench/wiki": ["@wrathbench/wiki@workspace:wiki"],
 

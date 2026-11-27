@@ -50,7 +50,7 @@
  *
  * A `move` record is joined the same way where it says whose it is: the
  * viewer stamps it with the `callTs` of the call that dispatched it and marks
- * a routine's (`runner/viewer/record-feed.ts`), and a call's own moves are
+ * a routine's (`viewer/record-feed.ts`), and a call's own moves are
  * already on its card, as the action log's `move to …` lines with their
  * verdicts. So they are held on the group (`moves`) rather than drawn again
  * under it. A routine's moves, a move whose call is off the window, and every

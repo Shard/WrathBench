@@ -1,13 +1,13 @@
 /**
  * The models table's pure layer. The projection is tested server-side
- * (`runner/test/models.test.ts`, `runner/test/viewer-models.test.ts`); what is
+ * (`runner/test/models.test.ts`, `viewer/test/viewer-models.test.ts`); what is
  * pinned here is how the page phrases it, and the one lookup other pages depend
  * on — `(model, effort) → roster name`, which is the same key the projection
  * matches runs on and the only way a run page can link back to a row.
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ModelRowView } from "../../runner/viewer/api-types";
+import type { ModelRowView } from "../../viewer/api-types";
 import { MODEL_COLUMNS, columnClass, modelRunCost, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, modelTableRows, noteOf, schedulableOf, statusClass, windowParam } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {

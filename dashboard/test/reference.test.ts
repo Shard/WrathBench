@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ResultRun } from "../../runner/viewer/api-types";
+import type { ResultRun } from "../../viewer/api-types";
 import {
   HUMAN_SPEEDRUN_BANDS,
   ceilingLabel,

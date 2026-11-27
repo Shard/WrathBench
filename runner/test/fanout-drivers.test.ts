@@ -28,7 +28,7 @@ import { loadRunConfig, type RunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote, openFanout, readRoster, ROSTER_FILE } from "../src/fanout-run";
 import { configFromArgs } from "../src/run";
-import { runsSource } from "../viewer/runs-source";
+import { runsSource } from "../../viewer/runs-source";
 import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
 import { characterSessionDir, RecordSignals, SESSION_DIR, SESSIONS_DIR } from "../src/session-record";
 import { toolsFor } from "../src/tools";

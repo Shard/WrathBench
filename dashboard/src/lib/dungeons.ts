@@ -1,6 +1,6 @@
 /**
  * The dungeon board's display: labels and tooltips for the rows the viewer
- * derives (`runner/viewer/dungeons.ts`, where the order and the rules live).
+ * derives (`viewer/dungeons.ts`, where the order and the rules live).
  * Pure, so what the page claims is testable without a browser.
  */
 

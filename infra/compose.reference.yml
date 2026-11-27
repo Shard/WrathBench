@@ -45,7 +45,7 @@ services:
     environment:
       # The config store, so site settings survive a recreate.
       WRATHBENCH_CONFIG_DB: /config/config.sqlite
-      # The admin pages and the config API (runner/viewer/groups.ts).
+      # The admin pages and the config API (viewer/groups.ts).
       WRATHBENCH_ADMIN: "1"
       # The module's /health, for the server build and status on /api/info.
       # The port secret is the one the worldserver holds.

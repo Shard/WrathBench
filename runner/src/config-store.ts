@@ -199,7 +199,7 @@ export class ConfigRejected extends Error {
 /**
  * Drafts: models the OpenRouter catalogue offers that the roster does not name
  * yet (GitHub issue #66; the fetch, the estimate and the page's views are
- * `runner/viewer/drafts.ts`). They live in this store as `proposed/<model id>`
+ * `viewer/drafts.ts`). They live in this store as `proposed/<model id>`
  * rows of the same table — the model id is the whole rest of the key, slash
  * included (`proposed/z-ai/glm-5.3-flash:free`) — and they are NOT config:
  *

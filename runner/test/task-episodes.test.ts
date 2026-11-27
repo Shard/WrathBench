@@ -30,7 +30,7 @@ import { taskDefinition, taskDefinitionProblem, taskHash } from "../src/task-epi
 import { tempDirs } from "./fixtures/temp-dirs";
 import { countedFact } from "./fixtures/counted-fact";
 import { DEFAULT_POLICY, projectModel, schedulability, type RosterModel } from "../src/models";
-import { withoutUnpublishedEpisodes } from "../viewer/public-projection";
+import { withoutUnpublishedEpisodes } from "../../viewer/public-projection";
 
 const tempDir = tempDirs();
 const ROOT = join(import.meta.dir, "..", "campaigns");
@@ -214,7 +214,7 @@ test("a refused task launch is a CampaignLaunchError", () => {
 
 describe("the public projection of the task episodes", () => {
   test("names deadmines-solo on the episode list and a model row, and not the five-agent id", async () => {
-    const { projectEpisodes, projectModels } = await import("../viewer/public-projection");
+    const { projectEpisodes, projectModels } = await import("../../viewer/public-projection");
     const tier = (id: string) => ({ id, minutes: 240, idleMinutes: 20, noXpMinutes: null, toolCalls: 8000, objectiveAllowed: true, scored: true, summary: id, members: 1, overrides: 0, lapsed: 0, derived: 0 });
     const episodes = projectEpisodes({ episodes: ["e90", "deadmines-solo", "deadmines"].map(tier), untiered: 0, now: 1 } as unknown as Parameters<typeof projectEpisodes>[0]);
     expect(episodes.episodes.map((e) => e.id)).toEqual(["e90", "deadmines-solo"]);

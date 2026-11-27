@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FeedEntry } from "../../runner/viewer/api-types";
+import type { FeedEntry } from "../../viewer/api-types";
 import {
   EXPAND_DEFAULT,
   EXPAND_PRESETS,

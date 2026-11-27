@@ -5,7 +5,7 @@
  * issue #31, criteria 1 and 2).
  *
  * The publisher (`infra/publish-core.ts`) proves ordering against a fake
- * bucket, and the renderer (`runner/viewer/snapshot.ts`) proves the projection
+ * bucket, and the renderer (`viewer/snapshot.ts`) proves the projection
  * against a poisoned fixture. Neither proves anything about the objects a real
  * R2 bucket is holding right now: a PUT that succeeded, a prune that raced, a
  * publisher rolled back across a layout change, an object written by an older
@@ -23,7 +23,7 @@
  *    checks, because one of them alone would be a re-statement of the
  *    publisher's own beliefs:
  *    - **Re-projection.** Every published body is fed back through the same
- *      `runner/viewer/public-projection.ts` function the renderer used, and the
+ *      `viewer/public-projection.ts` function the renderer used, and the
  *      result must equal the body it came from. The projection is an allowlist
  *      that builds fresh objects, so it is a fixed point on its own output:
  *      any extra field, any un-nulled `apiBase`, any un-tokenised
@@ -84,11 +84,11 @@ import {
   projectTools,
   projectTrack,
   projectTraceSegment,
-} from "../runner/viewer/public-projection";
-import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
-import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
+} from "../viewer/public-projection";
+import { REDACTED_PROSE } from "../viewer/redact-prose";
+import { LOCAL_PATH_ROOTS } from "../viewer/scrub-paths";
 import { unpackSegs } from "@wrathbench/inspector/codec/trace";
-import { PUBLIC_NEARBY_SPAN_MS } from "../runner/viewer/public-keys";
+import { PUBLIC_NEARBY_SPAN_MS } from "../viewer/public-keys";
 import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
 import { isNotAModelRun } from "../runner/src/config";
 import { LIVE_PATH, MANIFEST_PATH, NEARBY_PATH, classifyPath, traceSegmentPath } from "./publish-core";
@@ -278,7 +278,7 @@ export interface AcceptReport {
  * A local filesystem path. Anchored on the separator that follows a known root
  * so that a zone name, an in-game phrase or a `1/2` fraction cannot match.
  *
- * The roots come from `runner/viewer/scrub-paths.ts`, the module the projection
+ * The roots come from `viewer/scrub-paths.ts`, the module the projection
  * scrubs with, so the scrub and the verifier cannot drift apart. `wrathbench`
  * is deliberately still on that list after the scrub landed: a published string
  * that still carries the container prefix means the scrub did not run over it,
@@ -503,7 +503,7 @@ export function scanBody(key: string, body: unknown): { findings: Finding[]; res
       findings.push({ kind: "withheld-field", key, at: path, detail: `pauseReason = ${excerpt(String(v))}` });
     }
     // The reference tool's whole result is withheld (`WITHHELD_TOOLS` in
-    // runner/viewer/redact-prose.ts); anything else there is wiki text.
+    // viewer/redact-prose.ts); anything else there is wiki text.
     if (k === "name" && v === "search_reference") {
       const entry = valueAt(body, path.replace(/\.name$/, "")) as { text?: unknown } | undefined;
       if (entry !== undefined && typeof entry.text === "string" && entry.text !== REDACTED_PROSE) {

@@ -213,7 +213,7 @@ staging:
   soapPort: 7878
   stagerPasswordKey: WRATHBENCH_STAGER_PASSWORD
 
-# The three groups a deployment is made of (runner/viewer/groups.ts;
+# The three groups a deployment is made of (viewer/groups.ts;
 # docs/ARCHITECTURE.md, "Groups"). Each is on by default, which renders what
 # the chart rendered before groups existed. A group that is off is absent, not
 # hidden: its workloads are not rendered, whatever their own `enabled` says,

@@ -30,7 +30,7 @@ unchanged.
 
 ## The live viewer is not a public service
 
-Public delivery is **static snapshots only**. `runner/viewer` — the live
+Public delivery is **static snapshots only**. `viewer` — the live
 viewer, on loopback or an explicitly opted-in LAN — is private and
 operator-only, and running it Internet-facing is unsupported: it reads the runs
 directory, tails live trajectories, holds an SSE connection open per watcher,
@@ -59,7 +59,7 @@ hug-of-death survivable by construction.
 
 ### The publisher (lab side)
 
-A Bun process (`runner/viewer/snapshot.ts` for rendering,
+A Bun process (`viewer/snapshot.ts` for rendering,
 `infra/publish-dashboard.ts` for the CLI, following the existing seam: render
 logic lives with the viewer's readers, operational CLIs live in `infra/`). It
 calls the viewer's `createApi` handler in-process — the handler is already "a
@@ -339,7 +339,7 @@ holds its window.
   nine minutes behind the newest `live.json`, and from one pass to the next
   its playhead reaches about nine minutes behind the pass in hand at the
   nominal cadence and eleven with passes ten minutes apart. Twelve covers both
-  (`runner/viewer/public-keys.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
+  (`viewer/public-keys.ts`; `dashboard/test/nearbyplayer.test.ts` runs the
   clock against it). A slower publisher leaves the layer empty for part of a
   cycle rather than showing old units. The window is read straight after the
   feed, at the top of the pass, so it reaches as far back as the playhead.
@@ -549,12 +549,12 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
 - **Minimap tiles**: shown on the public map, uploaded by the
   explicit `infra/publish-tiles.ts` step above and never by a
   snapshot pass. Independent of that: no snapshot
-  *artifact* may name a tile (`runner/test/snapshot.test.ts` pins it).
+  *artifact* may name a tile (`viewer/test/snapshot.test.ts` pins it).
 - **Entries: names and ids stay, game prose goes** (docs/DATA-AND-LEGAL.md,
   "Trajectory logs"). One window per run is published —
   the feed's tail, `entries.json` beside `detail.json` — after `projectEntry`
   (an allowlist per entry type) and `redactGameProse`
-  (`runner/viewer/redact-prose.ts`), which replaces the prose fields enumerated
+  (`viewer/redact-prose.ts`), which replaces the prose fields enumerated
   from `wrath-mcp/sdk/src/protocol.ts` and the SDK's own types wherever a decoded
   payload appears in a tool result — as JSON, or as the sandbox renders a
   snippet's value and its console objects (`Bun.inspect`, read in place) —
@@ -577,7 +577,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   echoed it in its action replies carry it wherever a snippet logged one, in
   the model-authored text above. As a backstop for those, the public
   boundary strikes it by value, after projection (`publicText`,
-  `runner/viewer/api.ts`), from every body that carries a run's text: the
+  `viewer/api.ts`), from every body that carries a run's text: the
   run's own detail, entries, track and scratchpad, its trace windows and the
   trace index's tail, each position's episodic status and trace tail on the
   live map (`live.json`), and a character's attempts. The
@@ -585,7 +585,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   (a run from before token hardening used its run id) is left alone.
 - **Paths**: a container-internal prefix is made repo-relative — every
   exported projector's output crosses `scrubPathsValue`
-  (`runner/viewer/scrub-paths.ts`); the model's text is otherwise as written, and every other absolute path stays "Never".
+  (`viewer/scrub-paths.ts`); the model's text is otherwise as written, and every other absolute path stays "Never".
 - **The action log ships** in the window: an `actions` record's notes are
   rebuilt field by field (`projectActionNotes`), their `args` against the
   body fields `ActionRequest` declares, and the client-cache `names` they
@@ -698,7 +698,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   are published, and only their `clips/` files. Live viewing is a private
   viewer's alone (operator, 2026-11-15): it shows a live run's newest frame on
   the run page and in the map's sidebar, and nothing on the public site acts as
-  a live view of the world (`runner/viewer/README.md`, "The live still").
+  a live view of the world (`viewer/README.md`, "The live still").
   `projectClips` rebuilds the list field by field: each part's moment and
   length, and its video and poster as this part's bucket key and nothing
   else, up to the first part that does not read; each chapter's time, part,
@@ -828,7 +828,7 @@ pass leaves out, and who reads what is left:
   single run's page. A model's run list carries `actual` and the same listed
   estimate, which its column prints where there is no actual. A dungeon board
   row's best attempt carries one number, `costUsd`: its runs' costs as the ladder reads each
-  (`runner/viewer/run-cost.ts`), summed, and null when any run has none.
+  (`viewer/run-cost.ts`), summed, and null when any run has none.
 - **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
   `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
   reads the first six off the run's own row and tuple. It carries
@@ -868,10 +868,10 @@ zone and area ids and their served names), and its own party chat lines,
 which its trace windows already publish as the map's bubbles, masked for
 credential shapes as there. A campaign square of a party definition lists its
 attempts' ids beside its run ids (`parties`).
-`runner/test/public-projection.test.ts` pins each field. A member run's
+`viewer/test/public-projection.test.ts` pins each field. A member run's
 objects re-key once for it.
 
-`runner/test/public-projection.test.ts` pins each of these and scans the
+`viewer/test/public-projection.test.ts` pins each of these and scans the
 dashboard's source for the unambiguous names, so a page that starts to read one
 fails there until the projection carries it again. Nothing about a trace
 segment, a run's character, the leaderboards' numbers or anything the model sees
@@ -889,7 +889,7 @@ mode; the map's layer reads neither).
 
 **The map's quest count is the run's.** A live position's `questsCompleted` in
 `live.json`, and each point's in a track, is summed across the counter's
-restarts as the run's detail is (`runner/viewer/README.md`): the recorded count
+restarts as the run's detail is (`viewer/README.md`): the recorded count
 is its process's own and reads zero again after every resume, which a freeplay
 character goes through most days. A track's points carried null before, so the
 replay's sidebar read "—". Every run that recorded a count changes its track's
@@ -949,7 +949,7 @@ episode, harness, effort, wiki, compaction window, loop and `yield`, and what
 is being tested (its subject kind, a local build's serving, an external
 agent's declared name and version), and never the prompt hash, which every in-series prompt patch moves, nor the requested
 routing: a model's runs on any provider are one row (operator, 2026-11-16).
-The key is `conditionKey` in `runner/viewer/condition.ts`, read off the stamped
+The key is `conditionKey` in `viewer/condition.ts`, read off the stamped
 tuple, with an absent field read as its default, so a run stamped before a
 field existed is the snippet loop with nothing to state. A table row, a
 scatter point, a mean line and the shared highlight are all keyed on that

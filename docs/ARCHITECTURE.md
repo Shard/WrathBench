@@ -24,7 +24,7 @@ flowchart TB
     end
 
     subgraph view["Reading results"]
-        viewer["Viewer API<br/>runner/viewer: /api,<br/>derivations, ladder;<br/>the inspector's API mounted"]
+        viewer["Viewer API<br/>viewer: /api,<br/>derivations, ladder;<br/>the inspector's API mounted"]
         dashboard["Dashboard SPA"]
     end
 
@@ -69,7 +69,7 @@ downstream of those files is derived.
 ### Groups
 
 A deployment is made of three groups, and any of them can be switched off
-(GitHub issue #427; `runner/viewer/groups.ts`): **runner** (the agent loop, the
+(GitHub issue #427; `viewer/groups.ts`): **runner** (the agent loop, the
 drivers, providers and credentials, the fleet supervisor), **evals** (episodes,
 campaigns, scoring, the ladder, comparability) and **viewer** (the inspector,
 the run pages, the public site). A group that is off is absent, not hidden:
@@ -202,7 +202,7 @@ takes from the stack and how.
   (`partyOwnGuids`), so a group row written before a sibling's record names
   its character still keeps it. Any other player is never written.
 - **Reading it back** (`@wrathbench/inspector`): the viewer reads every
-  session through the inspector's source interface. `runner/viewer/runs-source.ts`
+  session through the inspector's source interface. `viewer/runs-source.ts`
   implements it over the runs directory: a v1 run is a session under its run
   id, read with the inspector's store reader, a fan-out run's characters are
   sessions under `<run-id>~<Character>` listed with the run id as their
@@ -225,7 +225,7 @@ takes from the stack and how.
   the map's replay and the run page share (`dashboard/README.md`), which draw
   models and logos, run ids, replay and party links, reflection status and
   attempts; the map view's maths, which are built on the viewer's world and
-  tile-pyramid transforms (`runner/viewer/worldmap.ts`, `tileindex.ts`) and
+  tile-pyramid transforms (`viewer/worldmap.ts`, `tileindex.ts`) and
   key a pip by run; and the minimap and its tooling.
 
 **Versions, as built.** The SDK has its own version (docs/METHODOLOGY.md,
@@ -250,7 +250,7 @@ checks before a launch or resume (`fetchServerBuild`;
   The loop is the program loop: the model keeps a small file workspace in the run directory (`program/`) whose exported async functions are routines the stack runs and tracks, and it sleeps between wakes the runner decides (`runner/src/wake.ts`). The fixed loop, claude-code and codex run it; pi runs the snippet loop, kept as the legacy arm of probe campaigns, until its program adapter exists (`runner/README.md`, "The program loop").
 - Fan-out, by grant: `--max-characters <n> --accounts <a,b,…>` (`RunConfig.fanout`, `runner/src/fanout-run.ts`) lets one run's agent have up to `n` characters in the world at once, on those accounts and one model credential (Shard/wrath-mcp#29). The mechanism is the stack's ([wrath-mcp's architecture](https://github.com/Shard/wrath-mcp/blob/master/docs/ARCHITECTURE.md), "Several characters"): one sandbox child holding a client per character, the roster that leases each character's token, and the tool list a granted client is served. The run adds the grant, a session record per character (`sessions/<Character>/`), and `roster.json` (mode 0600: each character's account and session token), which is what a resume logs the characters back in from. On the snippet loop it is served the nine tools with `character` on three of them, and on the program loop the program list with `character` on `run_snippet`, the two routine tools and the two views; the three roster tools follow either, in the stack's default wording, and its turn context is the roll-up. On the program loop the roll-up, the merged feed's "who saw it" and `list_characters` are worded by the runner's own copy of the stack's default (`runner/src/fanout-wording.ts`), held to it byte for byte by a golden test so a stack bump cannot move scored surface; that wording stands for the 1.0 series, frozen as deadmines@5 ran it (operator delegated, 2026-11-15). The tool descriptions and refusals are still the stack's, which the runner cannot word. It is refused for a scored episode other than `deadmines-solo`, a party member and a continuation; on `deadmines-solo` the tuple carries its agents and characters as keys (`comparability.ts`), and elsewhere it is not in the tuple (as a party is not). A scored Deadmines attempt reaches the same launch through a file its id pins (`runner/src/task-episodes.ts`), drawn by the policy rather than a campaign, stamped with its episode and no campaign. The fleet launches one as a party campaign's one-agent arm (`arms[].agents: 1`, docs/EPISODES.md): the job holds every account of the party, as a party's does, but one credential slot and one driver session (`FleetJob.fanout`, `sessionsOf`), the roster stages the party and launches one run on it, and every reader of who holds an account counts each account of a run's grant (`accountsOfRun`, `accountHeldBy`), so a supervisor restart or another job never takes one while the run is live, and its resume waits for all of them. By hand it is still `docs/RUNBOOK.md`, "A fan-out run, by hand". A run with no `fanout` in its config, which is every other run, is served, recorded and torn down exactly as before.
 - Watchdogs: idle timeout, no-XP timeout (off unless a run names one), episode time limit, snippet runaway. Each ends the episode with a named termination reason.
-- The run's records, in two halves. The session record is the stack's, written into the run's `session/` ("Persistence", below): the trace, game events, tool calls, the action log and movement intentions. The trajectory log is the runner's: JSONL per run with the model's side, every request and response, snippet and result, every event batch the model saw, token and cost figures, compaction, pauses and the termination. Nothing game-side is in the trajectory: the scorer, the collector and the run page's feed read the session record, and the feed merges its rows into the trajectory's by time, each with the turn in flight joined by timestamp (`runner/viewer/record-feed.ts`). The one event list the trajectory keeps is each turn's context window (`events_served`, `via: "context"`), because it is what the model was shown. A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
+- The run's records, in two halves. The session record is the stack's, written into the run's `session/` ("Persistence", below): the trace, game events, tool calls, the action log and movement intentions. The trajectory log is the runner's: JSONL per run with the model's side, every request and response, snippet and result, every event batch the model saw, token and cost figures, compaction, pauses and the termination. Nothing game-side is in the trajectory: the scorer, the collector and the run page's feed read the session record, and the feed merges its rows into the trajectory's by time, each with the turn in flight joined by timestamp (`viewer/record-feed.ts`). The one event list the trajectory keeps is each turn's context window (`events_served`, `via: "context"`), because it is what the model was shown. A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with the count of its folded messages and a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 - Drivers (`runner/src/drivers.ts`): `openai`, the fixed loop over the chat adapter; three CLI scaffolds, `claude-code`, `codex` and `pi`; and three that never score, `stub` (a scripted response list, for testing the harness without a model), `reference` (the scripted reference run, played through `run_snippet`) and `external`, an agent loop that is not ours, stamped but never launched by this runner ("Launching a run: the run contract", below). The driver contract (`runner/README.md`, "The driver contract") says what the runner keeps for every driver, what a driver may vary, and what the trajectory records regardless.
 
@@ -324,16 +324,17 @@ could ever observe the character leaving or landing, or count a turn: it answers
 and refuses `read_log` rather than serving the log through a window that could
 never close.
 
-### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
+### viewer/ + dashboard/ (Bun/TypeScript, MIT)
 
 The operator's window on runs, live and finished: read-only, except the
 config API the admin switch mounts. Split in two along
 one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
-The viewer is a leaf of the code as well as a group: it imports from
-`runner/src/` freely, and neither the runner's core nor the collector ever
-imports from `runner/viewer/`, types included (`infra/viewer-boundary.test.ts`).
+The viewer is a leaf of the code as well as a group, and a workspace of its
+own beside the runner rather than inside it: it imports from `runner/src/`
+freely, by relative path as the collector does, and neither the runner's core nor the collector ever
+imports from `viewer/`, types included (`infra/viewer-boundary.test.ts`).
 What both sides read lives in `runner/src/`: the run listing (`run-list.ts`),
 a trajectory's totals (`run-totals.ts`, the scanner the collector stores),
 their types (`run-types.ts`, re-exported by the wire contract `api-types.ts`),
@@ -341,7 +342,7 @@ a run's sessions, the race and class names and the archive directory's name.
 So the code a model sees never moves when a viewer module does, and the
 viewer deploys alone.
 
-- `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
+- `viewer/` serves a read-only JSON API under `/api`, an SSE tail per
   run, the inspector's API at `/api/inspector` (the session record unprojected,
   so a public handle withholds it whole; its id reads as the session's id
   there, the run id or `<run-id>~<Character>`, never as the token's
@@ -353,7 +354,7 @@ viewer deploys alone.
   disturbed. Bearer tokens are stripped from anything that forwards a raw
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles — the
   unprojected record and Blizzard bytes — and serves entry summaries through
-  the public projection and the game-prose redactor (`runner/viewer/README.md`).
+  the public projection and the game-prose redactor (`viewer/README.md`).
   `WRATHBENCH_VIEWER_TILES_PUBLIC=1` opts tiles alone back in for a deployment
   whose operator has decided it may serve them; the static public
   snapshot never carries a tile either way.
@@ -400,7 +401,7 @@ viewer deploys alone.
   freeplay character is one character across attempts, and everything the runner
   records is per attempt — so a reader could see only the session in front of
   them and the quest count was the last session's. The viewer aggregates the
-  chain at read time (`runner/viewer/character.ts`) and the run page carries
+  chain at read time (`viewer/character.ts`) and the run page carries
   it in a pane under the milestones, closed until opened, so the run in front of the reader comes
   first. The feed stays per attempt because a trajectory is one run's, with a link
   at each seam. The character is also a page of its own, `/character/<id>`. It is **universal, not freeplay-only**: a scored run's character
@@ -418,7 +419,7 @@ viewer deploys alone.
   clock, each in its own colour, the map following one member while the
   sidebar says where the others are. Like the character page, both are built in
   the browser from the listing and each member's run detail, which carries that
-  member's own records (`runner/viewer/party-marks.ts`); there is no party
+  member's own records (`viewer/party-marks.ts`); there is no party
   route, so the private viewer and the public bucket run one derivation.
 - **The harness series is one shell-wide filter, not a per-page control.** The
   series — `major.minor` of a version stamp — is already the comparability
@@ -507,7 +508,7 @@ viewer deploys alone.
   through an alias, because the same model is different money on different
   hosts: OpenRouter's synced windows by OpenRouter id, Anthropic's list prices
   by the served ids, an endpoint's by its base and id
-  (`runner/viewer/pricing.ts` holds the rules for which row a run reads, and no
+  (`viewer/pricing.ts` holds the rules for which row a run reads, and no
   rate). So an OpenCode Go run reads OpenCode's own published price first,
   synced from its `/models` listing, and only where that listing has none
   (another API, context-size tiers, or a model never run on Go) its entry's
@@ -573,7 +574,7 @@ An optional camera films runs for replays (`camera` in the chart, off by default
 
 - **Invisible from load.** A world with the block on sets `GM.LoginState = 1` and `GM.Visible = 0`, which the core applies to a GM while it loads the character, before it is on the map. The server then sends the camera's player object to no session below its GM level, and harness accounts carry none, so it is absent from the agent's objects by the server's own visibility rule: the observation contract holds with no module change (wrath-mcp/docs/CONTRACTS.md). The director checks the camera's invisibility aura before every move and logs out, for good, if it is ever missing.
 - **What it does in the world.** Only GM movement: `.appear` to the subject, a `.morph` that hides its own body, and nothing else. It never targets, speaks, casts or interacts. Its frames show the world only: the interface, chat bubbles and name text are off, the light is pinned to noon on the camera's own clock (the world's time is untouched), and it has no sound.
-- **What it keeps.** Under the run's own directory, `camera/`: still frames (`frames/<seq>.jpg` with the seq zero-padded to six digits, `frames/000042.jpg`; JPEG q75, 1280×720) and their index `frames.jsonl`, and the run's one video, `clips/part-<n>.mp4` with a poster each, and `clips.json` (version 2), the one file a reader opens to find it: the parts, the chapters (each level reached and each boss killed, on the whole video's timeline), the model's words as captions, and a time map between video time and run time that the map replay syncs by. `infra/camera/layout.ts` is the shape and `infra/camera/assemble.ts` the rates: every frame in the order it was taken, at 8 frames a second, so ten-second interval frames make a 90-minute run about a minute and a half of video before its events, and each event is the twelve seconds around it at full rate with its own frame held a second. An event is what a run's timeline marks, one rule in `runner/viewer/timeline-marks.ts` (operator, 2026-11-16): a level reached and a boss killed (creature rank 3, or a five-man boss by entry), which are chapters, and a death, which is shown the same and listed nowhere. A turn-in and a zone crossed were events until a real run's chapters were a solid band of them; a video cut before the rule still lists them, still plays, and no reader draws them. A part covers at most six hours of play; a closed part is never encoded again, so a freeplay character filmed for days re-encodes only its newest part. A frame is kept every `intervalSeconds`, and around each event the 30 s before it and the 10 s after; the director holds about 45 s of frames in memory so an event the session record reports late still has its lead-in. Captions are the model's own words at that moment, from the trajectory's responses and pad writes, never from a tool result; they are text in `clips.json`, never burned into the picture, which carries only the benchmark's name, the model's and an event's detail.
+- **What it keeps.** Under the run's own directory, `camera/`: still frames (`frames/<seq>.jpg` with the seq zero-padded to six digits, `frames/000042.jpg`; JPEG q75, 1280×720) and their index `frames.jsonl`, and the run's one video, `clips/part-<n>.mp4` with a poster each, and `clips.json` (version 2), the one file a reader opens to find it: the parts, the chapters (each level reached and each boss killed, on the whole video's timeline), the model's words as captions, and a time map between video time and run time that the map replay syncs by. `infra/camera/layout.ts` is the shape and `infra/camera/assemble.ts` the rates: every frame in the order it was taken, at 8 frames a second, so ten-second interval frames make a 90-minute run about a minute and a half of video before its events, and each event is the twelve seconds around it at full rate with its own frame held a second. An event is what a run's timeline marks, one rule in `viewer/timeline-marks.ts` (operator, 2026-11-16): a level reached and a boss killed (creature rank 3, or a five-man boss by entry), which are chapters, and a death, which is shown the same and listed nowhere. A turn-in and a zone crossed were events until a real run's chapters were a solid band of them; a video cut before the rule still lists them, still plays, and no reader draws them. A part covers at most six hours of play; a closed part is never encoded again, so a freeplay character filmed for days re-encodes only its newest part. A frame is kept every `intervalSeconds`, and around each event the 30 s before it and the 10 s after; the director holds about 45 s of frames in memory so an event the session record reports late still has its lead-in. Captions are the model's own words at that moment, from the trajectory's responses and pad writes, never from a tool result; they are text in `clips.json`, never burned into the picture, which carries only the benchmark's name, the model's and an event's detail.
 - **The label.** `meta.json` gains `camera: true`. The runner owns that file, so the runner writes it, on any rewrite once the run's `camera/frames.jsonl` exists (`runner/src/trajectory.ts`); the camera never writes a live run's meta.json, and the sweep labels only an ended one (`infra/camera/sweep.ts`). It is a label like `world`, never a key in the comparability tuple (docs/METHODOLOGY.md).
 - **Housekeeping.** A CronJob of the chart's sweeps the runs tree every ten minutes (`infra/camera/sweep.ts`), whatever camera is up: it assembles any filmed run with no live owner whose frames are newer than its video, and a live run's at most hourly, and prunes still frames `camera.frameKeepHours` (24) after the assembly that covers them, but never the open part's before the run has ended. The video is kept, and a closed part outlives its frames.
 - **Who it follows.** The live runs on its own world, newest first: an eval world's attempt, or a freeplay character on the shared one. A fan-out run is not followed.
@@ -804,7 +805,7 @@ A scored level episode starts a freshly created level-1 character of the race an
   it back, on a resume. Each character is read as a v1 run is, under its
   session id `<id>~<Character>` (`~` never occurs in a run id): the viewer
   serves it as a session of its own and its replay feed under that id
-  (`runner/viewer/README.md`, "A fan-out run's characters"), and the
+  (`viewer/README.md`, "A fan-out run's characters"), and the
   collector keys its state, move and milestone rows by it, so no table
   needed a new key. No one character's curve, money or milestones are the
   run's, so the run's own samples read empty and its latest reading, which a
@@ -818,7 +819,7 @@ A scored level episode starts a freshly created level-1 character of the race an
 - A run recorded before the session record (a 0.5 run) has no `session/`:
   its run row, 60-second state samples, trace and movement intentions are
   tables of its `run.sqlite`, and its milestones are trajectory records. It stays
-  readable through one adapter (`runner/viewer/legacy05-source.ts`) and is
+  readable through one adapter (`viewer/legacy05-source.ts`) and is
   never converted, because the run files are the evidence a result points
   at; frozen 0.5 runs with golden API answers
   (`runner/test/legacy05-golden.test.ts`) keep that true. Readable, not

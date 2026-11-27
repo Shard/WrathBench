@@ -51,7 +51,7 @@ function mins(m: number | null): string {
 
 /**
  * The deployment's own about page when its `site.about` is set (rendered and
- * sanitized by the viewer, `runner/viewer/site-info.ts`), the built-in one
+ * sanitized by the viewer, `viewer/site-info.ts`), the built-in one
  * otherwise. The legal section is on both and is never the deployment's to
  * replace.
  */

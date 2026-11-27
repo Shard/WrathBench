@@ -2,7 +2,7 @@
  * The map's view maths. Pure functions, so pip placement is checked here rather
  * than by looking at a canvas.
  *
- * The transform itself is `runner/viewer/worldmap.ts` and is tested there; what
+ * The transform itself is `viewer/worldmap.ts` and is tested there; what
  * these pin is the layer the SPA adds — projection under a view, fitting,
  * cursor-anchored zoom, hit testing, the pip fold, and the derived state the
  * page hangs off its feed. The last of those is a regression: the derivation
@@ -10,9 +10,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
-import { buildTileIndex } from "../../runner/viewer/tileindex";
-import { LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, worldToPixel } from "../../runner/viewer/worldmap";
+import type { AgentPosition, TrackResponse } from "../../viewer/api-types";
+import { buildTileIndex } from "../../viewer/tileindex";
+import { LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, worldToPixel } from "../../viewer/worldmap";
 import { positionsAt } from "../src/lib/replay";
 import {
   type Pip,

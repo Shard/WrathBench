@@ -57,9 +57,9 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describeTranscode, transcodeTree } from "../minimap/src/transcode";
-import { TILE_INDEX_NAME } from "../runner/viewer/tileindex";
-import { SERVED_DIR, isRevalidatedTile, parseTileIndexPath, parseTilePath, tileContentType, tileRefPath } from "../runner/viewer/tiles";
-import { LOD_LAYERS } from "../runner/viewer/worldmap";
+import { TILE_INDEX_NAME } from "../viewer/tileindex";
+import { SERVED_DIR, isRevalidatedTile, parseTileIndexPath, parseTilePath, tileContentType, tileRefPath } from "../viewer/tiles";
+import { LOD_LAYERS } from "../viewer/worldmap";
 
 // ------------------------------------------------------------------ contracts
 
@@ -124,7 +124,7 @@ function list(dir: string): string[] {
 /**
  * Every tile under the served root (`<tile root>/web`), as bucket keys.
  *
- * Strict on names: a file is a tile only if `runner/viewer/tiles.ts` would
+ * Strict on names: a file is a tile only if `viewer/tiles.ts` would
  * parse its path back out of a request *and* spell it the same way — so a
  * README, an extraction log, a half-written temp file, a level outside its
  * range, a layer the viewer does not serve, a second spelling of a tile

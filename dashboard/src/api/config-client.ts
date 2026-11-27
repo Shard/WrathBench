@@ -95,7 +95,7 @@ async function send<T>(
 ): Promise<T> {
   // Every write says JSON, a body or not (DELETE, the draft fetch): the viewer
   // refuses an unsafe method without it, which is what keeps another site's
-  // form or `text/plain` POST from writing here (runner/viewer/write-guard.ts).
+  // form or `text/plain` POST from writing here (viewer/write-guard.ts).
   const write = (rest.method ?? "GET").toUpperCase() !== "GET";
   const headers: Record<string, string> = { accept: "application/json", ...(write || rest.body !== undefined ? { "content-type": "application/json" } : {}) };
   const res = await f(url, { ...rest, headers });
@@ -127,7 +127,7 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
   return {
     /** The whole config. One shot, never memoised — see the header. */
     config: (): Promise<ConfigResponse> => send<ConfigResponse>(f, at("/api/config"), { method: "GET" }),
-    /** The admin pages' status beside the config (`runner/viewer/admin-api.ts`): read-only. */
+    /** The admin pages' status beside the config (`viewer/admin-api.ts`): read-only. */
     admin: (): Promise<AdminResponse> => send<AdminResponse>(f, at("/api/admin"), { method: "GET" }),
     audit: (limit = 50): Promise<ConfigAuditResponse> =>
       send<ConfigAuditResponse>(f, at(`/api/config/audit?limit=${String(limit)}`), { method: "GET" }),
@@ -156,7 +156,7 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
     unignoreDraft: (model: string): Promise<DraftStatusResponse> =>
       send<DraftStatusResponse>(f, at("/api/config/proposed/unignore"), { method: "POST", body: JSON.stringify({ model }) }),
     /**
-     * Store a credential's secret, sealed (`runner/viewer/admin-api.ts`). The
+     * Store a credential's secret, sealed (`viewer/admin-api.ts`). The
      * value travels in the body and nowhere else: never the URL, never a
      * header, and the answer never carries it back.
      */

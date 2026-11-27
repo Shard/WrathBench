@@ -63,13 +63,13 @@ import { dirname } from "node:path";
 // published trace windows in the same packed runs a track lists them in.
 import { segRunsAdd, segRunsHas, unpackSegs, type TraceSegRuns } from "@wrathbench/inspector/codec/trace";
 import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
-import { CLIP_MEDIA_KEY, PUBLIC_NEARBY_KEY } from "../runner/viewer/public-keys";
+import { CLIP_MEDIA_KEY, PUBLIC_NEARBY_KEY } from "../viewer/public-keys";
 
 // ------------------------------------------------------------------ contracts
 
 /**
  * One object to write to the bucket. Structurally identical to the renderer's
- * own type (`runner/viewer/snapshot.ts`); declared here so the engine and its
+ * own type (`viewer/snapshot.ts`); declared here so the engine and its
  * tests stand alone, and exported so the CLI that imports both can
  * `satisfies`-check that they still agree.
  */
@@ -106,7 +106,7 @@ export interface MediaArtifact {
 export interface SnapshotResult {
   /**
    * The manifest's own identity — the hash of the aggregate name/version pairs
-   * (`runner/viewer/snapshot.ts`). Since 2026-09-04 it addresses nothing: it is
+   * (`viewer/snapshot.ts`). Since 2026-09-04 it addresses nothing: it is
    * only what decides whether the flip is worth a PUT.
    */
   gen: string;

@@ -165,7 +165,7 @@ import { readModelListsSidecar } from "../runner/src/model-lists";
 import { K8sClient } from "./k8s-client";
 import { ensureSharedCamera, readCameraTemplate, reapCameras } from "./camera-pods";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, readLauncherSettings, rosterHasRunPod } from "./run-pod";
-import type { FleetWorldView } from "../runner/viewer/api-types";
+import type { FleetWorldView } from "../viewer/api-types";
 import { fleetWorldViews, mysqlWorldDb, reconcileWorlds, worldPodPrefix, worldPodRelease, worldsHold, worldTemplateRefusal, WorldStore, WORLDS_DIR } from "./world";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { deleteCodexThread, pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
@@ -186,7 +186,7 @@ import type { Credential } from "../runner/src/credential-slots";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import { resolveStoreSecrets } from "../runner/src/store-secrets";
 import { CODEX_LOGIN_POLL_MS, CodexLogins } from "../runner/src/codex-login";
-import { GROUPS_ENV, groupsEnvValue, groupsFromEnv } from "../runner/viewer/groups";
+import { GROUPS_ENV, groupsEnvValue, groupsFromEnv } from "../viewer/groups";
 import {
   MODELS_SIDECAR,
   modelStates,
@@ -444,7 +444,7 @@ export function pruneCodexHomes(o: {
 
 /** Where the module answers. Same default the runner and roster use. */
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
-/** The deployment's groups (`runner/viewer/groups.ts`), read once: a change is a new pod. */
+/** The deployment's groups (`viewer/groups.ts`), read once: a change is a new pod. */
 const GROUPS = groupsFromEnv(process.env);
 /** The worldserver's log directory as seen from this side of the mounts. */
 const SERVER_LOG_DIR = join(REPO_ROOT, "data", "logs");

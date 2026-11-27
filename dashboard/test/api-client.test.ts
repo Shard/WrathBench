@@ -6,12 +6,12 @@
  * carrying the status a page needs to tell 404 from 500.
  *
  * The typing is checked by construction: the responses below are declared as
- * the shared wire types from `runner/viewer/api-types.ts`, so a drift between
+ * the shared wire types from `viewer/api-types.ts`, so a drift between
  * the viewer's shapes and the client's is a compile error, not a runtime one.
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetResponse, RunsResponse } from "../../runner/viewer/api-types";
+import type { FleetResponse, RunsResponse } from "../../viewer/api-types";
 import { ApiError, createClient, LIVE_TTL_MS, sweepExpired } from "../src/api/client";
 
 interface Call {

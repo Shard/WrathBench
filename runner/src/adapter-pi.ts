@@ -54,7 +54,7 @@
  * One `response` per assistant message, with usage normalised from pi's
  * per-request figures (`normalizePiUsage`) and pi's catalogue-priced cost
  * beside it as `piCostUsd`, a cross-check only: the run is priced from its
- * tokens by the hand-held provider rows (runner/viewer/pricing.ts), which pi's
+ * tokens by the hand-held provider rows (viewer/pricing.ts), which pi's
  * catalogue does not match. Each compaction is a `harness` record of kind
  * `compaction` with pi's summary, and its own summarisation call — billed, and
  * on no `message_end` — is a `response` of kind `compaction` carrying that

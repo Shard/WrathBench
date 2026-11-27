@@ -19,8 +19,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { lodServedName } from "../../runner/viewer/worldmap";
-import { buildTileIndex, parseTileIndex, renderTileIndex } from "../../runner/viewer/tileindex";
+import { lodServedName } from "../../viewer/worldmap";
+import { buildTileIndex, parseTileIndex, renderTileIndex } from "../../viewer/tileindex";
 import { levelTilePath, nativeFormat, tileBasesFromEnv, tileIndexPath, tilePath, tileUrl, tileUrlFor } from "../src/lib/tiles";
 
 const SRC = join(import.meta.dir, "..", "src");

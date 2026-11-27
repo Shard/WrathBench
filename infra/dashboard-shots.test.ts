@@ -7,8 +7,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { createApi } from "../runner/viewer/api";
-import { localRunStore } from "../runner/viewer/clickhouse";
+import { createApi } from "../viewer/api";
+import { localRunStore } from "../viewer/clickhouse";
 import { defaultStates, parseCli, pathName } from "./dashboard-shots";
 import { ENDED_RUN, LIVE_RUN, LIVE_RUN_2, LIVE_RUN_3, LIVE_RUN_4, writeFixture } from "./shots/fixture";
 import { tempDirs } from "./temp-dirs";

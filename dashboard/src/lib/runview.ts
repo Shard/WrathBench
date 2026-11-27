@@ -222,7 +222,7 @@ export function atBottom(
  *
  * Here rather than on a page because two pages print it: a run's own card and
  * a character's, whose source degrades to the weakest any attempt reported
- * (`mergeTokens` in `runner/viewer/character.ts`). One wording, so a reader
+ * (`mergeTokens` in `viewer/character.ts`). One wording, so a reader
  * moving between them is not told two different things about the same number.
  */
 export function sourceLabel(source: string | undefined): string {

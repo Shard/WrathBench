@@ -10,9 +10,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { indexCovers, indexHas, parseTileIndex } from "../../runner/viewer/tileindex";
-import { SERVED_DIR } from "../../runner/viewer/tiles";
-import { TILE_PX } from "../../runner/viewer/worldmap";
+import { indexCovers, indexHas, parseTileIndex } from "../../viewer/tileindex";
+import { SERVED_DIR } from "../../viewer/tiles";
+import { TILE_PX } from "../../viewer/worldmap";
 import { decodePng, encodePng } from "../src/png";
 import { TRANSCODE_STATE, artCovers, encoderId, transcodeTile, transcodeTree } from "../src/transcode";
 

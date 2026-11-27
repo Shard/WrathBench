@@ -44,10 +44,10 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, normalize, resolve } from "node:path";
 import { copyRunDb, isRunDbSideFile, RUN_DB_FILE } from "../runner/src/rundb";
-import { localRunStore } from "../runner/viewer/clickhouse";
-import { createApi } from "../runner/viewer/api";
-import { createRenderer } from "../runner/viewer/snapshot";
-import { ALL_GROUPS, groupsFromEnv, type Groups } from "../runner/viewer/groups";
+import { localRunStore } from "../viewer/clickhouse";
+import { createApi } from "../viewer/api";
+import { createRenderer } from "../viewer/snapshot";
+import { ALL_GROUPS, groupsFromEnv, type Groups } from "../viewer/groups";
 import { ConfigStore } from "../runner/src/config-store";
 import { findChromium, launch, type Browser, type Page, type PageOptions } from "./shots/cdp";
 import { E90_DUNGEON_RUN, ENDED_RUN, FREEPLAY_FRESH, LIVE_RUN, LONG_RUN, writeFixture, type Fixture } from "./shots/fixture";
@@ -67,7 +67,7 @@ export interface RigOptions {
   /** A bare session store the private viewer reads beside the runs (`WRATHBENCH_SESSION_STORE`); read in place, never copied or written. */
   sessions?: string;
   wowhead?: "stub" | "real";
-  /** The deployment's groups (`runner/viewer/groups.ts`); every group when absent. */
+  /** The deployment's groups (`viewer/groups.ts`); every group when absent. */
   groups?: Groups;
   /** Seed the rig's config store from `infra/fleet.example.json`, so the admin pages have a config to show. */
   seed?: boolean;

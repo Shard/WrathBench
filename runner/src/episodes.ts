@@ -22,7 +22,7 @@
  *   back-labeled: they ran under the defaults of their day
  *   (idle 10m, no-XP 45m), which is not what `e90` pins. The reader still
  *   *labels* such a run so it can be found and counted
- *   (`runner/viewer/results.ts`), but only a stamped, un-overridden run is a
+ *   (`viewer/results.ts`), but only a stamped, un-overridden run is a
  *   member of a tier's comparability group, and nothing is ever written back.
  *
  * The operator-facing write-up of what each tier is
@@ -54,12 +54,12 @@ export function isTaskEpisode(id: string | null | undefined): id is TaskEpisodeI
 }
 
 /**
- * The task ids with a table on the dungeon board (`runner/viewer/dungeons.ts`):
+ * The task ids with a table on the dungeon board (`viewer/dungeons.ts`):
  * `deadmines-solo` alone, the Deadmines eval. The five-agent `deadmines` runs
  * only as a probe campaign for now and has no ladder tab (operator,
  * 2026-11-15); it joins this list when it becomes an eval. A public handle
  * names no task id that is not here (`isUnpublishedEpisode`,
- * `runner/viewer/public-projection.ts`). The scheduler does not read it.
+ * `viewer/public-projection.ts`). The scheduler does not read it.
  */
 export const BOARD_EPISODE_IDS: readonly TaskEpisodeId[] = ["deadmines-solo"];
 

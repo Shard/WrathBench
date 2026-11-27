@@ -19,7 +19,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { GRID, LOD_MAX, MINIMAP_LAYER, TILE_PX, lodTileName } from "../../runner/viewer/worldmap";
+import { GRID, LOD_MAX, MINIMAP_LAYER, TILE_PX, lodTileName } from "../../viewer/worldmap";
 import { decodePng, encodePng } from "./png";
 
 /** RGBA, `TILE_PX` square. */

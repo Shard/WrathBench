@@ -2,7 +2,7 @@
  * The readback verifier, against a bucket in memory.
  *
  * The fixture is built the way the publisher builds the real one: private
- * responses are pushed through `runner/viewer/public-projection.ts`, wrapped in
+ * responses are pushed through `viewer/public-projection.ts`, wrapped in
  * the renderer's envelope, and laid out on the renderer's keys. So a clean
  * bucket here is a bucket the renderer could actually have written, and every
  * poisoned case below is the same bucket with exactly one thing wrong.
@@ -32,7 +32,7 @@ import {
   projectRunDetail,
   projectRuns,
   projectTrack,
-} from "../runner/viewer/public-projection";
+} from "../viewer/public-projection";
 
 // ------------------------------------------------------------- the fake bucket
 
@@ -601,7 +601,7 @@ describe("the checks themselves", () => {
   });
 
   test("the scrub's output is not a finding, and a container-absolute path still is", () => {
-    // The regression detector for `runner/viewer/scrub-paths.ts` (operator,
+    // The regression detector for `viewer/scrub-paths.ts` (operator,
     // 2026-09-11): the scrub makes a container path repo-relative, so a
     // published string that still carries the prefix means the scrub did not
     // run over it — and the readback has to say so. Under a key the scan does

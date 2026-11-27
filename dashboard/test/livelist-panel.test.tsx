@@ -16,7 +16,7 @@ import { render } from "solid-js/web";
 import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { fileURLToPath } from "node:url";
-import type { AgentPosition } from "../../runner/viewer/api-types";
+import type { AgentPosition } from "../../viewer/api-types";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -28,7 +28,7 @@ async function loadLiveList(): Promise<LiveListModule> {
     configFile: false,
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

@@ -1,11 +1,11 @@
 /**
  * The `site` block's deployment keys (runner/src/site-settings.ts) and the
- * about page's rendering (runner/viewer/site-info.ts): what a write may set,
+ * about page's rendering (viewer/site-info.ts): what a write may set,
  * and that nothing scriptable survives the markdown.
  */
 import { describe, expect, test } from "bun:test";
 import { ABOUT_MAX, NAME_MAX, parseSiteBlock, siteSettingsOf } from "../src/site-settings";
-import { renderAboutHtml, siteInfoField } from "../viewer/site-info";
+import { renderAboutHtml, siteInfoField } from "../../viewer/site-info";
 
 describe("parseSiteBlock", () => {
   test("absent, empty and all-null blocks are no settings", () => {

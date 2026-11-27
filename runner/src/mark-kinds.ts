@@ -1,6 +1,6 @@
 /**
  * Which kinds of moment a run's timeline marks, and as what
- * (`runner/viewer/timeline-marks.ts` has the rule in full and re-exports
+ * (`viewer/timeline-marks.ts` has the rule in full and re-exports
  * this). Here, import-free, because the camera's layout (`infra/camera/
  * layout.ts`) reads it as well as the viewer and the browser bundle, and the
  * viewer reads that layout: from `runner/src` each side takes it without one

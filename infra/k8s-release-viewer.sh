@@ -37,7 +37,7 @@
 # Everything else may ride, Dockerfiles, the lockfile and a wrath-mcp pointer
 # bump included: the image is built whole at B, so it is self-consistent, and a
 # newer reader of older records is the direction the viewer already keeps.
-# Admin writes are held while the builds differ (runner/viewer/write-hold.ts),
+# Admin writes are held while the builds differ (viewer/write-hold.ts),
 # and the harness stamp every pod carries stays A (the chart's `image.tag`).
 #
 # THE HOOK CONTRACT. `--viewer-pin-hook <command>` is run as

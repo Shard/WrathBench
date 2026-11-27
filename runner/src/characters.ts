@@ -13,7 +13,7 @@
  * ("not recorded", never back-labeled), while an id no table knows renders as
  * its own number rather than being dropped or guessed into a neighbour.
  *
- * Import-free, like `runner/viewer/api-types.ts`, because the dashboard bundles it
+ * Import-free, like `viewer/api-types.ts`, because the dashboard bundles it
  * (`@runner/characters`): the campaigns page labels a cell's race and class
  * from the ids `/api/campaigns` serves, where a run row carries the composed
  * label on the wire.

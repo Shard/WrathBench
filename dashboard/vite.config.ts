@@ -13,7 +13,7 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * static bundle the Bun viewer hosts itself. Same-origin in production is why
  * there is no CORS anywhere.
  *
- * `@viewer/*` reaches into `runner/viewer` for the modules that are shared
+ * `@viewer/*` reaches into `viewer` for the modules that are shared
  * rather than duplicated: the API wire types, the world→tile transform (with
  * the names of the maps that have tiles), the freeplay lineage walk, the
  * character aggregation over it, the public projection's allowlist, the
@@ -77,7 +77,7 @@ export default defineConfig({
   plugins: [solid(), ogMeta(), catalogueSubset()],
   resolve: {
     alias: {
-      "@viewer": resolve(import.meta.dirname, "../runner/viewer"),
+      "@viewer": resolve(import.meta.dirname, "../viewer"),
       "@runner": resolve(import.meta.dirname, "../runner/src"),
     },
     // One Solid: the inspector's views (`@wrathbench/inspector/views`) take it

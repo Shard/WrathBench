@@ -22,7 +22,7 @@ import { type RunStatus, statusOf, statusText, statusTitle, statusTone } from ".
  * What a character has done, across every attempt of it.
  *
  * The figures are the server's (`character.totals`, aggregated at read time in
- * `runner/viewer/character.ts`), never re-derived here, so this card and the
+ * `viewer/character.ts`), never re-derived here, so this card and the
  * freeplay ladder cannot quote different numbers for one character.
  *
  * `runId` is the attempt the reader is ON, and is what makes this card two

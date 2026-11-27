@@ -3,7 +3,7 @@
  *
  * The load-bearing claims: a scored run's prompt hash is the fixed prompt's, an
  * objective run's is not, the tuple survives a JSON round trip through
- * meta.json, and the wire mirror in `runner/viewer/api-types.ts` still matches
+ * meta.json, and the wire mirror in `viewer/api-types.ts` still matches
  * the definition it mirrors.
  *
  * That last one is a type-level assertion, and it is caught by `bun run
@@ -31,7 +31,7 @@ import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
 import { Trajectory, readMeta } from "../src/trajectory";
-import type { ComparabilityView, EpisodeTierView } from "../viewer/api-types";
+import type { ComparabilityView, EpisodeTierView } from "../../viewer/api-types";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
 const _toView: ComparabilityView = {} as Comparability;

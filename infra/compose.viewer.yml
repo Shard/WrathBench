@@ -35,7 +35,7 @@ services:
       WRATHBENCH_SESSION_STORE: /sessions
       WRATHBENCH_MINIMAP_DIR: /minimap
       # The viewer binds loopback only and refuses anything else unless told
-      # the network is trusted (runner/viewer/README.md, "Loopback only").
+      # the network is trusted (viewer/README.md, "Loopback only").
       # Inside a container loopback is the container's own, so it binds
       # 0.0.0.0 here; what keeps it private is the port below, published on
       # the HOST's loopback and nowhere else. Change that address only for a

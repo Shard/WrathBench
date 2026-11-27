@@ -1,6 +1,6 @@
 /**
  * The viewer is a leaf. The runner's core (`runner/src/`) and the collector
- * (`collector/src/`) never import from `runner/viewer/`, type imports
+ * (`collector/src/`) never import from `viewer/`, type imports
  * included: the viewer deploys alone (viewer.Dockerfile), and the code a model
  * sees (the prompt, the context, the loop) must not move when a viewer module
  * does. The viewer imports from `runner/src/` freely; what both sides read
@@ -13,7 +13,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { importsOf } from "./stack-boundary";
 
 const ROOT = resolve(import.meta.dir, "..");
-const VIEWER = join(ROOT, "runner", "viewer");
+const VIEWER = join(ROOT, "viewer");
 /** The trees that may not reach into the viewer. */
 const GUARDED = ["runner/src", "collector/src"] as const;
 
@@ -28,7 +28,7 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** One line per import from a guarded tree into `runner/viewer/`; empty when the boundary holds. */
+/** One line per import from a guarded tree into `viewer/`; empty when the boundary holds. */
 function viewerImports(): string[] {
   const problems: string[] = [];
   for (const tree of GUARDED) {
@@ -44,14 +44,14 @@ function viewerImports(): string[] {
 }
 
 describe("the viewer boundary", () => {
-  test("runner/src and collector/src import nothing from runner/viewer", () => {
+  test("runner/src and collector/src import nothing from viewer", () => {
     expect(viewerImports()).toEqual([]);
   });
 });
 
 /*
  * A viewer-only process (`WRATHBENCH_GROUPS=viewer`, no admin switch) loads
- * the viewer and nothing of the runner's: `createApi` (`runner/viewer/api.ts`)
+ * the viewer and nothing of the runner's: `createApi` (`viewer/api.ts`)
  * imports each group's route modules with `import()` only when that group, or
  * the admin switch, is on. This is the module graph such a process loads,
  * built by Bun's own bundler from the bind (`serve.ts`) and walked over every
@@ -59,15 +59,15 @@ describe("the viewer boundary", () => {
  * process (a static import, a re-export, a dynamic import anywhere else, such
  * as the local store's collector) shows here.
  */
-const SERVE = "runner/viewer/serve.ts";
-const API = "runner/viewer/api.ts";
+const SERVE = "viewer/serve.ts";
+const API = "viewer/api.ts";
 /** What `api.ts` imports only with a group or the admin switch on. */
 const GATED = [
-  "runner/viewer/api-fleet.ts",
-  "runner/viewer/api-evals.ts",
-  "runner/viewer/config-api.ts",
-  "runner/viewer/admin-api.ts",
-  "runner/viewer/drafts.ts",
+  "viewer/api-fleet.ts",
+  "viewer/api-evals.ts",
+  "viewer/config-api.ts",
+  "viewer/admin-api.ts",
+  "viewer/drafts.ts",
 ] as const;
 /**
  * What a viewer-only process must never load: the agent loop, the drivers,
@@ -90,7 +90,7 @@ const FORBIDDEN: readonly RegExp[] = [
   /^runner\/src\/(models|config-store|campaigns|campaign-def|run-flags|credential-slots|providers|roster-refusal|account-pool|model-lists|run-fact-cache|store-secrets|move-credential|trajectory)\.ts$/,
   /^infra\/run-fleet(-config)?\.ts$/,
   // `models.ts` completes the roster for the runner and evals routes; every handle reads `roster.ts`.
-  /^runner\/viewer\/(admin-api|config-api|drafts|api-fleet|tools|api-evals|campaigns|dungeons|dungeon-marks|models)\.ts$/,
+  /^viewer\/(admin-api|config-api|drafts|api-fleet|tools|api-evals|campaigns|dungeons|dungeon-marks|models)\.ts$/,
 ];
 /**
  * How many `runner/src` files a viewer-only process reaches, at most. A
@@ -144,7 +144,7 @@ describe("a viewer-only process", () => {
     for (const g of GATED) expect((graph.get(API) ?? []).filter((e) => e.path === g).map((e) => e.kind)).toEqual(["dynamic-import"]);
     // And through them the walk reaches what they hold, so the gates are what keep it out.
     const everything = reach(graph, () => true);
-    expect(everything.has("runner/viewer/api-fleet.ts")).toBe(true);
+    expect(everything.has("viewer/api-fleet.ts")).toBe(true);
     expect([...everything].some((f) => f.startsWith("wiki/"))).toBe(true);
 
     const loaded = reach(graph, (from, e) => !isGate(from, e));

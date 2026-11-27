@@ -12,7 +12,7 @@
  * What a secret's value is never appears: a credential names the env var its
  * secret is in, and the page says whether it is set. A secret typed or pasted
  * here goes to the store sealed and is never read back
- * (`runner/viewer/admin-api.ts`); a Codex home is logged in again by the
+ * (`viewer/admin-api.ts`); a Codex home is logged in again by the
  * supervisor, and the page shows the link and the one-time code it waits on.
  */
 

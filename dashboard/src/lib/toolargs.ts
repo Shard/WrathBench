@@ -29,7 +29,7 @@ const PATH_KEYS = ["path", "file_path", "filePath", "file"] as const;
 const CONTENT_KEYS = ["content", "text", "code"] as const;
 const REPLACE_ALL_KEYS = ["replaceAll", "replace_all"] as const;
 
-/** The marker `runner/viewer/tail.ts` leaves where it cut a long string. */
+/** The marker `viewer/tail.ts` leaves where it cut a long string. */
 const CLIP_MARKER = /\n… \d+ more characters$/;
 
 export const EDIT_TOOLS: ReadonlySet<string> = new Set(["edit_file", "edit_scratchpad"]);

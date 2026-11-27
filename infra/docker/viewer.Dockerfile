@@ -1,5 +1,5 @@
 # Viewer-only image: Bun (pinned), the workspace's TypeScript and the built
-# dashboard, and nothing else. It runs `runner/viewer/serve.ts` over a session
+# dashboard, and nothing else. It runs `viewer/serve.ts` over a session
 # store someone else's wrath-mcp records into, with no runner, no game server
 # and no ClickHouse beside it (infra/compose.viewer.yml, infra/README.md
 # "Viewer only"). No model CLIs, no git, no ffmpeg: the runner image
@@ -22,6 +22,7 @@ COPY wrath-mcp/sdk/package.json wrath-mcp/sdk/package.json
 COPY wrath-mcp/mcp/package.json wrath-mcp/mcp/package.json
 COPY wrath-mcp/inspector/package.json wrath-mcp/inspector/package.json
 COPY runner/package.json    runner/package.json
+COPY viewer/package.json    viewer/package.json
 COPY wiki/package.json      wiki/package.json
 COPY minimap/package.json   minimap/package.json
 COPY dashboard/package.json dashboard/package.json
@@ -38,6 +39,7 @@ COPY wrath-mcp/sdk/package.json wrath-mcp/sdk/package.json
 COPY wrath-mcp/mcp/package.json wrath-mcp/mcp/package.json
 COPY wrath-mcp/inspector/package.json wrath-mcp/inspector/package.json
 COPY runner/package.json    runner/package.json
+COPY viewer/package.json    viewer/package.json
 COPY wiki/package.json      wiki/package.json
 COPY minimap/package.json   minimap/package.json
 COPY dashboard/package.json dashboard/package.json
@@ -57,4 +59,4 @@ ENV WRATHBENCH_RUNS_DIR=/var/lib/wrathbench/runs \
 
 # No `.env` is read, wherever one might appear: Bun autoloads one from the
 # working directory, and a viewer's configuration is its environment alone.
-CMD ["bun", "--no-env-file", "runner/viewer/serve.ts"]
+CMD ["bun", "--no-env-file", "viewer/serve.ts"]

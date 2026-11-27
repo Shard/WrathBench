@@ -6,7 +6,7 @@ import { inflateSync } from "node:zlib";
 import { MpqArchive, MpqChain, bufferSource } from "../src/mpq";
 import { parseTrs, parseWmoTrs } from "../src/trs";
 import { DEFAULT_MAPS, type PlacedWmo, type WmoPaint, compositeWmoMap, extractMap, paintWmos } from "../src/extract";
-import { TILED_MAPS } from "../../runner/viewer/worldmap";
+import { TILED_MAPS } from "../../viewer/worldmap";
 import { ADT_FRAME_ORIGIN, type WmoGroupBox, type WmoPlacement, placementToWorld } from "../src/wmo";
 import { buildDxtBlp, buildMpq, dxt1Block, rgb565of } from "./fixtures";
 

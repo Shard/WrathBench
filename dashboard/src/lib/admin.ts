@@ -154,7 +154,7 @@ export function sectionReadsOnly(id: ConfigSectionId): boolean {
 /**
  * Whether a section needs a seeded store before it can write: every one that
  * writes, but the site's settings on a deployment with no runner group, whose
- * first write creates the store (`runner/viewer/config-api.ts`).
+ * first write creates the store (`viewer/config-api.ts`).
  */
 export function sectionNeedsSeed(id: ConfigSectionId, groups: Groups): boolean {
   if (sectionReadsOnly(id)) return false;

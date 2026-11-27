@@ -22,11 +22,11 @@ async function loadAxisComponents(): Promise<{ XAxis: typeof import("../src/comp
     configFile: false,
     // `configFile: false` means the app's own resolve config is not loaded, so
     // the `@viewer/*` alias has to be restated: `lib/ladder.ts` imports the
-    // lineage walk from `runner/viewer` at RUNTIME (the wire types are erased,
+    // lineage walk from `viewer` at RUNTIME (the wire types are erased,
     // this is not), and without the alias the module runner cannot find it.
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

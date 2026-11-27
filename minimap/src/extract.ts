@@ -11,7 +11,7 @@
  *                                  [--data <dir>] [--out <tile root>] [--client <client Data dir>]
  *
  * Without `--map` it extracts every map in `TILED_MAPS`
- * (`runner/viewer/worldmap.ts`): the continents, the tram and every dungeon
+ * (`viewer/worldmap.ts`): the continents, the tram and every dungeon
  * and raid with a minimap, the same table the dashboard names maps from.
  *
  * `--data` is the data directory the other inputs default under (`data/`):
@@ -22,7 +22,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { TILE_PX as WORLD_TILE_PX, GRID, tiledMapIds, worldToPixel } from "../../runner/viewer/worldmap";
+import { TILE_PX as WORLD_TILE_PX, GRID, tiledMapIds, worldToPixel } from "../../viewer/worldmap";
 import { MpqChain } from "./mpq";
 import { decodeBlp } from "./blp";
 import { encodePng } from "./png";

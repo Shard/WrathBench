@@ -13,8 +13,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@wrathbench/inspector/codec/trace";
-import type { TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
-import { projectTraceSegment } from "../../runner/viewer/public-projection";
+import type { TraceItemName, TraceQuestReq, TraceSegment } from "../../viewer/api-types";
+import { projectTraceSegment } from "../../viewer/public-projection";
 import { sheetReading } from "@wrathbench/inspector/views/inventory";
 import { QUEST_STATUS_LABEL, objectiveText, questLog, questsInLog, type QuestRow } from "@wrathbench/inspector/views/questlog";
 import { createTraceStore } from "@wrathbench/inspector/views/traceplayer";

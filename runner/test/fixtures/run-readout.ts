@@ -1,13 +1,13 @@
 /**
  * The viewer's session-side reads of one run, by run id: the inspector's
  * readout (`@wrathbench/inspector`) over the run's session
- * (`runner/viewer/runs-source.ts`), as the API makes them. For tests that
+ * (`viewer/runs-source.ts`), as the API makes them. For tests that
  * ask one question of one run without going through a route.
  */
 
 import { closedWindowsMemo, nearbyFresh as freshOf, nearbyWindow, recentTrace, traceChat, traceIndex, traceSegment, type TrackTrace } from "@wrathbench/inspector";
 import type { TraceChatKind } from "@wrathbench/inspector/wire";
-import { isV1Run, runSession } from "../../viewer/runs-source";
+import { isV1Run, runSession } from "../../../viewer/runs-source";
 
 /** Which reader a run is read through: its v1 session record, or the 0.5 adapter. */
 export const sessionKind = (runsDir: string, runId: string): "v1" | "legacy-0.5" => (isV1Run(runsDir, runId) ? "v1" : "legacy-0.5");

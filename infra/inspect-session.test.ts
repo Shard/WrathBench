@@ -17,7 +17,7 @@ import { Trajectory } from "../runner/src/trajectory";
 import { readRunRow } from "../runner/src/run-reader";
 import { writeLegacy05Run } from "../runner/test/fixtures/legacy05-writer";
 import { CATALOGUE } from "./model-catalogue";
-import { costOf, breakdownTotal, priceFor } from "../runner/viewer/pricing";
+import { costOf, breakdownTotal, priceFor } from "../viewer/pricing";
 import { reportedCostUsd, scanRunTotals } from "../runner/src/run-totals";
 import { FANOUT_SEP, type InspectStore, main, SESSIONS_DIR, usageSql } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";

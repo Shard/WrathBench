@@ -6,13 +6,13 @@
  *
  * This is no longer the viewer's listing path. `/api/runs`, `/api/results`,
  * `/api/models` and the run page read the derived store instead
- * (`runner/viewer/clickhouse.ts`), which is why the memoisation that used to live at the
+ * (`viewer/clickhouse.ts`), which is why the memoisation that used to live at the
  * bottom of this file is gone: a query is not a thousand file opens, and a
  * cache in front of one would only be a second thing that can be wrong about a
  * live run. What still reads files directly, and must, is everything that asks
  * about a process writing *right now*: the fleet supervisor's own polling
  * (`runner/src/archive.ts`), the account ledger on `/api/fleet`, and the live
- * map (`runner/viewer/positions.ts`).
+ * map (`viewer/positions.ts`).
  *
  * All three prefilter: the first two to the handful of runs whose files moved
  * inside their window, the live map to the runs the derived store lists as
@@ -23,7 +23,7 @@
  *
  * The runner's own, not the viewer's: the archive CLI and the collector read
  * it, and neither imports the viewer. The viewer's per-run series readers
- * (`runner/viewer/runs.ts`) read beside it.
+ * (`viewer/runs.ts`) read beside it.
  */
 
 import { isTaskEpisode } from "./episodes";
@@ -41,14 +41,10 @@ import { bareSessionDir, isBareSessionDir, isBareSessionId, sessionStoreOf } fro
 import { harnessOfRun, parseComparability } from "./comparability-tuple";
 import { runCredentialOf } from "./run-credential";
 import { platformOf } from "./platform";
+import { LIVE_WINDOW_MS } from "./run-fact";
 
-/**
- * A run counts as live when it has not terminated and its trajectory grew
- * recently. "No termination reason" alone is not enough — a killed process
- * leaves none — and a stale mtime is the only signal we have from outside the
- * container.
- */
-export const LIVE_WINDOW_MS = 120_000;
+/** When a run counts as live: the run fact's window (`run-fact.ts`), re-exported for the listing's readers. */
+export { LIVE_WINDOW_MS };
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 

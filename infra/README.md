@@ -209,7 +209,7 @@ directory's name, which is its token's fingerprint. It lists once its
 character has entered the world; a record a client opened without ever
 playing (each server start opens one) is not shown. Without Docker, the same
 viewer is `WRATHBENCH_GROUPS=viewer WRATHBENCH_SESSION_STORE=<absolute dir>
-bun runner/viewer/serve.ts` from the repository root.
+bun viewer/serve.ts` from the repository root.
 
 On Kubernetes the chart does the same from values alone:
 `infra/chart/wrathbench/values-viewer-only.yaml` turns the runner and evals

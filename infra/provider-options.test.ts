@@ -14,7 +14,7 @@ import { planOf } from "./fixtures/tick";
 import { countedFact } from "../runner/test/fixtures/counted-fact";
 import { entryOwnsRun, type RunFact } from "../runner/src/models";
 import { rosterEntryRefusal } from "../runner/src/roster-refusal";
-import { rowOf } from "../runner/viewer/models";
+import { rowOf } from "../viewer/models";
 import { parseCredentials } from "../runner/src/credential-slots";
 import { OPENCODE_GO_ROUTING } from "../runner/src/routing";
 

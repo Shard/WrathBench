@@ -43,7 +43,7 @@
  * under the vendor prefix (`openai/gpt-6-astra`). `catalogueIds` asks for the
  * prefixed id and *not* the bare one — the catalogue has no bare row, so
  * wanting it would report a miss every sync — and `codexPrice` in
- * `runner/viewer/pricing.ts` reads it back the same way.
+ * `viewer/pricing.ts` reads it back the same way.
  *
  * Units: the catalogue quotes dollars per token as strings; the file holds
  * dollars per million, rounded to six significant figures so a re-sync that
@@ -56,7 +56,7 @@
  * The sync compares the catalogue against the *latest* window and, when the
  * four rates differ, appends a new one stamped `from: <today>` — so the runs
  * that billed at the old rate keep reading it (`windowAt` in
- * `runner/viewer/pricing.ts` picks the window in force at a run's start). A
+ * `viewer/pricing.ts` picks the window in force at a run's start). A
  * second sync on the same day replaces that day's window rather than stacking
  * a duplicate. The first window has no `from`: it means "everything before the
  * next window begins", which is what makes every run already on disk price
@@ -86,7 +86,7 @@
  * or responses API is another endpoint, whatever its id), and only where one
  * flat rate is the price: a rate tiered by context size, or one that moves on
  * a date, is reported and left to the OpenRouter fallback, the way Haiku 5.5's
- * tiers are a decided blank (`runner/viewer/pricing.ts`). A rate the listing
+ * tiers are a decided blank (`viewer/pricing.ts`). A rate the listing
  * multiplies at peak hours (OpenCode's DeepSeek) is written at the off-peak
  * rate and the row's note says so, as DeepSeek's own platform row does. A row
  * that states its own `source` is hand-held and never touched.
@@ -100,7 +100,7 @@ import { driverEntry } from "../runner/src/drivers";
 import { isContributorSlug, isFreeSlug } from "../runner/src/model-cost";
 import { sameBase } from "../runner/src/platform";
 
-/** OpenRouter's model catalogue. Public: read with no key, here and by `runner/viewer/drafts.ts`. */
+/** OpenRouter's model catalogue. Public: read with no key, here and by `viewer/drafts.ts`. */
 export const CATALOGUE = "https://openrouter.ai/api/v1/models";
 const OUT = "infra/model-catalogue.json";
 const RUNS = "data/runs";
@@ -377,7 +377,7 @@ export function movedToday(before: readonly SyncedWindow[], after: readonly Sync
  * for a codex slug, `catalogueIds`), and the key of the catalogue entry it
  * resolves to when that key is itself vendor-prefixed. The key is the row an
  * OpenCode run falls back to when its provider's listing has no price for the
- * model (`subscriptionListPrice` in `runner/viewer/pricing.ts` reads the entry's
+ * model (`subscriptionListPrice` in `viewer/pricing.ts` reads the entry's
  * key and nothing else), so Go's bare `glm-5.3` asks for `z-ai/glm-5.3`, and a
  * model only ever run on a `:free` variant OpenRouter has since dropped still
  * gets its paid listing. A bare key (`kimi-k3.1-pro`) is no OpenRouter id and

@@ -14,7 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CampaignView, Square } from "../../runner/viewer/api-types";
+import type { CampaignView, Square } from "../../viewer/api-types";
 import {
   argvText,
   armRowText,

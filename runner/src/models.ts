@@ -72,7 +72,7 @@ import { RunFactCache } from "./run-fact-cache";
 import type { ServingSpec } from "./serving";
 import { goneReason, modelGoneOf, readModelListsSidecar, type ModelGone, type ModelListsSidecar } from "./model-lists";
 import { readRunFact, readRunFacts, runFactCacheVersion, stillbornOf, type RunFact } from "./run-fact";
-import { entryOwnsWindow, IDLE_MODES, ownedWindows, TIERS, type IdleMode, type RosterIdentity, type Tier } from "./roster-entry";
+import { entryOwnsWindow, IDLE_MODES, ownedWindows, TIERS, type IdleMode, type RosterIdentity, type RosterModel, type Tier } from "./roster-entry";
 
 /*
  * One run's fact — `readRunFact`, the record-count scanner, the trajectory's
@@ -534,45 +534,8 @@ export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error"
 
 // ----------------------------------------------------------------- inputs
 
-/** A roster entry as the projection needs it: identity plus the two optional overrides. */
-export interface RosterModel {
-  /** The roster name; the key everything else hangs off. */
-  name: string;
-  model: string;
-  effort?: string;
-  /**
-   * The CLI harness's compaction window as the entry declares it
-   * (`parseEntryCompactWindow`): a canonical window, `"auto"` where the
-   * driver defaults another, or absent for the driver's default — the CLI's
-   * `auto`, or claude-code's 300k. Part of the entry's identity, like effort
-   * (`entryOwnsWindow`).
-   */
-  compactWindow?: string;
-  driver?: string;
-  /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
-  serving?: ServingSpec;
-  /** Its providers in preference order (`provider-options.ts`); absent on a single-provider entry. A run of any is the entry's. */
-  providers?: readonly ProviderOption[];
-  apiBase?: string;
-  /** The routing block the entry declares, the fleet's default folded in (`routing.ts`). A target counts a run whatever its routing (operator, 2026-11-16). */
-  routing?: RoutingSpec;
-  /** False when the entry runs without the reference wiki; a target counts only runs with its wiki. */
-  wiki?: boolean;
-  /**
-   * How much evidence this model gets (`TIER_TABLE`). Required: with a default,
-   * adding a model and forgetting the field quietly buys a full budget, and for
-   * a paid model that is money nobody approved.
-   */
-  tier: Tier;
-  /** What it does with an account once its tier is spent. Absent: nothing. */
-  idle?: IdleMode;
-  /** Operator override of the billing verdict (`model-cost.ts`). */
-  billing?: Billing;
-  /** Held from the scored lane (`FleetRosterEntry.campaignOnly`): projected like a probe-only driver's entry, except that its `idle` stands. */
-  campaignOnly?: true;
-  /** Opts into the five-agent Deadmines episode (`FleetRosterEntry.deadmines`), which its tier then buys like the one-agent one. */
-  deadmines?: true;
-}
+/* A roster entry as the projection needs it: `roster-entry.ts`, re-exported here unchanged. */
+export type { RosterModel } from "./roster-entry";
 
 /* What a job holds of the roster, and why a name is outside the policy: `roster-entry.ts`, re-exported here unchanged. */
 export { pinnedRefs, policyExclusion, policyRefs, type PolicyJob, type PolicyRoster } from "./roster-entry";
@@ -1518,7 +1481,7 @@ export type Verdict = { verdict: "eval" | "free" | "blocked"; why: string };
 
 /**
  * A verdict as a deployment with the evals group off reads it
- * (`runner/viewer/groups.ts`): owing a counted run is owing nothing, so the
+ * (`viewer/groups.ts`): owing a counted run is owing nothing, so the
  * model is free for its idle work. One rule for the policy's picks and the
  * `--status` table.
  */
@@ -1713,7 +1676,7 @@ export interface NextJobsOptions {
    */
   holding?: ReadonlySet<string>;
   /**
-   * Whether the deployment's evals group is on (`runner/viewer/groups.ts`).
+   * Whether the deployment's evals group is on (`viewer/groups.ts`).
    * Off, the policy picks no scored episode and no campaign work, and a model
    * that would owe a counted run is treated as owing none, so its idle work
    * (an `unlimited` freeplay session) is what it gets. It changes what is

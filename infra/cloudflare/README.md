@@ -351,7 +351,7 @@ bun infra/publish-accept.ts --base https://wrathbench-data.shard.page
 
 This walks the manifest's whole generation over plain `GET` — every aggregate it
 names and every per-run key a `runs.json` row points at — re-projects each body
-through `runner/viewer/public-projection.ts` and scans it for anything across
+through `viewer/public-projection.ts` and scans it for anything across
 the content boundary. It needs no credential, which is the point: it is the
 check a stranger could run, and it exercises the custom domain, the cache rules
 and the CORS-less `GET` path that a browser will take. Exit 0 and "nothing

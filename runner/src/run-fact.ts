@@ -254,7 +254,13 @@ export interface RunFact {
 
 // ----------------------------------------------------------- reading runs
 
-/** A trajectory touched more recently than this belongs to a live process. */
+/**
+ * A trajectory touched more recently than this belongs to a live process. A
+ * run counts as live when it has not terminated and its trajectory grew
+ * recently. "No termination reason" alone is not enough — a killed process
+ * leaves none — and a stale mtime is the only signal we have from outside the
+ * container. The one definition: the run listing (`run-list.ts`) re-exports it.
+ */
 export const LIVE_WINDOW_MS = 120_000;
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;

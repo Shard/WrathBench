@@ -1,7 +1,7 @@
 /**
  * The archive directory, and the one record type a reader counts.
  *
- * Import-free by construction, like `runner/viewer/api-types.ts`: the dashboard may want
+ * Import-free by construction, like `viewer/api-types.ts`: the dashboard may want
  * these too, and nothing here may drag `bun:sqlite` into a browser bundle.
  */
 

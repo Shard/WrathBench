@@ -14,7 +14,7 @@
  * so a renamed field breaks the typecheck rather than quietly testing nothing.
  */
 
-import type { CampaignsResponse, CampaignView, Square } from "../../../runner/viewer/api-types";
+import type { CampaignsResponse, CampaignView, Square } from "../../../viewer/api-types";
 
 export const NOW = Date.UTC(2026, 9, 11, 12, 0, 0);
 

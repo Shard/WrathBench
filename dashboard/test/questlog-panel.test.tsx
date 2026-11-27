@@ -30,7 +30,7 @@ async function loadInventory(): Promise<InventoryModule> {
     configFile: false,
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

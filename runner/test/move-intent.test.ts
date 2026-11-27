@@ -20,13 +20,13 @@ import type { MoveIntentNote } from "@wrathbench/mcp";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
-import { readMoves } from "../viewer/runs";
+import { readMoves } from "../../viewer/runs";
 import { sessionKind } from "./fixtures/run-readout";
 import { SessionReader } from "@wrathbench/mcp/record";
 import { openSessionRecord, sessionDirOf, type SessionRecord } from "../src/session-record";
-import { TrajectoryTail } from "../viewer/tail";
+import { TrajectoryTail } from "../../viewer/tail";
 import { openTestSession, recordDrain, recordedMove } from "./fixtures/v1-session";
-import { readLatestMove, readPositions } from "../viewer/positions";
+import { readLatestMove, readPositions } from "../../viewer/positions";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

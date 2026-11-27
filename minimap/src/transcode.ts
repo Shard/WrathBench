@@ -13,7 +13,7 @@
  *   and mostly transparent tile, which a lossy codec shifts by whole levels
  *   and which then seams against its neighbours;
  * - `<map>/index.json`, which cells exist, where the art hides the minimap,
- *   and that the natives are WebP (`runner/viewer/tileindex.ts`).
+ *   and that the natives are WebP (`viewer/tileindex.ts`).
  *
  * Alpha comes through exact or the tile is not lossy: every encoded tile is
  * decoded again and compared, and a mismatch falls back to the lossless form.
@@ -36,9 +36,9 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { type IndexCell, TILE_INDEX_NAME, buildTileIndex, renderTileIndex } from "../../runner/viewer/tileindex";
-import { SERVED_DIR, newestMasterDir } from "../../runner/viewer/tiles";
-import { ART_LAYER, LOD_LAYERS, LOD_MAX, type LodLayer, MINIMAP_LAYER, lodServedName, lodTileName, nativeServedName, tileName } from "../../runner/viewer/worldmap";
+import { type IndexCell, TILE_INDEX_NAME, buildTileIndex, renderTileIndex } from "../../viewer/tileindex";
+import { SERVED_DIR, newestMasterDir } from "../../viewer/tiles";
+import { ART_LAYER, LOD_LAYERS, LOD_MAX, type LodLayer, MINIMAP_LAYER, lodServedName, lodTileName, nativeServedName, tileName } from "../../viewer/worldmap";
 import { decodePng } from "./png";
 
 /** libwebp quality for every served tile; why 90 is in the README. */
@@ -115,7 +115,7 @@ function readState(file: string): State {
 
 /**
  * The viewer serves a served file only while it is at least as new as what it
- * was derived from (`runner/viewer/tiles.ts`). A re-bake that rewrites a
+ * was derived from (`viewer/tiles.ts`). A re-bake that rewrites a
  * master with the same bytes moves its mtime and nothing else, so the output
  * it maps to is current but looks stale: move its mtime up too. Only then,
  * so an unchanged pass leaves every validator the viewer sends alone.

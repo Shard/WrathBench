@@ -48,7 +48,7 @@ export * from "./comparability-tuple";
 /**
  * Read the worldserver's build identity off its `/health`, for the tuple.
  *
- * Mirrors `runner/viewer/api.ts`'s `worldserverIdentity` read, one layer down:
+ * Mirrors `viewer/api.ts`'s `worldserverIdentity` read, one layer down:
  * this one is not cached (it runs once per launch or resume, not once per
  * poll) — an unreachable module, a timeout, or a module that predates the
  * field all read as `null`, and the caller never awaits longer than

@@ -8,7 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ART_LAYER, LOD_MAX, TILE_SIZE, lodTileName } from "../../runner/viewer/worldmap";
+import { ART_LAYER, LOD_MAX, TILE_SIZE, lodTileName } from "../../viewer/worldmap";
 import { type ArtParams, type ArtSources, DEFAULT_PARAMS, renderArt, writeArtPyramid } from "../src/artbake";
 import { LIQUID_OCEAN } from "../src/mapfile";
 import { decodePng } from "../src/png";

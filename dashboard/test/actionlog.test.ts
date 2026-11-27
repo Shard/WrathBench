@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ActionNoteView, ActionsEntry, FeedEntry } from "../../runner/viewer/api-types";
+import type { ActionNoteView, ActionsEntry, FeedEntry } from "../../viewer/api-types";
 import { actionLine, actionLines, keepLines, moveVerdicts, sameVerdicts } from "../src/lib/actionlog";
 import { groupFeed, type CallGroup } from "../src/lib/feedgroup";
 

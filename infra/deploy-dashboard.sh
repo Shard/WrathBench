@@ -47,7 +47,7 @@ done
 
 if [ "$tests" = 1 ]; then
   echo "deploy: dashboard tests"
-  bun test dashboard runner/test/viewer-tools.test.ts runner/test/public-projection.test.ts runner/test/snapshot.test.ts >/dev/null
+  bun test dashboard viewer/test/viewer-tools.test.ts viewer/test/public-projection.test.ts viewer/test/snapshot.test.ts >/dev/null
   bun run --cwd dashboard typecheck >/dev/null
 fi
 if [ "$tiles" = 1 ]; then

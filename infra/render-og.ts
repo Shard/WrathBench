@@ -39,8 +39,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { S3Client } from "bun";
-import type { ResultRun } from "../runner/viewer/api-types";
-import { createRenderer } from "../runner/viewer/snapshot";
+import type { ResultRun } from "../viewer/api-types";
+import { createRenderer } from "../viewer/snapshot";
 import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
 import { OG_W } from "../dashboard/src/lib/og";
 import { heightAt, OG_KEY, ogSvgWithLogos, renderOgPng } from "./og-render";

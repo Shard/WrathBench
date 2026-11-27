@@ -25,7 +25,7 @@ import { render } from "solid-js/web";
 import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 import { fileURLToPath } from "node:url";
-import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
+import type { AgentPosition, TrackResponse } from "../../viewer/api-types";
 import type { PlayBarProps } from "../src/components/PlayBar";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -43,10 +43,10 @@ async function loadEntry(): Promise<Entry> {
     configFile: false,
     // The app's own resolve config is not loaded with `configFile: false`, so
     // the `@viewer/*` alias is restated: `lib/mapview.ts` imports the world→tile
-    // transform from `runner/viewer` at runtime.
+    // transform from `viewer` at runtime.
     resolve: {
       alias: {
-        "@viewer": fileURLToPath(new URL("../../runner/viewer", import.meta.url)),
+        "@viewer": fileURLToPath(new URL("../../viewer", import.meta.url)),
         "@runner": fileURLToPath(new URL("../../runner/src", import.meta.url)),
       },
     },

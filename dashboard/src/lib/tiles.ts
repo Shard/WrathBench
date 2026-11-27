@@ -5,7 +5,7 @@
  * `nativeFormat`), the baked pyramid levels of each layer as WebP under
  * `/tiles/<map>/<layer>/<z>/` (`minimap`, `art`) and each map's
  * `/tiles/<map>/index.json`, off `data/minimap/`
- * (`runner/viewer/tiles.ts`), same-origin with the SPA. The Gated preview
+ * (`viewer/tiles.ts`), same-origin with the SPA. The Gated preview
  * served the SPA and the bucket from one Worker behind one password, so the
  * same relative path resolved there too and the map page could hard-code it.
  *
