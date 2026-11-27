@@ -56,14 +56,14 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver, isNotAModelRun, isProbeOnlyDriver, probeOnlyRefusal, DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./drivers";
-import { defaultLoopOf, isTokenEnvName, isUnscoredDriverName } from "./config";
+import { DEFAULT_DRIVER, driverEntry, eitherHas, entryOf, harnessDriver, isNotAModelRun, isProbeOnlyDriver, probeOnlyRefusal, DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./drivers";
+import { defaultLoopOf, isUnscoredDriverName } from "./config";
 import { EPISODE_IDS, EPISODES, isLevelEpisode, isScoredEpisode, isTaskEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, partyAttempt, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, countedRun, neverStale, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
+import { countedRun, neverStale, SUBSCRIPTION_PAUSE, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { credentialCarries, providerById, providerOfModel, type Credential } from "./credential-slots";
-import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
+import { platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { canonicalModelId } from "../../infra/model-catalogue";
 import { entryModelIds, type ProviderOption } from "./provider-options";
@@ -656,13 +656,6 @@ export interface HeldPick {
   name: string;
   episode: EpisodeId;
   why: string;
-}
-
-/** An account that exists but is taken, and (where known) who is holding it. */
-export interface BusyAccount {
-  account: string;
-  /** The run id or job name on it; absent when the caller cannot name one. */
-  by?: string;
 }
 
 /** `run.ts --resume` refused because the run has a live owner (EX_TEMPFAIL): nothing was written. */

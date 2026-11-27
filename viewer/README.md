@@ -229,7 +229,7 @@ sample says nothing about the run. Within a process it only grows, so the
 run's count is summed across every drop (`questsAcrossRestarts`, a lower bound
 by whatever a stretch completed after its last sample) everywhere a reader is
 shown it: `/api/run/<id>` and the results rows, the map feed (each live run's
-counts read off its samples, `readQuestCounts`), and the
+counts read off its samples), and the
 replay track, whose every point carries the run's count up to it from the same
 fold (`questTally`), so the end of a replay reads what the run page does. Only
 the fleet listing's row is the newest sample, which on a resumed run is the

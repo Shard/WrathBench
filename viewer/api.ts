@@ -53,7 +53,6 @@ import { fanoutLead, fanoutReadings } from "../runner/src/run-reader";
 import { clipsView, pickHighlight } from "./camera";
 import { readStateItems, readStates } from "./runs";
 import { isValidRunId, readRun, runDir } from "../runner/src/run-list";
-import { LIVE_WINDOW_MS } from "../runner/src/run-fact";
 import {
   factOf,
   runRowOf,
@@ -81,7 +80,7 @@ import {
   tileValidators,
 } from "./tiles";
 import { playtimeMs, recordSegments } from "../runner/src/sessions";
-import { RunTotalsScanner, type RunTotals } from "../runner/src/run-totals";
+import type { RunTotals } from "../runner/src/run-totals";
 import type { ApiContext } from "./api-context";
 import { sharedStore, STORE_SHARE_MS } from "./shared-store";
 import { createTailCache } from "./api-tails";

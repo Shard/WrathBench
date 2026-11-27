@@ -237,7 +237,7 @@ export async function readLatestMove(runsDir: string, runId: string): Promise<Mo
   }
 }
 
-/** `readQuestCounts` (`runs.ts`) over an open database: every sample's quest count, oldest first. */
+/** Every sample's quest count in an open `run.sqlite`, oldest first. */
 function questCountsIn(db: Database, runId: string): { questsCompleted: number | null }[] {
   if (!stateColumns(db).has("quests_completed")) return [];
   const rows = db
