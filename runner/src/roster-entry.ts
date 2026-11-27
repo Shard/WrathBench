@@ -2,8 +2,8 @@
  * A roster entry's identity as every reader of the roster shares it: the
  * entry's shape (`RosterModel`), the tier and idle names an entry may carry
  * (`TIER_TABLE` in `models.ts` says what each buys), why a roster name is
- * outside the policy, and which runs an entry's compaction window owns. Split out of `models.ts` (which re-exports
- * all of it unchanged) so a reader that only names a run's roster row — the
+ * outside the policy, and which runs an entry's compaction window owns. Apart
+ * from `models.ts` so a reader that only names a run's roster row — the
  * viewer's run page — does not load the scheduler.
  */
 
@@ -14,9 +14,41 @@ import type { ProviderOption } from "./provider-options";
 import type { RoutingSpec } from "./routing";
 import type { ServingSpec } from "./serving";
 
+/**
+ * The ladder a model climbs, named once here. A tier is a statement
+ * of **how much evidence** a model gets, denominated in runs, and it is the
+ * only thing that sets a run count: there is no per-entry override and no
+ * per-billing table, so "how many runs does this model get" has exactly one
+ * answer and it is the word in the config.
+ *
+ * The table lives in code, not in the fleet config, for the reason promotion is a
+ * threshold rather than a judgement: a budget that every model is
+ * held to alike is a recorded decision, and a bespoke volume is a NAMED tier
+ * added here, reviewed like an episode id — never a number edited into one
+ * model's entry at 03:00.
+ *
+ * Money is deliberately not modelled. A tier is denominated in runs; a spend
+ * cap is a credential's `spend` budget (`runner/src/credential-slots.ts`), its own
+ * thing beside the tier. Minting `t0a`/`t0b` to approximate dollars is the accretion this
+ * table exists to stop.
+ */
 export const TIERS = ["t0", "t1", "t2", "t3"] as const;
 export type Tier = (typeof TIERS)[number];
 
+/**
+ * What a model does with an account when it has no counted runs left to earn.
+ *
+ * Two values, not three. `characters` used to mean "another scored run of an
+ * eligible tier with the next race/class in a code-side cycle", and it was the
+ * wrong shape for what it was doing: sampling start states is exploration, so
+ * putting it in a SCORED episode meant an unscored question was being asked in
+ * the scored lane, with the cell chosen by a counter that meant something else
+ * (how many extras this model had made). It is a probe campaign now, where
+ * the cells are named in the config and the runs are unscored.
+ *
+ * - `none` — nothing. The default, and what a paid model wants.
+ * - `unlimited` — a freeplay session, unscored, governed by its idle watchdog.
+ */
 export const IDLE_MODES = ["none", "unlimited"] as const;
 export type IdleMode = (typeof IDLE_MODES)[number];
 

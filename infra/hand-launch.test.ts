@@ -10,16 +10,8 @@ import { launchRouting } from "../runner/test/fixtures/launch-routing";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  modelStates,
-  readFleetRuns,
-  readRunFact,
-  readRunFacts,
-  runFactCache,
-  utcDay,
-  type RunFact,
-  type UnstampedRun,
-} from "../runner/src/models";
+import { modelStates, runFactCache } from "../runner/src/models";
+import { readFleetRuns, readRunFact, readRunFacts, utcDay, type RunFact, type UnstampedRun } from "../runner/src/run-fact";
 import { parseCredentials } from "../runner/src/credential-slots";
 import { parseFleet, rosterModels, type FleetConfig } from "./run-fleet";
 import { planOf } from "./fixtures/tick";

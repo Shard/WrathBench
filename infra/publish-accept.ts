@@ -90,7 +90,7 @@ import { LOCAL_PATH_ROOTS } from "../viewer/scrub-paths";
 import { unpackSegs } from "@wrathbench/inspector/codec/trace";
 import { PUBLIC_NEARBY_SPAN_MS } from "../viewer/public-keys";
 import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
-import { isNotAModelRun } from "../runner/src/config";
+import { isNotAModelRun } from "../runner/src/drivers";
 import { LIVE_PATH, MANIFEST_PATH, NEARBY_PATH, classifyPath, traceSegmentPath } from "./publish-core";
 
 /* ------------------------------------------------------------- the source --- */

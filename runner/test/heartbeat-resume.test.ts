@@ -13,8 +13,10 @@ import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "n
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, newSessionToken } from "../src/config";
-import { liveOwnerOf, readRunFact, RESUME_REFUSED_EXIT } from "../src/models";
-import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, startHeartbeat, Trajectory } from "../src/trajectory";
+import { liveOwnerOf, RESUME_REFUSED_EXIT } from "../src/models";
+import { readRunFact } from "../src/run-fact";
+import { Trajectory } from "../src/trajectory";
+import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, startHeartbeat } from "../src/heartbeat";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();

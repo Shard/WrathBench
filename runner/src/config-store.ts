@@ -78,24 +78,6 @@ import { describeBudget, parseCredentials, rosterProviderRefusal, type Credentia
 import { subscriptionFamilyRefusal } from "./roster-refusal";
 import { parseSiteBlock } from "./site-settings";
 
-/*
- * Reading the store — where it lives, its keys, how rows render, and
- * `readFleetConfig` — is `config-read.ts`'s, which a reader loads without the
- * write gate below; re-exported here unchanged.
- */
-export {
-  COLLECTION_KEYS,
-  CONFIG_DB_BUSY_TIMEOUT_MS,
-  configDbPath,
-  PROPOSED_PREFIX,
-  readFleetConfig,
-  renderFleet,
-  TOP_LEVEL_KEYS,
-  type CollectionKey,
-  type ConfigRow,
-  type FleetRead,
-} from "./config-read";
-
 /**
  * Whether a row key is one the renderer would actually emit.
  *

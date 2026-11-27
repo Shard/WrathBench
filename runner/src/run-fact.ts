@@ -2,7 +2,7 @@
  * One run's fact, as the scheduler reads it: `readRunFact` over a run
  * directory, the record-count scanner it tallies the trajectory with, the
  * verdict off the trajectory's tail, and the walk and cache key over a whole
- * runs tree. Split out of `models.ts` (which re-exports all of it unchanged)
+ * runs tree. Apart from the policy (`models.ts`)
  * so a reader that needs the fact and not the policy — the collector, which
  * stores each run's fact as it tails, and the viewer beside it — does not load
  * the scheduler: the roster, the campaigns, the credential slots.
@@ -259,7 +259,7 @@ export interface RunFact {
  * run counts as live when it has not terminated and its trajectory grew
  * recently. "No termination reason" alone is not enough — a killed process
  * leaves none — and a stale mtime is the only signal we have from outside the
- * container. The one definition: the run listing (`run-list.ts`) re-exports it.
+ * container. The one definition, which the run listing (`run-list.ts`) reads too.
  */
 export const LIVE_WINDOW_MS = 120_000;
 

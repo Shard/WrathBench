@@ -1,8 +1,8 @@
 /**
  * Reading the config store (`config-store.ts`): where it lives, how its rows
  * render back to the config document, and the one read every reader takes
- * (`readFleetConfig`). Split out of `config-store.ts`, which re-exports all of
- * it unchanged and keeps everything that writes or validates, so a reader —
+ * (`readFleetConfig`). Apart from `config-store.ts`, which keeps everything
+ * that writes or validates, so a reader —
  * the viewer, for its `site` block and its roster names — does not load the
  * supervisor's parser (`infra/run-fleet-config.ts`), the campaigns or the
  * credential slots the write gate runs through. `ConfigStore` selects and

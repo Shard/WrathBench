@@ -13,17 +13,8 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  ConfigRejected,
-  ConfigStore,
-  configDbPath,
-  configStoreSeeded,
-  EMPTY_STORE_HINT,
-  openConfigStore,
-  readFleetConfig,
-  renderFleet,
-  splitFleet,
-} from "../src/config-store";
+import { ConfigRejected, ConfigStore, configStoreSeeded, EMPTY_STORE_HINT, openConfigStore, splitFleet } from "../src/config-store";
+import { configDbPath, readFleetConfig, renderFleet } from "../src/config-read";
 import { parseFleet } from "../../infra/run-fleet-config";
 import { tempDirs } from "./fixtures/temp-dirs";
 

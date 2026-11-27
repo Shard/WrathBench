@@ -29,7 +29,7 @@ import { REDACTED } from "@wrathbench/mcp/redact";
  * `POST /action` and `DELETE /session`: the old default — the
  * run id, a second-granularity timestamp — was enumerable, so a snippet in one
  * run could drive or tear down a concurrent one. Here rather than in
- * `config.ts`, which re-exports it, so striking a token loads no run config.
+ * `config.ts`, so striking a token loads no run config.
  */
 export const MIN_TOKEN_LENGTH = 32;
 

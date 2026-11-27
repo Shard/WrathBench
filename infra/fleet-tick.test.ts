@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { parseFleet, type FleetConfig, type FleetJob, type JobSpawn } from "./run-fleet-config";
 import { effectiveJobs, type TickIO, type TickMemory } from "./run-fleet-tick";
 import type { EndedRun, NameSweep } from "./run-fleet-plan";
-import type { RunFact, UnstampedRun } from "../runner/src/models";
+import type { RunFact, UnstampedRun } from "../runner/src/run-fact";
 import type { CampaignFile } from "../runner/src/campaign-file";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { countedFact } from "../runner/test/fixtures/counted-fact";

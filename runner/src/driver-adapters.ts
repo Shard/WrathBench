@@ -13,8 +13,10 @@
 import type { Database } from "bun:sqlite";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
-import { codexEffortRefusal, homeLooksLoggedIn, runCodexEpisode } from "./adapter-codex";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, type Driver, type RunConfig } from "./config";
+import { codexEffortRefusal, runCodexEpisode } from "./adapter-codex";
+import { homeLooksLoggedIn } from "./codex-home";
+import { isTokenEnvName, type RunConfig } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, type Driver } from "./drivers";
 import type { EpisodicLog } from "./episodic";
 import type { LoopOutcome, ObservationStallHook } from "./loop";
 import { piEffortRefusal, runPiEpisode } from "./adapter-pi";

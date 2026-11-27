@@ -21,7 +21,7 @@ import {
   type TalentFrame,
 } from "./loadouts";
 import { DEADMINES_ENTRANCE_TRIGGER, DEADMINES_STAGING, DEADMINES_STAGING_SPOTS, SCENARIOS, SENTINEL_HILL_BIND, validateScenario } from "./scenarios";
-import { isValidCharacterName } from "../../runner/src/config";
+import { isValidCharacterName } from "../../runner/src/character-name";
 
 /** The frame a module would answer for a loadout, built from the preset itself. */
 function frameFor(l: Loadout): TalentFrame {

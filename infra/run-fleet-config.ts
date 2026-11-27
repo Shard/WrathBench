@@ -29,22 +29,9 @@ import {
 } from "../runner/src/campaigns";
 import type { CampaignFile } from "../runner/src/campaign-file";
 import { isOneAgentArm } from "../runner/src/campaign-def";
-import {
-  isCounted,
-  parsePolicyBlock,
-  parseTier,
-  parseIdle,
-  TIERS,
-  pinnedRefs as pinnedRefsOf,
-  policyExclusion as policyExclusionOf,
-  policyRefs as policyRefsOf,
-  type IdleMode,
-  type ModelState,
-  type RosterModel,
-  type RunFact,
-  type SchedulingPolicy,
-  type Tier,
-} from "../runner/src/models";
+import { isCounted, parsePolicyBlock, parseTier, parseIdle, type ModelState, type SchedulingPolicy } from "../runner/src/models";
+import { TIERS, pinnedRefs as pinnedRefsOf, policyExclusion as policyExclusionOf, policyRefs as policyRefsOf, type IdleMode, type RosterModel, type Tier } from "../runner/src/roster-entry";
+import type { RunFact } from "../runner/src/run-fact";
 import { EPISODE_IDS, isScoredEpisode, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { credentialCandidates, isCredentialId, parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { evalPoolAccountNames, evalPoolSizeOf, isEvalPoolAccountName, isPoolAccountName, POOL_SIZE_ENV, poolAccountNames, poolSizeOf } from "../runner/src/account-pool";

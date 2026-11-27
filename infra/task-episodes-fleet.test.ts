@@ -9,10 +9,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY, parsePolicyBlock, projectModel, rehearsalHold, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, parsePolicyBlock, projectModel, rehearsalHold, type SchedulingPolicy } from "../runner/src/models";
+import type { RosterModel } from "../runner/src/roster-entry";
+import type { RunFact } from "../runner/src/run-fact";
 import { loadRunConfig } from "../runner/src/config";
-import { taskHash } from "../runner/src/task-episodes";
-import { taskDefinition } from "../runner/src/task-episodes";
+import { taskHash, taskDefinition } from "../runner/src/task-episodes";
 import { parseFleet, type FleetConfig } from "./run-fleet-config";
 import { planOf } from "./fixtures/tick";
 import { episodeFlags, resolve } from "./run-roster";

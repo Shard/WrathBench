@@ -43,8 +43,6 @@ import { isBareSessionDir } from "./session-store";
 import { TraceSampler, TurnIndex, type StateSample } from "./trace-samples";
 import { num } from "./values";
 
-export { RUN_TURNS, TurnIndex, type StateSample } from "./trace-samples";
-
 /** The session record's directory inside a run directory (`session-record.ts`). */
 const SESSION_DIR = "session";
 

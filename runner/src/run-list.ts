@@ -43,9 +43,6 @@ import { runCredentialOf } from "./run-credential";
 import { platformOf } from "./platform";
 import { LIVE_WINDOW_MS } from "./run-fact";
 
-/** When a run counts as live: the run fact's window (`run-fact.ts`), re-exported for the listing's readers. */
-export { LIVE_WINDOW_MS };
-
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 
 /** Guard against `..` and anything that would leave the runs directory. */

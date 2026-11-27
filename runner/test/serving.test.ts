@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { parseServing, parseServingLabels } from "../src/serving";
 import { servingRefusal } from "../src/roster-refusal";
-import { comparabilityOf, harnessOfRun, subjectOfConfig } from "../src/comparability";
+import { comparabilityOf, subjectOfConfig } from "../src/comparability";
+import { harnessOfRun } from "../src/comparability-tuple";
 import { isProbeOnlyDriver, isRosterDriver } from "../src/drivers";
 import { contextSentence } from "../src/prompt";
 import { entryOwnsRun } from "../src/models";

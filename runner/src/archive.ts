@@ -51,7 +51,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync 
 import { join } from "node:path";
 import { listRuns, runDir } from "./run-list";
 import { ARCHIVE_DIR } from "./archive-dir";
-import { countModelResponses } from "./models";
+import { countModelResponses } from "./run-fact";
 import { fanoutCharacters, fanoutSessionDir, readRunRow, SESSIONS_DIR } from "./run-reader";
 import { removeSessionRing } from "./session-record";
 import { CLIENT_CACHE_FILE } from "@wrathbench/mcp/client-cache";

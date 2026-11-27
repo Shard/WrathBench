@@ -26,14 +26,8 @@
  */
 
 import { existsSync } from "node:fs";
-import {
-  ConfigRejected,
-  ConfigStore,
-  DraftRefused,
-  configDbPath,
-  validateFleet,
-  type AuditRow,
-} from "../runner/src/config-store";
+import { ConfigRejected, ConfigStore, DraftRefused, validateFleet, type AuditRow } from "../runner/src/config-store";
+import { configDbPath } from "../runner/src/config-read";
 import { parseCredentials, type Credential } from "../runner/src/credential-slots";
 import { parsePolicyBlock } from "../runner/src/models";
 import type { RoutingSpec } from "../runner/src/routing";

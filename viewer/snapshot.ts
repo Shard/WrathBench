@@ -100,8 +100,7 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { unpackSegs } from "@wrathbench/inspector/codec/trace";
-import { clipMediaKey, traceSegmentKey } from "./public-keys";
-import { ENTRIES_WINDOW, PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
+import { clipMediaKey, traceSegmentKey, ENTRIES_WINDOW, PUBLIC_NEARBY_KEY, PUBLIC_NEARBY_SPAN_MS } from "./public-keys";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -123,7 +122,7 @@ import {
   projectTraceSegment,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
-import { isNotAModelRun } from "../runner/src/config";
+import { isNotAModelRun } from "../runner/src/drivers";
 import { ALL_GROUPS, type Groups } from "./groups";
 
 /** The mutable keys are polled; everything else is content-addressed. */

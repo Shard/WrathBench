@@ -14,10 +14,12 @@ import { PROGRAM_EDIT_SCRATCHPAD_NOT_FOUND, routineDetailKey, Scratchpad } from 
 import { PROGRAM_FANOUT_RUN_SNIPPET_SENTENCE } from "@wrathbench/mcp/fanout";
 import { StubAdapter, type ChatRequest } from "../src/adapter";
 import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
-import { comparabilityOf, promptHash } from "../src/comparability";
+import { comparabilityOf } from "../src/comparability";
+import { promptHash } from "../src/comparability-tuple";
 import { assembleContext, capWindowMessage, CONTEXT_POLICY, PadSeen, renderWindow, scratchpadUnchangedLine, type HistoryMessage } from "../src/context";
 import { PAD_HEADER_PATTERN } from "../../infra/inspect-run";
-import { defaultLoopOf, harnessOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, scoredWaitFor } from "../src/config";
+import { defaultLoopOf, launchLoopOf, loadRunConfig, loopLaunchRefusal, programLoopRefusal, scoredWaitFor } from "../src/config";
+import { harnessOf } from "../src/drivers";
 import { EpisodicLog } from "../src/episodic";
 import { fanoutSessionNote } from "../src/fanout-run";
 import { runLoop } from "../src/loop";

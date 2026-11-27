@@ -2,15 +2,13 @@
  * The comparability tuple's shape and its readers: the schema a run's
  * `meta.json` stamp is parsed with, the harness series of a version stamp,
  * the prompt digest, and the comparisons a reader makes. What the tuple holds
- * and why is `comparability.ts`, which stamps it at launch and re-exports all
- * of this; it is here, apart from the stamping, so a reader of runs (the
+ * and why is `comparability.ts`, which stamps it at launch; it is here, apart from the stamping, so a reader of runs (the
  * viewer, the collector, a run listing) does not load the system prompt and
  * the SDK the stamping renders and checks against.
  */
 
 import { z } from "zod";
-import { HARNESSES, type Harness } from "./config";
-import { driverEntry } from "./drivers";
+import { HARNESSES, type Harness, driverEntry } from "./drivers";
 import { episodeIdSchema } from "./episodes";
 import { routingSchema } from "./routing";
 import { agentSchema, servingSchema, SUBJECT_KINDS } from "./serving";

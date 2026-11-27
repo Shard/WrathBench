@@ -12,7 +12,8 @@ import { entryBilling, runBilling } from "../src/billing";
 import { loadRunConfig } from "../src/config";
 import { credentialCandidates, parseCredentials } from "../src/credential-slots";
 import { billingOf } from "../src/model-cost";
-import { DEFAULT_POLICY, outstandingWork, projectModel, type RosterModel } from "../src/models";
+import { DEFAULT_POLICY, outstandingWork, projectModel } from "../src/models";
+import type { RosterModel } from "../src/roster-entry";
 import { configFromArgs } from "../src/run";
 import { rowOf } from "../../viewer/models";
 

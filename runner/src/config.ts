@@ -199,27 +199,6 @@ export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 // --------------------------------------------------------------- run config
 
-export { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
-
-// The driver vocabulary, the harness tags and each driver's facts live in the
-// registry (`drivers.ts`), which stays import-free so the viewer and the fleet
-// can read it; they are re-exported here for every caller that already reads
-// them from config.
-export {
-  DEFAULT_CLAUDE_TOKEN_ENV,
-  DEFAULT_CODEX_HOME_ENV,
-  DEFAULT_DRIVER,
-  DRIVERS,
-  HARNESS_OF_DRIVER,
-  HARNESSES,
-  harnessOf,
-  isDriver,
-  REFERENCE_STAMP,
-  STUB_STAMP,
-  type Driver,
-  type Harness,
-} from "./drivers";
-
 /**
  * Whether a string is usable as the NAME of an env var holding a credential.
  * An env var name and nothing else: the runner looks it up in `process.env`,
@@ -943,9 +922,6 @@ export function newRunId(now: Date = new Date()): string {
   return `run-${stamp}`;
 }
 
-/* The module's floor on a session token's length, from the leaf that strikes tokens (`session-token.ts`). */
-export { MIN_TOKEN_LENGTH };
-
 /** A fresh session secret: 16 random bytes, 32 hex characters. */
 export function newSessionToken(): string {
   return randomBytes(16).toString("hex");
@@ -1302,9 +1278,6 @@ export function isUnscoredDriver(driver: Driver): boolean {
 export function isUnscoredDriverName(driver: string | null | undefined): boolean {
   return typeof driver === "string" && isDriver(driver) && isUnscoredDriver(driver);
 }
-
-/** Whether a stored run was driven by something that is not a model: `drivers.ts` holds the one definition. */
-export { isNotAModelRun } from "./drivers";
 
 /**
  * The stamp a run gets, or undefined for a run that can score.

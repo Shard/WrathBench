@@ -8,7 +8,7 @@
 
 import { harnessSeries } from "../runner/src/comparability-tuple";
 import { EPISODE_LIST, hasBoard } from "../runner/src/episodes";
-import { isNotAModelRun } from "../runner/src/config";
+import { isNotAModelRun } from "../runner/src/drivers";
 import { badEvidenceReason, countedRun } from "../runner/src/lapse";
 import type {
   CampaignsResponse,

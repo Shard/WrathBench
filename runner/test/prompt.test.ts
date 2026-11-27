@@ -233,7 +233,7 @@ describe("episode sentence", () => {
     // body, moved all of them. The helpers line pointing at the SDK reference
     // as the file it is, and the death line naming state.self.dead (operator,
     // 2026-11-18), both in the shared body, moved all of them.
-    const { promptHash } = require("../src/comparability");
+    const { promptHash } = require("../src/comparability-tuple");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
         wrathbench: { on: "sha256:e9d8610d84e4215a", off: "sha256:5b7ad6f87ab688f6" },
@@ -343,7 +343,7 @@ describe("an objective replaces the broad goal (operator, 2026-10-21)", () => {
   test("objective-bearing renderings hash as pinned", () => {
     // Moved with the pins above by the shared-body edits that move them, the
     // last the SDK-reference and state.self.dead lines (operator, 2026-11-18).
-    const { promptHash } = require("../src/comparability");
+    const { promptHash } = require("../src/comparability-tuple");
     const got = {
       probing4h: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "wrathbench", true, 14_400_000)),
       probing4hCli: promptHash(buildSystemPrompt("walk to Ironforge", "probing", "claude-code", true, 14_400_000)),

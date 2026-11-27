@@ -7,7 +7,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY, isPartyEpisode, partyAttempts, projectModel, type RosterModel, type RunFact } from "../src/models";
+import { DEFAULT_POLICY, isPartyEpisode, partyAttempts, projectModel } from "../src/models";
+import type { RosterModel } from "../src/roster-entry";
+import type { RunFact } from "../src/run-fact";
 import { countedFact } from "./fixtures/counted-fact";
 
 const NOW = Date.UTC(2026, 10, 14, 12);

@@ -5,7 +5,7 @@
  * name now follows the account, as the preflight gate's always did.
  */
 import { describe, expect, test } from "bun:test";
-import { isValidCharacterName } from "../runner/src/config";
+import { isValidCharacterName } from "../runner/src/character-name";
 import { accountFixtureName } from "./smoke/lib/fixture";
 
 describe("accountFixtureName", () => {

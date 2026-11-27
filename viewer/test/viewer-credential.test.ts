@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { loadRunConfig, newSessionToken } from "../../runner/src/config";
 import { runCredentialOf } from "../../runner/src/run-credential";
-import { readRunFact } from "../../runner/src/models";
+import { readRunFact } from "../../runner/src/run-fact";
 import { Trajectory } from "../../runner/src/trajectory";
 import { createApi } from "../api";
 import type { RunDetailResponse, RunsResponse } from "../api-types";

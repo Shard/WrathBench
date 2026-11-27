@@ -4,15 +4,14 @@
  * resume's reload; a label the run fact carries, never a key.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { configFromArgs } from "../src/run";
 import { runConfigSchema } from "../src/config";
-import { readRunFact } from "../src/models";
+import { readRunFact } from "../src/run-fact";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { openSessionRecord } from "../src/session-record";
 import type { SessionFile } from "@wrathbench/mcp/record";
-import { readFileSync } from "node:fs";
 
 const tempDir = tempDirs();
 const ID = "wabcdefghij";

@@ -7,7 +7,8 @@
 import { defaultLoopOf } from "../../src/config";
 import { DEFAULT_DRIVER, driverEntry, isDriver } from "../../src/drivers";
 import type { EpisodeId } from "../../src/episodes";
-import type { RosterModel, RunFact } from "../../src/models";
+import type { RosterModel } from "../../src/roster-entry";
+import type { RunFact } from "../../src/run-fact";
 import { DEFAULT_API_BASE } from "../../src/providers";
 import { routingForRun } from "../../src/routing";
 

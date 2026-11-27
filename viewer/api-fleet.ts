@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json } from "./http";
-import { HARNESSES } from "../runner/src/config";
+import { HARNESSES } from "../runner/src/drivers";
 import type {
   FleetAccountView,
   FleetJobView,

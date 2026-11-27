@@ -21,7 +21,8 @@ import {
   runPiEpisode,
 } from "../src/adapter-pi";
 import { COMPACTED_NOTICE, piAutoCompactLimit, piReserveTokens, piWindowCapRefusal } from "../src/cli-compaction";
-import { comparabilityOf, promptHash } from "../src/comparability";
+import { comparabilityOf } from "../src/comparability";
+import { promptHash } from "../src/comparability-tuple";
 import { harnessClash, loadRunConfig } from "../src/config";
 import { CODEX_SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, PI_SYSTEM_PROMPT, SNIPPET_DELTA_SENTENCE, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import wrathbenchPromptExtension, { PI_PROMPT_MISSING } from "../src/pi-extension";
@@ -31,7 +32,7 @@ import { priceFor, rosterPriceGap, runCost } from "../../viewer/pricing";
 import { projectEntry } from "../../viewer/public-projection";
 import { summarize } from "../../viewer/tail";
 import { tokenTotals } from "../src/run-totals";
-import { countRecords } from "../src/models";
+import { countRecords } from "../src/run-fact";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "@wrathbench/mcp";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";

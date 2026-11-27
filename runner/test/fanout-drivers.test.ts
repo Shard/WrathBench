@@ -30,7 +30,8 @@ import { fanoutSessionNote, openFanout, readRoster, ROSTER_FILE } from "../src/f
 import { configFromArgs } from "../src/run";
 import { runsSource } from "../../viewer/runs-source";
 import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
-import { characterSessionDir, RecordSignals, SESSION_DIR, SESSIONS_DIR } from "../src/session-record";
+import { characterSessionDir, RecordSignals, SESSION_DIR } from "../src/session-record";
+import { SESSIONS_DIR } from "../src/run-reader";
 import { toolsFor } from "../src/tools";
 import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";

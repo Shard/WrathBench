@@ -6,7 +6,7 @@
 import type { EpisodeId, FleetConfig, FleetJob, JobSource } from "../run-fleet-config";
 import { holdsAssignment, planTick, type TickPlan, type TickSnapshot } from "../run-fleet-plan";
 import type { ReadHold, RunPodsSetting, WorldsSetting } from "../run-fleet-credentials";
-import type { RunFact, UnstampedRun } from "../../runner/src/models";
+import type { RunFact, UnstampedRun } from "../../runner/src/run-fact";
 import { emptyModelLists } from "../../runner/src/model-lists";
 import type { SubscriptionUsage } from "../../runner/src/subscription-usage";
 import type { CampaignFile } from "../../runner/src/campaign-file";

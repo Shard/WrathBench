@@ -1,7 +1,7 @@
 /**
  * What a Codex home on disk says about its login, and nothing else: a leaf,
  * so the login flow (`codex-login.ts`) and the admin page that reads it need
- * not load the codex driver (`adapter-codex.ts`, which re-exports this) and
+ * not load the codex driver (`adapter-codex.ts`) and
  * the agent loop behind it.
  */
 

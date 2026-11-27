@@ -18,25 +18,19 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ChatMessage } from "../src/context";
-import {
-  DRIVERS,
-  REFERENCE_STAMP,
-  STUB_STAMP,
-  isNotAModelRun,
-  isUnscoredDriver,
-  isUnscoredDriverName,
-  loadRunConfig,
-  unscoredStamp,
-} from "../src/config";
+import { isUnscoredDriver, isUnscoredDriverName, loadRunConfig, unscoredStamp } from "../src/config";
+import { DRIVERS, REFERENCE_STAMP, STUB_STAMP, isNotAModelRun } from "../src/drivers";
 import { comparabilityOf } from "../src/comparability";
 import { DRIVER_ADAPTERS } from "../src/driver-adapters";
 import { configFromArgs } from "../src/run";
 import { runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "@wrathbench/mcp";
+import { Scratchpad, compileSnippet } from "@wrathbench/mcp";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
-import { DEFAULT_POLICY, isCounted, projectModel, readRunFacts, type RosterModel, type RunFact } from "../src/models";
+import { DEFAULT_POLICY, isCounted, projectModel } from "../src/models";
+import { readRunFacts, type RunFact } from "../src/run-fact";
+import type { RosterModel } from "../src/roster-entry";
 import { MAX_FAILED_TICKS, REFERENCE_GLOBAL, ReferenceAdapter, lastToolResult, parseReport } from "../src/reference-adapter";
 import {
   REFERENCE_PROGRAM_ENV,
@@ -48,7 +42,6 @@ import {
   type ReferenceProgram,
 } from "../src/reference-program";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import { compileSnippet } from "@wrathbench/mcp";
 import { createApi } from "../../viewer/api";
 import { STUB_ROUTE, program as stubProgram } from "./fixtures/reference-stub";
 import { writeReadings } from "./fixtures/v1-session";

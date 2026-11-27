@@ -8,7 +8,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFleet } from "../../../infra/run-fleet-config";
-import { ConfigStore, readFleetConfig } from "../../src/config-store";
+import { ConfigStore } from "../../src/config-store";
+import { readFleetConfig } from "../../src/config-read";
 import type { DraftRecord } from "../../../viewer/drafts";
 
 export const CATALOGUE_TEXT = readFileSync(join(import.meta.dir, "openrouter-models.json"), "utf8");

@@ -19,13 +19,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  comparabilityOf,
-  fetchServerBuild,
-  parseComparability,
-  promptHash,
-  sameComparability,
-  type Comparability, harnessSeries } from "../src/comparability";
+import { comparabilityOf, fetchServerBuild } from "../src/comparability";
+import { parseComparability, promptHash, sameComparability, type Comparability, harnessSeries } from "../src/comparability-tuple";
 import { ModuleProtocolError } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";

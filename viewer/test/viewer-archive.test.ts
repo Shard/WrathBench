@@ -18,7 +18,7 @@ import { ARCHIVE_DIR } from "../../runner/src/archive-dir";
 import { scanRunTotals } from "../../runner/src/run-totals";
 import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds, runActivityAge } from "../../runner/src/archive";
 import { FANOUT_CHARACTERS, FANOUT_RUN, writeFanoutRun } from "../../runner/test/fixtures/fanout";
-import { readRunFacts } from "../../runner/src/models";
+import { readRunFacts } from "../../runner/src/run-fact";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();

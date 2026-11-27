@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { parseFleet, type FleetConfig } from "./run-fleet-config";
 import { charactersFrom, formerCharactersFrom, isExtraJob, keepFor } from "./run-fleet-plan";
 import { planOf } from "./fixtures/tick";
-import type { RunFact } from "../runner/src/models";
+import type { RunFact } from "../runner/src/run-fact";
 
 const NOW = Date.UTC(2026, 10, 15, 12);
 const H = 3_600_000;

@@ -41,7 +41,8 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { dirname, join } from "node:path";
 import { SQL } from "bun";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
-import { liveOwnerOf, terminationOfTrajectory, type WorldsMode } from "../runner/src/models";
+import { liveOwnerOf, type WorldsMode } from "../runner/src/models";
+import { terminationOfTrajectory } from "../runner/src/run-fact";
 import { digestOf, K8sClient, type Pod, type PodEnvVar } from "./k8s-client";
 import { isQuotaRefusal, readLauncherSettings, ROSTER_PID_LABEL } from "./run-pod";
 import { WORLDS_SECRET_ENV } from "./episode-launcher";

@@ -12,16 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  RecordCountScanner,
-  countModelResponses,
-  countRecords,
-  countRecordsCached,
-  readRunFact,
-  readRunFacts,
-  type CountCache,
-  type ReadAt,
-} from "../src/models";
+import { RecordCountScanner, countModelResponses, countRecords, countRecordsCached, readRunFact, readRunFacts, type CountCache, type ReadAt } from "../src/run-fact";
 
 const KINDS = ["response", "pause"] as const;
 

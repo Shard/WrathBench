@@ -9,26 +9,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { COMPACT_WINDOW_DRIVERS, compactWindowDriverRefusal, DRIVER_STAMPS, REFERENCE_STAMP, STUB_STAMP } from "../src/config";
+import { COMPACT_WINDOW_DRIVERS, compactWindowDriverRefusal, DRIVER_STAMPS } from "../src/config";
+import { REFERENCE_STAMP, STUB_STAMP, DEFAULT_DRIVER, DRIVER_LIST, DRIVER_POD_VOLUMES, DRIVER_TABLE, DRIVERS, entryOf, HARNESS_OF_DRIVER, HARNESSES, HOME_CREDENTIAL_ENVS, inProcessRunPodRefusal, RUN_POD_STAMP_ENV, ROSTER_DRIVERS, harnessDriver, isProbeOnlyDriver, probeOnlyRefusal, type RosterDriver } from "../src/drivers";
 import { DRIVER_ADAPTERS } from "../src/driver-adapters";
-import {
-  DEFAULT_DRIVER,
-  DRIVER_LIST,
-  DRIVER_POD_VOLUMES,
-  DRIVER_TABLE,
-  DRIVERS,
-  entryOf,
-  HARNESS_OF_DRIVER,
-  HARNESSES,
-  HOME_CREDENTIAL_ENVS,
-  inProcessRunPodRefusal,
-  RUN_POD_STAMP_ENV,
-  ROSTER_DRIVERS,
-  harnessDriver,
-  isProbeOnlyDriver,
-  probeOnlyRefusal,
-  type RosterDriver,
-} from "../src/drivers";
 import { providerOfModel } from "../src/credential-slots";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";

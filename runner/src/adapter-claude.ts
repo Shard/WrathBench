@@ -113,9 +113,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { threadContextOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, entryOf } from "./drivers";
 import { ThreadContext } from "./context";
-import { entryOf } from "./drivers";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { MCP_BRIDGE_PATH } from "@wrathbench/mcp/paths";
 import { McpServer } from "./mcp";
@@ -592,8 +592,6 @@ export function compactEnv(window: string | undefined): Record<string, string> {
  * about it reaches the model. Missing numbers read as null rather than zero.
  * Null when the envelope is not a compaction.
  */
-export type { CompactionRecord } from "./cli-compaction";
-
 export function compactionRecord(turn: number, msg: Record<string, unknown>): CompactionRecord | null {
   if (msg["type"] !== "system" || msg["subtype"] !== "compact_boundary") return null;
   const raw = msg["compact_metadata"];

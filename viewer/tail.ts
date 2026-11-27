@@ -35,7 +35,8 @@ import type {
 } from "./api-types";
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
-import { isV1RunDir, sessionDirOfRun, TurnIndex } from "../runner/src/run-reader";
+import { isV1RunDir, sessionDirOfRun } from "../runner/src/run-reader";
+import { TurnIndex } from "../runner/src/trace-samples";
 import { isBareSessionDir } from "../runner/src/session-store";
 import { feedRecordOf, pairStoreCalls, readHeldCall, readRecordRow, RecordFollower, storeCallRecordsOf, type RecordLine, type RecordLoc, type StoreCalls } from "./record-feed";
 import { CodexUsageCorrector } from "../runner/src/codex-usage";

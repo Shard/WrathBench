@@ -33,24 +33,9 @@ import { join } from "node:path";
 import { DEFAULT_DRIVER, driverEntry } from "../runner/src/drivers";
 import { entryBilling } from "../runner/src/billing";
 import { configDbPath } from "../runner/src/config-read";
-import {
-  DEFAULT_POLICY,
-  LADDER_MS,
-  countsTowardTarget,
-  isCounted,
-  parsePolicyBlock,
-  entryOwnsRun,
-  sameModel,
-  ownedWindows,
-  platformOf,
-  schedulability,
-  verdictForGroups,
-  schedulableView,
-  type ModelState,
-  type SchedulingPolicy,
-  type RunFact,
-  TIER_TABLE,
-} from "../runner/src/models";
+import { DEFAULT_POLICY, LADDER_MS, countsTowardTarget, isCounted, parsePolicyBlock, entryOwnsRun, sameModel, platformOf, schedulability, verdictForGroups, schedulableView, type ModelState, type SchedulingPolicy, TIER_TABLE } from "../runner/src/models";
+import { ownedWindows } from "../runner/src/roster-entry";
+import type { RunFact } from "../runner/src/run-fact";
 import { harnessSeries } from "../runner/src/comparability-tuple";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../runner/src/campaigns";
 import { rosterEntryRefusal } from "../runner/src/roster-refusal";

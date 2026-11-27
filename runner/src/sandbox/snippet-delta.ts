@@ -34,15 +34,8 @@
  * never drained.
  */
 
-import {
-  formatChatLine,
-  isGroupOrWhisperChat,
-  memberState,
-  questLabel,
-  type ChatLineLike,
-  type GroupMemberLike,
-  type UnitLike,
-} from "../context";
+import { formatChatLine, memberState, questLabel, type ChatLineLike, type GroupMemberLike, type UnitLike } from "../context";
+import { isGroupOrWhisperChat } from "@wrathbench/sdk";
 
 /**
  * The block's caps. `MAX_CHARS` bounds the whole block, header included;

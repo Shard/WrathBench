@@ -22,7 +22,8 @@
 
 import { runBilling } from "../runner/src/billing";
 import { harnessSeries } from "../runner/src/comparability-tuple";
-import { DRIVER_STAMPS, isDriver } from "../runner/src/config";
+import { DRIVER_STAMPS } from "../runner/src/config";
+import { isDriver } from "../runner/src/drivers";
 import { badEvidenceReason } from "../runner/src/lapse";
 import { stillbornOf } from "../runner/src/run-fact";
 import { EPISODES } from "../runner/src/episodes";

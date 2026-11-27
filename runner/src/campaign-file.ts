@@ -45,8 +45,6 @@ import { taskDefinition, taskHash } from "./task-episodes";
 /** The file a probe's run directory holds; one of the `LAUNCH_FILES`. */
 export const CAMPAIGN_FILE = "campaign.json";
 
-export { LAUNCH_FILES, holdsOnlyLaunchFiles } from "./launch-files";
-
 export const campaignFileSchema = z
   .object({
     campaign: z.string().min(1),
@@ -255,7 +253,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(USAGE);
     return 2;
   }
-  const { configDbPath, readFleetConfig } = await import("./config-store");
+  const { configDbPath, readFleetConfig } = await import("./config-read");
   const { parseCampaignDefinitions } = await import("./campaigns");
   const { newRunId } = await import("./config");
   if (parseCampaignRef(ref) === null) {

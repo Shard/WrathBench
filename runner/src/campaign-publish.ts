@@ -187,7 +187,8 @@ async function main(argv: string[]): Promise<number> {
     );
     return p.exitCode ?? 1;
   }
-  const { ConfigStore, configDbPath } = await import("./config-store");
+  const { ConfigStore } = await import("./config-store");
+  const { configDbPath } = await import("./config-read");
   const store = new ConfigStore(db ?? configDbPath());
   try {
     const { key, status } = store.publishDefinition(doc, { actor, ...(note !== undefined ? { note } : {}) });

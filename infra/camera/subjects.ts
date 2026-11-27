@@ -11,7 +11,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { HEARTBEAT_DEAD_MS, heartbeatAt } from "../../runner/src/trajectory";
+import { HEARTBEAT_DEAD_MS, heartbeatAt } from "../../runner/src/heartbeat";
 import { readWorldPointer, SHARED_WORLD } from "../world";
 
 export interface Subject {

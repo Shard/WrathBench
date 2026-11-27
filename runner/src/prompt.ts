@@ -20,7 +20,8 @@
  * describes is the same.
  */
 
-import type { Harness, RunConfig } from "./config";
+import type { RunConfig } from "./config";
+import type { Harness } from "./drivers";
 import { harnessDriver } from "./drivers";
 import { EPISODES, type EpisodeId } from "./episodes";
 import { VALID_STARTS } from "./starts";

@@ -25,8 +25,10 @@ import { readReportFacts, unarchived } from "./run-fleet-state";
 import { tempDirs } from "./temp-dirs";
 import { comparabilityOf } from "../runner/src/comparability";
 import { loadRunConfig, newSessionToken, type TerminationReason } from "../runner/src/config";
-import { modelStates, readRunFacts, runFactCache, RUN_FACT_SETTLE_MS, type RunFact } from "../runner/src/models";
-import { HEARTBEAT_FILE, Trajectory } from "../runner/src/trajectory";
+import { modelStates, runFactCache } from "../runner/src/models";
+import { readRunFacts, RUN_FACT_SETTLE_MS, type RunFact } from "../runner/src/run-fact";
+import { Trajectory } from "../runner/src/trajectory";
+import { HEARTBEAT_FILE } from "../runner/src/heartbeat";
 
 const tempDir = tempDirs();
 const HARNESS = "harness-0.5-1068-g0000000";

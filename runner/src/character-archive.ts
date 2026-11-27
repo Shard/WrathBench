@@ -108,12 +108,14 @@ import { createGunzip, createGzip, type Gzip } from "node:zlib";
 import { z } from "zod";
 import { ARCHIVE_DIR } from "./archive-dir";
 import { DEFAULT_DRIVER } from "./drivers";
-import { liveOwnerOf, readRunFact } from "./models";
+import { liveOwnerOf } from "./models";
+import { readRunFact } from "./run-fact";
 import { formatLike } from "./move-credential";
 import { REDACTED } from "@wrathbench/mcp/redact";
 import { describeFindings, envSecrets, SecretScanner, type KnownSecret } from "./secret-scan";
 import { strikableSessionToken } from "./session-token";
-import { HEARTBEAT_FILE, type CharacterImport } from "./trajectory";
+import { type CharacterImport } from "./trajectory";
+import { HEARTBEAT_FILE } from "./heartbeat";
 import { isSafeMemberPath, tarEnd, tarHeader, tarPadding, TarReader, type TarEntry, type TarHandler } from "./ustar";
 
 export const ARCHIVE_FORMAT = "wrathbench-character-archive";
