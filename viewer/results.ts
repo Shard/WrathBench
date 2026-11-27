@@ -53,7 +53,8 @@ import type {
 import { conditionOf } from "./condition";
 import { itemSamplesOf } from "../runner/src/run-list";
 import { encodeInventory } from "@wrathbench/inspector/codec/inventory";
-import { activeMsUntil, type ActiveSegment } from "../runner/src/sessions";
+import { activeMsUntil } from "../runner/src/sessions";
+import type { ActiveSegment } from "../runner/src/run-types";
 import type { MilestoneInstants } from "../runner/src/run-totals";
 import { EXPANSION_MAPS } from "./worldmap";
 
