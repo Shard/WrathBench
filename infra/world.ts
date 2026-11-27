@@ -86,8 +86,8 @@ export const WORLD_ID_RE = /^w[a-z2-7]{10}$/;
 /** The only schemas this file ever drops. */
 export const WORLD_SCHEMA_RE = /^acore_characters_w[a-z2-7]{10}$/;
 /** Realm slots a world may hold: 1 is the shared world's, 255 is left alone. */
-const REALM_MIN = 2;
-const REALM_MAX = 254;
+export const REALM_MIN = 2;
+export const REALM_MAX = 254;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 

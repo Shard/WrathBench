@@ -10,7 +10,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { SQL } from "bun";
-import { calculateVerifier, main, parseArgs } from "./bootstrap";
+import { calculateVerifier, isWorldRealm, main, parseArgs } from "./bootstrap";
+import { newWorldId, REALM_MAX, REALM_MIN } from "../world";
 
 type Row = { id: number; salt: string; verifier: string };
 
@@ -242,5 +243,19 @@ describe("arguments", () => {
     for (const bad of ["5SMOKE", "SMOKE-5", "", "A".repeat(17), "x y", "SMOKE5;DROP", "spectator"]) {
       expect(parseArgs(["--accounts-only", bad]), bad).toMatchObject({ kind: "error" });
     }
+  });
+});
+
+describe("which realm rows are a world's", () => {
+  test("the rule is world.ts's: its slots and its ids", () => {
+    for (let n = 0; n < 50; n++) {
+      const id = newWorldId();
+      expect(isWorldRealm({ id: REALM_MIN, name: `WrathBench ${id}` })).toBe(true);
+      expect(isWorldRealm({ id: REALM_MAX, name: `WrathBench ${id}` })).toBe(true);
+    }
+    expect(isWorldRealm({ id: REALM_MIN - 1, name: "WrathBench wabcdefghij" })).toBe(false);
+    expect(isWorldRealm({ id: REALM_MAX + 1, name: "WrathBench wabcdefghij" })).toBe(false);
+    expect(isWorldRealm({ id: 3, name: "WrathBench" })).toBe(false);
+    expect(isWorldRealm({ id: 3, name: "WrathBench wABCDEFGHIJ" })).toBe(false);
   });
 });
