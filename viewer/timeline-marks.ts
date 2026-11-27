@@ -20,9 +20,6 @@ import type { LevelUpFacts } from "./api-types";
 
 import { isChapter, MARK_KINDS, type MarkKind, type MarkRole } from "../runner/src/mark-kinds";
 
-/* The kinds and their roles, from the import-free leaf the camera's layout reads too. */
-export { CHAPTER_KINDS, isChapter, MARK_KINDS, markRole, type MarkKind, type MarkRole } from "../runner/src/mark-kinds";
-
 /** Creature rank 3 is a boss (`creature_template.rank`). */
 export const BOSS_RANK = 3;
 

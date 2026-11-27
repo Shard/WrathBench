@@ -38,7 +38,7 @@ import { evalPoolAccountNames, evalPoolSizeOf, isEvalPoolAccountName, isPoolAcco
 import { tenantAccountRefusal } from "./tenant-accounts";
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { harnessVersion } from "../runner/src/version";
-import { DEFAULT_DRIVER, driverEntry, isChatGptFamily, isClaudeFamily, ROSTER_DRIVERS } from "../runner/src/drivers";
+import { DEFAULT_DRIVER, driverEntry, isClaudeFamily, ROSTER_DRIVERS } from "../runner/src/drivers";
 import { PROVIDER_OPTION_KEYS, type ProviderOption } from "../runner/src/provider-options";
 
 /**
@@ -146,9 +146,6 @@ export interface PreflightRecord {
 // without one is POOL work, spawned on whichever `accounts.pool` account is
 // free when its turn comes; the policy's own picks are jobs too, made up each
 // tick.
-
-/** Episode tiers. The unscored ids bypass the tiers gate entirely. */
-export { EPISODE_IDS, type EpisodeId } from "../runner/src/episodes";
 
 /**
  * A roster entry as named in the `roster` map: the exact per-entry schema plus
@@ -750,9 +747,6 @@ export function fail(msg: string): never {
   throw new Error(msg);
 }
 
-/** The roster's model families (runner/src/drivers.ts), re-exported where the roster policy reads them. */
-export { isChatGptFamily, isClaudeFamily };
-
 /**
  * Roster-policy and shape checks for roster entries. `where` names the
  * entry's home (`roster:<name>`) for the error message.
@@ -920,13 +914,6 @@ export function parsePreflight(raw: unknown): FleetPreflight {
   return preflight;
 }
 
-/**
- * The keys a roster entry and a queue job may carry, and the refusal of a
- * whole entry, live beside the viewer's reader of them
- * (runner/src/roster-refusal.ts); re-exported so importers of this module keep
- * their names.
- */
-export { ROSTER_ENTRY_KEYS, QUEUE_JOB_KEYS, unknownKeysOf } from "../runner/src/roster-refusal";
 
 /**
  * Every job name a roster entry could spawn under: the file's own jobs that

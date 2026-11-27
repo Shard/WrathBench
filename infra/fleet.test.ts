@@ -8,8 +8,6 @@ import {
   applyPause,
   parsePauseSidecar,
   fillEntries,
-  isChatGptFamily,
-  isClaudeFamily,
   jobArgv,
   jobJsonlPath,
   parseFleet as parseFleetIn,
@@ -79,6 +77,7 @@ import {
   publishedVersion,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
+import { isChatGptFamily, isClaudeFamily } from "../runner/src/drivers";
 import { DEFAULT_POLICY, isStandingPause, modelStates, planNextJobs, schedulability, wantsIdle, type ModelState, type SchedulingPolicy, entryOwnsRun, isCounted } from "../runner/src/models";
 import { IDLE_MODES, TIERS, type RosterModel } from "../runner/src/roster-entry";
 import type { RunFact } from "../runner/src/run-fact";

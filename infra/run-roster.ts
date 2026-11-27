@@ -65,11 +65,11 @@ import { servingRefusal } from "../runner/src/roster-refusal";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, PARTY_PAUSE, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
 import { episodeStart } from "../runner/src/episodes";
-import { readCredentialUsage, type PlacedCredential } from "./run-fleet-credentials";
-import { EXHAUSTED_PCT, gateClassOf, newestByCredential, thresholdOf, thresholdsOf, usageHold } from "../runner/src/subscription-usage";
+import type { PlacedCredential } from "./run-fleet-credentials";
+import { EXHAUSTED_PCT, gateClassOf, newestByCredential, readCredentialUsage, thresholdOf, thresholdsOf, usageHold } from "../runner/src/subscription-usage";
 import { Trajectory, writeMetaFile } from "../runner/src/trajectory";
 import { readRoster } from "../runner/src/fanout-run";
-import { liveOwnerOf, LADDER_MS, parseWorldsMode, type WorldsMode } from "../runner/src/models";
+import { liveOwnerOf, LADDER_MS, parseRunPodsMode, parseWorldsMode, type RunPodsMode, type WorldsMode } from "../runner/src/models";
 import { MODEL_RESPONSE_RECORD, RecordCountScanner, verdictOfTrajectory, type ScanReads } from "../runner/src/run-fact";
 import { CAMPAIGN_FILE, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
@@ -79,14 +79,12 @@ import {
   chooseLauncher,
   EPISODE_TERM_GRACE_MS,
   parseLaunchSpec,
-  parseRunPodsMode,
   ProcessLauncher,
   refusedEpisode,
   type EpisodeExit,
   type EpisodeHandle,
   type EpisodeLauncher,
   type LaunchSpec,
-  type RunPodsMode,
 } from "./episode-launcher";
 import { K8sClient } from "./k8s-client";
 import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";

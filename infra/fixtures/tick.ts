@@ -3,7 +3,8 @@
  * test names, everything else empty (`TickSnapshot`), so a test plans the
  * supervisor's own tick (`planTick`) over a fixture without the I/O.
  */
-import type { EpisodeId, FleetConfig, FleetJob, JobSource } from "../run-fleet-config";
+import type { FleetConfig, FleetJob, JobSource } from "../run-fleet-config";
+import type { EpisodeId } from "../../runner/src/episodes";
 import { holdsAssignment, planTick, type TickPlan, type TickSnapshot } from "../run-fleet-plan";
 import type { ReadHold, RunPodsSetting, WorldsSetting } from "../run-fleet-credentials";
 import type { RunFact, UnstampedRun } from "../../runner/src/run-fact";

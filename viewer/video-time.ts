@@ -11,7 +11,7 @@
  */
 
 import type { CaptionCueView, ChapterType, ChapterView } from "./api-types";
-import { isChapter } from "./timeline-marks";
+import { isChapter } from "../runner/src/mark-kinds";
 import { isRecord } from "../runner/src/values";
 
 /**

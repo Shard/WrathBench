@@ -19,8 +19,8 @@ import type { CredentialStatus } from "./run-fleet-credentials";
 import { HEARTBEAT_DEAD_MS } from "../runner/src/heartbeat";
 import { progressSampleOf, progressVerdict, recordWrites, STUCK_DEFAULTS, stuckFlag } from "./inspect-run";
 import { dirname, isAbsolute, join } from "node:path";
+import type { EpisodeId } from "../runner/src/episodes";
 import {
-  type EpisodeId,
   type FleetConfig,
   type FleetJob,
   type JobSource,

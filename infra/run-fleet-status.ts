@@ -11,7 +11,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ConfigRefusal,
-  type EpisodeId,
   type FleetConfig,
   type FleetJob,
   type FleetPreflight,
@@ -70,7 +69,7 @@ import { CONTAINER, type FleetState, foreignRosters, jobArgv, rosterResumes, job
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy, accountHolders } from "./run-roster";
-import { EPISODE_LIST, EPISODES } from "../runner/src/episodes";
+import { EPISODE_LIST, EPISODES, type EpisodeId } from "../runner/src/episodes";
 import { className as classNameOf, raceName as raceNameOf } from "../runner/src/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
 import { runCampaignFile } from "../runner/src/campaign-file";
@@ -83,7 +82,6 @@ import {
   credentialStatuses,
   formatCredentialStatus,
   publishedReads,
-  readCredentialUsage,
   type ReadHold,
   readHoldsOf,
   SlotBook,
@@ -94,7 +92,7 @@ import type { CredentialRead } from "../runner/src/credential-health";
 import { worldsHere } from "./world";
 import { formatModelLists } from "./run-fleet-model-lists";
 import { readModelListsSidecar } from "../runner/src/model-lists";
-import type { SubscriptionUsage } from "../runner/src/subscription-usage";
+import { readCredentialUsage, type SubscriptionUsage } from "../runner/src/subscription-usage";
 import { providerById } from "../runner/src/credential-slots";
 import { rosterPriceGap } from "../viewer/pricing";
 import { catalogueKeyOf } from "./model-catalogue";

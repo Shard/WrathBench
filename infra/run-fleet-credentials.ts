@@ -55,15 +55,12 @@ import {
   EXHAUSTED_PCT,
   gateClassOf,
   newestByCredential,
-  readCredentialUsage,
   thresholdOf,
   usageHold,
   type SubscriptionUsage,
   type UsageHold,
 } from "../runner/src/subscription-usage";
 import type { FleetRosterEntry, JobSpawn } from "./run-fleet-config";
-
-export { readCredentialUsage, CREDENTIAL_USAGE_SIDECAR };
 
 // ------------------------------------------------------------------ the budgets
 

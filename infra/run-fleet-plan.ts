@@ -12,7 +12,6 @@ import {
   type Eligible,
   eligibleFrom,
   episodeDimensions,
-  type EpisodeId,
   fail,
   type FleetConfig,
   type FleetJob,
@@ -47,7 +46,7 @@ import { fanoutLaunchOf, memberRunId } from "../runner/src/party";
 import { isEvalPoolAccountName } from "../runner/src/account-pool";
 import { scoredWaitFor, stampedCompactWindow, type TerminationReason } from "../runner/src/config";
 import { driverEntry, isProbeOnlyDriver } from "../runner/src/drivers";
-import { EPISODES, isScoredEpisode, isTaskEpisode } from "../runner/src/episodes";
+import { EPISODES, isScoredEpisode, isTaskEpisode, type EpisodeId } from "../runner/src/episodes";
 import { canonicalModelId } from "./model-catalogue";
 import { asProvider, optionOf } from "../runner/src/provider-options";
 import { taskDefinition } from "../runner/src/task-episodes";

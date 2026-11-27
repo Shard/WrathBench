@@ -25,12 +25,9 @@
 
 import type { PlacedCredential } from "./run-fleet-credentials";
 import { DEFAULT_DRIVER, driverEntry, entryOf, type RosterDriver } from "../runner/src/drivers";
-import { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode } from "../runner/src/models";
+import type { RunPodsMode } from "../runner/src/models";
 import { launchSecret, STORE_KEY_ENV } from "../runner/src/store-secrets";
 import type { CampaignFile } from "../runner/src/campaign-file";
-
-/** The fleet setting's vocabulary lives with the policy block it is part of; re-exported for the launchers' callers. */
-export { parseRunPodsMode, RUN_PODS_MODES, type RunPodsMode };
 
 /** The port secret's variable, which every run reads. */
 export const MODULE_SECRET_ENV = "WRATHBENCH_MODULE_SECRET";
