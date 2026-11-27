@@ -49,6 +49,8 @@
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
+// Before cleanup, which uses it.
+const req = moduleRequest(BASE);
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
@@ -118,8 +120,6 @@ const { fail: failNow, failed } = failOnce({ prefix: () => `[probe] FAIL[${step}
 function fail(msg: string): never {
   return failNow(msg);
 }
-
-const req = moduleRequest(BASE);
 
 const action = moduleAction(req, TOKEN, fail);
 
