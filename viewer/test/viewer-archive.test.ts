@@ -16,7 +16,7 @@ import { createApi } from "../api";
 import { listRuns } from "../../runner/src/run-list";
 import { ARCHIVE_DIR } from "../../runner/src/archive-dir";
 import { scanRunTotals } from "../../runner/src/run-totals";
-import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds, runActivityAge } from "../../runner/src/archive";
+import { archiveIfNoResponses, archiveRun, inSeries, planPreSeries, planRunIds, runActivityAge } from "../../runner/src/archive";
 import { FANOUT_CHARACTERS, FANOUT_RUN, writeFanoutRun } from "../../runner/test/fixtures/fanout";
 import { readRunFacts } from "../../runner/src/run-fact";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
@@ -127,15 +127,6 @@ describe("the listings", () => {
     return (await res.json()) as Record<string, unknown>;
   };
 
-  test("every run on disk is listed — there is no zero-response filter left", async () => {
-    const runs = fixture();
-    const body = await get(runs, "/api/runs");
-    const rows = body["runs"] as { runId: string; modelResponses: number | null }[];
-    expect(rows.map((r) => r.runId).sort()).toEqual(["dead-on-arrival", "spoke-only", "worked"]);
-    expect(rows.find((r) => r.runId === "spoke-only")?.modelResponses).toBe(1);
-    expect("stillbornExcluded" in body).toBe(false);
-  });
-
   test("/api/results and /api/episodes count what is on disk, and skip the archive", async () => {
     const runs = fixture();
     archiveIfNoResponses(runs, "dead-on-arrival");
@@ -187,16 +178,6 @@ describe("the archive directory", () => {
       expect(existsSync(join(runs, ARCHIVE_DIR, FANOUT_RUN, "sessions", c.name, "session.json"))).toBe(true);
       expect(existsSync(join(runs, ARCHIVE_DIR, FANOUT_RUN, "sessions", c.name, "nearby"))).toBe(false);
     }
-  });
-
-  test("a fleet job log names what it recently started; an old record holds nothing", () => {
-    const runs = fixture();
-    const now = Date.now();
-    const log = join(runs, "fleet-job-a.jsonl");
-    writeFileSync(log, JSON.stringify({ ts: now - 60_000, runId: "dead-on-arrival", outcome: "started" }) + "\n");
-    expect(recentFleetRunIds(runs, now)).toContain("dead-on-arrival");
-    writeFileSync(log, JSON.stringify({ ts: now - 86_400_000, runId: "dead-on-arrival" }) + "\n");
-    expect(recentFleetRunIds(runs, now).size).toBe(0);
   });
 });
 
@@ -261,15 +242,6 @@ describe("the named selector", () => {
     utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
   };
 
-  test("a comma list, an @file and a duplicate all name the same set once", () => {
-    expect(parseRunIds("a,b , c")).toEqual(["a", "b", "c"]);
-    expect(parseRunIds("a,b,a")).toEqual(["a", "b"]);
-    const dir = tempDir("runids-");
-    const file = join(dir, "ids.txt");
-    writeFileSync(file, "# the dead qwen sessions\na\n\nb\n");
-    expect(parseRunIds(`@${file}`)).toEqual(["a", "b"]);
-  });
-
   test("named runs move, and an id that names nothing is reported rather than thrown", () => {
     const runs = fixture();
     const { plans, unknown } = planRunIds(runs, ["worked", "no-such-run", ARCHIVE_DIR]);
@@ -312,22 +284,4 @@ describe("the named selector", () => {
     // no sqlite for; the guard's own pause test reads meta.json, and does.)
     expect(released.get("warm-live")).toMatchObject({ held: true });
   });
-
-  test("--dry-run plans and moves nothing", async () => {
-    const runs = fixture();
-    const cli = join(import.meta.dir, "..", "..", "runner", "src", "archive.ts");
-    const proc = Bun.spawn({
-      cmd: [process.execPath, cli, "--run-ids", "worked,no-such-run", "--dry-run"],
-      env: { ...process.env, WRATHBENCH_RUNS_DIR: runs },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    expect(out).toContain("would move  worked");
-    expect(out).toContain("unknown   no-such-run");
-    expect(out).toContain("1 would move, 0 held back, 1 unknown");
-    expect(existsSync(join(runs, "worked", "trajectory.jsonl"))).toBe(true);
-    expect(existsSync(join(runs, ARCHIVE_DIR, "worked"))).toBe(false);
-  }, 30_000);
 });

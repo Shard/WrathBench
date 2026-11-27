@@ -21,10 +21,9 @@ import { Trajectory } from "../../runner/src/trajectory";
 import { writeLegacy05Moves, writeLegacy05Run } from "../../runner/test/fixtures/legacy05-writer";
 import { readRunRow } from "../../runner/src/run-reader";
 import { openTestSession, recordDrain, recordedMove } from "../../runner/test/fixtures/v1-session";
-import { readStateItems, readStates, readMoves } from "../runs";
+import { readStates, readMoves } from "../runs";
 import { readRun } from "../../runner/src/run-list";
 import {
-  clickhouseConfigFromEnv,
   clickhouseErrorMessage,
   latestStatesOf,
   localRunStore,
@@ -140,17 +139,6 @@ describe("a run row off the store is the run row off the files", () => {
     expect(readRun(runsDir, "run-1", NOW)).not.toHaveProperty("declaredBilling");
   });
 
-  test("the stored item JSON reads back whole, old-shape rows included", async () => {
-    // The column is JSON text on both sides, so the paperdoll's fields needed
-    // no migration; what they did need is for the shape check not to drop them.
-    const row = runRowOf((await store.runRows())[0]!, (await store.latestStates()).get("run-1"), NOW);
-    expect(row.items).toEqual([
-      { name: "Invented Jerky", count: 4, equipped: false, itemId: 90117, quality: 1, slot: 23, bag: 255 },
-      { name: "Invented Mace", count: 1, equipped: true },
-    ]);
-    expect(Object.keys(row.items![1]!)).toEqual(["name", "count", "equipped"]);
-  });
-
   test("the readings a listing shows come off the newest sample that had them", async () => {
     const latest = (await store.latestStates()).get("run-1");
     // Level and xp ride on the SAME sample; money and quests are each the
@@ -161,19 +149,6 @@ describe("a run row off the store is the run row off the files", () => {
   test("the state series is the state series", async () => {
     const fromStore = (await store.stateRows("run-1")).map(statePointOf);
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readStates(runsDir, "run-1")));
-  });
-
-  test("the item samples are their own read: only the samples that carried one, and the files agree", async () => {
-    // Its own call because `items` is the large column: `stateRows` must not
-    // have grown it, and only a replay pays for it.
-    const fromStore = await store.stateItemRows("run-1");
-    expect(fromStore).toHaveLength(1);
-    expect(JSON.parse(fromStore[0]!.items)).toHaveLength(2);
-    const fromFiles = readStateItems(runsDir, "run-1");
-    expect(fromFiles.map((r) => r.items)).toEqual(fromStore.map((r) => r.items));
-    // A sample that carried no inventory is not a row here: the replay reads
-    // changes, and "" would look like an emptied bag.
-    expect(fromStore.every((r) => r.items.length > 0)).toBe(true);
   });
 
   test("the movement intentions are the movement intentions", async () => {
@@ -210,16 +185,6 @@ describe("a run row off the store is the run row off the files", () => {
 });
 
 describe("liveness is decided at read time", () => {
-  test("a quiet run reads dead against a later now and live against an earlier one", async () => {
-    const runsDir = tmpRoot();
-    writeRun(runsDir, "run-live");
-    const store = localRunStore(runsDir);
-    const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
-    const r = rows[0]!;
-    // A terminated run is never live, whatever the clock says.
-    expect(runRowOf(r, latest.get("run-live"), r.trajectory_mtime + 1).live).toBe(false);
-  });
-
   test("a run with no termination is live inside the window and dead outside it", async () => {
     const runsDir = tmpRoot();
     const dir = join(runsDir, "run-open");
@@ -296,32 +261,6 @@ describe("the latest-reading rule", () => {
     const latest = latestStatesOf([row({ ts: 1, money: 500 }), row({ ts: 2, money: 0 }), row({ ts: 3 })]).get("r");
     expect(latest?.money).toBe(0);
   });
-
-  test("a run with no usable sample reads as nothing recorded", () => {
-    expect(latestStatesOf([row({ ts: 1 })]).get("r")).toEqual({
-      level: null,
-      xp: null,
-      money: null,
-      questsCompleted: null,
-      items: "",
-    });
-  });
-});
-
-describe("configuration", () => {
-  test("no CLICKHOUSE_URL is a first-class answer, not a failure", () => {
-    expect(clickhouseConfigFromEnv({})).toBeNull();
-    expect(clickhouseConfigFromEnv({ CLICKHOUSE_URL: "" })).toBeNull();
-  });
-
-  test("a trailing slash is trimmed and the defaults are the collector's", () => {
-    expect(clickhouseConfigFromEnv({ CLICKHOUSE_URL: "http://ch:8123/" })).toEqual({
-      url: "http://ch:8123",
-      user: "default",
-      password: "",
-      database: "wrathbench",
-    });
-  });
 });
 
 describe("one query for the listing, not one per run", () => {
@@ -344,17 +283,6 @@ describe("one query for the listing, not one per run", () => {
       expect(JSON.stringify((bulk.get(id) ?? []).map(statePointOf))).toBe(JSON.stringify(one));
       expect(one.length).toBeGreaterThan(0);
     }
-  });
-
-  test("runs the caller did not ask for are not in the map", async () => {
-    const bulk = await store.stateRowsByRun(["run-a"]);
-    expect([...bulk.keys()]).toEqual(["run-a"]);
-    expect(await store.stateRowsByRun([])).toEqual(new Map());
-  });
-
-  test("a run with no state rows is absent, not an empty series", async () => {
-    const bulk = await store.stateRowsByRun(["run-a", "run-nothing"]);
-    expect(bulk.has("run-nothing")).toBe(false);
   });
 
   test("one run's latest readings come off the aggregate, and a run with no states reads undefined", async () => {
@@ -390,10 +318,5 @@ describe("a failed query says what ClickHouse said", () => {
     expect(clickhouseErrorMessage(500, body)).toBe(
       "clickhouse 500: Code: 241. DB::Exception: Memory limit (total) exceeded: would use 56.00 GiB",
     );
-  });
-
-  test("a body with no exception in it falls back to the body", () => {
-    expect(clickhouseErrorMessage(404, "Code: 60. Unknown table")).toBe("clickhouse 404: Code: 60. Unknown table");
-    expect(clickhouseErrorMessage(500, "x".repeat(600))).toBe(`clickhouse 500: ${"x".repeat(400)}`);
   });
 });

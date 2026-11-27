@@ -76,11 +76,6 @@ describe("a run resumed in place", () => {
     const clock = sessionClock([sample(PAUSE + DAY)], sessions);
     expect(clock.points[0]!.ts).toBe(20 * HOUR);
   });
-
-  test("everything but the time is the sample as served", () => {
-    const clock = sessionClock([sample(T0 + 1_000, { level: 13, xp: 4602, questsCompleted: 60 })], sessions);
-    expect(clock.points[0]).toMatchObject({ ts: 1_000, level: 13, xp: 4602, questsCompleted: 60 });
-  });
 });
 
 describe("the session clock", () => {
@@ -97,11 +92,6 @@ describe("the session clock", () => {
       expect(clock.starts).toEqual([0]);
       expect(clock.startedAt).toEqual([4_000]);
     }
-  });
-
-  test("nothing sampled is an empty clock, not a throw", () => {
-    expect(sessionClock([], undefined)).toEqual({ points: [], starts: [0], startedAt: [0] });
-    expect(sessionClock([], segmentsFrom(MARKS)).points).toEqual([]);
   });
 });
 

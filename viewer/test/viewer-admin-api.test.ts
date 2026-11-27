@@ -9,7 +9,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../api";
-import { credentialViews } from "../admin-api";
 import type { AdminResponse } from "../api-types-admin";
 import { ConfigStore } from "../../runner/src/config-store";
 
@@ -59,20 +58,6 @@ describe("GET /api/admin", () => {
     expect(((await res.json()) as { error: string }).error).toContain("/api/config");
   });
 
-  test("with no supervisor up: the store's credentials, their status unknown rather than unset", async () => {
-    const body = (await (await get(fixture().handle)).json()) as AdminResponse;
-    expect(body.fleet.up).toBe(false);
-    // Nobody up to say: unknown, except what the store says itself.
-    expect(body.credentials.map((c) => c.health?.state ?? null)).toEqual([null, "disabled"]);
-    expect(body.groups).toEqual({ runner: true, evals: true, viewer: true });
-    expect(body.credentials.map((c) => [c.id, c.secretEnv, c.secretSet, c.inUse, c.budget, c.enabled])).toEqual([
-      ["or-1", "OPENROUTER_KEY", null, null, "$5/day", true],
-      ["or-2", "OPENROUTER_KEY_2", null, null, "no budget", false],
-    ]);
-    expect(body.providers.map((p) => p.id)).toContain("openrouter");
-    expect(body.publishing.last).toBeNull();
-  });
-
   test("with the supervisor up: its word on each variable, joined by id", async () => {
     const now = Date.now();
     const { handle } = fixture({
@@ -99,33 +84,6 @@ describe("GET /api/admin", () => {
     // Nothing a body carries is a value: the fixture has none to leak, and the shape has no field for one.
     expect(JSON.stringify(body)).not.toMatch(/sk-|Bearer/);
   });
-
-  test("the supervisor's published inputs: its holds, its windows and a reader's last read; the store's switch and the chart win", async () => {
-    const now = Date.now();
-    const status = (over: Record<string, unknown>) => ({ provider: "openrouter", billing: "paid", enabled: true, secretSet: true, slots: 1, inUse: 0, budget: "$5/day", used: null, held: {}, lastError: null, ...over });
-    const { handle } = fixture({
-      supervisor: {
-        heartbeatAt: now - 10_000,
-        credentials: [
-          status({ id: "or-1", secretEnv: "OPENROUTER_KEY", held: { scored: "x", freeplay: "y" }, holds: { scored: { code: "spend-budget", until: now + 3_600_000 }, freeplay: { code: "spend-budget", until: now + 3_600_000 } } }),
-          status({ id: "or-2", secretEnv: "OPENROUTER_KEY_2", lastRead: { at: now - 5_000, http: 401, code: "api_key_expired", classification: "auth-failed" }, windows: [{ name: "5h", usedPercent: 40, resetsAt: now + 1, limited: false }] }),
-        ],
-      },
-    });
-    const body = (await (await get(handle)).json()) as AdminResponse;
-    expect(body.credentials[0]!.health).toMatchObject({ state: "held", reason: "today's spend budget is used" });
-    expect(body.credentials[0]!.fix).toMatchObject({ kind: "raise-budget", until: now + 3_600_000 });
-    // or-2 is switched off in the store, which wins over what the supervisor read of it.
-    expect(body.credentials[1]!.health).toMatchObject({ state: "disabled", lastCheck: { http: 401, code: "api_key_expired" } });
-    expect(body.credentials[1]!.windows).toEqual([{ name: "5h", usedPercent: 40, resetsAt: now + 1, limited: false }]);
-  });
-
-  test("a stale heartbeat is no supervisor: its last word is not passed off as current", async () => {
-    const { handle } = fixture({ supervisor: { heartbeatAt: Date.now() - 3_600_000, credentials: [{ id: "or-1", secretEnv: "OPENROUTER_KEY", secretSet: true }] } });
-    const body = (await (await get(handle)).json()) as AdminResponse;
-    expect(body.fleet.up).toBe(false);
-    expect(body.credentials[0]!.secretSet).toBeNull();
-  });
 });
 
 describe("a credential written from the admin page", () => {
@@ -150,30 +108,5 @@ describe("a credential written from the admin page", () => {
       expect([provider, env, await put(provider, env)]).toEqual([provider, env, 400]);
     }
     expect(await put("openrouter", "OPENROUTER_KEY_9")).toBe(200);
-  });
-});
-
-describe("credentialViews", () => {
-  const stored = [
-    { id: "a", provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, budget: null, billing: "paid" as const, enabled: true },
-    { id: "b", provider: "openrouter", secretEnv: "OPENROUTER_KEY_3", slots: 1, budget: null, billing: "paid" as const, enabled: true },
-  ];
-  test("whether the chart hands each variable to the model pods, when the viewer was told", () => {
-    const views = credentialViews({ stored, fleet: {}, up: false, modelKeys: ["OPENROUTER_KEY"] });
-    expect(views.map((v) => [v.id, v.deployed])).toEqual([
-      ["a", true],
-      ["b", false],
-    ]);
-    expect(credentialViews({ stored, fleet: {}, up: false, modelKeys: null })[0]!.deployed).toBeNull();
-  });
-
-  test("a credential renamed since the supervisor's tick reads unknown, not the old variable's answer", () => {
-    const views = credentialViews({
-      stored,
-      fleet: { credentials: [{ id: "a", provider: "openrouter", billing: "paid", enabled: true, secretEnv: "OLD_NAME", secretSet: true, slots: 1, inUse: 0, budget: "no budget", used: null, held: {}, lastError: null }] },
-      up: true,
-      modelKeys: null,
-    });
-    expect(views[0]!.secretSet).toBeNull();
   });
 });

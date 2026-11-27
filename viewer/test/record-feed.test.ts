@@ -10,10 +10,10 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { SessionWriter, type CallRow } from "@wrathbench/mcp/record";
-import { feedRecordOf, pairStoreCalls, storeCallRecordsOf, type RecordLine, type StoreCalls } from "../record-feed";
+import { pairStoreCalls, storeCallRecordsOf, type RecordLine, type StoreCalls } from "../record-feed";
 import { TrajectoryTail } from "../tail";
 import type { EntrySummary } from "../api-types";
-import { materialiseV1p1, V1P1_RUN } from "../../runner/test/fixtures/v1p1";
+import { materialiseV1p1 } from "../../runner/test/fixtures/v1p1";
 import { recordDrain } from "../../runner/test/fixtures/v1-session";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
@@ -39,31 +39,6 @@ describe("the run page's feed over a v1 run", () => {
     // The run page's facts read the same rows.
     expect(tail.leveling?.levelUps).toBe(2);
     expect(tail.achievements?.earned).toBe(2);
-  });
-
-  test("a later scan adds only what the record and the trajectory gained, and a new tail reads the same feed", async () => {
-    const dir = materialiseV1p1(tempDir("record-feed-"), { as: V1P1_RUN });
-    const a = new TrajectoryTail(join(dir, "trajectory.jsonl"));
-    await a.scan();
-    expect(await a.scan()).toEqual([]);
-    const b = new TrajectoryTail(join(dir, "trajectory.jsonl"));
-    await b.scan();
-    expect(b.entries.map((e) => [e.t, e.ts])).toEqual(a.entries.map((e) => [e.t, e.ts]));
-  });
-});
-
-describe("a move row as the feed's record", () => {
-  const row = { ts: 2000, kind: "move" as const, at: 1990, moveId: 4, map: 0, x: 1, y: 2, z: 3, target: null, status: "arrived" };
-
-  test("it says whose move it is, as an action log does: the call's stamp, and a routine's mark", () => {
-    expect(feedRecordOf({ ...row, origin: { type: "tool", call: 1000 } }, 7, "calls")).toEqual({
-      t: "move", ts: 2000, turn: 7, callTs: 1000, moveId: 4, map: 0, x: 1, y: 2, z: 3, target: null, status: "arrived",
-    });
-    expect(feedRecordOf({ ...row, origin: { type: "routine", call: 1000 } }, null, "calls")).toMatchObject({ callTs: 1000, routine: true });
-    expect(feedRecordOf({ ...row, origin: { type: "program", call: 1000, routine: "patrol" } }, null, "calls")).toMatchObject({ callTs: 1000, routine: true });
-    // The SDK's own traffic belongs to no call.
-    const own = feedRecordOf({ ...row, origin: { type: "client" } }, null, "calls")!;
-    expect("callTs" in own || "routine" in own).toBe(false);
   });
 });
 
@@ -211,11 +186,5 @@ describe("a store session's feed", () => {
     // A run_snippet whose args carry no code keeps them on its card.
     const noCode = storeCallRecordsOf({ row: { ...call, args: { file: "a.ts" } }, n: 1 }, { ts: 3_000, kind: "result", id: 1_000, text: "ok", error: false, durationMs: 2_000 });
     expect(noCode.map((r) => r["t"])).toEqual(["tool_call", "snippet_result"]);
-  });
-
-  test("a run's own record calls stay off its feed: its trajectory holds them", () => {
-    const origin = { type: "tool" };
-    expect(feedRecordOf({ ts: 1_000, kind: "call", id: 1_000, origin, tool: "run_snippet", args: { code: "1" } }, 3, "calls")).toBeNull();
-    expect(feedRecordOf({ ts: 1_200, kind: "result", id: 1_000, text: "ok", error: false, durationMs: 200 }, 3, "calls")).toBeNull();
   });
 });

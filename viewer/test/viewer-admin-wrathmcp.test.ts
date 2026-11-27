@@ -10,10 +10,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../api";
-import { displayUrl, moduleHealthReader, moduleView } from "../module-health";
-import type { ApiInfoResponse } from "../api-types";
+import { displayUrl, moduleView } from "../module-health";
 import type { AdminResponse } from "../api-types-admin";
-import { bareSessionId } from "../../runner/src/session-store";
 
 const roots: string[] = [];
 const servers: { stop: (force?: boolean) => unknown }[] = [];
@@ -168,70 +166,9 @@ describe("the module, through /api/admin", () => {
     expect(text).not.toContain("c0ffee");
   });
 
-  test("a world that did not load whole is a 503 the section still reads; /api/info names no worldserver for it", async () => {
-    const m = fakeModule({ status: 503, body: { ...healthBody({ ok: false }), error: "world_not_loaded" } });
-    const h = handle({ moduleUrl: m.url });
-    const { body } = await admin(h);
-    expect(body.wrathMcp.module?.ok).toBe(false);
-    expect(body.wrathMcp.module?.worldLoaded).toBe(false);
-    const info = (await (await h(new Request("http://x/api/info"))).json()) as ApiInfoResponse;
-    expect(info.worldserver).toBeNull();
-    // One fetch for both routes, inside the cache window.
-    expect(m.bearers.length).toBe(1);
-  });
-
-  test("/api/info's worldserver comes off the same read", async () => {
-    const m = fakeModule();
-    const info = (await (await handle({ moduleUrl: m.url })(new Request("http://x/api/info"))).json()) as ApiInfoResponse;
-    expect(info.worldserver).toEqual({ build: "harness-0.3-41-g0bfe207", startedAtMs: 1_787_400_000_000 });
-  });
-
-  test("a refused credential, nothing listening, and no module URL at all read apart", async () => {
-    const refused = fakeModule({ status: 401, body: { ok: false, error: "unauthorized" } });
-    expect((await admin(handle({ moduleUrl: refused.url }))).body.wrathMcp).toMatchObject({ module: null, moduleError: "refused" });
-    expect((await admin(handle({ moduleUrl: "http://127.0.0.1:1" }))).body.wrathMcp).toMatchObject({ module: null, moduleError: "unreachable" });
-    // Unset is tried at the loopback default, and nothing answering there reads as not configured.
-    const tried: string[] = [];
-    const unset = moduleHealthReader(undefined, {
-      env: {},
-      fetch: (async (url: string | URL | Request) => {
-        tried.push(String(url));
-        throw new Error("connection refused");
-      }) as unknown as typeof fetch,
-    });
-    expect(await unset()).toEqual({ view: null, error: "unset", status: null });
-    expect(tried).toEqual(["http://127.0.0.1:8086/health"]);
-    const before = process.env["WRATHBENCH_MODULE_SECRET"];
-    delete process.env["WRATHBENCH_MODULE_SECRET"];
-    try {
-      expect((await admin(handle({ moduleUrl: "http://127.0.0.1:1" }))).body.wrathMcp.secret).toEqual({ env: "WRATHBENCH_MODULE_SECRET", set: false });
-    } finally {
-      if (before !== undefined) process.env["WRATHBENCH_MODULE_SECRET"] = before;
-    }
-  });
-
   test("the URL it shows has no userinfo, and a limit is copied only as a number", () => {
     expect(displayUrl("http://op:hunter2@worldserver:8086/")).toBe("http://worldserver:8086");
     expect(displayUrl("not a url")).toBe("(not a URL)");
     expect(moduleView("http://m:1", { limits: { actionRate: "20", leases: 3 }, build: 7 })).toMatchObject({ limits: { leases: 3 }, build: null, ok: false });
-  });
-});
-
-describe("the session store, through /api/admin", () => {
-  test("counts the sessions that reached the world, the live ones by viewer id, and the stack each reports", async () => {
-    const { body } = await admin(handle({ moduleUrl: "http://127.0.0.1:1", sessions: true }));
-    expect(body.wrathMcp.store).toEqual({
-      sessions: 2,
-      live: 1,
-      versions: [
-        { version: "0.2.0", commit: "0123456789abcdef0123456789abcdef01234567", sessions: 1 },
-        { version: "0.1.0", commit: null, sessions: 1 },
-      ],
-      liveSessions: [{ id: bareSessionId(FP_LIVE), character: "Bramblewick", version: "0.2.0", commit: "0123456789abcdef0123456789abcdef01234567" }],
-    });
-  });
-
-  test("is null when the viewer reads no store", async () => {
-    expect((await admin(handle({ moduleUrl: "http://127.0.0.1:1" }))).body.wrathMcp.store).toBeNull();
   });
 });

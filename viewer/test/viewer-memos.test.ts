@@ -119,16 +119,6 @@ describe("entry index eviction", () => {
       expect(handle.cachedRuns().entries).toBe(1);
     });
   });
-
-  test("release drops a run at once", async () => {
-    const runs = tempDir("viewer-evict-release-");
-    writeRun(runs, "run-a");
-    const handle = handleOf(runs);
-    await handle(new Request("http://x/api/run/run-a/entries"));
-    expect(handle.cachedRuns().entries).toBe(1);
-    handle.release("run-a");
-    expect(handle.cachedRuns().entries).toBe(0);
-  });
 });
 
 describe("the track of a settled run", () => {

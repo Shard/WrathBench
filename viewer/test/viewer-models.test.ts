@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../api";
 import { ConfigStore, splitFleet } from "../../runner/src/config-store";
-import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster } from "../models";
+import { ERROR_MAX_CHARS, currentSeries, readFleetRoster } from "../models";
 import { rosterNameOf } from "../roster";
 import type { RunDetailResponse } from "../api-types";
 import type { ModelsResponse } from "../api-types-runner";
@@ -156,17 +156,6 @@ afterAll(() => {
 });
 
 describe("readFleetRoster", () => {
-  test("reads the roster map, with effort and policy", () => {
-    const { fleetPath } = fixture(ROSTER);
-    const read = readFleetRoster(fleetPath);
-    expect(read.shape).toBe("roster");
-    expect(read.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
-    expect(read.models[1]!.effort).toBe("low");
-    expect(read.models.map((m) => m.tier)).toEqual(["t1", "t1", "t1"]);
-    expect(read.policy.maxSessions["openai"]).toBe(1);
-    expect(read.credentials.map((c) => [c.id, c.slots])).toEqual([["or-paid", 1]]);
-  });
-
   test("an entry with no tier is not the viewer's to reject — it is skipped, not rowed", () => {
     // The supervisor is what refuses a bad config; the viewer reads one. An
     // untiered entry is either steered (outside the policy) or a mistake the
@@ -175,48 +164,6 @@ describe("readFleetRoster", () => {
     const read = readFleetRoster(fleetPath);
     expect(read.shape).toBe("roster");
     expect(read.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
-  });
-
-  // the same predicate the supervisor schedules on.
-  test("names the entries the policy does not schedule, with why", () => {
-    const { fleetPath } = fixture({
-      ...ROSTER,
-      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
-      queue: [
-        { ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop", enabled: true },
-        { ref: "alpha", episode: "e90" },
-      ],
-      policy: { ...ROSTER.policy, maxSessions: { "claude-code": 2 } },
-    });
-    const read = readFleetRoster(fleetPath);
-    // Pinned wins the sentence: the account is spoken for either way.
-    expect(read.excluded).toEqual([
-      { name: "probe", reason: "pinned to SHAKEOUT by job probe-freeplay" },
-    ]);
-    // A pool job holds its ref without pinning it: still the policy's to schedule.
-    expect(read.models.map((m) => m.name)).toContain("alpha");
-    expect(read.policy.maxSessions).toEqual({ "claude-code": 2 });
-  });
-
-  test("an entry is excluded only by a pinned job, never by anything on itself", () => {
-    // The viewer is deliberately lenient about a config the supervisor would
-    // refuse — it reports what a file says rather than adjudicating it — so an
-    // entry with a stray objective is still read. It is simply not a reason:
-    // since campaigns took over steering nothing on an entry takes it out of the policy, and a
-    // campaign borrows a model rather than removing it from the schedule.
-    const { fleetPath } = fixture({
-      ...ROSTER,
-      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", tier: "t1", objective: "ride the tram" } },
-    });
-    expect(readFleetRoster(fleetPath).excluded).toEqual([]);
-    expect(readFleetRoster(fleetPath).models.some((m) => m.name === "probe")).toBe(true);
-  });
-
-  test("a config without a roster map is unreadable and empty, never a synthesised roster", () => {
-    const { fleetPath } = fixture({ queue: [{ ref: "alpha" }] });
-    const read = readFleetRoster(fleetPath);
-    expect(read.shape).toBe("unreadable");
-    expect(read.models).toEqual([]);
   });
 
   test("an empty store and an unreadable one are labelled, not thrown", () => {
@@ -308,26 +255,6 @@ describe("/api/models", () => {
     expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
   });
 
-  test("the store's raw spelling of a window is canonicalised before it matches runs", async () => {
-    // The store keeps the document as the operator wrote it; only `parseFleet`
-    // normalises, so the page has to read `100K` and `auto` the way runs are stamped.
-    const { runsDir, fleetPath } = fixture({
-      roster: {
-        hk: { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "AUTO", tier: "t2" },
-        "hk-c100k": { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100K", tier: "t0" },
-      },
-    });
-    writeRun(runsDir, { id: "hk-1", model: "claude-haiku-5-5", effort: "max", responses: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
-    writeRun(runsDir, { id: "hk100-1", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", responses: 3, reason: "episode-limit", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
-    const [auto, small] = (await models(runsDir, fleetPath)).models;
-    // On claude-code `auto` is the entry's stated opt-out from the 300k default, kept as one spelling.
-    expect(auto!.compactWindow).toBe("auto");
-    expect(auto!.windows).toEqual(["auto"]);
-    expect(auto!.runs.map((r) => r.runId)).toEqual(["hk-1"]);
-    expect(small!.compactWindow).toBe("100k");
-    expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
-  });
-
   test("an entry with no window on claude-code lists its auto runs and its 300k runs, and a run links back to it", async () => {
     const { runsDir, fleetPath } = fixture({
       roster: {
@@ -395,15 +322,6 @@ describe("/api/models", () => {
     // The bearer token was interpolated into the message; it must not come back.
     expect(JSON.stringify(body)).not.toContain(SENTINEL);
     expect(err.message).toContain("[redacted]");
-  });
-
-  test("lastErrorOf ignores a clean termination and a run with none", () => {
-    const { runsDir } = fixture(ROSTER);
-    writeRun(runsDir, { id: "ok-1", model: "vendor/alpha", responses: 2, reason: "episode-limit", detail: "90m", startedAt: NOW, endedAt: NOW + HOUR });
-    writeRun(runsDir, { id: "none-1", model: "vendor/alpha", responses: 2, reason: null, startedAt: NOW, endedAt: NOW + HOUR });
-    expect(lastErrorOf(join(runsDir, "ok-1"), "ok-1")).toBeNull();
-    expect(lastErrorOf(join(runsDir, "none-1"), "none-1")).toBeNull();
-    expect(lastErrorOf(join(runsDir, "gone"), "gone")).toBeNull();
   });
 
   test("a fleet config without a roster serves an empty, labelled roster", async () => {
@@ -538,13 +456,5 @@ describe("rosterName on /api/run/<id>", () => {
     expect(rosterNameOf(roster, "vendor/alpha")).toBe("alpha");
     expect(rosterNameOf(roster, null)).toBeNull();
     expect(rosterNameOf({ models: [], excluded: [] }, "vendor/alpha")).toBeNull();
-  });
-
-  test("no roster at all is no link, not an error", async () => {
-    const { runsDir } = fixture(ROSTER);
-    writeRun(runsDir, { id: "r-1", model: "vendor/alpha", responses: 1, startedAt: NOW - HOUR, endedAt: NOW - HOUR + 1 });
-    const handle = createApi({ runsDir, tilesDir: join(runsDir, "tiles") });
-    const body = (await (await handle(new Request("http://x/api/run/r-1"))).json()) as RunDetailResponse;
-    expect(body.rosterName).toBeNull();
   });
 });

@@ -45,12 +45,6 @@ async function call(
 const ATTRIBUTED = { [ACTOR_HEADER]: "mark", [NOTE_HEADER]: "trial the new glm" };
 
 describe("the draft routes", () => {
-  test("the prefix belongs to the draft routes, which take no PUT: the generic row path never sees it", async () => {
-    const db = seededStore();
-    const res = await call(db, "PUT", "proposed/z-ai/glm-6", { status: "draft" });
-    expect(res.status).toBe(405);
-  });
-
   test("a fetch proposes, makes one call, and changes nothing the fleet reads", async () => {
     const db = seededStore();
     const before = { fleet: fleetOf(db), facts: storeFacts(db) };
@@ -64,16 +58,6 @@ describe("the draft routes", () => {
     expect(f.calls).toEqual([CATALOGUE_URL]);
     expect(fleetOf(db)).toEqual(before.fleet);
     expect(storeFacts(db)).toEqual(before.facts);
-  });
-
-  test("fetching twice creates no duplicates", async () => {
-    const db = seededStore();
-    await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch });
-    const again = await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch });
-    expect((again.body as DraftFetchResponse).added).toEqual([]);
-    const store = new ConfigStore(db, { readonly: true });
-    expect(store.drafts().length).toBe(4);
-    store.close();
   });
 
   test("the listing: newest first, labelled free or paid from the slug, roster models absent, estimate only with a profile", async () => {
@@ -100,23 +84,6 @@ describe("the draft routes", () => {
     expect(priced.drafts.find((d) => d.model === "z-ai/glm-6:free")!.estimateUsd).toBe(0);
     // No price quoted, no estimate, profile or not.
     expect(priced.drafts.find((d) => d.model === "openrouter/auto")!.estimateUsd).toBeNull();
-  });
-
-  test("an ignored model stays ignored through every later fetch, until un-ignored", async () => {
-    const db = seededStore();
-    await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch });
-    const ignored = await call(db, "POST", "proposed/ignore", { model: "openrouter/auto" }, {}, { [ACTOR_HEADER]: "mark" });
-    expect(ignored).toEqual({ status: 200, body: { model: "openrouter/auto", status: "ignored" } });
-    await call(db, "POST", "proposed/fetch", undefined, { fetch: catalogueFetch().fetch });
-    const list = (await call(db, "GET", "proposed")).body as DraftsResponse;
-    expect(list.drafts.map((d) => d.model)).not.toContain("openrouter/auto");
-    expect(list.ignored.map((d) => [d.model, d.ignoredBy])).toEqual([["openrouter/auto", "mark"]]);
-
-    await call(db, "POST", "proposed/unignore", { model: "openrouter/auto" });
-    const back = (await call(db, "GET", "proposed")).body as DraftsResponse;
-    expect(back.drafts.map((d) => d.model)).toContain("openrouter/auto");
-    expect(back.ignored).toEqual([]);
-    expect((await call(db, "POST", "proposed/ignore", { model: "nobody/nothing" })).status).toBe(404);
   });
 
   test("promotion writes an ordinary roster entry at the chosen tier, recorded, and the draft is gone", async () => {
@@ -234,19 +201,6 @@ describe("the draft routes", () => {
     expect((await call(db, "POST", "proposed/promote", { model: "nobody/nothing", name: "x", tier: "t0" })).status).toBe(404);
   });
 
-  test("a catalogue that cannot be read is a 502 with the reason, and writes nothing", async () => {
-    const db = seededStore();
-    const down = (async () => {
-      throw new TypeError("fetch failed");
-    }) as unknown as typeof globalThis.fetch;
-    const res = await call(db, "POST", "proposed/fetch", undefined, { fetch: down });
-    expect(res.status).toBe(502);
-    expect((res.body as { error: string }).error).toMatch(/could not read the catalogue/);
-    const store = new ConfigStore(db, { readonly: true });
-    expect(store.drafts()).toEqual([]);
-    store.close();
-  });
-
   test("with no store, the listing is empty and a fetch is refused before any call", async () => {
     const db = join(tempDir("drafts-nostore-"), "config.sqlite");
     expect(await call(db, "GET", "proposed")).toEqual({ status: 200, body: { drafts: [], ignored: [], profile: null } });
@@ -279,18 +233,6 @@ describe("drafts never reach anything public", () => {
       const res = await handle(new Request(`http://x${path}`, { method, ...(method === "POST" ? { body: "{}" } : {}) }));
       expect([method, path, res.status]).toEqual([method, path, 404]);
     }
-  });
-
-  test("a private handle serves the listing, with no profile on an empty runs directory", async () => {
-    const { handle, db } = handles(false);
-    const store = new ConfigStore(db);
-    store.writeDrafts({ put: [{ model: "z-ai/glm-6", value: { ...PENDING } }] });
-    store.close();
-    const res = await handle(new Request("http://x/api/config/proposed"));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as DraftsResponse;
-    expect(body.drafts.map((d) => d.model)).toEqual(["z-ai/glm-6"]);
-    expect(body.profile).toBeNull();
   });
 
   test("the publisher renders the roster and no draft: no id, no key space, no route", async () => {

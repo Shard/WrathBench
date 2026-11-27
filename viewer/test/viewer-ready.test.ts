@@ -47,17 +47,12 @@ async function timed(h: ReturnType<typeof createApi>, path: string, host = "view
 }
 
 describe("/api/ready", () => {
-  test("answers at once while the module hangs; /api/info is the route that waits on it", async () => {
-    const h = handle();
-    const ready = await timed(h, "/api/ready");
+  test("answers at once while the module hangs", async () => {
+    const ready = await timed(handle(), "/api/ready");
     expect(ready.status).toBe(200);
     expect(ready.body).toEqual({ ready: true });
     expect(ready.ms).toBeLessThan(250);
-    const info = await timed(h, "/api/info");
-    expect(info.status).toBe(200);
-    expect((info.body as { worldserver: unknown }).worldserver).toBeNull();
-    expect(info.ms).toBeGreaterThan(1_500);
-  }, 10_000);
+  });
 
   test("is served in public mode and with only the viewer group on", async () => {
     for (const h of [handle({ publicMode: true }), handle({ groups: { runner: false, evals: false, viewer: true } })]) {

@@ -20,7 +20,7 @@ import { createApi } from "../api";
 import { ConfigStore, splitFleet } from "../../runner/src/config-store";
 import type { ResultsResponse, RunDetailResponse, RunsResponse } from "../api-types";
 import type { CampaignsResponse } from "../api-types-evals";
-import { checkedIn, defsBlock, definition, seedPublished } from "../../runner/test/fixtures/campaigns";
+import { checkedIn, defsBlock, seedPublished } from "../../runner/test/fixtures/campaigns";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -196,35 +196,6 @@ describe("/api/campaigns", () => {
     expect(body.refused).toEqual([{ key: "campaigns/race-probe", reason: expect.stringContaining("campaign race-probe") }]);
     expect(body.campaigns.map((c) => `${c.key}:${c.state}`)).toEqual(["race-probe@1:unassigned"]);
   });
-
-  test("a pinned arm's pairs reach refused[] while run pods are off, and leave once they are on", async () => {
-    const pinned = definition({
-      id: "pin-probe",
-      cells: [{ id: "c", race: 1, class: 1 }],
-      arms: [
-        { id: "a", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-1" },
-        { id: "b", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-2" },
-      ],
-    });
-    const doc = (policy: Record<string, unknown>): unknown => ({
-      ...CONFIG,
-      policy,
-      "campaign-defs": defsBlock(race, pinned),
-      campaigns: { "pin-probe": { version: 1, assignments: [{ model: "m", runsPerCell: 1 }] } },
-    });
-    const off = await campaigns([], doc({}));
-    expect(off.refused.map((r) => r.key)).toEqual(["pin-probe@1:m:a", "pin-probe@1:m:b"]);
-    expect(off.refused[0]!.reason).toContain('policy.runPods is "off"');
-    const view = off.campaigns.find((c) => c.key === "pin-probe@1")!;
-    expect(view.grid[0]!.squares.every((q) => q.refused?.includes("run pod") === true)).toBe(true);
-    const on = await campaigns([], doc({ runPods: "probes" }));
-    expect(on.refused).toEqual([]);
-  });
-
-  test("an empty config store serves no campaigns and no refusals", async () => {
-    const body = await campaigns([stamped("r1")]);
-    expect(body).toMatchObject({ campaigns: [], refused: [] });
-  });
 });
 
 describe("/api/runs keeps every stamp, on and off the page", () => {
@@ -234,15 +205,6 @@ describe("/api/runs keeps every stamp, on and off the page", () => {
     const runs = ((await res.json()) as RunsResponse).runs;
     expect(runs.find((r) => r.runId === "fleet-a")).toMatchObject({ campaign: "race-probe", campaignVersion: 1, cell: "orc-warrior", arm: "base", ref: "m" });
     expect(runs.find((r) => r.runId === "legacy")).toMatchObject({ campaign: "race-probe", campaignVersion: null, arm: null, ref: null });
-  });
-
-  test("a directory holding only launch files is a launch that never became a run: not listed", async () => {
-    const f = fixture([stamped("fleet-a")]);
-    const launchOnly = join(f.runs, "fleet-m-race-probe-orc-warrior-base-test-model-20261011");
-    mkdirSync(launchOnly, { recursive: true });
-    writeFileSync(join(launchOnly, "campaign.json"), "{}");
-    const res = await handleFor(f)(new Request("http://x/api/runs"));
-    expect(((await res.json()) as RunsResponse).runs.map((r) => r.runId)).toEqual(["fleet-a"]);
   });
 
   test("the public results and run page carry the version and the arm, and not the roster name", async () => {

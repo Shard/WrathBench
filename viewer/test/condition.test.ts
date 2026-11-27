@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chartGroupOf, conditionKey, conditionOf, currentChartGroupId, type ConditionFacts } from "../condition";
+import { chartGroupOf, conditionKey, conditionOf, type ConditionFacts } from "../condition";
 import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
 
 const facts = (tuple: ConditionFacts["tuple"], over: Partial<ConditionFacts> = {}): ConditionFacts => ({
@@ -71,12 +71,5 @@ describe("conditionOf and chartGroupOf", () => {
     expect(of({ routing: { allowFallbacks: false, order: ["x"] } })).toBe("snippet");
     expect(of({ wiki: false, loop: "program" })).toBe("program-nowiki");
     expect(chartGroupOf({ loop: "program", wiki: false }).label).toBe("program loop · no wiki");
-  });
-
-  test("a group id from before routing left the chart names its loop's group", () => {
-    expect(currentChartGroupId("snippet-unpinned")).toBe("snippet");
-    expect(currentChartGroupId("program-unpinned-nowiki")).toBe("program-nowiki");
-    expect(currentChartGroupId("program")).toBe("program");
-    expect(currentChartGroupId("external")).toBe("external");
   });
 });

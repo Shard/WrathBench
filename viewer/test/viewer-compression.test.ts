@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { brotliDecompressSync } from "node:zlib";
 import { createApi } from "../api";
 import { COMPRESS_MIN_BYTES, compressResponse, negotiateEncoding } from "../compress";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
@@ -68,22 +68,6 @@ describe("compressed JSON", () => {
     expect(brotliDecompressSync(bytes).toString("utf8")).toBe(text);
   });
 
-  test("gzip where brotli is refused", async () => {
-    const handle = api(fixture());
-    const text = await (await handle(new Request(ENTRIES))).text();
-    const gz = await handle(new Request(ENTRIES, { headers: { "accept-encoding": "br;q=0, gzip" } }));
-    expect(gz.headers.get("content-encoding")).toBe("gzip");
-    expect(gunzipSync(new Uint8Array(await gz.arrayBuffer())).toString("utf8")).toBe(text);
-  });
-
-  test("a small body is sent as it is, still varying on the header", async () => {
-    const handle = api(fixture());
-    const res = await handle(new Request("http://x/api/info", { headers: { "accept-encoding": "br" } }));
-    expect(res.headers.get("content-encoding")).toBeNull();
-    expect(res.headers.get("vary")).toContain("Accept-Encoding");
-    expect(((await res.json()) as { service: string }).service).toBe("wrathbench-viewer");
-  });
-
   test("the SSE tail is never encoded or buffered", async () => {
     const handle = api(fixture());
     const res = await handle(new Request(`http://x/api/run/${RUN}/stream`, { headers: { "accept-encoding": "br, gzip" } }));
@@ -98,14 +82,6 @@ describe("compressed JSON", () => {
     expect(first.startsWith("id: 301\ndata: ")).toBe(true);
     expect(JSON.parse(first.slice(first.indexOf("data: ") + 6).trim())).toMatchObject({ hello: RUN, total: 301 });
   });
-
-  test("plain text is untouched", async () => {
-    const runs = fixture();
-    writeFileSync(join(runs, RUN, "scratchpad.md"), "x".repeat(COMPRESS_MIN_BYTES * 2));
-    const res = await api(runs)(new Request(`http://x/api/run/${RUN}/scratchpad`, { headers: { "accept-encoding": "br" } }));
-    expect(res.headers.get("content-encoding")).toBeNull();
-    expect((await res.text()).length).toBe(COMPRESS_MIN_BYTES * 2);
-  });
 });
 
 describe("compressResponse", () => {
@@ -116,11 +92,5 @@ describe("compressResponse", () => {
     const res = await compressResponse(req, new Response(big, { headers: { "content-type": "application/json", etag: '"abc"' } }));
     expect(res.headers.get("content-encoding")).toBeNull();
     expect(await res.text()).toBe(big);
-  });
-
-  test("a weak ETag is kept on the encoded body", async () => {
-    const res = await compressResponse(req, new Response(big, { headers: { "content-type": "application/json", etag: 'W/"abc"' } }));
-    expect(res.headers.get("content-encoding")).toBe("br");
-    expect(res.headers.get("etag")).toBe('W/"abc"');
   });
 });

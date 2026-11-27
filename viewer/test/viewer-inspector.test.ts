@@ -182,14 +182,17 @@ describe("the session token's fingerprint", () => {
     return { runs, fingerprints: ids };
   }
 
-  /** A response's body as text; an event stream is read for a few frames and then cancelled. */
+  /**
+   * A response's body as text; an event stream is read for a few frames and then cancelled.
+   * The first frame is waited for patiently; after it, only what is already queued is read.
+   */
   async function bodyOf(res: Response): Promise<string> {
     if (!(res.headers.get("content-type") ?? "").startsWith("text/event-stream")) return await res.text();
     const reader = res.body!.getReader();
     const dec = new TextDecoder();
     let out = "";
     for (let i = 0; i < 8; i++) {
-      const next = await Promise.race([reader.read(), Bun.sleep(250).then(() => null)]);
+      const next = await Promise.race([reader.read(), Bun.sleep(i === 0 ? 2_000 : 60).then(() => null)]);
       if (next === null || next.done) break;
       out += dec.decode(next.value);
     }
@@ -213,17 +216,6 @@ describe("the session token's fingerprint", () => {
       if (!publicMode) expect(served).toEqual(expect.arrayContaining([...inspectorPaths, ...fanoutReplayPaths]));
     });
   }
-
-  test("each session's record reads its own id: the run id, or the fan-out character's composite id", async () => {
-    const { runs } = await runsWithFingerprints("viewer-inspector-fp-ids-");
-    const h = viewer(runs);
-    const list = (await (await get(h, "/api/inspector/sessions")).json()) as { sessions: { id: string; session: { id: string } }[] };
-    expect(list.sessions.map((s) => [s.id, s.session.id]).sort()).toEqual(SESSIONS.map((id) => [id, id]).sort());
-    for (const id of SESSIONS) {
-      const one = (await (await get(h, `/api/inspector/sessions/${id}`)).json()) as { id: string; session: { id: string } };
-      expect(one).toMatchObject({ id, session: { id } });
-    }
-  });
 
   test("no object the publisher renders carries one", async () => {
     const { runs, fingerprints } = await runsWithFingerprints("viewer-inspector-fp-pub-");

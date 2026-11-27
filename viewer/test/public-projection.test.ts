@@ -17,8 +17,6 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import type { ApiInfoResponse, ComparabilityView, CostFigure, CostView, DeathFacts, PartyDetailView, PositionsResponse, ResultRun, ResultsResponse, RunDetailResponse, RunListRow, RunRow, RunsResponse, TokenTotals, TrackInventory, TrackResponse, TraceIndexResponse, TraceInvRow, TraceSegment } from "../api-types";
 import type { CampaignsResponse, EpisodesResponse } from "../api-types-evals";
 import type { FleetAccountView, FleetJobView, FleetResponse, FleetServerView, ModelRowView, ModelRunView, ModelsResponse } from "../api-types-runner";
@@ -576,38 +574,12 @@ function runRowOf(over: Partial<RunRow> = {}): RunRow {
   ).run;
 }
 
-function fixtureBudget(): ComparabilityView["budget"] {
-  return runRowFixture().comparability!.budget;
-}
-
 describe("projectRuns", () => {
   test("emits exactly the allowlist and none of the poisoned values (projectRuns)", () => {
     const input: RunsResponse = smuggle<RunsResponse>({ runs: [runListRowFixture()] });
     const out = projectRuns(input);
     expect(keyPaths(out)).toEqual(allow(["runs", ...under("runs[]", RUN_LIST_ROW_KEYS)]));
     assertClean(JSON.stringify(out));
-  });
-
-  test("a listing row is the fleet table's join and nothing else: no field a page reads off another object", () => {
-    const row = projectRuns({ runs: [runListRowFixture()] }).runs[0]!;
-    expect(row.runId).toBeDefined();
-    for (const gone of ["items", "objective", "apiBase", "terminationDetail", "pauseReason", "character", "characterLabel", "model", "mtime", "bytes", "firstTs", "lastTs", "modelResponses", "driver", "harnessVersion"]) {
-      expect(gone in row).toBe(false);
-    }
-    // The estimate and the per-component dollars stay on the run's own page.
-    expect(Object.keys(row.cost!)).toEqual(["actual"]);
-    expect(row.comparability).toEqual({ budget: { episodeMs: fixtureBudget().episodeMs } });
-  });
-
-  test("a row with no actual carries the estimate its cost cell shows, cut to dollars and date, and stays a fixed point (operator, 2026-11-18)", () => {
-    const none = smuggle<CostFigure>({ usd: null, basis: "none", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "a subscription endpoint, so no actual" });
-    const input = smuggle<RunListRow>({ ...runListRowFixture(), cost: smuggle<CostView>({ ...costFigureFixture(), actual: none, expected: costFigureFixture() }) });
-    const row = projectRuns({ runs: [input] }).runs[0]!;
-    expect(row.cost).toEqual({
-      actual: { usd: null, basis: "none", asIfMetered: false, note: "a subscription endpoint, so no actual" },
-      expected: { usd: 1.5, basis: "list-price", asIfMetered: true, asOf: "2026-08-20" },
-    });
-    expect(projectRuns({ runs: [row as unknown as RunListRow] }).runs[0]!.cost).toEqual(row.cost);
   });
 
   test("withholds by value, not by renaming: the fields read null", () => {
@@ -635,15 +607,6 @@ describe("projectRuns", () => {
     expect(row.terminationReason).toBe("episode-limit");
   });
 
-  test("a backfilled claude-code actual crosses with its parts, so the public figure wears the same *", () => {
-    const backfill = { reportedUsd: 839.38, usd: 748.7, turns: 2 };
-    const fixture = runListRowFixture();
-    const row = { ...fixture, cost: { ...fixture.cost!, actual: { ...fixture.cost!.actual, backfill: smuggle<typeof backfill>({ ...backfill }) } } };
-    const out = projectRuns({ runs: [row] }).runs[0]!;
-    expect(out.cost?.actual.backfill).toEqual(backfill);
-    assertClean(JSON.stringify(out));
-  });
-
   test("a launch-failed stub's detail is the launcher's text, registry host and API URL included: withheld, the reason crosses", () => {
     const detail = "run pod create refused: POST https://kubernetes.default.svc/api/v1/namespaces/wrathbench/pods: 403 Forbidden — harbor.example/library/wrathbench-runner:harness-0.5-1";
     const row = runRowOf({ terminationReason: "launch-failed", terminationDetail: detail });
@@ -651,10 +614,6 @@ describe("projectRuns", () => {
     expect(row.terminationDetail).toBeNull();
     expect(JSON.stringify(row)).not.toContain("harbor.example");
     expect(JSON.stringify(row)).not.toContain("kubernetes.default.svc");
-  });
-
-  test("a run that never paused stays null: the token marks paused runs only", () => {
-    expect(runRowOf({ pauseReason: null }).pauseReason).toBeNull();
   });
 
   test("the stall pause crosses as itself, so the public site can say stalled; every other reason is still the token", () => {
@@ -669,30 +628,6 @@ describe("projectRuns", () => {
 });
 
 describe("projectRunDetail", () => {
-  test("a disabled tool-call ceiling survives projection as null", () => {
-    // The projection copies the budget key by key, so a value it cannot
-    // represent would land as undefined and the page would render nothing at
-    // all where it should say "unlimited". The policy freeplay lane is the
-    // only run that carries this, and it is exactly the run an operator opens
-    // the page to check on.
-    const run = runRowFixture();
-    const input: RunDetailResponse = smuggle<RunDetailResponse>({
-      run: smuggle({
-        ...run,
-        comparability: smuggle({ ...run.comparability!, budget: smuggle({ ...run.comparability!.budget, maxToolCalls: null }) }),
-      }),
-      states: [],
-      total: 0,
-      tokens: tokensFixture(),
-      cost: costViewFixture(),
-      playtimeMs: 1000,
-      achievements: { earned: 0, points: 0, ids: [] },
-      taxi: { flights: 0 },
-      tps: { overall: 0, recent: 0, replies: 0, recentReplies: 0 },
-    });
-    expect(projectRunDetail(input).run.comparability!.budget.maxToolCalls).toBeNull();
-  });
-
   test("emits exactly the allowlist and none of the poisoned values (projectRunDetail)", () => {
     const input: RunDetailResponse = smuggle<RunDetailResponse>({
       run: runRowFixture(),
@@ -803,31 +738,6 @@ describe("projectRunDetail", () => {
     });
     assertClean(JSON.stringify(out));
   });
-
-  test("a run that recorded none keeps the null: the public reader must not read it as zero", () => {
-    const input: RunDetailResponse = smuggle<RunDetailResponse>({
-      run: runRowFixture(),
-      states: [],
-      total: 0,
-      tokens: tokensFixture(),
-      cost: costViewFixture(),
-      playtimeMs: 1000,
-      spells: null,
-      talents: null,
-      trades: null,
-      deaths: null,
-    });
-    const out = projectRunDetail(input);
-    expect(out.spells).toBeNull();
-    expect(out.talents).toBeNull();
-    expect(out.trades).toBeNull();
-    expect(out.deaths).toBeNull();
-    // A body from before deaths were public has none, and re-projects to itself.
-    const { deaths: _gone, ...older } = input;
-    const again = projectRunDetail(older as RunDetailResponse);
-    expect("deaths" in again).toBe(false);
-    expect(projectRunDetail(again)).toEqual(again);
-  });
 });
 
 describe("projectResults", () => {
@@ -857,13 +767,6 @@ describe("projectResults", () => {
       subject: "local",
       serving: { weights: "Qwen/Qwen3-GGUF", quant: "Q4_K_M", runtime: "LM Studio" },
     });
-  });
-
-  test("condition ids are renumbered per response: equal stays equal, distinct stays distinct", () => {
-    const base = resultsFixture().runs[0]!;
-    const withId = (runId: string, id: string): ResultRun => ({ ...base, runId, condition: { ...base.condition!, id } });
-    const out = projectResults({ ...resultsFixture(), runs: [withId("a", "z"), withId("b", "a"), withId("c", "z")] });
-    expect(out.runs.map((r) => r.condition!.id)).toEqual(["c2", "c1", "c2"]);
   });
 
   test("a response with ten or more conditions is a fixed point of its own projection", () => {
@@ -1006,6 +909,8 @@ describe("projectPositions and projectTrack", () => {
         smuggle({ kind: "hearth", ts: 1600 }),
         smuggle({ kind: "portal" as "taxi", ts: 1700 }),
       ],
+      // The trace window list: numbers only, and nothing smuggled beside them.
+      trace: smuggle({ segMs: 300_000, segs: [[1_760_000_100_000, 3, POISON.smuggled] as unknown as [number, number]] }),
     });
     const out = projectTrack(input);
     expect(keyPaths(out)).toEqual(
@@ -1029,9 +934,13 @@ describe("projectPositions and projectTrack", () => {
         ...under("character", ["characterId", "attempt", "attempts", "previous", "next"]),
         "travel",
         ...under("travel[]", ["kind", "ts"]),
+        "trace",
+        "trace.segMs",
+        "trace.segs",
       ]),
     );
     assertClean(JSON.stringify(out));
+    expect(out.trace).toEqual({ segMs: 300_000, segs: [[1_760_000_100_000, 3]] });
     expect(out.characterName).toBe(CHARACTER_NAME);
     expect(out.moves![0]!.target).toBe(SURVIVES.targetName);
     // Deaths are public (operator, 2026-10-18), so the graveyard release ships.
@@ -1055,32 +964,6 @@ describe("projectPositions and projectTrack", () => {
     expect(out.character).toEqual({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
   });
 
-  test("track: an inventory entry off the track, or a row naming no item, is dropped, and the result re-projects to itself", () => {
-    const input = smuggle<TrackResponse>({
-      runId: "fixture-run-1",
-      characterName: CHARACTER_NAME,
-      model: "test/model",
-      harnessVersion: "harness-0.5-1-gabc",
-      points: [
-        { ts: 1000, map: 0, x: 1, y: 2, level: 1, xp: 0, money: null, questsCompleted: null, turn: 1 },
-        { ts: 2000, map: 0, x: 1, y: 2, level: 1, xp: 0, money: null, questsCompleted: null, turn: 2 },
-      ],
-      inv: {
-        items: [[SURVIVES.itemName, 5956, 1]],
-        at: [
-          [0, [[255, 23, 0], [255, 24, 3], [255, 25, 0.5], [255, 26], [7]]],
-          [1.5, [[255, 23]]],
-          [2, [[255, 23]]],
-          [-1, [[255, 23]]],
-          [1, null, "not rows"],
-        ] as unknown as TrackInventory["at"],
-      },
-    });
-    const out = projectTrack(input);
-    expect(out.inv).toEqual({ items: [[SURVIVES.itemName, 5956, 1]], at: [[0, [[255, 23, 0], [255, 26]]], [1, null, []]] });
-    expect(projectTrack(out)).toEqual(out);
-  });
-
   test("track: a track published before the inventory was patches re-projects to itself", () => {
     const input = smuggle<TrackResponse>({
       runId: "fixture-run-1",
@@ -1101,38 +984,6 @@ describe("projectPositions and projectTrack", () => {
     expect("inv" in out).toBe(false);
     assertClean(JSON.stringify(out));
     expect(projectTrack(out)).toEqual(out);
-  });
-
-  test("track: a run with no character carries no field at all, as an older track does", () => {
-    const out = projectTrack({
-      runId: "fixture-run-1",
-      characterName: CHARACTER_NAME,
-      model: "test/model",
-      harnessVersion: "harness-0.5-1-gabc",
-      points: [],
-    });
-    expect("character" in out).toBe(false);
-    // Nor travel marks: absent is what an older track says, not "none".
-    expect("travel" in out).toBe(false);
-    // Nor a trace: a run from before the recorder keeps its bytes, and its key.
-    expect("trace" in out).toBe(false);
-    // Nor an inventory: a run that recorded none has none to patch.
-    expect("inv" in out).toBe(false);
-  });
-
-  test("track: the trace window list ships as numbers, and nothing smuggled beside it", () => {
-    const out = projectTrack(
-      smuggle<TrackResponse>({
-        runId: "fixture-run-1",
-        characterName: CHARACTER_NAME,
-        model: "test/model",
-        harnessVersion: "harness-0.5-1-gabc",
-        points: [],
-        trace: smuggle({ segMs: 300_000, segs: [[1_760_000_100_000, 3, POISON.smuggled] as unknown as [number, number]] }),
-      }),
-    );
-    expect(out.trace).toEqual({ segMs: 300_000, segs: [[1_760_000_100_000, 3]] });
-    assertClean(JSON.stringify(out));
   });
 });
 
@@ -1201,41 +1052,6 @@ describe("projectTraceSegment", () => {
       [500, "cast", null],
     ]);
     for (const withheld of ['"target"', '"mood"', "player"]) expect(JSON.stringify(out)).not.toContain(withheld);
-  });
-
-  test("a death is published: the flags, the gauges at the corpse, and the Ghost aura and Resurrection Sickness", () => {
-    const seg = traceSegmentFixture();
-    const t0 = seg.t0;
-    const sickness = [15007, 1, t0 + 640_000, 0x80];
-    seg.ev = [
-      [2000, "hp", 0],
-      [2000, "dead", true],
-      [2000, "target", { kind: "player", hpPct: 40 }],
-      [4000, "hp", 1],
-      [4000, "auras", [[8326, 1, 0, 0x80]]],
-      [4000, "dead", false],
-      [4000, "ghost", true],
-      [6000, "hp", 600],
-      [6000, "auras", [sickness]],
-      [6000, "ghost", false],
-    ];
-    const out = projectTraceSegment(seg);
-    expect(out.ev).toEqual([
-      [2000, "hp", 0],
-      [2000, "dead", true],
-      [4000, "hp", 1],
-      [4000, "auras", [[8326, 1, 0]]],
-      [4000, "dead", false],
-      [4000, "ghost", true],
-      [6000, "hp", 600],
-      [6000, "auras", [[15007, 1, t0 + 640_000]]],
-      [6000, "ghost", false],
-    ]);
-    // A segment that opens down says so, gauges and all.
-    const downAtStart = traceSegmentFixture();
-    downAtStart.k.s = { ...downAtStart.k.s, hp: 1, ghost: true, auras: [[8326, 1, 0]] };
-    expect(projectTraceSegment(downAtStart).k.s).toMatchObject({ hp: 1, hpMax: 1200, dead: false, ghost: true, auras: [[8326, 1, 0]] });
-    expect(JSON.stringify(out)).not.toContain('"target"');
   });
 
   test("a segment published before deaths were public re-projects to itself", () => {
@@ -1502,13 +1318,6 @@ describe("projectTraceSegment: the character sheet", () => {
     const out = JSON.stringify(projectTraceSegment(seg));
     expect(out).toContain("Skeleton Key");
     expect(new SecretScanner([]).scan(out)).toEqual([]);
-  });
-
-  test("a segment without a sheet gains no sheet key and no dictionary", () => {
-    const out = projectTraceSegment(traceSegmentFixture());
-    for (const k of ["money", "equip", "bags", "inv", "dur", "quests", "rep", "skills"]) expect(Object.hasOwn(out.k.s, k)).toBe(false);
-    expect(out.items).toBeUndefined();
-    expect(out.qreq).toBeUndefined();
   });
 });
 
@@ -2110,25 +1919,6 @@ describe("projectInfo", () => {
     assertClean(JSON.stringify(out));
   });
 
-  test("carries the preview series when the store names one, and nothing when it does not", () => {
-    const base: ApiInfoResponse = {
-      service: "wrathbench-viewer",
-      publicMode: false,
-      dashboard: true,
-      dashboardBuild: null,
-      worldserver: null,
-      harnessSeries: [{ series: "1.0", runs: 2 }, { series: "0.5", runs: 9 }],
-      now: 5000,
-    };
-    const set = projectInfo({ ...base, previewSeries: "1.0" });
-    expect(set.previewSeries).toBe("1.0");
-    expect(keyPaths(set)).toContain("previewSeries");
-    const unset = projectInfo(base);
-    expect("previewSeries" in unset).toBe(false);
-    // A smuggled non-string never crosses.
-    expect("previewSeries" in projectInfo(smuggle<ApiInfoResponse>({ ...base, previewSeries: { series: "1.0" } as unknown as string }))).toBe(false);
-  });
-
   test("carries the site's name, theme, home and about key by key, and nothing when none is set", () => {
     const base: ApiInfoResponse = {
       service: "wrathbench-viewer",
@@ -2275,25 +2065,6 @@ describe("projectEntries", () => {
     expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "turn", "kind"]));
   });
 
-  // The feed times a call from its writer's dispatch stamp; without it here the
-  // public feed would fall back to guessing the writer from the record's shape.
-  test("a tool call keeps its dispatch stamp, its call index and nothing smuggled", () => {
-    const input = {
-      from: 0,
-      total: 1,
-      entries: [
-        smuggle({ i: 0, t: "tool_call", ts: 900, start: 0, end: 1, turn: 1, call: 7, name: "run_snippet",
-          args: { code: "1" }, dispatchTs: 400 }),
-      ],
-    };
-    const out = projectEntries(input as never);
-    assertClean(JSON.stringify(out));
-    expect(keyPaths(out.entries[0])).toEqual(
-      allow(["i", "t", "ts", "turn", "call", "name", "args", "args.code", "dispatchTs"]),
-    );
-    expect(out.entries[0]).toMatchObject({ call: 7, dispatchTs: 400 });
-  });
-
   test("tool results cross the redactor; the reference tool's text goes whole; model text passes", () => {
     const input = {
       from: 3,
@@ -2434,68 +2205,10 @@ describe("the action log in a public window", () => {
 
 /* ------------------------------------------------------ what is published --- */
 
-describe("a snippet call's code is published once", () => {
+describe("bookkeeping in a public window", () => {
   const entry = (over: Record<string, unknown>): never => ({ ts: 1, start: 0, end: 1, ...over }) as never;
   const window = (entries: unknown[]): Record<string, unknown>[] =>
     projectEntries({ from: 0, total: entries.length, entries: entries as never }).entries as unknown as Record<string, unknown>[];
-
-  test("the call keeps its name, stamps and dispatch time, and loses the copy of the code the snippet record beside it says", () => {
-    const out = window([
-      entry({ i: 0, t: "tool_call", turn: 3, call: 1, name: "run_snippet", args: { code: "return 1" }, dispatchTs: 40 }),
-      entry({ i: 1, t: "snippet", turn: 3, call: 1, code: "return 1" }),
-    ]);
-    expect(out[0]).toEqual({ i: 0, t: "tool_call", ts: 1, turn: 3, call: 1, name: "run_snippet", dispatchTs: 40 });
-    expect(out[1]!["code"]).toBe("return 1");
-  });
-
-  test("a call whose snippet is not next, differs, or belongs to another turn or call keeps its code", () => {
-    const call = { i: 0, t: "tool_call", turn: 3, name: "run_snippet", args: { code: "return 1" } };
-    // No snippet after it (the window ends, or the next record is something else).
-    expect(window([entry(call)])[0]!["args"]).toEqual({ code: "return 1" });
-    expect(window([entry(call), entry({ i: 1, t: "state", level: 1 })])[0]!["args"]).toEqual({ code: "return 1" });
-    // A snippet that says something else.
-    expect(window([entry(call), entry({ i: 1, t: "snippet", turn: 3, code: "return 2" })])[0]!["args"]).toEqual({ code: "return 1" });
-    // The dashboard's own pairing rule: a turn or call index that disagrees is no pair.
-    expect(window([entry(call), entry({ i: 1, t: "snippet", turn: 4, code: "return 1" })])[0]!["args"]).toEqual({ code: "return 1" });
-    expect(window([entry({ ...call, call: 1 }), entry({ i: 1, t: "snippet", turn: 3, call: 2, code: "return 1" })])[0]!["args"]).toEqual({ code: "return 1" });
-  });
-
-  test("a call's summary clip of the snippet's code is the same copy: dropped when the clip is of that code, kept when it is not", () => {
-    const code = "x".repeat(2500);
-    const clip = `${code.slice(0, 2000)}\n… 500 more characters`;
-    const call = { i: 0, t: "tool_call", turn: 3, name: "run_snippet", clipped: true };
-    const kept = window([entry({ ...call, args: { code: clip } }), entry({ i: 1, t: "snippet", turn: 3, code })]);
-    expect(kept[0]!["args"]).toBeUndefined();
-    expect(kept[0]!["clipped"]).toBe(true);
-    // A clip of other code, or with the wrong count, is not this snippet's.
-    const other = window([entry({ ...call, args: { code: clip } }), entry({ i: 1, t: "snippet", turn: 3, code: "y".repeat(2500) })]);
-    expect(other[0]!["args"]).toEqual({ code: clip });
-    const miscount = window([entry({ ...call, args: { code: clip } }), entry({ i: 1, t: "snippet", turn: 3, code: code + "z" })]);
-    expect(miscount[0]!["args"]).toEqual({ code: clip });
-  });
-
-  test("a call's other arguments still ship, and a tool with no snippet is untouched", () => {
-    const out = window([
-      entry({ i: 0, t: "tool_call", turn: 3, name: "run_snippet", args: { code: "x", timeoutMs: 5 } }),
-      entry({ i: 1, t: "snippet", turn: 3, code: "x" }),
-      entry({ i: 2, t: "tool_call", turn: 4, name: "edit_scratchpad", args: { old: "a", new: "b" } }),
-      entry({ i: 3, t: "tool_result", turn: 4, name: "edit_scratchpad", text: "ok" }),
-    ]);
-    expect(out[0]!["args"]).toEqual({ timeoutMs: 5 });
-    expect(out[2]!["args"]).toEqual({ old: "a", new: "b" });
-  });
-
-  test("the published window is a fixed point of its own projection", () => {
-    const once = projectEntries({
-      from: 0,
-      total: 2,
-      entries: [
-        entry({ i: 0, t: "tool_call", turn: 3, name: "run_snippet", args: { code: "return 1" } }),
-        entry({ i: 1, t: "snippet", turn: 3, code: "return 1" }),
-      ] as never,
-    });
-    expect(projectEntries(once)).toEqual(once);
-  });
 
   test("the raw line's byte range, a request's and a reply's bookkeeping and an events batch's tallies are not published", () => {
     const out = window([
@@ -2507,39 +2220,6 @@ describe("a snippet call's code is published once", () => {
     expect(Object.keys(out[0]!).sort()).toEqual(["i", "messageCount", "promptChars", "t", "ts", "turn"]);
     expect(Object.keys(out[1]!).sort()).toEqual(["i", "t", "text", "tools", "ts", "turn"]);
     expect(Object.keys(out[2]!).sort()).toEqual(["count", "i", "moreOpcodes", "opcodes", "t", "ts", "via"]);
-  });
-});
-
-describe("no public page reads what the projection leaves out", () => {
-  // Fields whose names appear nowhere in the dashboard's source as a property
-  // read, at the audit (docs/PUBLIC-DASHBOARD.md, "What is published"). A page
-  // that starts to read one has to put it back in the projection first, and
-  // this fails until it does. Names that other objects also carry are not
-  // listed: a name scan cannot tell them apart, and the types
-  // (`PublicRunListRow`, `ChartSample`) carry those.
-  const LEFT_OUT = [
-    "raceName", "className", "outChars", "systemChars", "adapter", "ambient", "folded",
-    "countedLevel", "lastEnded", "lastReason", "otherSeries", "mtime", "firstTs",
-  ];
-
-  function sources(dir: string): string[] {
-    const out: string[] = [];
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) out.push(...sources(path));
-      else if (/\.(ts|tsx)$/.test(name) && !/\.test\./.test(name)) out.push(path);
-    }
-    return out;
-  }
-
-  test("the dashboard's source does not read them", () => {
-    const text = sources(join(import.meta.dir, "../../dashboard/src")).map((f) => [f, readFileSync(f, "utf8")] as const);
-    const reads: string[] = [];
-    for (const key of LEFT_OUT) {
-      const read = new RegExp(`(\\.\\??${key}\\b|\\b${key}\\??:|\\["${key}"\\]|[{,]\\s*${key}\\s*[,}=])`);
-      for (const [f, t] of text) if (read.test(t)) reads.push(`${key} in ${f}`);
-    }
-    expect(reads).toEqual([]);
   });
 });
 

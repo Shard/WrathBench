@@ -30,7 +30,7 @@ import { recordDrain, traceOfReading } from "../../runner/test/fixtures/v1-sessi
 import type { LiveNearby, PositionsResponse } from "../api-types";
 import { decodeNearby, nearbyAt } from "@wrathbench/inspector/codec/nearby";
 import { PUBLIC_NEARBY_SPAN_MS } from "../public-keys";
-import { PUBLIC_NEARBY_KEYS, projectLiveNearby } from "../public-projection";
+import { projectLiveNearby } from "../public-projection";
 import { createRenderer, type SnapshotArtifact } from "../snapshot";
 import { emptyState, publishPass, LIVE_PATH, NEARBY_PATH, type ObjectStore } from "../../infra/publish-core";
 import { NEARBY_PUBLIC_STATE, verifyPublication, type AcceptSource } from "../../infra/publish-accept";
@@ -122,7 +122,6 @@ interface Live {
   generatedAt: number;
   positions: PositionsResponse;
   nearbyKey?: string;
-  /** Only in a `live.json` from before the split. */
   nearby?: LiveNearby;
 }
 
@@ -194,19 +193,6 @@ describe("the public nearby layer", () => {
         expect(a.path).not.toContain("nearby");
         for (const v of [NAMES.wolf, NAMES.vendor, NAMES.chaser, WOLF, VENDOR, CHASER]) expect(`${a.path}: ${a.body}`).not.toContain(v);
       }
-    } finally {
-      rmSync(runs, { recursive: true, force: true });
-    }
-  });
-
-  // A v1 record cuts a player target to the literal "player"; the projection reads that, with `tgs` not true, as another player.
-  test("v1: a creature is withheld publicly while it targets another player", async () => {
-    const { runs, ring } = await setup(undefined, "v1");
-    try {
-      const out = await createRenderer({ runsDir: runs })(Date.now());
-      const near = JSON.parse(out.artifacts.find((a) => a.path === NEARBY_PATH)!.body) as Nearby;
-      const d = decodeNearby(near.nearby[LIVE_RUN]!);
-      expect(nearbyAt(d, ring.chaseSelfAt - 30_000).find((u) => u.id === CHASER)).toBeUndefined();
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }
@@ -292,15 +278,13 @@ describe("the public nearby layer", () => {
 describe("the verifier on the published units", () => {
   /**
    * One clean published pass over the fixture, and ways to rewrite what it
-   * wrote: `edit` the windows in `nearby.json`, `editLive` the `live.json`
-   * beside it, or `legacy` to fold the windows back into `live.json` the way a
-   * publisher before the split wrote them.
+   * wrote: `edit` the windows in `nearby.json`, or `editLive` the `live.json`
+   * beside it.
    */
   async function published(): Promise<{
     bucket: ReturnType<typeof memoryBucket>;
     edit: (fn: (live: Nearby & Record<string, unknown>) => void) => void;
     editLive: (fn: (live: Live & Record<string, unknown>) => void) => void;
-    legacy: () => void;
     done: () => void;
   }> {
     const { runs } = await setup();
@@ -316,28 +300,16 @@ describe("the verifier on the published units", () => {
       bucket,
       edit: (fn) => rewrite(NEARBY_PATH, fn),
       editLive: (fn) => rewrite(LIVE_PATH, fn),
-      legacy: () => {
-        const near = JSON.parse(bucket.objects.get(NEARBY_PATH)!) as Nearby;
-        bucket.objects.delete(NEARBY_PATH);
-        rewrite<Live>(LIVE_PATH, (live) => {
-          delete live.nearbyKey;
-          live.nearby = near.nearby;
-        });
-      },
       done: () => rmSync(runs, { recursive: true, force: true }),
     };
   }
   const kindsAt = (findings: { kind: string; at: string }[]): string[] => [...new Set(findings.filter((f) => f.at.startsWith("nearby") || f.at.startsWith("positions")).map((f) => f.kind))].sort();
 
-  test("the public state keys are the projection's, restated", () => {
-    expect([...NEARBY_PUBLIC_STATE].sort()).toEqual([...PUBLIC_NEARBY_KEYS].sort());
-  });
-
   test("a token planted in a unit's name is a credential finding", async () => {
     const p = await published();
     try {
       p.edit((live) => {
-        live.nearby![LIVE_RUN]!.k.s[0]!.name = `token=${"ab".repeat(16)}`;
+        live.nearby[LIVE_RUN]!.k.s[0]!.name = `token=${"ab".repeat(16)}`;
       });
       const report = await verifyPublication(p.bucket.source, { cache: false });
       const cred = report.findings.filter((f) => f.kind === "credential");
@@ -354,7 +326,7 @@ describe("the verifier on the published units", () => {
     const p = await published();
     try {
       p.edit((live) => {
-        live.nearby![LIVE_RUN]!.k.s[0]!.name = "see http://10.0.0.5:8080/x";
+        live.nearby[LIVE_RUN]!.k.s[0]!.name = "see http://10.0.0.5:8080/x";
       });
       const report = await verifyPublication(p.bucket.source, { cache: false });
       expect(report.findings.map((f) => f.kind)).toContain("host-fact");
@@ -364,61 +336,43 @@ describe("the verifier on the published units", () => {
     }
   });
 
-  /** The windows, wherever the shape under test keeps them. */
-  type Holder = { nearby?: LiveNearby };
-  /** Plant on the current shape (in nearby.json) and on the one before the split (inline in live.json). */
-  const shapes = [
-    { name: "nearby.json", apply: (p: Awaited<ReturnType<typeof published>>, fn: (h: Holder) => void) => p.edit(fn) },
-    {
-      name: "inline in live.json",
-      apply: (p: Awaited<ReturnType<typeof published>>, fn: (h: Holder) => void) => {
-        p.legacy();
-        p.editLive(fn);
+  test("a planted player, a guid key or a self that names the character is caught twice: drift and a withheld field", async () => {
+    for (const [i, plant] of [
+      (n: Nearby) => {
+        const w = n.nearby[LIVE_RUN]!;
+        w.ids.push(OTHER);
+        w.ty.push(3);
       },
-    },
-  ];
-
-  test("a planted player, a guid key or a self that names the character is caught twice: drift and a withheld field, in either shape", async () => {
-    for (const shape of shapes) {
-      for (const plant of [
-        (h: Holder) => {
-          const w = h.nearby![LIVE_RUN]!;
-          w.ids.push(OTHER);
-          w.ty.push(3);
-        },
-        (h: Holder) => {
-          h.nearby![LIVE_RUN]!.k.s[0]!.tg = OTHER;
-        },
-        (h: Holder) => {
-          h.nearby![LIVE_RUN]!.k.self.guid = "7";
-        },
-      ]) {
-        const p = await published();
-        try {
-          shape.apply(p, plant);
-          const report = await verifyPublication(p.bucket.source, { cache: false });
-          expect([shape.name, kindsAt(report.findings)]).toEqual([shape.name, ["projection-drift", "withheld-field"]]);
-        } finally {
-          p.done();
-        }
+      (n: Nearby) => {
+        n.nearby[LIVE_RUN]!.k.s[0]!.tg = OTHER;
+      },
+      (n: Nearby) => {
+        n.nearby[LIVE_RUN]!.k.self.guid = "7";
+      },
+    ].entries()) {
+      const p = await published();
+      try {
+        p.edit(plant);
+        const report = await verifyPublication(p.bucket.source, { cache: false });
+        expect([i, kindsAt(report.findings)]).toEqual([i, ["projection-drift", "withheld-field"]]);
+      } finally {
+        p.done();
       }
     }
   });
 
   test("a window reaching back past the live span is not live, and is drift", async () => {
-    for (const shape of shapes) {
-      const p = await published();
-      try {
-        shape.apply(p, (h) => {
-          const w = h.nearby![LIVE_RUN]!;
-          w.t0 = w.t1 - PUBLIC_NEARBY_SPAN_MS - 60_000;
-        });
-        const report = await verifyPublication(p.bucket.source, { cache: false });
-        expect(kindsAt(report.findings)).toContain("live-only");
-        expect(kindsAt(report.findings)).toContain("projection-drift");
-      } finally {
-        p.done();
-      }
+    const p = await published();
+    try {
+      p.edit((n) => {
+        const w = n.nearby[LIVE_RUN]!;
+        w.t0 = w.t1 - PUBLIC_NEARBY_SPAN_MS - 60_000;
+      });
+      const report = await verifyPublication(p.bucket.source, { cache: false });
+      expect(kindsAt(report.findings)).toContain("live-only");
+      expect(kindsAt(report.findings)).toContain("projection-drift");
+    } finally {
+      p.done();
     }
   });
 
@@ -469,18 +423,6 @@ describe("the verifier on the published units", () => {
       expect(report.findings.filter((f) => f.key === LIVE_PATH).map((f) => `${f.kind} ${f.at}`)).toEqual(["projection-drift nearbyKey"]);
     } finally {
       q.done();
-    }
-  });
-
-  test("a live.json from before the split, its windows inline, verifies clean", async () => {
-    const p = await published();
-    try {
-      p.legacy();
-      const report = await verifyPublication(p.bucket.source, { cache: false });
-      expect(report.missing).toEqual([]);
-      expect(report.findings).toEqual([]);
-    } finally {
-      p.done();
     }
   });
 });

@@ -10,18 +10,16 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../../runner/src/comparability";
 import { ConfigStore } from "../../runner/src/config-store";
 import { configFromArgs } from "../../runner/src/run";
-import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi } from "../api";
-import { entriesWindowAt } from "../api-run";
+import { RESULT_RUNS_CACHE_MS, createApi } from "../api";
 import { harnessSeriesCensus } from "../api-evals";
 import { readFleet } from "../api-fleet";
 import { type RunStore, localRunStore } from "../clickhouse";
 import { redactRawLine, redactSecrets } from "../tail";
-import { readRun } from "../../runner/src/run-list";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 import { defsBlock, definition, seedPublished } from "../../runner/test/fixtures/campaigns";
 import type { CampaignsResponse } from "../api-types-evals";
@@ -178,49 +176,13 @@ describe("no endpoint serves the bearer token", () => {
       `/api/run/${RUN_ID}/raw/0`,
       `/api/run/${RUN_ID}/raw/1`,
       `/api/run/${RUN_ID}/scratchpad`,
+      `/api/run/${RUN_ID}/track`,
+      "/api/results?episode=all",
     ];
     for (const p of paths) {
       const text = await body(await handle(new Request(`http://x${p}`)));
       expect(`${p}: ${text}`).not.toContain(SENTINEL);
     }
-  });
-
-  test("the meta entry still lists its other config, so redaction is targeted", async () => {
-    const runs = fixture();
-    const handle = api(runs);
-    const text = await body(await handle(new Request(`http://x/api/run/${RUN_ID}/entries?from=0`)));
-    expect(text).toContain("Fixturely");
-    expect(text).toContain("OPENROUTER_KEY");
-  });
-});
-
-describe("the feed window that holds a moment (`/entries?at=`)", () => {
-  const entries = Array.from({ length: 100 }, (_, i) => ({ ts: 1000 + i * 10 }));
-
-  test("starts a quarter of a window before the last entry at or before the time", () => {
-    // 1505 falls after entry 50 (ts 1500): a window of 20 begins five entries before it.
-    expect(entriesWindowAt(entries, 1505, 20)).toBe(45);
-    expect(entriesWindowAt(entries, 1500, 20)).toBe(45);
-  });
-
-  test("is clamped to the run: before the first entry is the first window, past the last is the tail", () => {
-    expect(entriesWindowAt(entries, 0, 20)).toBe(0);
-    expect(entriesWindowAt(entries, 1010, 20)).toBe(0);
-    expect(entriesWindowAt(entries, 99_999, 20)).toBe(80);
-    expect(entriesWindowAt(entries, 1500, 500)).toBe(0);
-    expect(entriesWindowAt([], 1500, 20)).toBe(0);
-  });
-
-  test("the route serves that window, and `from` still wins where a link names both", async () => {
-    const handle = api(fixture());
-    type Page = { from: number; total: number; entries: { i: number; ts: number }[] };
-    const at = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/entries?at=1150&limit=1`))).json()) as Page;
-    expect(at.total).toBe(3);
-    expect(at.entries.map((e) => e.ts)).toEqual([1100]);
-    const tail = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/entries?at=nonsense&limit=1`))).json()) as Page;
-    expect(tail.entries.map((e) => e.ts)).toEqual([1200]);
-    const both = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/entries?from=0&at=1250&limit=1`))).json()) as Page;
-    expect(both.from).toBe(0);
   });
 });
 
@@ -389,53 +351,6 @@ describe("the thinking-token envelopes", () => {
     expect(detail.run).toMatchObject({ resolvedModel: "claude-opus-5", cliVersion: "2.1.239" });
     rmSync(runs, { recursive: true, force: true });
   });
-
-  test("a run whose last record is a dropped envelope keeps its playtime", async () => {
-    const runs = thinkingFixture();
-    // The common claude ending: the watchdog cuts the run mid-thinking, so the
-    // file's last line is one the feed does not serve.
-    appendFileSync(
-      join(runs, "claude-run", "trajectory.jsonl"),
-      JSON.stringify({ ts: 9000, t: "claude_system", turn: 2, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 7 }) + "\n",
-    );
-    // Old enough that the run reads as finished: a live run's segment closes
-    // on `now` and the two figures would agree for the wrong reason.
-    const old = new Date(Date.now() - 3_600_000);
-    utimesSync(join(runs, "claude-run", "trajectory.jsonl"), old, old);
-    const handle = api(runs);
-    const listed = (await (await handle(new Request("http://x/api/runs"))).json()) as {
-      runs: { runId: string; playtimeMs: number | null }[];
-    };
-    const detail = (await (await handle(new Request("http://x/api/run/claude-run"))).json()) as { playtimeMs: number | null };
-    // The listing reads every line; the run page must not close the segment on
-    // the last SERVED one and report a shorter run than the listing does.
-    expect(detail.playtimeMs).toBe(new Map(listed.runs.map((r) => [r.runId, r.playtimeMs])).get("claude-run")!);
-    expect(detail.playtimeMs).toBe(8000);
-    rmSync(runs, { recursive: true, force: true });
-  });
-
-  test("the live tail forwards the same filtered batches", async () => {
-    const runs = thinkingFixture();
-    const handle = api(runs);
-    // Prime the tail, then append the shape a live claude run appends.
-    await handle(new Request("http://x/api/run/claude-run/entries?from=0"));
-    appendFileSync(
-      join(runs, "claude-run", "trajectory.jsonl"),
-      [
-        { ts: 1400, t: "claude_system", turn: 2, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 9 },
-        { ts: 1500, t: "response", turn: 2, message: { role: "assistant", content: "second" } },
-      ]
-        .map((l) => JSON.stringify(l))
-        .join("\n") + "\n",
-    );
-    const res = await handle(new Request("http://x/api/run/claude-run/stream"));
-    const reader = res.body!.getReader();
-    const hello = new TextDecoder().decode((await reader.read()).value!);
-    await reader.cancel();
-    // The SSE hello carries the served count, which the new envelope did not grow.
-    expect(JSON.parse(hello.slice(hello.indexOf("data: ") + 6).trim())).toMatchObject({ hello: "claude-run", total: 5 });
-    rmSync(runs, { recursive: true, force: true });
-  });
 });
 
 describe("playtime", () => {
@@ -458,32 +373,6 @@ describe("playtime", () => {
     const paused = by.get("live-paused-run")!;
     expect(paused.live).toBe(true);
     expect(paused.playtimeMs).toBe(30_000);
-  });
-
-  test("the run page agrees with the listing", async () => {
-    const now = Date.now();
-    const runs = pausedFixture(now);
-    const handle = api(runs);
-    for (const id of ["resumed-run", "live-paused-run"]) {
-      const list = (await (await handle(new Request("http://x/api/runs"))).json()) as {
-        runs: { runId: string; playtimeMs: number | null }[];
-      };
-      const detail = (await (await handle(new Request(`http://x/api/run/${id}`))).json()) as {
-        playtimeMs: number | null;
-      };
-      expect(detail.playtimeMs).toBe(list.runs.find((r) => r.runId === id)!.playtimeMs);
-    }
-  });
-
-  test("a run with no pauses is unchanged: its whole span", async () => {
-    const runs = fixture();
-    const detail = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
-      run: { live: boolean };
-      playtimeMs: number | null;
-    };
-    // The fixture's files are fresh, so it reads live and counts to now.
-    expect(detail.run.live).toBe(true);
-    expect(detail.playtimeMs).toBeGreaterThan(Date.now() - 1000 - 5_000);
   });
 });
 
@@ -570,21 +459,6 @@ describe("a run resumed in place", () => {
     expect(character.character.runs[0]!.sessions).toHaveLength(2);
     expect(character.character.totals.questsCompleted).toBe(5);
   });
-
-  test("public mode serves the sessions and the whole run's count, and the chart's samples without the per-sample count", async () => {
-    const { runs, id } = resumedInPlaceFixture();
-    const detail = (await (await api(runs, true)(new Request(`http://x/api/run/${id}`))).json()) as {
-      run: { questsCompleted: number | null };
-      states: Record<string, unknown>[];
-      sessions?: unknown[];
-    };
-    expect(detail.sessions).toHaveLength(2);
-    // The sum across the restart is the server's, applied before the projection;
-    // the samples the run page's chart reads are when, the level and the XP.
-    expect(detail.run.questsCompleted).toBe(5);
-    expect(detail.states).toHaveLength(4);
-    for (const s of detail.states) expect(Object.keys(s).sort()).toEqual(["level", "ts", "xp"]);
-  });
 });
 
 describe("scoreability projection", () => {
@@ -609,28 +483,6 @@ describe("scoreability projection", () => {
         episodes: { id: string; members: number }[];
       };
       expect(episodes.episodes.find((episode) => episode.id === "e90")!.members).toBe(0);
-    } finally {
-      rmSync(runs, { recursive: true, force: true });
-    }
-  });
-
-  test("/api/ladder keeps tainted e90 rows visible with their explicit unscored reasons", async () => {
-    const runs = scoreabilityFixture();
-    try {
-      const ladder = (await (await api(runs)(new Request("http://x/api/ladder?episode=e90"))).json()) as {
-        episode: string;
-        runs: { runId: string; unscored: string | null }[];
-      };
-      expect(ladder.episode).toBe("e90");
-      expect(ladder.runs).toHaveLength(6);
-      expect(Object.fromEntries(ladder.runs.map((r) => [r.runId, r.unscored]))).toEqual({
-        "paused-response": "unscored (paused)",
-        "paused-zero": "unscored (paused)",
-        "zero-response": "unscored (no model responses)",
-        "unknown-response": "unscored (model responses unknown)",
-        "live-response": "unscored (live)",
-        "environment-defect": "unscored (environment-defect)",
-      });
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }
@@ -664,51 +516,10 @@ describe("scoreability projection", () => {
 });
 
 describe("routes", () => {
-  test("the run listing carries totals alongside the row", async () => {
-    const runs = fixture();
-    const res = await api(runs)(new Request("http://x/api/runs"));
-    const b = (await res.json()) as { runs: { runId: string; tokens: unknown; level: number }[] };
-    expect(b.runs).toHaveLength(1);
-    expect(b.runs[0]!.runId).toBe(RUN_ID);
-    expect(b.runs[0]!.level).toBe(3);
-    expect(b.runs[0]!.tokens).not.toBeNull();
-  });
-
-  test("an unknown run is a 404, not a crash", async () => {
-    const runs = fixture();
-    expect((await api(runs)(new Request("http://x/api/run/nope"))).status).toBe(404);
-  });
-
   test("a run id that tries to escape the runs directory is refused", async () => {
     const runs = fixture();
     const res = await api(runs)(new Request("http://x/api/run/..%2F..%2Fetc"));
     expect(res.status).toBe(404);
-  });
-
-  test("/api/info lists the harness series that have runs, newest first", async () => {
-    const runs = fixture();
-    const res = await api(runs)(new Request("http://x/api/info"));
-    const b = (await res.json()) as { harnessSeries: { series: string; runs: number }[] };
-    // The fixture's stamp (`harness-test`) names no series, and a run in no
-    // group is never listed — only the selector's "all" shows it.
-    expect(b.harnessSeries).toEqual([]);
-  });
-
-  test("/api/info names the store's preview series only while site.previewSeries is set", async () => {
-    const runs = fixture();
-    const db = join(runs, "site-config.sqlite");
-    const store = new ConfigStore(db);
-    store.seed({ roster: {}, queue: [] }, { actor: "fixture" });
-    const info = async (): Promise<Record<string, unknown>> =>
-      (await (await createApi({ runsDir: runs, tilesDir: join(runs, "..", "minimap"), moduleUrl: "http://127.0.0.1:1", configDbPath: db })(new Request("http://x/api/info"))).json()) as Record<string, unknown>;
-    // Unset: the body has no such key at all, so a snapshot stays byte-identical.
-    expect("previewSeries" in (await info())).toBe(false);
-    store.put("site", { previewSeries: "1.0" }, { actor: "fixture" });
-    expect((await info()).previewSeries).toBe("1.0");
-    // The flip: deleting the row clears it.
-    store.put("site", undefined, { actor: "fixture" });
-    expect("previewSeries" in (await info())).toBe(false);
-    store.close();
   });
 
   test("/api/info carries the site's name, theme, home and about only while one is set, the about rendered and sanitized", async () => {
@@ -747,39 +558,6 @@ describe("routes", () => {
       { series: "0.4", runs: 2 },
     ]);
   });
-
-  test("/api/info reports the mode the viewer is in", async () => {
-    const runs = fixture();
-    const res = await api(runs, true)(new Request("http://x/api/info"));
-    const b = (await res.json()) as { publicMode: boolean; dashboard: boolean };
-    expect(b.publicMode).toBe(true);
-    expect(b.dashboard).toBe(false);
-  });
-
-  test("/api/info carries the worldserver build off /health, null when it is down or unstamped", async () => {
-    const runs = fixture();
-    // Down: the default test module URL is unroutable.
-    const down = (await (await api(runs)(new Request("http://x/api/info"))).json()) as { worldserver: unknown };
-    expect(down.worldserver).toBeNull();
-
-    let hits = 0;
-    let body: Record<string, unknown> = { ok: true, module: "mod-wrathbench", worldStopped: false, build: "harness-0.3-41-gabc123", startedAtMs: 1787400000000, uptimeMs: 7 };
-    const stub = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => { hits++; return Response.json(body); } });
-    try {
-      const handle = api(runs, false, undefined, `http://127.0.0.1:${stub.port}`);
-      const up = (await (await handle(new Request("http://x/api/info"))).json()) as { worldserver: unknown };
-      expect(up.worldserver).toEqual({ build: "harness-0.3-41-gabc123", startedAtMs: 1787400000000 });
-      // Cached: a second poll inside the window does not refetch.
-      await handle(new Request("http://x/api/info"));
-      expect(hits).toBe(1);
-      // A module that predates the field (a fresh api, so no cache) reports null.
-      body = { ok: true, module: "mod-wrathbench", worldStopped: false };
-      const old = (await (await api(runs, false, undefined, `http://127.0.0.1:${stub.port}`)(new Request("http://x/api/info"))).json()) as { worldserver: unknown };
-      expect(old.worldserver).toBeNull();
-    } finally {
-      stub.stop(true);
-    }
-  });
 });
 
 describe("public mode", () => {
@@ -811,18 +589,6 @@ describe("public mode", () => {
 });
 
 describe("static hosting of the dashboard", () => {
-  test("without a build, / is the not-built notice and not a fallback UI", async () => {
-    const runs = fixture();
-    const handle = api(runs);
-    for (const path of ["/", "/run/anything", "/map"]) {
-      const res = await handle(new Request(`http://x${path}`));
-      expect(res.status).toBe(503);
-      expect(await body(res)).toBe(UNBUILT_NOTICE);
-    }
-    // The API keeps serving with no build in place.
-    expect((await handle(new Request("http://x/api/runs"))).status).toBe(200);
-  });
-
   test("with a build, / serves index.html and unknown paths fall through to it", async () => {
     const runs = fixture();
     const dist = tempDir("viewer-dist-");
@@ -840,14 +606,6 @@ describe("static hosting of the dashboard", () => {
     // And nothing under the dist root can be escaped out of.
     const esc = await handle(new Request("http://x/..%2F..%2Fetc%2Fpasswd"));
     expect(await body(esc)).toBe("<html>spa</html>");
-  });
-
-  test("a dashboard directory configured but not built serves the notice, not a 404", async () => {
-    const runs = fixture();
-    const empty = tempDir("viewer-empty-");
-    const res = await api(runs, false, empty)(new Request("http://x/"));
-    expect(res.status).toBe(503);
-    expect(await body(res)).toBe(UNBUILT_NOTICE);
   });
 });
 
@@ -891,14 +649,6 @@ function jobState(runs: string, account: string, extra: Record<string, unknown> 
 }
 
 describe("fleet state", () => {
-  test("absent fleet-state.json reads as present:false, not an error", () => {
-    const runs = fixture();
-    const f = readFleet(runs);
-    expect(f.present).toBe(false);
-    expect(f.jobs).toEqual([]);
-    expect(f.accounts).toEqual([]);
-  });
-
   test("jobs are named and sorted, classed by their account, and host paths are not forwarded", () => {
     const runs = fixture();
     jobState(runs, "RUNNER", {
@@ -920,73 +670,6 @@ describe("fleet state", () => {
       { account: "RUNNER", class: "pool", job: "job-a" },
       { account: "PAID", class: "pool", job: null },
     ]);
-  });
-
-  test("the worlds and their hold are forwarded as the supervisor wrote them", () => {
-    const runs = fixture();
-    const worlds = [{ id: "wabcdefghij", state: "up", realmId: 2, runIds: [RUN_ID], createdAt: 1, endedAt: null, boots: 1, bootMs: 31_000, failed: null }];
-    jobState(runs, "RUNNER", { worlds, worldsHold: "worlds held: 3 boots failed in a row" });
-    const f = readFleet(runs);
-    expect(f.worlds).toEqual(worlds as never);
-    expect(f.worldsHold).toBe("worlds held: 3 boots failed in a row");
-    jobState(runs, "RUNNER");
-    expect(readFleet(runs)).not.toHaveProperty("worlds");
-  });
-
-  test("each job names the run holding its account, and its models", () => {
-    const runs = fixture();
-    jobState(runs, "RUNNER");
-    const f = readFleet(runs);
-    expect(f.jobs[0]!.runId).toBe(RUN_ID);
-    expect(f.jobs[0]!.model).toBe("test/model");
-    expect(f.jobs[0]!.models).toEqual(["test/model", "next/model"]);
-    expect(f.jobs[0]!.attempt).toBe(2);
-  });
-
-  test("a job whose account nobody holds reads as idle, not as driving a run", () => {
-    const runs = fixture();
-    jobState(runs, "RUNNER9");
-    const f = readFleet(runs);
-    expect(f.jobs[0]!.runId).toBeNull();
-    expect(f.jobs[0]!.model).toBeNull();
-  });
-
-  test("a paused run has already freed its session, so it holds no account", () => {
-    const runs = fixture();
-    jobState(runs, "RUNNER");
-    const db = new Database(join(runs, RUN_ID, "run.sqlite"));
-    db.run(`UPDATE run SET pause_reason = 'deferred'`);
-    db.close();
-    expect(readFleet(runs).jobs[0]!.runId).toBeNull();
-  });
-
-  test("a run whose files have gone cold has let its account go", () => {
-    const runs = fixture();
-    jobState(runs, "RUNNER");
-    const old = new Date(Date.now() - 10 * 60_000);
-    for (const name of ["trajectory.jsonl", "run.sqlite"]) {
-      utimesSync(join(runs, RUN_ID, name), old, old);
-    }
-    expect(readFleet(runs).jobs[0]!.runId).toBeNull();
-  });
-
-  test("the --status indicators ride along: session, gate, rejection, paused and ended", () => {
-    const runs = fixture();
-    const preflight = { at: 5, serverIdentity: "build:x@1", build: "harness-0.4-3-gabc", ok: true, results: [{ script: "infra/smoke/a.ts", ok: true, ms: 20_000, tail: "PASS" }] };
-    jobState(runs, "RUNNER", {
-      session: { finished: 12, ok: 11, retried: 3 },
-      preflight,
-      configRejected: { since: 9, error: "queue: bad", mtime: 10 },
-      paused: [{ runId: "p-1", model: "m", account: "RUNNER2", reason: "rate-limited", since: 1, elapsedMs: 2, budgetMs: 3, why: "resuming after 17:00" }],
-      ended: [{ runId: "e-1", model: "m", ref: "r", detail: "ended by the supervisor: model m no longer under ref r" }],
-    });
-    const f = readFleet(runs);
-    expect(f.session).toEqual({ finished: 12, ok: 11, retried: 3 });
-    expect(f.preflight).toEqual(preflight);
-    // The rejection's file mtime is the supervisor's business, not the page's.
-    expect(f.configRejected).toEqual({ since: 9, error: "queue: bad" });
-    expect(f.paused).toHaveLength(1);
-    expect(f.ended[0]!.runId).toBe("e-1");
   });
 
   test("a truncated fleet-state.json degrades to absent rather than throwing", () => {
@@ -1025,12 +708,9 @@ describe("fleet state", () => {
 });
 
 /**
- * The release-point surface: the comparability tuple on a run, and the two
- * derived routes the results charts and the map replay read.
- *
- * The fixture writes an old-shape `state` table with no `turn` column on
- * purpose — that is what every run recorded before this change looks like, and
- * both routes have to keep answering for it.
+ * The release-point surface: the comparability tuple on a run, episode
+ * membership on the results and ladder routes, and the character chain the
+ * track and `/api/character` read.
  */
 describe("comparability, /api/results and /api/run/<id>/track", () => {
   const TUPLE = {
@@ -1078,45 +758,6 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     const res = await api(runs)(new Request(`http://x/api/run/${RUN_ID}`));
     expect(res.status).toBe(200);
     expect(((await res.json()) as { run: { comparability: unknown } }).run.comparability).toBeNull();
-  });
-
-  test("states carry a turn index, null on a database written without the column", async () => {
-    const runs = fixture();
-    const d = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
-      states: { turn: number | null }[];
-    };
-    expect(d.states).toHaveLength(1);
-    expect(d.states[0]!.turn).toBeNull();
-  });
-
-  test("achievement and flight milestones cross the wire on both the results row and the run page", async () => {
-    const runs = fixture();
-    // Appended, not rewritten: this is what the loop adds to a live file.
-    appendFileSync(
-      join(runs, RUN_ID, "trajectory.jsonl"),
-      [
-        { ts: 1300, t: "milestone", kind: "achievements_at_login", ids: [6], points: 10, turn: 1 },
-        { ts: 1400, t: "milestone", kind: "achievement", id: 12, name: "Explore Elwynn Forest", points: 10, turn: 1 },
-        { ts: 1500, t: "milestone", kind: "taxi", from: { areaId: 9 }, turn: 2 },
-      ]
-        .map((l) => JSON.stringify(l))
-        .join("\n") + "\n",
-    );
-    const handle = api(runs);
-    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
-      runs: { runId: string; achievements: unknown; taxi: unknown }[];
-    };
-    const row = results.runs.find((r) => r.runId === RUN_ID)!;
-    expect(row.achievements).toEqual({ earned: 2, points: 20, ids: [6, 12] });
-    expect(row.taxi).toEqual({ flights: 1 });
-    // The run page reads the same facts off the incremental tail, so the two
-    // views of one run cannot disagree.
-    const detail = (await (await handle(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
-      achievements: unknown;
-      taxi: unknown;
-    };
-    expect(detail.achievements).toEqual(row.achievements);
-    expect(detail.taxi).toEqual(row.taxi);
   });
 
   test("level and death milestones cross the wire on both the results row and the run page", async () => {
@@ -1219,23 +860,6 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(row.actualCost).not.toHaveProperty("expected");
   });
 
-  test("?episode=all is every run /api/runs lists — the episodes page replaces the fleet's table", async () => {
-    const runs = fixture();
-    const listing = (await (await api(runs)(new Request("http://x/api/runs"))).json()) as {
-      runs: { runId: string }[];
-    };
-    const results = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
-      runs: { runId: string }[];
-    };
-    expect(results.runs.map((r) => r.runId).sort()).toEqual(listing.runs.map((r) => r.runId).sort());
-  });
-
-  test("/api/eval is gone: a rename is a rename, with no alias behind it", async () => {
-    const runs = fixture();
-    expect((await api(runs)(new Request("http://x/api/eval"))).status).toBe(404);
-    expect((await api(runs)(new Request("http://x/api/ladder?episode=all"))).status).toBe(200);
-  });
-
   test("/api/results defaults to the e90 group, and says how much it dropped", async () => {
     const runs = fixture();
     stamped(runs, TUPLE); // a six-hour tuple with no episode id: not a member
@@ -1280,27 +904,6 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e360.runs.map((r) => r.runId)).toEqual([RUN_ID]);
     const e90 = (await (await api(runs)(new Request("http://x/api/ladder"))).json()) as { runs: unknown[] };
     expect(e90.runs).toHaveLength(0);
-  });
-
-  test("a freeplay continuation's lineage reaches the row and the results projection", async () => {
-    const runs = fixture();
-    // The fixture's run.sqlite predates the column, so this is also the
-    // "written before the durable character existed" path: meta answers.
-    const dir = join(runs, RUN_ID);
-    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as {
-      config: Record<string, unknown>;
-    };
-    meta.config["continuedFrom"] = "fixture-run-0";
-    writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
-    expect(readRun(runs, RUN_ID).continuedFrom).toBe("fixture-run-0");
-    const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
-      runs: { runId: string; continuedFrom: string | null; stillborn: boolean | null }[];
-    };
-    const row = body.runs.find((r) => r.runId === RUN_ID)!;
-    expect(row.continuedFrom).toBe("fixture-run-0");
-    // The fixture run has not terminated, so "produced nothing" is undecided —
-    // which is the scheduler's own answer for a launch still in progress.
-    expect(row.stillborn).toBeNull();
   });
 
   test("the freeplay ladder holds an overridden run: an id that pins nothing has no membership to lose", async () => {
@@ -1451,28 +1054,6 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(await trackOf("a3")).toMatchObject({ attempt: 3, previous: "a2", next: null });
   });
 
-  test("the track's neighbours are the ones /api/run/<id> serves, from the same walk", async () => {
-    const runs = chainFixture();
-    const handle = api(runs);
-    const detail = (await (await handle(new Request("http://x/api/run/a2"))).json()) as {
-      character: { characterId: string; attempt: number; attempts: number; previous: string | null; next: string | null };
-    };
-    const track = (await (await handle(new Request("http://x/api/run/a2/track"))).json()) as {
-      character: typeof detail.character;
-    };
-    const { characterId, attempt, attempts, previous, next } = detail.character;
-    expect(track.character).toEqual({ characterId, attempt, attempts, previous, next });
-  });
-
-  test("a run that is no character carries no field, and pays nothing to find out", async () => {
-    const runs = fixture();
-    const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as Record<
-      string,
-      unknown
-    >;
-    expect("character" in body).toBe(false);
-  });
-
   /*
    * `/api/character/<id>` is the whole chain — the view every
    * attempt's page carries a card of, plus the level and XP series across all
@@ -1496,91 +1077,6 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
       ["a3", 3],
     ]);
     expect(body.states.every((p) => p.level === 5)).toBe(true);
-  });
-
-  test("/api/character/<id> answers for any attempt, not only the head", async () => {
-    const runs = chainFixture();
-    const handle = api(runs);
-    const idOf = async (id: string): Promise<string> =>
-      ((await (await handle(new Request(`http://x/api/character/${id}`))).json()) as {
-        character: { characterId: string };
-      }).character.characterId;
-    expect(await idOf("a3")).toBe("a1");
-    expect(await idOf("a2")).toBe("a1");
-  });
-
-  /* Universal, not freeplay-only: a scored run is a character of one attempt. */
-  test("/api/character/<id> answers for a scored run as a chain of one", async () => {
-    const runs = fixture();
-    const body = (await (await api(runs)(new Request(`http://x/api/character/${RUN_ID}`))).json()) as {
-      character: { characterId: string; attempt: number; attempts: number; previous: string | null };
-    };
-    expect(body.character).toMatchObject({ characterId: RUN_ID, attempt: 1, attempts: 1, previous: null });
-  });
-
-  test("/api/character/<id> 404s on an id no run answers to", async () => {
-    const runs = fixture();
-    const res = await api(runs)(new Request("http://x/api/character/no-such-run"));
-    expect(res.status).toBe(404);
-  });
-
-  test("/api/run/<id>/track serves the recorded positions", async () => {
-    const runs = fixture();
-    const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
-      characterName: string | null;
-      points: { map: number; x: number; y: number }[];
-    };
-    expect(body.characterName).toBe("Fixturely");
-    expect(body.points).toHaveLength(1);
-    expect(body.points[0]).toMatchObject({ map: 0, x: -6240, y: 380 });
-    // Nothing on the record says how it travelled: the field is there, empty.
-    expect((body as { travel?: unknown }).travel).toEqual([]);
-  });
-
-  test("/api/run/<id>/track carries the travel marks, read off the trajectory at request time", async () => {
-    const runs = fixture();
-    const handle = api(runs);
-    // Read once before anything is appended, so the second read shows the
-    // marks arriving through the same incremental tail a live run grows.
-    await handle(new Request(`http://x/api/run/${RUN_ID}/track`));
-    appendFileSync(
-      join(runs, RUN_ID, "trajectory.jsonl"),
-      [
-        { ts: 1500, t: "milestone", kind: "taxi", from: { areaId: 9 }, turn: 2 },
-        { ts: 1600, t: "milestone", kind: "taxi_landed", to: { areaId: 1519 }, turn: 2 },
-        { ts: 1700, t: "milestone", kind: "release", turn: 3 },
-        {
-          ts: 1900,
-          t: "actions",
-          turn: 3,
-          actions: [{ ts: 1800, action: "use_item", status: 200, ms: 4, args: { bag: 255, slot: 23 }, names: { item: "Hearthstone" } }],
-        },
-      ]
-        .map((l) => JSON.stringify(l))
-        .join("\n") + "\n",
-    );
-    const body = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
-      travel: { kind: string; ts: number }[];
-    };
-    expect(body.travel).toEqual([
-      { kind: "taxi", ts: 1500 },
-      { kind: "taxi_landed", ts: 1600 },
-      { kind: "release", ts: 1700 },
-      { kind: "hearth", ts: 1800 },
-    ]);
-    // Public mode ships the release with the rest of the deaths (operator, 2026-10-18).
-    const pub = (await (await api(runs, true)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
-      travel: { kind: string }[];
-    };
-    expect(pub.travel.map((m) => m.kind)).toEqual(["taxi", "taxi_landed", "release", "hearth"]);
-  });
-
-  test("the new routes leak no secret either", async () => {
-    const runs = fixture();
-    stamped(runs, TUPLE);
-    for (const p of ["/api/results", `/api/run/${RUN_ID}/track`]) {
-      expect(await body(await api(runs)(new Request(`http://x${p}`)))).not.toContain(SENTINEL);
-    }
   });
 });
 

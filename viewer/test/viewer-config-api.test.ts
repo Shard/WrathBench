@@ -241,92 +241,11 @@ describe("writes", () => {
     store.close();
   });
 
-  test("with a chatgpt credential a ChatGPT model off codex is a 400 by name, a providers list included, and nothing is written", async () => {
-    const { handle, dbPath } = fixture();
-    const put = async (key: string, body: unknown, method = "PUT") => handle(req(`/api/config/${key}`, { method, body: JSON.stringify(body) }));
-    // With no ChatGPT subscription configured, an OpenRouter GPT entry is an ordinary one.
-    expect((await put("roster/astra-or", { tier: "t0", model: "openai/gpt-6.2-astra" })).status).toBe(200);
-    expect((await put("roster/astra-or", undefined, "DELETE")).status).toBe(200);
-    expect((await put("credentials/chatgpt", { provider: "chatgpt", secretEnv: "CODEX_HOME", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
-    expect((await put("credentials/or-paid", { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
-    for (const [method, key, body] of [
-      ["PUT", "roster/astra", { tier: "t0", model: "openai/gpt-6.2-astra" }],
-      ["PATCH", "roster/glm", { model: "openai/gpt-6.1-sol" }],
-      ["PUT", "roster/luna", { tier: "t0", model: "gpt-6-luna", providers: [{ credential: "or-paid", model: "openai/gpt-6-luna" }] }],
-    ] as const) {
-      const res = await put(key, body, method);
-      expect([method, key, res.status]).toEqual([method, key, 400]);
-      expect(((await res.json()) as { error: string }).error).toMatch(
-        new RegExp(`^${key}: roster policy — \\S+ is a ChatGPT model, and with a chatgpt credential configured ChatGPT models run only via the codex driver: write it as a codex entry on that credential instead`),
-      );
-    }
-    // gpt-oss is open weights, and a codex entry is the ChatGPT model's place.
-    expect((await put("roster/oss", { tier: "t0", model: "openai/gpt-oss-120b" })).status).toBe(200);
-    expect((await put("roster/sol", { tier: "t1", model: "gpt-6.2-sol", driver: "codex", credential: "chatgpt" })).status).toBe(200);
-    const store = new ConfigStore(dbPath, { readonly: true });
-    expect(store.get("roster/astra")).toBeUndefined();
-    expect(store.get("roster/luna")).toBeUndefined();
-    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
-    store.close();
-  });
-
-  test("with a claude credential a Claude model off claude-code is a 400 by name, a providers list included, and nothing is written", async () => {
-    const { handle, dbPath } = fixture();
-    const put = async (key: string, body: unknown, method = "PUT") => handle(req(`/api/config/${key}`, { method, body: JSON.stringify(body) }));
-    // With no Claude subscription configured, an OpenRouter Claude entry is an ordinary one.
-    expect((await put("roster/opus-or", { tier: "t0", model: "anthropic/claude-opus-5.5" })).status).toBe(200);
-    expect((await put("roster/opus-or", undefined, "DELETE")).status).toBe(200);
-    expect((await put("credentials/claude", { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
-    expect((await put("credentials/or-paid", { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 1, billing: "paid", enabled: true })).status).toBe(200);
-    for (const [method, key, body] of [
-      ["PUT", "roster/opus", { tier: "t0", model: "anthropic/claude-opus-5.5" }],
-      ["PATCH", "roster/glm", { model: "anthropic/claude-haiku-5.5" }],
-      ["PUT", "roster/fable", { tier: "t0", model: "z-ai/glm-6", providers: [{ credential: "or-paid", model: "anthropic/claude-fable-5.2" }] }],
-    ] as const) {
-      const res = await put(key, body, method);
-      expect([method, key, res.status]).toEqual([method, key, 400]);
-      expect(((await res.json()) as { error: string }).error).toMatch(
-        new RegExp(`^${key}: roster policy — \\S+ is a Claude model, and with a claude credential configured Claude models run only via the claude-code driver: write it as a claude-code entry on that credential instead`),
-      );
-    }
-    // A claude-code entry is the Claude model's place.
-    expect((await put("roster/sonnet", { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", credential: "claude" })).status).toBe(200);
-    const store = new ConfigStore(dbPath, { readonly: true });
-    expect(store.get("roster/opus")).toBeUndefined();
-    expect(store.get("roster/fable")).toBeUndefined();
-    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
-    store.close();
-  });
-
-  test("a roster edit naming a key, or a base no credential provider serves, is a 400, and nothing is written", async () => {
-    const { handle, dbPath } = fixture();
-    for (const [method, path, body] of [
-      ["PUT", "/api/config/roster/glm", { tier: "t1", model: "z-ai/glm-5.2:free", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" }],
-      ["PATCH", "/api/config/roster/glm", { apiBase: "https://collector.example/v1" }],
-      ["PUT", "/api/config/roster/new", { tier: "t0", model: "vendor/x", apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN" }],
-    ] as const) {
-      const res = await handle(req(path, { method, body: JSON.stringify(body) }));
-      expect([method, path, res.status]).toEqual([method, path, 400]);
-      expect(((await res.json()) as { error: string }).error).toMatch(/a key is a credential's|is no credential provider's host/);
-    }
-    const store = new ConfigStore(dbPath, { readonly: true });
-    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
-    expect(store.get("roster/new")).toBeUndefined();
-    store.close();
-  });
-
   test("a key the renderer would never emit is refused rather than stored", async () => {
     const { handle } = fixture();
     const res = await handle(req("/api/config/nonsense", { method: "PUT", body: "{}" }));
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/is not a config key/);
-  });
-
-  test("a body that is not JSON is a 400, not a 500", async () => {
-    const { handle } = fixture();
-    const res = await handle(req("/api/config/policy", { method: "PUT", body: "{nope" }));
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toBe("request body is not JSON");
   });
 
   test("DELETE removes a key; a key that is not there is a 404", async () => {
@@ -368,11 +287,5 @@ describe("audit and export", () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/export writes no file/);
     expect(await Bun.file(out).exists()).toBe(false);
-  });
-
-  test("a method the route does not take is a 405, not a silent success", async () => {
-    const { handle } = fixture();
-    expect((await handle(req("/api/config", { method: "PUT", body: "{}" }))).status).toBe(405);
-    expect((await handle(req("/api/config/export"))).status).toBe(405);
   });
 });

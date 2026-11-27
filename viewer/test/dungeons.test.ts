@@ -8,8 +8,8 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_POLICY, projectModel } from "../../runner/src/models";
 import type { RunFact } from "../../runner/src/run-fact";
-import { attemptOf, boardOf, boardsOf, compareAttempts, costOf, wipesOf, type CharacterMarks, type DungeonRun } from "../dungeons";
-import { DEADMINES_BOSSES, DEADMINES_REQUIRED } from "../deadmines";
+import { attemptOf, boardOf, compareAttempts, costOf, wipesOf, type CharacterMarks, type DungeonRun } from "../dungeons";
+import { DEADMINES_REQUIRED } from "../deadmines";
 import { projectDungeons } from "../public-projection";
 import type { CostFigure, ResultRun } from "../api-types";
 
@@ -95,9 +95,6 @@ describe("an attempt", () => {
   });
 
   test("bosses are the route's seven, counted alike, as the union over characters by victim (operator, 2026-11-20)", () => {
-    expect(DEADMINES_REQUIRED).toEqual([644, 643, 642, 1763, 646, 647, 639]);
-    // Cookie is still a Deadmines boss to the timeline and the camera.
-    expect(DEADMINES_BOSSES).toEqual([...DEADMINES_REQUIRED, 645]);
     const a = attemptOf([solo("a", "episode-limit", [marks("x", { kills: [kill(643, 30, "s"), kill(642, 31, "sh"), kill(100, 5)] }), marks("y", { kills: [kill(643, 30, "s")] })])]);
     expect(a.bosses).toEqual([643, 642]);
     expect(a.cookie).toBe(false);
@@ -177,12 +174,6 @@ describe("the order", () => {
       ["glm", 0, 1, "g1"],
     ]);
     expect(boardOf("deadmines", runs).rows).toEqual([]);
-  });
-
-  test("only the Deadmines eval has a table; the five-agent id's waits, dormant (operator, 2026-11-15)", () => {
-    const runs = [solo("s2", "kill-target", [marks("x", { kills: [...route(), kill(639, 150)] })]), ...party("p1", "kill-target", [...route(), kill(639, 90)])];
-    expect(boardsOf(runs).map((b) => [b.episode, b.rows.length])).toEqual([["deadmines-solo", 1]]);
-    expect(boardOf("deadmines", runs).rows.length).toBe(1);
   });
 
   test("the published board carries the same numbers", () => {

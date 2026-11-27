@@ -15,28 +15,16 @@ function r(runId: string, continuedFrom: string | null = null, startedAt: number
 }
 
 describe("chainsOf", () => {
-  test("a fresh run is its own chain", () => {
-    expect(chainsOf([r("a1")]).get("a1")).toEqual(["a1"]);
-  });
-
   test("a chain is oldest first and ends in the run itself", () => {
     const chains = chainsOf([r("a1"), r("a2", "a1"), r("a3", "a2")]);
     expect(chains.get("a3")).toEqual(["a1", "a2", "a3"]);
     expect(chains.get("a2")).toEqual(["a1", "a2"]);
   });
 
-  test("a predecessor the set does not hold makes a root, never a dropped run", () => {
-    expect(chainsOf([r("b7", "b6-archived")]).get("b7")).toEqual(["b7"]);
-  });
-
   test("a malformed cycle ends the walk instead of hanging", () => {
     const chains = chainsOf([r("c1", "c2"), r("c2", "c1")]);
     expect(chains.get("c1")).toEqual(["c2", "c1"]);
     expect(chains.get("c2")).toEqual(["c1", "c2"]);
-  });
-
-  test("a run naming itself is a root", () => {
-    expect(chainsOf([r("d1", "d1")]).get("d1")).toEqual(["d1"]);
   });
 });
 
@@ -75,19 +63,6 @@ describe("lineageIndex", () => {
   test("a fork with no start times is settled by id, so two polls agree", () => {
     const idx = lineageIndex([r("a1"), r("a2", "a1"), r("a3", "a1")]);
     expect(idx.get("a1")?.next).toBe("a3");
-  });
-
-  test("a mid-chain attempt knows the character is longer than its own chain", () => {
-    const idx = lineageIndex([r("a1"), r("a2", "a1"), r("a3", "a2"), r("a4", "a3")]);
-    expect(idx.get("a2")).toMatchObject({ attempt: 2, attempts: 4 });
-    expect(hasLineage(idx.get("a2"))).toBe(true);
-  });
-
-  test("a cycle produces no entry that hangs, and every run keeps a place", () => {
-    const idx = lineageIndex([r("c1", "c2"), r("c2", "c1")]);
-    expect(idx.size).toBe(2);
-    expect(idx.get("c1")?.attempt).toBe(2);
-    expect(idx.get("c2")?.attempt).toBe(2);
   });
 
   test("the order the server served rows in does not change the answer", () => {

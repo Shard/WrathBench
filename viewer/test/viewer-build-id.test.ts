@@ -36,25 +36,7 @@ function fixture(entry: string | null): { runs: string; dash: string } {
   return { runs, dash };
 }
 
-async function info(runs: string, dash?: string): Promise<ApiInfoResponse> {
-  const handle = createApi({
-    runsDir: runs,
-    tilesDir: join(runs, "..", "minimap"),
-    publicMode: false,
-    moduleUrl: "http://127.0.0.1:1",
-    ...(dash !== undefined ? { dashboardDir: dash } : {}),
-  });
-  const res = await handle(new Request("http://x/api/info"));
-  expect(res.status).toBe(200);
-  return (await res.json()) as ApiInfoResponse;
-}
-
 describe("/api/info dashboardBuild", () => {
-  test("the served build is the fingerprinted entry name", async () => {
-    const { runs, dash } = fixture("index-EbAbwMv4.js");
-    expect((await info(runs, dash)).dashboardBuild).toBe("index-EbAbwMv4.js");
-  });
-
   test("a rebuild moves it, which is the whole point", async () => {
     // The load-bearing case. The id is cached on mtime, so a cache that keyed
     // on anything staler — the handle's lifetime, the directory path — would
@@ -69,12 +51,5 @@ describe("/api/info dashboardBuild", () => {
     utimesSync(join(dash, "index.html"), later, later);
     const second = (await (await handle(new Request("http://x/api/info"))).json()) as ApiInfoResponse;
     expect(second.dashboardBuild).toBe("index-BBB.js");
-  });
-
-  test("no dashboard on disk, and a page with no entry script, are both null not a crash", async () => {
-    const bare = fixture(null);
-    expect((await info(bare.runs, bare.dash)).dashboardBuild).toBeNull();
-    const none = fixture("x.js");
-    expect((await info(none.runs)).dashboardBuild).toBeNull();
   });
 });

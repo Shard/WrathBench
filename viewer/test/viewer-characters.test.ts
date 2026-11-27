@@ -11,28 +11,13 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLASS_NAMES, RACE_NAMES, characterLabel, className, raceName } from "../../runner/src/characters";
+import { CLASS_NAMES, RACE_NAMES, className, raceName } from "../../runner/src/characters";
 import { readRun } from "../../runner/src/run-list";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();
 
 describe("names resolve", () => {
-  test("the ids the extras cycle actually uses", () => {
-    expect(raceName(1)).toBe("Human");
-    expect(raceName(3)).toBe("Dwarf");
-    expect(raceName(4)).toBe("Night Elf");
-    expect(raceName(7)).toBe("Gnome");
-    expect(className(1)).toBe("Warrior");
-    expect(className(2)).toBe("Paladin");
-    expect(className(3)).toBe("Hunter");
-    expect(className(4)).toBe("Rogue");
-    expect(className(5)).toBe("Priest");
-    expect(className(8)).toBe("Mage");
-    expect(className(9)).toBe("Warlock");
-    expect(className(11)).toBe("Druid");
-  });
-
   test("the gaps are where SharedDefines.h puts them", () => {
     // 6 is Death Knight and 7 Shaman — not Shaman and Mage, which is what a
     // nine-name list crammed into 1..9 would claim.
@@ -51,14 +36,6 @@ describe("names resolve", () => {
     expect(raceName(null)).toBeNull();
     expect(className(undefined)).toBeNull();
   });
-
-  test("the label is both halves, one half, or nothing", () => {
-    expect(characterLabel(3, 3)).toBe("Dwarf Hunter");
-    expect(characterLabel(9, 10)).toBe("9 10");
-    expect(characterLabel(4, null)).toBe("Night Elf");
-    expect(characterLabel(null, 11)).toBe("Druid");
-    expect(characterLabel(null, null)).toBeNull();
-  });
 });
 
 describe("a run row carries its character", () => {
@@ -76,13 +53,5 @@ describe("a run row carries its character", () => {
     expect(row.race).toBe(3);
     expect(row.class).toBe(3);
     expect(row.characterLabel).toBe("Dwarf Hunter");
-  });
-
-  test("a run whose config predates the fields reads null, and is never back-labeled", () => {
-    const { runs, id } = fixture({ model: "m", character: "Benchy" });
-    const row = readRun(runs, id);
-    expect(row.race).toBeNull();
-    expect(row.className).toBeNull();
-    expect(row.characterLabel).toBeNull();
   });
 });

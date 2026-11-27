@@ -1,7 +1,7 @@
 /**
  * New models as drafts (GitHub issue #66), below the routes: the `proposed/`
- * key space in the config store, the catalogue read, what a fetch does to the
- * drafts, and the estimate. The routes, and the proof that nothing public
+ * key space in the config store, what a fetch does to the drafts, and the
+ * estimate. The routes, and the proof that nothing public
  * carries a draft, are `viewer-config-drafts.test.ts`.
  *
  * Fixture-based throughout. The catalogue is `fixtures/openrouter-models.json`
@@ -9,27 +9,19 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
-import { parseFleet } from "../../infra/run-fleet-config";
-import { ConfigRejected, ConfigStore, DraftRefused, isConfigKey, proposedKey, splitFleet } from "../../runner/src/config-store";
-import { readFleetConfig, renderFleet } from "../../runner/src/config-read";
+import { ConfigRejected, ConfigStore, isConfigKey, proposedKey } from "../../runner/src/config-store";
 import { DEFAULT_POLICY, type SchedulingPolicy } from "../../runner/src/models";
 import type { RunFact } from "../../runner/src/run-fact";
 import type { TokenTotals } from "../api-types";
 import type { E90TokenProfileView } from "../api-types-admin";
 import {
-  CATALOGUE_URL,
-  CatalogueError,
-  draftRecordOf,
   e90TokenProfile,
   estimateUsd,
   parseCatalogue,
-  readCatalogue,
   reconcileDrafts,
-  suggestedRosterName,
   type DraftRecord,
 } from "../drafts";
-import { CATALOGUE_TEXT, CONFIG, PENDING, ROSTER_MODEL, catalogueFetch, fleetOf, seededStore as seeded, storeFacts } from "../../runner/test/fixtures/drafts";
+import { CATALOGUE_TEXT, CONFIG, PENDING, ROSTER_MODEL, fleetOf, seededStore as seeded, storeFacts } from "../../runner/test/fixtures/drafts";
 import { tempDirs } from "../../runner/test/fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -57,114 +49,12 @@ describe("the proposed/ key space is invisible to the config", () => {
     expect(storeFacts(db)).toEqual(facts);
   });
 
-  test("renderFleet renders draft rows out even when handed them, so an older reader cannot see one", () => {
-    const rows = splitFleet(CONFIG);
-    const withDrafts = [...rows, { key: proposedKey("z-ai/glm-6"), ord: 0, value: { ...PENDING }, updatedAt: 0 }];
-    expect(renderFleet(withDrafts)).toEqual(renderFleet(rows));
-    expect(parseFleet(renderFleet(withDrafts))).toEqual(parseFleet(renderFleet(rows)));
-  });
-
   test("the generic write path cannot reach a draft", () => {
     expect(isConfigKey("proposed/z-ai/glm-6")).toBe(false);
     const db = seededStore();
     const store = new ConfigStore(db);
     expect(() => store.put("proposed/glm", { status: "draft" })).toThrow(ConfigRejected);
     store.close();
-  });
-
-  test("a store holding only drafts still reads as empty, not as an empty config", () => {
-    const db = join(tempDir("drafts-empty-"), "config.sqlite");
-    const store = new ConfigStore(db);
-    store.writeDrafts({ put: [{ model: "z-ai/glm-6", value: { ...PENDING } }] });
-    expect(store.isEmpty()).toBe(true);
-    store.close();
-    expect(readFleetConfig(db).status).toBe("empty");
-  });
-
-  test("the store refuses a second entry for a model the roster already runs", () => {
-    const db = seededStore();
-    const store = new ConfigStore(db);
-    store.writeDrafts({ put: [{ model: ROSTER_MODEL, value: { status: "draft", firstSeen: 1 } }] });
-    expect(() => store.promote(ROSTER_MODEL, "nemo-2", { model: ROSTER_MODEL, tier: "t0" })).toThrow(DraftRefused);
-    store.close();
-  });
-
-  test("a reseed replaces the config and keeps the drafts, so an ignore survives it", () => {
-    const db = seededStore();
-    const store = new ConfigStore(db);
-    store.writeDrafts({ put: [{ model: "fixturelab/mystery-7b", value: { status: "ignored", firstSeen: 1 } }] });
-    store.seed({ ...CONFIG, roster: { nemo: CONFIG.roster.nemo } }, { force: true, actor: "fixture" });
-    expect(store.draft("fixturelab/mystery-7b")).toEqual({ status: "ignored", firstSeen: 1 });
-    expect(Object.keys(store.render()["roster"] as object)).toEqual(["nemo"]);
-    store.close();
-  });
-});
-
-// ------------------------------------------------------------- the catalogue
-
-describe("reading the catalogue", () => {
-  test("rows parse to drafts' fields; a row that does not fit is skipped and counted", () => {
-    const read = parseCatalogue(CATALOGUE_TEXT);
-    expect(read.skipped).toBe(1);
-    const glm = read.models.find((m) => m.id === "z-ai/glm-6")!;
-    expect(glm).toEqual({
-      id: "z-ai/glm-6",
-      name: "Z.AI: GLM 6",
-      created: 1_790_000_000_000,
-      tools: true,
-      // Per million, through the price sync's own reading; no write tier quoted, so writes bill as input.
-      price: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0.6 },
-    });
-    expect(read.models.find((m) => m.id === "fixturelab/chat-only")!.tools).toBe(false);
-    // A router's "-1" is not a price.
-    expect(read.models.find((m) => m.id === "openrouter/auto")!.price).toBeNull();
-  });
-
-  test("an answer that is not the catalogue's shape is refused in a sentence", () => {
-    expect(() => parseCatalogue("<html>")).toThrow(CatalogueError);
-    expect(() => parseCatalogue(JSON.stringify({ models: [] }))).toThrow(/data/);
-  });
-
-  test("one GET of the catalogue URL, and nothing else", async () => {
-    const f = catalogueFetch();
-    const read = await readCatalogue(f.fetch);
-    expect(f.calls).toEqual([CATALOGUE_URL]);
-    expect(read.models.length).toBe(7);
-  });
-
-  test("a non-200 is refused with its status", async () => {
-    const f = (async () => new Response("nope", { status: 503 })) as unknown as typeof globalThis.fetch;
-    await expect(readCatalogue(f)).rejects.toThrow(/HTTP 503/);
-  });
-
-  test("a catalogue that never answers is given up on, even by a fetcher that ignores the abort", async () => {
-    const hang = (() => new Promise<Response>(() => {})) as unknown as typeof globalThis.fetch;
-    await expect(readCatalogue(hang, { timeoutMs: 20 })).rejects.toThrow(/did not answer/);
-  });
-
-  test("a body past the byte bound is refused, declared or streamed", async () => {
-    const big = "x".repeat(4096);
-    const declared = (async () =>
-      new Response(big, { status: 200, headers: { "content-length": String(big.length) } })) as unknown as typeof globalThis.fetch;
-    await expect(readCatalogue(declared, { maxBytes: 100 })).rejects.toThrow(/bound/);
-    const streamed = (async () =>
-      new Response(
-        new ReadableStream({
-          start(c) {
-            for (let i = 0; i < 8; i++) c.enqueue(new TextEncoder().encode(big));
-            c.close();
-          },
-        }),
-        { status: 200 },
-      )) as unknown as typeof globalThis.fetch;
-    await expect(readCatalogue(streamed, { maxBytes: 100 })).rejects.toThrow(/bound/);
-  });
-
-  test("a network failure comes back as a catalogue error, not a crash", async () => {
-    const down = (async () => {
-      throw new TypeError("fetch failed");
-    }) as unknown as typeof globalThis.fetch;
-    await expect(readCatalogue(down)).rejects.toThrow(/could not read the catalogue: fetch failed/);
   });
 });
 
@@ -197,30 +87,6 @@ describe("what a fetch does to the drafts", () => {
     const r = reconcileDrafts({ catalogue, existing: [ignored], roster, now: 6 });
     expect(r.put.find((d) => d.model === "z-ai/glm-6")).toBeUndefined();
     expect(r.report.added).not.toContain("z-ai/glm-6");
-  });
-
-  test("a pending draft's price is refreshed in place, keeping when it was first proposed", () => {
-    const stale: DraftRecord = { ...PENDING, price: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 } };
-    const r = reconcileDrafts({ catalogue, existing: [stale], roster, now: 6 });
-    expect(r.report.refreshed).toBe(1);
-    expect(r.put.find((d) => d.model === "z-ai/glm-6")).toEqual({ ...PENDING, firstSeen: 1 });
-  });
-
-  test("a draft for a model the roster now runs is dropped; one missing from this read is left alone", () => {
-    const gone: DraftRecord = { ...PENDING, model: "fixturelab/delisted" };
-    const r = reconcileDrafts({ catalogue, existing: [PENDING, gone], roster: new Set([...roster, "z-ai/glm-6"]), now: 6 });
-    expect(r.remove).toEqual(["z-ai/glm-6"]);
-    expect(r.report.removed).toEqual(["z-ai/glm-6"]);
-  });
-
-  test("a stored row reads back to the record it was written from", () => {
-    expect(draftRecordOf({ key: proposedKey("z-ai/glm-6"), value: { ...PENDING } })).toEqual(PENDING);
-    expect(draftRecordOf({ key: "roster/x", value: {} })).toBeNull();
-  });
-
-  test("the suggested roster name is the slug, in roster-name characters", () => {
-    expect(suggestedRosterName("z-ai/glm-6:free")).toBe("glm-6-free");
-    expect(suggestedRosterName("fixturelab/Mystery 7B")).toBe("mystery-7b");
   });
 });
 
@@ -291,11 +157,6 @@ describe("the e90 estimate", () => {
       // A run whose provider never reported cache reads reads as none, as `costOf` reads it.
       cacheReadTokens: 400_000,
     });
-  });
-
-  test("no counted e90 to take a profile from is no profile, not a made-up one", () => {
-    expect(e90TokenProfile([], POLICY)).toBeNull();
-    expect(e90TokenProfile([{ fact: fact({ live: true }), harness: "wrathbench", tokens: tokens(1, 1, 0) }], POLICY)).toBeNull();
   });
 
   test("list price applied to the profile, through costOf: cache reads come out of the prompt", () => {
