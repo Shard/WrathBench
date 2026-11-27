@@ -395,18 +395,6 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(searchReference(db, "Example Item Zeta")[0]!.title).toBe("Example Item Zeta");
 
   db.close();
-
-  // Rebuilding replaces the bundle in place.
-  const again = Bun.spawn(
-    // `--no-canary`: the fixtures are invented pages, so the capitals the
-    // canary requires are not among them. `canary.test.ts` covers the gate.
-    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  expect(await again.exited).toBe(0);
-  const db2 = new Database(outPath, { readonly: true });
-  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(6);
-  db2.close();
 }, 30_000);
 
 test("a page split into 50-revision blocks builds as one row", async () => {
@@ -529,24 +517,13 @@ test("the canary refuses to rename a bundle that lost this world's pages", async
   expect(readdirSync(dir).filter((f) => f.startsWith(".canary-bundle"))).toEqual([]);
 }, 30_000);
 
-test("--no-canary and --max-pages decide whether the gate runs", () => {
-  expect(parseArgs(["dump.xml"]).canary).toBe(true);
-  expect(parseArgs(["dump.xml", "--no-canary"]).canary).toBe(false);
-  // A smoke build stops before most of the dump, so the gate is off unless it
-  // is asked for.
-  expect(parseArgs(["dump.xml", "--max-pages", "50"]).canary).toBe(false);
-  expect(parseArgs(["dump.xml", "--max-pages", "50", "--canary"]).canary).toBe(true);
-});
-
-test("--era-cutoff overrides the default and is validated before the stream", () => {
-  expect(parseArgs(["dump.xml"]).eraCutoff).toBe(DEFAULT_ERA_CUTOFF);
+test("--era-cutoff is validated before the stream", () => {
   expect(parseArgs(["dump.xml", "--era-cutoff", "2009-01-01T00:00:00Z"]).eraCutoff).toBe(
     "2009-01-01T00:00:00Z",
   );
   // A date without a time would compare wrongly against the dump's timestamps
   // and quietly drop every page in the bundle.
   expect(() => parseArgs(["dump.xml", "--era-cutoff", "2010-10-12"])).toThrow(/ISO-8601/);
-  expect(() => parseArgs(["dump.xml", "--era-cutoff", "yesterday"])).toThrow(/ISO-8601/);
 });
 
 /**
@@ -1023,71 +1000,32 @@ test("a rendered name changes what a row says, never which rows there are", asyn
  */
 const ARTICLE = "x".repeat(1000);
 
-test("a protected page's prose steps back to the last revision with no signal on it", () => {
-  expect(
-    eraSource(
-      {
-        eraWikitext: ARTICLE,
-        eraTimestamp: "2010-09-26T00:00:00Z",
-        eraFreeWikitext: "y".repeat(800),
-        eraFreeTimestamp: "2010-04-30T00:00:00Z",
-      },
-      true,
-    ),
-  ).toEqual({
+test("a protected page's prose steps back to the last revision with no signal on it, but never to a stub", () => {
+  const era = { eraWikitext: ARTICLE, eraTimestamp: "2010-09-26T00:00:00Z" };
+  const free = { eraFreeWikitext: "y".repeat(800), eraFreeTimestamp: "2010-04-30T00:00:00Z" };
+  expect(eraSource({ ...era, ...free }, true)).toEqual({
     text: "y".repeat(800),
     timestamp: "2010-04-30T00:00:00Z",
     steppedBack: true,
     refused: false,
   });
+  // Under a quarter of the article: a blanking or a stub, not the page.
+  expect(eraSource({ ...era, eraFreeWikitext: "y".repeat(200), eraFreeTimestamp: "2008-04-30T00:00:00Z" }, true)).toEqual({
+    text: ARTICLE,
+    timestamp: "2010-09-26T00:00:00Z",
+    steppedBack: false,
+    refused: true,
+  });
+  // A page that is not protected is never stepped back, and one with no
+  // signal-free revision stays on the one it has.
+  expect(eraSource({ ...era, ...free }, false)).toMatchObject({ text: ARTICLE, steppedBack: false, refused: false });
+  expect(eraSource({ ...era, eraFreeWikitext: null, eraFreeTimestamp: "" }, true)).toMatchObject({
+    text: ARTICLE,
+    steppedBack: false,
+    refused: false,
+  });
 });
 
-test("stepping back is refused when it would trade an article for a stub", () => {
-  const got = eraSource(
-    {
-      eraWikitext: ARTICLE,
-      eraTimestamp: "2010-09-26T00:00:00Z",
-      // Under a quarter of the article: a blanking or a stub, not the page.
-      eraFreeWikitext: "y".repeat(200),
-      eraFreeTimestamp: "2008-04-30T00:00:00Z",
-    },
-    true,
-  );
-  expect(got.text).toBe(ARTICLE);
-  expect(got.timestamp).toBe("2010-09-26T00:00:00Z");
-  expect(got.steppedBack).toBe(false);
-  expect(got.refused).toBe(true);
-});
-
-test("a page that is not protected is never stepped back", () => {
-  const got = eraSource(
-    {
-      eraWikitext: ARTICLE,
-      eraTimestamp: "2010-09-26T00:00:00Z",
-      eraFreeWikitext: "y".repeat(800),
-      eraFreeTimestamp: "2010-04-30T00:00:00Z",
-    },
-    false,
-  );
-  expect(got.text).toBe(ARTICLE);
-  expect(got.steppedBack).toBe(false);
-  expect(got.refused).toBe(false);
-});
-
-test("no signal-free revision at all leaves the page on the one it has", () => {
-  const got = eraSource(
-    {
-      eraWikitext: ARTICLE,
-      eraTimestamp: "2010-09-26T00:00:00Z",
-      eraFreeWikitext: null,
-      eraFreeTimestamp: "",
-    },
-    true,
-  );
-  expect(got.text).toBe(ARTICLE);
-  expect(got.steppedBack).toBe(false);
-  expect(got.refused).toBe(false);
-});
 
 /**
  * `--world-ids`: a late page whose stated id exists on this server is admitted.

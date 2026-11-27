@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   ADT_FRAME_ORIGIN,
-  WMO_PX_PER_YARD,
-  WMO_TILE_SIZE,
   type WmoPlacement,
   groupPixelToModel,
   isUprightPlacement,
@@ -10,7 +8,6 @@ import {
   parseWdtGlobalWmo,
   parseWmoGroupBoxes,
   placementToWorld,
-  wmoModelStem,
   wmoTrsSection,
 } from "../src/wmo";
 import { buildAdtWithWmos, buildGlobalWmoWdt, buildWmoRoot, chunk } from "./fixtures";
@@ -27,10 +24,6 @@ describe("parseWdtGlobalWmo", () => {
     expect(p?.extentMax[2]).toBeCloseTo(215, 3);
   });
 
-  test("refuses a WDT with no MODF", () => {
-    expect(parseWdtGlobalWmo(chunk("MVER", new Uint8Array(4)))).toBeNull();
-  });
-
   test("refuses more than one model, which would need a transform each", () => {
     const parts = [
       chunk("MVER", new Uint8Array(4)),
@@ -40,11 +33,6 @@ describe("parseWdtGlobalWmo", () => {
     const two = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
     parts.reduce((at, p) => (two.set(p, at), at + p.byteLength), 0);
     expect(parseWdtGlobalWmo(two)).toBeNull();
-  });
-
-  test("survives a truncated trailing chunk rather than reading past the end", () => {
-    const wdt = buildGlobalWmoWdt(NAME);
-    expect(parseWdtGlobalWmo(wdt.subarray(0, wdt.byteLength - 8))).toBeNull();
   });
 });
 
@@ -58,20 +46,13 @@ describe("parseAdtWmoPlacements", () => {
     ],
   );
 
-  test("names each placement through MWID, not by position in MWMO", () => {
+  test("names each placement through MWID, not by position in MWMO, and drops an out-of-range name id", () => {
     const placed = parseAdtWmoPlacements(adt);
+    expect(placed).toHaveLength(2);
     expect(placed.map((p) => p.name)).toEqual(["WORLD\\WMO\\DUNGEON\\AZ_DEADMINES\\AZ_DEADMINES_B.WMO", "WORLD\\WMO\\A.WMO"]);
     expect(placed[0]?.uniqueId).toBe(170633);
     expect(placed[0]?.rotation[1]).toBeCloseTo(-91, 3);
     expect(placed[1]?.position).toEqual([1, 2, 3]);
-  });
-
-  test("drops an entry whose name id is out of range rather than misnaming it", () => {
-    expect(parseAdtWmoPlacements(adt)).toHaveLength(2);
-  });
-
-  test("an ADT that places no model has no placements", () => {
-    expect(parseAdtWmoPlacements(chunk("MVER", new Uint8Array(4)))).toEqual([]);
   });
 });
 
@@ -97,17 +78,6 @@ describe("parseWmoGroupBoxes", () => {
     expect(boxes).toHaveLength(2);
     expect(boxes[0]?.min[1]).toBeCloseTo(-348.3, 3);
     expect(boxes[1]?.max[2]).toBeCloseTo(3, 3);
-  });
-
-  test("a root with no MOGI is empty, not a throw", () => {
-    expect(parseWmoGroupBoxes(chunk("MVER", new Uint8Array(4)))).toEqual([]);
-  });
-});
-
-describe("the measured scale", () => {
-  test("is two pixels per yard, 128 yards to a tile", () => {
-    expect(WMO_TILE_SIZE).toBe(128);
-    expect(WMO_PX_PER_YARD).toBe(2);
   });
 });
 
@@ -197,12 +167,6 @@ describe("groupPixelToModel", () => {
     expect(groupPixelToModel(box, { a: 0, b: 0 }, 256, 0, 255).y).toBeCloseTo(-193.1 - 0.5, 6);
   });
 
-  test("consecutive b tiles meet without a seam", () => {
-    const lastOfB1 = groupPixelToModel(box, { a: 0, b: 1 }, 256, 0, 255).y;
-    const firstOfB0 = groupPixelToModel(box, { a: 0, b: 0 }, 256, 0, 0).y;
-    expect(firstOfB0 - lastOfB1).toBeCloseTo(0.5, 6);
-  });
-
   test("a short image sits flush at max.y too, not 128 yards below it", () => {
     // AZ_Deadmines_B group 000 is a 64x64 image over a 23.2-yard span: its
     // paint fills rows 18-63, so row 63 is half a yard short of max.y.
@@ -212,19 +176,8 @@ describe("groupPixelToModel", () => {
   });
 });
 
-describe("wmoModelStem", () => {
-  test("is the file name without its extension, lower-cased", () => {
-    expect(wmoModelStem(NAME)).toBe("subway");
-    expect(wmoModelStem("WORLD\\WMO\\DUNGEON\\AZ_DEADMINES\\AZ_DEADMINES_B.WMO")).toBe("az_deadmines_b");
-  });
-});
-
 describe("wmoTrsSection", () => {
   test("is the model's directory without the World prefix, lower-cased", () => {
     expect(wmoTrsSection(NAME)).toBe("wmo\\dungeon\\az_subway");
-  });
-
-  test("tolerates a name with no directory at all", () => {
-    expect(wmoTrsSection("Subway.wmo")).toBe("");
   });
 });

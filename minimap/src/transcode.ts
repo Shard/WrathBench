@@ -86,7 +86,7 @@ export async function transcodeTile(master: Uint8Array): Promise<Uint8Array> {
  * paints at all. Where it does, the map page drawing the art at full
  * strength never shows the minimap, so it does not fetch it.
  */
-export function artCovers(art: Uint8Array, minimap: Uint8Array): boolean {
+function artCovers(art: Uint8Array, minimap: Uint8Array): boolean {
   for (let i = 3; i < minimap.length; i += 4) if (minimap[i] !== 0 && art[i] !== 255) return false;
   return true;
 }

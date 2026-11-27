@@ -26,17 +26,11 @@ function bundleOf(titles: readonly string[], redirects: readonly [string, string
 }
 
 describe("the canary list", () => {
-  test("has no duplicates", () => {
+  test("is a real list of clean, distinct titles that does not overlap the forbidden ones", () => {
     expect(new Set(MUST_EXIST).size).toBe(MUST_EXIST.length);
-  });
-
-  test("is not empty, and does not overlap the forbidden titles", () => {
     expect(MUST_EXIST.length).toBeGreaterThan(30);
     const forbidden = new Set(MUST_NOT_EXIST);
     expect(MUST_EXIST.filter((t) => forbidden.has(t))).toEqual([]);
-  });
-
-  test("holds no title that is only whitespace or an underscore form", () => {
     for (const title of MUST_EXIST) {
       expect(title.trim()).toBe(title);
       expect(title).not.toContain("_");
@@ -52,18 +46,15 @@ describe("assertCanaries", () => {
     db.close();
   });
 
-  test("a title that is only a redirect still resolves", () => {
+  test("a title that is only a redirect still resolves, unless its target is missing", () => {
     const rest = MUST_EXIST.filter((t) => t !== "The Exodar");
     const db = bundleOf([...rest, "Exodar"], [["The Exodar", "Exodar"]]);
     expect(resolveCanary(db, "The Exodar")).toBe("Exodar");
     expect(() => assertCanaries(db)).not.toThrow();
     db.close();
-  });
-
-  test("a redirect whose target is not in the bundle does not resolve", () => {
-    const db = bundleOf([], [["The Exodar", "Exodar"]]);
-    expect(resolveCanary(db, "The Exodar")).toBe(null);
-    db.close();
+    const dangling = bundleOf([], [["The Exodar", "Exodar"]]);
+    expect(resolveCanary(dangling, "The Exodar")).toBe(null);
+    dangling.close();
   });
 
   test("fails, naming the missing pages", () => {

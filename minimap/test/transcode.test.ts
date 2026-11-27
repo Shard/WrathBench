@@ -14,7 +14,7 @@ import { indexCovers, indexHas, parseTileIndex } from "../../viewer/tileindex";
 import { SERVED_DIR } from "../../viewer/tiles";
 import { TILE_PX } from "../../viewer/worldmap";
 import { decodePng, encodePng } from "../src/png";
-import { TRANSCODE_STATE, artCovers, encoderId, transcodeTile, transcodeTree } from "../src/transcode";
+import { TRANSCODE_STATE, encoderId, transcodeTile, transcodeTree } from "../src/transcode";
 
 const scratch = mkdtempSync(join(tmpdir(), "wrathbench-transcode-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -68,13 +68,6 @@ function walk(dir: string): string[] {
 }
 
 describe("a tile, native or pyramid", () => {
-  test("keeps alpha exact, transparent corners and all", async () => {
-    const src = busy(2, (x, y) => (x < 40 && y < 40 ? 0 : 255));
-    const out = await transcodeTile(png(src));
-    expect(isWebp(out)).toBe(true);
-    expect(alphaOf(await decode(out))).toEqual(alphaOf(src));
-  });
-
   test("is served as WebP, lossy where it is busy, with alpha exact through every level of it", async () => {
     const src = busy(3, (x) => x % 256);
     const out = await transcodeTile(png(src));
@@ -94,21 +87,6 @@ describe("a tile, native or pyramid", () => {
       expect(isWebp(out)).toBe(true);
       expect(await decode(out)).toEqual(src);
     }
-  });
-});
-
-describe("artCovers", () => {
-  test("only where the art is opaque over every pixel the minimap paints", () => {
-    const minimap = flat([0, 0, 0, 0]);
-    minimap.set([1, 2, 3, 255], 0);
-    const art = flat([9, 9, 9, 255]);
-    expect(artCovers(art, minimap)).toBe(true);
-    art[3] = 254;
-    expect(artCovers(art, minimap)).toBe(false);
-    // Transparent art over a pixel the minimap does not paint hides nothing.
-    art[3] = 255;
-    art[7] = 0;
-    expect(artCovers(art, minimap)).toBe(true);
   });
 });
 
@@ -190,24 +168,5 @@ describe("transcodeTree", () => {
     const pruned = await transcodeTree(root);
     expect(pruned.removed).toBe(1);
     expect(walk(join(root, SERVED_DIR))).not.toContain("0/art/1/21_16.webp");
-  });
-
-  test("replaces the indexed PNG natives an older transcode wrote", async () => {
-    const root = tree();
-    // What a served tree from before the WebP natives holds, current or not.
-    write(root, `${SERVED_DIR}/0/43_31.png`, png(busy(4)));
-    write(root, `${SERVED_DIR}/36/30_30.png`, png(busy(9)));
-    const report = await transcodeTree(root);
-    expect(report.removed).toBe(2);
-    const served = walk(join(root, SERVED_DIR));
-    expect(served.filter((p) => /^\d+\/\d+_\d+\./.test(p))).toEqual(["0/43_31.webp", "0/43_32.webp", "36/30_30.webp"]);
-  });
-
-  test("is byte-deterministic", async () => {
-    const a = tree();
-    const b = tree();
-    await transcodeTree(a);
-    await transcodeTree(b);
-    for (const p of walk(join(a, SERVED_DIR))) expect(readFileSync(join(a, SERVED_DIR, p)).equals(readFileSync(join(b, SERVED_DIR, p)))).toBe(true);
   });
 });

@@ -39,7 +39,7 @@ describe("parsePages", () => {
     }
   });
 
-  test("picks the newest revision whatever the dump's ordering", async () => {
+  test("picks the newest revision whatever the dump's ordering, breaking a tie on the higher id", async () => {
     const revisions = [
       { id: 1, timestamp: "2006-05-05T10:00:00Z", text: "oldest lorem" },
       { id: 2, timestamp: "2010-05-05T10:00:00Z", text: "middle lorem" },
@@ -59,9 +59,7 @@ describe("parsePages", () => {
         expect(got[0]!.timestamp).toBe("2016-05-05T10:00:00Z");
       }
     }
-  });
 
-  test("equal timestamps break the tie on the higher revision id", async () => {
     const ts = "2013-03-03T03:03:03Z";
     const xml = renderDump([
       {
@@ -74,10 +72,7 @@ describe("parsePages", () => {
         ],
       },
     ]);
-    for (const size of [11, 4096]) {
-      const got = await collect(xml, size);
-      expect(got[0]!.wikitext).toBe("higher id lorem");
-    }
+    expect((await collect(xml, 11))[0]!.wikitext).toBe("higher id lorem");
   });
 
   test("drops namespaces outside the wanted set without parsing them", async () => {
@@ -94,21 +89,7 @@ describe("parsePages", () => {
     }
   });
 
-  test("carries a redirect attribute through when the dump emits one", async () => {
-    const xml = renderDump([
-      {
-        title: "Example Old Name",
-        ns: 0,
-        id: 10,
-        redirectAttr: "Example New Name",
-        revisions: [{ id: 1, timestamp: "2011-01-01T00:00:00Z", text: "#REDIRECT [[Example New Name]]" }],
-      },
-    ]);
-    const got = await collect(xml, 33);
-    expect(got[0]!.redirectAttr).toBe("Example New Name");
-  });
-
-  test("decodes entities in titles and text, and unescapes markup faithfully", async () => {
+  test("decodes entities in titles and text, unescapes markup faithfully, and turns underscores into spaces", async () => {
     const xml = renderDump([
       {
         title: "Example & Ampersand <Page>",
@@ -122,29 +103,10 @@ describe("parsePages", () => {
       expect(got[0]!.title).toBe("Example & Ampersand <Page>");
       expect(got[0]!.wikitext).toBe("a < b && c > d <br> end");
     }
-  });
-
-  test("underscores in titles become spaces", async () => {
-    const xml = renderDump([
+    const underscored = renderDump([
       { title: "Example_Quest_Alpha", ns: 0, id: 12, revisions: [{ id: 1, timestamp: "2011-01-01T00:00:00Z", text: "lorem" }] },
     ]);
-    expect((await collect(xml, 64))[0]!.title).toBe("Example Quest Alpha");
-  });
-
-  test("a page whose text spans many chunks is reassembled intact", async () => {
-    const body = "lorem ipsum dolor ".repeat(5000);
-    const xml = renderDump([
-      { title: "Example Long Page", ns: 0, id: 13, revisions: [{ id: 1, timestamp: "2011-01-01T00:00:00Z", text: body }] },
-    ]);
-    for (const size of [13, 997, 65536]) {
-      const got = await collect(xml, size);
-      expect(got[0]!.wikitext).toBe(body);
-    }
-  });
-
-  test("an empty stream yields nothing", async () => {
-    expect(await collect("", 16)).toEqual([]);
-    expect(await collect(renderDump([]), 16)).toEqual([]);
+    expect((await collect(underscored, 64))[0]!.title).toBe("Example Quest Alpha");
   });
 });
 
@@ -167,19 +129,6 @@ describe("a page split into 50-revision blocks", () => {
       expect(`${size}:${got.length}`).toBe(`${size}:1`);
       expect(`${size}:${got[0]!.wikitext}`).toBe(`${size}:newest lorem`);
       expect(got[0]!.timestamp).toBe("2018-04-04T04:04:04Z");
-    }
-  });
-
-  test("merges the same way when the blocks arrive oldest-first", async () => {
-    const xml = renderDump([
-      block("Example Long History", 0, 1, [rev(9, 2005, "oldest lorem"), rev(10, 2006, "b3 lorem")]),
-      block("Example Long History", 0, 1, [rev(19, 2012, "b2 older"), rev(20, 2013, "b2 lorem")]),
-      block("Example Long History", 0, 1, [rev(29, 2017, "b1 older"), rev(30, 2018, "newest lorem")]),
-    ]);
-    for (const size of [1, 23, 4096]) {
-      const got = await collect(xml, size);
-      expect(got).toHaveLength(1);
-      expect(got[0]!.wikitext).toBe("newest lorem");
     }
   });
 

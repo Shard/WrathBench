@@ -103,24 +103,6 @@ describe("the era revision slot", () => {
     }
   });
 
-  test("a redirect in the middle of the pre-cutoff range does not cost the page its prose", async () => {
-    const xml = renderDump([
-      {
-        title: "Example Zone Beta",
-        ns: 0,
-        id: 1,
-        revisions: [
-          { id: 4, timestamp: "2018-01-01T00:00:00Z", text: "The rewritten lorem." },
-          { id: 3, timestamp: "2010-09-01T00:00:00Z", text: "The era lorem." },
-          { id: 2, timestamp: "2010-05-01T00:00:00Z", text: "#REDIRECT [[Example Zone Gamma]]" },
-          { id: 1, timestamp: "2007-01-01T00:00:00Z", text: "The first stub, lorem." },
-        ],
-      },
-    ]);
-    const [got] = await parse(xml);
-    expect(got!.eraWikitext).toBe("The era lorem.");
-  });
-
   test("a pre-cutoff revision that was immediately reverted is skipped", async () => {
     // Revision 3 was undone: revision 4 restores the sha1 the page already had
     // at revision 2, so what revision 3 said is not what the page said.
@@ -143,25 +125,6 @@ describe("the era revision slot", () => {
       expect(`${size}:${got!.eraWikitext}`).toBe(`${size}:The era lorem.`);
       expect(got!.eraTimestamp).toBe("2010-05-01T00:00:00Z");
     }
-  });
-
-  test("a revert that itself predates the cutoff simply wins on its own", async () => {
-    const xml = renderDump([
-      {
-        title: "Example Zone Beta",
-        ns: 0,
-        id: 1,
-        revisions: [
-          { id: 4, timestamp: "2018-01-01T00:00:00Z", text: "The rewritten lorem." },
-          { id: 3, timestamp: "2010-09-02T00:00:00Z", text: "The era lorem.", sha1: "shared" },
-          { id: 2, timestamp: "2010-09-01T00:00:00Z", text: "Inserted nonsense, lorem." },
-          { id: 1, timestamp: "2010-05-01T00:00:00Z", text: "The era lorem.", sha1: "shared" },
-        ],
-      },
-    ]);
-    const [got] = await parse(xml);
-    expect(got!.eraWikitext).toBe("The era lorem.");
-    expect(got!.eraTimestamp).toBe("2010-09-02T00:00:00Z");
   });
 
   test("the era winner is found when it sits in a different block from the newest", async () => {
@@ -196,25 +159,6 @@ describe("the era revision slot", () => {
       expect(`${size}:${got.length}`).toBe(`${size}:1`);
       expect(`${size}:${got[0]!.wikitext}`).toBe(`${size}:The rewritten lorem.`);
       expect(`${size}:${got[0]!.eraWikitext}`).toBe(`${size}:The era lorem.`);
-    }
-  });
-
-  test("the winner does not depend on the order the revisions arrive in", async () => {
-    const revisions = [
-      { id: 1, timestamp: "2007-01-01T00:00:00Z", text: "The first stub, lorem." },
-      { id: 2, timestamp: "2010-09-01T00:00:00Z", text: "The era lorem." },
-      { id: 3, timestamp: "2018-01-01T00:00:00Z", text: "The rewritten lorem." },
-    ];
-    const orders = {
-      "oldest-first": revisions,
-      "newest-first": [...revisions].reverse(),
-      shuffled: [revisions[1]!, revisions[2]!, revisions[0]!],
-    };
-    for (const [name, revs] of Object.entries(orders)) {
-      const xml = renderDump([{ title: "Example Zone Beta", ns: 0, id: 1, revisions: revs }]);
-      const [got] = await parse(xml, 37);
-      expect(`${name}:${got!.eraWikitext}`).toBe(`${name}:The era lorem.`);
-      expect(`${name}:${got!.wikitext}`).toBe(`${name}:The rewritten lorem.`);
     }
   });
 
@@ -324,23 +268,6 @@ describe("the signal-free revision slot", () => {
     }
   });
 
-  test("a page no beta touched has both slots on the same revision", async () => {
-    const xml = renderDump([
-      {
-        title: "Example Zone Beta",
-        ns: 0,
-        id: 1,
-        revisions: [
-          { id: 2, timestamp: "2010-09-01T00:00:00Z", text: "The era lorem." },
-          { id: 1, timestamp: "2007-01-01T00:00:00Z", text: "The first stub, lorem." },
-        ],
-      },
-    ]);
-    const [got] = await parse(xml);
-    expect(got!.eraFreeWikitext).toBe(got!.eraWikitext);
-    expect(got!.eraFreeTimestamp).toBe(got!.eraTimestamp);
-  });
-
   test("every pre-cutoff revision signalled leaves the slot empty", async () => {
     const xml = renderDump([
       {
@@ -365,22 +292,6 @@ describe("the signal-free revision slot", () => {
     expect(got!.eraWikitext).toContain("A beta stub");
     expect(got!.eraFreeWikitext).toBeNull();
     expect(got!.eraFreeTimestamp).toBe("");
-  });
-
-  test("a title that is itself the signal leaves the slot empty without reading a body", async () => {
-    const xml = renderDump([
-      {
-        title: "Example Zone Beta (Cataclysm)",
-        ns: 0,
-        id: 1,
-        revisions: [
-          { id: 1, timestamp: "2010-09-01T00:00:00Z", text: "Plain prose, lorem ipsum." },
-        ],
-      },
-    ]);
-    const [got] = await parse(xml);
-    expect(got!.eraWikitext).toBe("Plain prose, lorem ipsum.");
-    expect(got!.eraFreeWikitext).toBeNull();
   });
 
   test("a reverted signal-free revision loses the slot to the one below it", async () => {

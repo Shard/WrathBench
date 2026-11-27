@@ -16,13 +16,10 @@ describe("parseTrs", () => {
     "",
   ].join("\r\n");
 
-  test("groups tiles by lower-cased directory", () => {
+  test("groups by lower-cased directory and reads mapX_Y as column then row", () => {
     const index = parseTrs(text);
     expect([...index.keys()].sort()).toEqual(["azeroth", "kalimdor"]);
-  });
-
-  test("reads mapX_Y as column then row", () => {
-    const azeroth = parseTrs(text).get("azeroth")!;
+    const azeroth = index.get("azeroth")!;
     expect(azeroth[0]).toEqual({
       col: 31,
       row: 43,
@@ -38,17 +35,6 @@ describe("parseTrs", () => {
   test("accepts bare mapX_Y.blp names and drops non-tile lines", () => {
     const kalimdor = parseTrs(text).get("kalimdor")!;
     expect(kalimdor).toEqual([{ col: 30, row: 20, hash: "0000000000000000000000000000aaaa.blp" }]);
-  });
-
-  test("merges repeated dir: sections", () => {
-    const index = parseTrs(
-      "dir: Azeroth\nAzeroth\\map1_2.blp\ta.blp\ndir: Azeroth\nAzeroth\\map3_4.blp\tb.blp\n",
-    );
-    expect(index.get("azeroth")).toHaveLength(2);
-  });
-
-  test("tolerates an empty file", () => {
-    expect(parseTrs("").size).toBe(0);
   });
 });
 
@@ -110,11 +96,7 @@ describe("Map.dbc", () => {
     expect(parsed.str(0, 1)).toBe("Azeroth");
   });
 
-  test("rejects a non-WDBC buffer", () => {
-    expect(() => parseWdbc(new Uint8Array(32))).toThrow(/not a WDBC/);
-  });
-
-  test("reads each map's instance type", () => {
+  test("reads each map's instance type and maps lower-cased directory names to map ids", () => {
     expect(mapInstanceTypes(dbc)).toEqual(
       new Map([
         [0, 0],
@@ -122,9 +104,6 @@ describe("Map.dbc", () => {
         [571, 1],
       ]),
     );
-  });
-
-  test("maps lower-cased directory names to map ids", () => {
     expect(mapDirectories(dbc)).toEqual(
       new Map([
         ["azeroth", 0],

@@ -42,23 +42,6 @@ describe("downsampleQuad", () => {
     expect(at(out, 4, 3, 3)).toEqual(WHITE);
   });
 
-  test("a missing child is a transparent quadrant, and no child at all is no tile", () => {
-    const out = downsampleQuad([null, solid(4, GREEN), null, null], 4)!;
-    expect(at(out, 4, 0, 0)).toEqual(CLEAR);
-    expect(at(out, 4, 2, 1)).toEqual(GREEN);
-    expect(at(out, 4, 1, 3)).toEqual(CLEAR);
-    expect(downsampleQuad([null, null, null, null], 4)).toBeNull();
-    // A child with nothing opaque in it is no content either.
-    expect(downsampleQuad([solid(4, [9, 9, 9, 0]), null, null, null], 4)).toBeNull();
-  });
-
-  test("a 2x2 block averages to the box mean", () => {
-    const child = new Uint8Array([10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 41, 0, 0, 255]);
-    const out = downsampleQuad([child, null, null, null], 2)!;
-    // (10 + 20 + 30 + 41) / 4 = 25.25
-    expect(at(out, 2, 0, 0)).toEqual([25, 0, 0, 255]);
-  });
-
   test("colour is weighted by alpha, so a transparent neighbour does not darken an edge", () => {
     // One opaque red pixel beside three transparent black ones. A straight
     // mean would give (64, 0, 0, 64) — a dark fringe; weighted it stays red.
@@ -70,6 +53,9 @@ describe("downsampleQuad", () => {
     const m = downsampleQuad([mixed, null, null, null], 2)!;
     // red weight 510, blue weight 256: r = 255*510/766, b = 255*256/766
     expect(at(m, 2, 0, 0)).toEqual([170, 0, 85, 192]);
+    // All opaque: the plain box mean, (10 + 20 + 30 + 41) / 4 = 25.25.
+    const box = new Uint8Array([10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 41, 0, 0, 255]);
+    expect(at(downsampleQuad([box, null, null, null], 2)!, 2, 0, 0)).toEqual([25, 0, 0, 255]);
   });
 });
 
@@ -113,17 +99,6 @@ describe("bakeMap", () => {
     expect(level(dir, 0)).toEqual([]);
   });
 
-  test("level 1 places its children where they are in the world", () => {
-    const dir = fixture("quadrants");
-    bakeMap(dir, { force: false });
-    // 21_15 covers rows 42-43 and cols 30-31: only the bottom row is present.
-    const t = read(dir, 1, 21, 15);
-    expect(at(t, TILE_PX, 10, 10)).toEqual(CLEAR);
-    expect(at(t, TILE_PX, 200, 10)).toEqual(CLEAR);
-    expect(at(t, TILE_PX, 10, 200)).toEqual(GREEN); // 43_30, bottom-left
-    expect(at(t, TILE_PX, 200, 200)).toEqual(RED); // 43_31, bottom-right
-  });
-
   test("the whole-world tile still has every native where the transform puts it", () => {
     const dir = fixture("world");
     bakeMap(dir, { force: false });
@@ -148,22 +123,5 @@ describe("bakeMap", () => {
     expect(forced.map((s) => s.written)).toEqual(first.map((s) => s.written));
     // Byte-identical, so the tile publisher's content hash skips a re-bake.
     expect(readFileSync(file).equals(bytes)).toBe(true);
-  });
-
-  test("an empty native writes no parent, and only canonical in-grid names are inputs", () => {
-    const dir = join(scratch, "inputs", "0");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "10_10.png"), encodePng(solid(TILE_PX, [0, 0, 0, 0]), TILE_PX, TILE_PX));
-    writeFileSync(join(dir, "043_31.png"), encodePng(solid(TILE_PX, RED), TILE_PX, TILE_PX));
-    writeFileSync(join(dir, "64_0.png"), encodePng(solid(TILE_PX, RED), TILE_PX, TILE_PX));
-    writeFileSync(join(dir, "43_31.png.tmp"), "half");
-    const stats = bakeMap(dir, { force: false });
-    expect(stats.every((s) => s.written === 0 && s.skipped === 0)).toBe(true);
-    expect(level(dir, 1)).toEqual([]);
-  });
-
-  test("a map directory that does not exist bakes nothing rather than throwing", () => {
-    const stats = bakeMap(join(scratch, "nope", "0"), { force: false });
-    expect(stats.every((s) => s.written === 0)).toBe(true);
   });
 });

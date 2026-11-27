@@ -42,6 +42,9 @@ test("the wiki's id kinds map onto the world DB's tables", async () => {
   expect(ids.name("quest", 21)).toBeUndefined();
   expect(ids.name("item", 41)).toBeUndefined();
   expect(ids.name("quest", 999)).toBeUndefined();
+  // The export's identity comes back for the bundle's meta.
+  expect(ids.exportedAt).toBe("2026-08-24T12:00:00Z");
+  expect(ids.counts).toEqual({ quest: 2, creature: 2, item: 2, gameobject: 1 });
 });
 
 test("spell and unknown never resolve, whatever the file holds", async () => {
@@ -55,25 +58,16 @@ test("spell and unknown never resolve, whatever the file holds", async () => {
   }
 });
 
-test("the export's identity comes back for the bundle's meta", async () => {
-  const ids = await loadWorldIds(await write("meta.json", EXPORT));
-  expect(ids.exportedAt).toBe("2026-08-24T12:00:00Z");
-  expect(ids.counts).toEqual({ quest: 2, creature: 2, item: 2, gameobject: 1 });
-});
-
-test("the id-only export is rejected, not read as nameless", async () => {
+test("the id-only, malformed or empty export fails the build rather than shrinking it", async () => {
   // The first version of this export was four bare id arrays, and an id without
   // a name admits the page that copy-pasted someone else's infobox. A build
   // handed one must stop, not quietly lose the discriminator.
   const old = await write("old.json", { ...EXPORT, creature: [21, 22] });
-  expect(loadWorldIds(old)).rejects.toThrow(/id-only export/);
-});
-
-test("a malformed or empty export fails the build rather than shrinking it", async () => {
+  await expect(loadWorldIds(old)).rejects.toThrow(/id-only export/);
   // Failing closed is the point: an export that silently loaded as empty would
   // put the bundle back where it was, which is exactly what this rule fixes.
   const missing = await write("missing.json", { ...EXPORT, item: undefined });
-  expect(loadWorldIds(missing)).rejects.toThrow(/item/);
+  await expect(loadWorldIds(missing)).rejects.toThrow(/item/);
   const empty = await write("empty.json", { ...EXPORT, creature: {} });
-  expect(loadWorldIds(empty)).rejects.toThrow(/creature/);
+  await expect(loadWorldIds(empty)).rejects.toThrow(/creature/);
 });
