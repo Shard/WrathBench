@@ -547,7 +547,7 @@ Tooling for local map assets used by the viewer: the extractor that decodes the 
 
 ### infra/
 
-The images (`infra/docker/`) and two ways to run them. The Helm chart (`infra/chart/wrathbench`) is how the fleet runs and the reference for a real deployment; its release and deploy scripts are `infra/k8s-release.sh` and `infra/k8s-deploy.sh`. `infra/compose.yml` brings the same services up on one machine as a quickstart, with no deploy or update path of its own, because nothing is operated on it over time. The server data directory is supplied by the operator under `data/`. The smoke scripts under `infra/smoke/` drive the module end to end through the SDK.
+The images (`infra/docker/`) and two ways to run them. The Helm chart (`infra/chart/wrathbench`) is how the fleet runs and the reference for a real deployment; its release and deploy scripts are `infra/k8s-release.sh` and `infra/k8s-deploy.sh`. `infra/compose.yml` brings the same services up on one machine as a quickstart, with no deploy or update path of its own, because nothing is operated on it over time. `infra/compose.reference.yml` extends its game services and the viewer-only file's viewer into the pure-viewer form: a game server for a host-side MCP client and the dashboard over what that client records. The server data directory is supplied by the operator under `data/`. The smoke scripts under `infra/smoke/` drive the module end to end through the SDK.
 
 The core is stock AzerothCore, pinned by commit — no playerbots fork, so there
 is one dependency tree. A party's members are agents too: five loops of one

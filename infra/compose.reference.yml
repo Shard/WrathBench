@@ -1,0 +1,68 @@
+# Play and watch: the reference for WrathBench as a pure viewer of agents an
+# MCP client drives (infra/README.md, "Play and watch"). The game server with
+# the wrath-mcp module, and the viewer and dashboard over the sessions that
+# client records. No runner, fleet, collector, ClickHouse or publisher.
+#
+# From the repository root, with WRATHBENCH_MODULE_SECRET in .env:
+#   docker compose --env-file .env -f infra/compose.reference.yml up -d --build
+#
+# Nothing is restated: every service extends the quickstart's (compose.yml)
+# or the viewer-only file's (compose.viewer.yml), and this file adds only
+# what joins them. The MCP gateway is not here: an agent runs wrath-mcp over
+# stdio on the host, recording into data/sessions (`--record-dir`), which is
+# what the viewer reads.
+#
+# Posture (docs/DATA-AND-LEGAL.md): every port is published on 127.0.0.1 and
+# nowhere else, the module's included, for the host-side MCP client. The
+# viewer's admin switch is on, which is safe only because of that.
+#
+# Its own project name, so its database volume is never the quickstart's.
+name: wrathbench-reference
+
+services:
+  db:
+    extends: { file: compose.yml, service: db }
+
+  db-import:
+    extends: { file: compose.yml, service: db-import }
+
+  bootstrap:
+    extends: { file: compose.yml, service: bootstrap }
+
+  authserver:
+    extends: { file: compose.yml, service: authserver }
+
+  worldserver:
+    extends: { file: compose.yml, service: worldserver }
+    # The module's port on the host's loopback, for wrath-mcp on the host.
+    # The quickstart does not publish it, because its runner is on the
+    # compose network.
+    ports:
+      - "127.0.0.1:8086:8086"
+
+  viewer:
+    extends: { file: compose.viewer.yml, service: viewer }
+    environment:
+      # The config store, so site settings survive a recreate.
+      WRATHBENCH_CONFIG_DB: /config/config.sqlite
+      # The admin pages and the config API (runner/viewer/groups.ts).
+      WRATHBENCH_ADMIN: "1"
+      # The module's /health, for the server build and status on /api/info.
+      # The port secret is the one the worldserver holds.
+      WRATHBENCH_MODULE_URL: http://worldserver:8086
+      WRATHBENCH_MODULE_SECRET: ${WRATHBENCH_MODULE_SECRET:?set WRATHBENCH_MODULE_SECRET in .env and pass --env-file .env}
+    volumes:
+      # Writable, unlike the session store: the config store and its WAL.
+      - ../data/viewer:/config
+    networks: [wrathbench]
+    depends_on:
+      worldserver:
+        condition: service_started
+
+volumes:
+  db-data:
+  no-minimap:
+
+networks:
+  wrathbench:
+    driver: bridge

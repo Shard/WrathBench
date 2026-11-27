@@ -78,70 +78,107 @@ checkout's `.env` and pass `--env-file .env` to every compose command there
 (`down`, `ps` and `logs` included), or export it in the shell. Prefer that to
 `-p`, which `bun wb --local` and `run-episode.sh` never pass; `bun wb` reads
 `.env` itself. An exported value also renames `compose.viewer.yml`'s project,
-so give that one `-p wrathbench-viewer` in such a shell, and
+so give that one `-p wrathbench-viewer` in such a shell; `compose.reference.yml`
+reads `.env` too, so give it `-p wrathbench-reference` in such a checkout; and
 `infra/export-world-ids.sh` needs `WRATHBENCH_DB_CONTAINER=<project>-db-1`.
 Two stacks still
 cannot run at the same time: the loopback ports (3724, 8085, 8123) are fixed,
 and both builds tag the same `wrathbench/*` images, so the last `--build`
 wins for both.
 
-## The game server alone, for an MCP client
+## Play and watch
 
-To drive a character from an MCP client (Claude Code or any other) rather
-than through the runner, the quickstart's game server is all you need. Name
-the two servers and compose brings up `db`, `db-import` and `bootstrap` with
-them, and leaves out the runner and its image build, ClickHouse and the
-collector. Of the `data/` directories above, only `client` (or
-`WRATHBENCH_CLIENT_DIR`), `etc` and `logs` are used.
+`infra/compose.reference.yml` runs WrathBench as a pure viewer of an agent
+you drive yourself: the quickstart's game server with the wrath-mcp module,
+and the viewer and dashboard over the sessions your MCP client records. No
+runner, fleet, collector, ClickHouse or publisher. Each service extends the
+one in `compose.yml` or `compose.viewer.yml`. The file adds four things: the
+module's port on the host's loopback, for wrath-mcp on the host; the module
+URL and secret for the viewer, so `/api/info` shows the server's build; the
+admin switch; and a writable `data/viewer` for the config store, which holds
+the site settings. Every port is published on 127.0.0.1 only. The project is
+`wrathbench-reference`, so its world is not the quickstart's.
 
-`compose.yml` does not publish the module's port, because the runner reaches
-it on the compose network. wrath-mcp runs on the host, so publish the port on
-the host's loopback with an override file that stays out of git. `data/` is
-gitignored, so it can live there:
+You need a clone with both submodules (`git submodule update --init`), Bun
+1.4, and Linux 6.7 or later, because the MCP server's sandbox needs Landlock.
+From the repository root:
 
 ```
-cat > data/mcp-port.yml <<'EOF'
-services:
-  worldserver:
-    ports: ["127.0.0.1:8086:8086"]
-EOF
-docker compose --env-file .env -f infra/compose.yml -f data/mcp-port.yml \
-  up -d authserver worldserver
+bun install --frozen-lockfile
+mkdir -p data/{client,etc,logs,sessions,viewer}
+# place an AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/) at data/client
+echo "WRATHBENCH_MODULE_SECRET=$(openssl rand -hex 32)" >> .env
+echo "WRATHBENCH_SESSION_STORE_HOST=$PWD/data/sessions" >> .env
+export WRATHBENCH_BUILD="$(git describe --tags --always --dirty)"
+docker compose --env-file .env -f infra/compose.reference.yml up -d --build
 ```
 
-Pass the same files to every later `up`. The module is then at
-`WRATHBENCH_MODULE_URL=http://127.0.0.1:8086`, and its port secret is
-`WRATHBENCH_MODULE_SECRET` from `.env`.
+The `mkdir` is not optional, for the quickstart's reason and two more: the
+MCP server on the host writes `data/sessions`, the viewer writes
+`data/viewer`, and Docker would create either one as root. The first `up`
+builds AzerothCore and imports its databases, which takes a while. The
+worldserver is ready when `data/logs/Server.log` says `wrathbench: HTTP/WS
+listening`, and `/api/info` on the viewer then shows its build under
+`worldserver`. Pass `--env-file .env` to every command on this file,
+including `ps`, `logs` and `down`. `down` keeps the world, and `down -v`
+throws it away. To run the game server without the viewer, name `authserver
+worldserver` after `up -d`.
+
+The config store starts absent, and the admin pages write only to a store
+that exists. Create it once by setting the site's name:
+
+```
+docker compose --env-file .env -f infra/compose.reference.yml exec viewer \
+  bun runner/src/config-store.ts set site '{"name":"My WrathBench"}'
+```
+
+The viewer's error message for a missing store suggests `bun wb config seed`.
+That command targets the cluster, and it seeds a fleet roster that a pure
+viewer has no use for.
+
+Then connect an agent. With Claude Code, run this in the directory you will
+start it from, because the registration is per directory. Fill in the secret
+from `.env` and this checkout's absolute path:
+
+```
+claude mcp add wrath \
+  -e WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 \
+  -e WRATHBENCH_MODULE_SECRET=<WRATHBENCH_MODULE_SECRET from .env> \
+  -- "$(command -v bun)" <checkout>/wrath-mcp/mcp/src/main.ts \
+     --account POOL01 --record-dir <checkout>/data/sessions
+```
+
+`--record-dir` must be `WRATHBENCH_SESSION_STORE_HOST`, because that
+directory is what the viewer reads. Headless, `claude -p` needs
+`--allowedTools mcp__wrath` before it may call the tools. wrath-mcp's
+`mcp/README.md`, "Connect an MCP client", covers the rest: other clients, the
+first prompt that teaches the agent the SDK, and the race and class ids. The
+root's `bun install`
+already installed the stack's dependencies, so never run an install inside
+`wrath-mcp/`.
+
+Open http://127.0.0.1:8090. A session lists on the runs page once its
+character has entered the world. It updates while live, and it stays after
+the session ends.
 
 For the account:
 
 - **Ready to use.** Bootstrap creates `RUNNER` and `POOL01` to `POOL04`, each
   with its name as its password, and all five are in the module's allowlist.
-  Give each client its own account; `RUNNER` is the runner's default.
-- **In the allowlist but not created.** The other allowlisted names (`PROBE`,
-  `SHAKEOUT`, `SMOKE2` and the rest) need creating once: `bun wb --local
-  accounts ensure PROBE`, which runs a one-off of the `bootstrap` service and
-  needs only `db` up, or the `bootstrap` service form in "Bootstrap" without
-  Bun on the host.
+  The module holds one live session per account, so give each client its own.
 - **A name of your own.** Set `WRATHBENCH_EXTRA_ACCOUNTS=ALICE,BOB` in `.env`
   and run the same `up` again. Compose appends the names to the module's
-  allowlist and recreates the worldserver with it, and bootstrap, which runs
-  first, creates each missing one with its name as its password. A name that
-  is not a letter then up to 15 letters and digits, or is `SPECTATOR` or a
-  `TENANTnn`, fails bootstrap, and then the servers do not start.
-
-wrath-mcp's `mcp/README.md`, "Connect an MCP client", takes it from there. In
-this checkout the stack is the `wrath-mcp/` submodule, and the root's
-`bun install --frozen-lockfile` already installs its dependencies; never run
-an install inside `wrath-mcp/`. Name a `--record-dir` and "Viewer only" below
-shows the sessions.
+  allowlist and recreates the worldserver with it. Bootstrap runs first and
+  creates each missing name, with the name as its password. A name that is
+  not a letter followed by up to 15 letters and digits, or is `SPECTATOR` or
+  a `TENANTnn`, fails bootstrap, and then the servers do not start.
 
 ## Viewer only
 
 WrathBench can also run as nothing but the viewer, beside a wrath-mcp and an
-AzerothCore someone else runs, or the game server above. Every session that
-wrath-mcp records, whatever MCP client drove it, lists on the runs page and
-opens as a run.
+AzerothCore someone else runs. If the game server runs on this machine, use
+"Play and watch" above instead. Every session that wrath-mcp records, whatever
+MCP client drove it, lists on the runs page and opens as a run.
 
 Run the standalone server with a store you name. A directory named with
 `--record-dir` is kept until you delete it (unless `--record-retention-days`
@@ -228,7 +265,8 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. Every port
 compose publishes is bound explicitly to `127.0.0.1`, for operator inspection:
-3724 (authserver), 8085 (worldserver) and 8123 (ClickHouse). Nothing may ever
+3724 (authserver), 8085 (worldserver) and 8123 (ClickHouse), and on
+`compose.reference.yml` also 8086 (the module) and 8090 (the viewer). Nothing may ever
 bind beyond loopback. Any other port needed for debugging follows the same rule
 and is not committed.
 
