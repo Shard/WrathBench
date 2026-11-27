@@ -2516,5 +2516,71 @@ export interface AdminResponse {
   credentials: AdminCredentialView[];
   providers: AdminProviderView[];
   publishing: AdminPublishView;
+  /** The agent stack: the module as its `/health` answers the viewer, and the sessions in the store it reads. */
+  wrathMcp: WrathMcpView;
   now: number;
+}
+
+/**
+ * The limits the module states on `/health` (wrath-mcp/module/PROTOCOL.md,
+ * "Limits"), each copied by name and only as a number (`MODULE_LIMIT_KEYS`,
+ * `module-health.ts`); `0` is off.
+ */
+export type ModuleLimitKey =
+  | "actionRate"
+  | "actionBurst"
+  | "eventsSubscribersPerToken"
+  | "leases"
+  | "connections"
+  | "connectionsPerPeer"
+  | "connectionsPerLease"
+  | "eventsBacklogBytes";
+export type ModuleLimits = Partial<Record<ModuleLimitKey, number>>;
+
+/**
+ * The module's `/health` as the viewer passes it on: an allowlist of fields,
+ * each copied only when it has its type (`runner/viewer/module-health.ts`),
+ * never the body. Nothing here is a secret or names a token.
+ */
+export interface WrathMcpModuleView {
+  /** The viewer's own route to the module, its userinfo stripped: not an address an agent uses. */
+  url: string;
+  /** The module's `ok`: false while the world did not load whole (a 503). */
+  ok: boolean;
+  worldLoaded: boolean | null;
+  build: string | null;
+  protocol: number | null;
+  startedAtMs: number | null;
+  uptimeMs: number | null;
+  /** Live bench sessions; leases held. Zero or absent on a view the port secret did not open. */
+  sessions: number | null;
+  leases: number | null;
+  limits: ModuleLimits | null;
+}
+
+/** Why `module` is null: no module URL was configured, nothing answered there, or it refused the viewer's credential. */
+export type WrathMcpModuleError = "unset" | "unreachable" | "refused";
+
+export interface WrathMcpView {
+  module: WrathMcpModuleView | null;
+  /** Null when `module` is not. */
+  moduleError: WrathMcpModuleError | null;
+  /** The env var the viewer reads the module's port secret from, and whether it is set. The value never leaves the viewer. */
+  secret: { env: string; set: boolean };
+  /** The session store the viewer reads (`WRATHBENCH_SESSION_STORE`), or null when it reads none. */
+  store: WrathMcpStoreView | null;
+}
+
+/**
+ * The store's sessions that reached the world, as the runs page lists them.
+ * A session is live while its record is open (`ended` null) and its writer's
+ * heartbeat is within the listing's live window.
+ */
+export interface WrathMcpStoreView {
+  sessions: number;
+  live: number;
+  /** The stack each session reports (`session.json`'s `stack`), most sessions first. */
+  versions: { version: string; commit: string | null; sessions: number }[];
+  /** Each live session by its viewer id (never its directory's name), its character and its stack. */
+  liveSessions: { id: string; character: string; version: string; commit: string | null }[];
 }

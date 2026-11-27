@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ACTOR_HEADER, NOTE_HEADER } from "../viewer/config-api";
 import { ConfigStore } from "../src/config-store";
+import type { Groups } from "../viewer/groups";
 
 const roots: string[] = [];
 afterAll(() => {
@@ -27,7 +28,7 @@ const CONFIG = {
   queue: [],
 };
 
-function fixture(opts: { seed?: boolean; publicMode?: boolean; admin?: boolean } = {}): {
+function fixture(opts: { seed?: boolean; publicMode?: boolean; admin?: boolean; groups?: Groups } = {}): {
   handle: ReturnType<typeof createApi>;
   dbPath: string;
 } {
@@ -45,6 +46,7 @@ function fixture(opts: { seed?: boolean; publicMode?: boolean; admin?: boolean }
     configDbPath: dbPath,
     admin: opts.admin !== false,
     ...(opts.publicMode === true ? { publicMode: true } : {}),
+    ...(opts.groups !== undefined ? { groups: opts.groups } : {}),
   });
   return { handle, dbPath };
 }
@@ -161,6 +163,36 @@ describe("reads", () => {
     const res = await handle(req("/api/config/policy", { method: "PUT", body: "{}" }));
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toMatch(/seed it first/);
+  });
+
+  test("with the runner group on, not even the site's settings create the store: that is the seed's", async () => {
+    const { handle, dbPath } = fixture({ seed: false });
+    const res = await handle(req("/api/config/site", { method: "PUT", body: JSON.stringify({ name: "Mine" }) }));
+    expect(res.status).toBe(409);
+    expect(await Bun.file(dbPath).exists()).toBe(false);
+  });
+
+  test("with no runner group, the site's settings create the store, validated, and nothing else does", async () => {
+    const viewerOnly: Groups = { runner: false, evals: false, viewer: true };
+    const { handle, dbPath } = fixture({ seed: false, groups: viewerOnly });
+    const policy = await handle(req("/api/config/policy", { method: "PUT", body: "{}" }));
+    expect(policy.status).toBe(409);
+    const why = ((await policy.json()) as { error: string }).error;
+    expect(why).toMatch(/no runner group/);
+    expect(why).not.toMatch(/bun wb config seed/);
+    expect(await Bun.file(dbPath).exists()).toBe(false);
+
+    const bad = await handle(req("/api/config/site", { method: "PUT", body: JSON.stringify({ name: 3 }) }));
+    expect(bad.status).toBe(400);
+
+    const ok = await handle(req("/api/config/site", { method: "PUT", body: JSON.stringify({ name: "Mine" }) }));
+    expect(ok.status).toBe(200);
+    const body = (await (await handle(req("/api/config"))).json()) as { seeded: boolean; config: Record<string, unknown> };
+    expect(body.seeded).toBe(true);
+    expect(body.config).toEqual({ site: { name: "Mine" } });
+    const patched = await handle(req("/api/config/site", { method: "PATCH", body: JSON.stringify({ home: "/runs" }) }));
+    expect(patched.status).toBe(200);
+    expect(((await (await handle(req("/api/config/site"))).json()) as { value: unknown }).value).toEqual({ name: "Mine", home: "/runs" });
   });
 });
 

@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { json, notFound, withheld } from "./http";
 import type { SiteSettings } from "../src/site-settings";
 import { siteInfoField } from "./site-info";
-import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";
+import { moduleHealthReader, worldserverOf } from "./module-health";
 import { HARNESSES, isNotAModelRun } from "../src/config";
 import type {
   ClipsResponse,
@@ -136,9 +136,11 @@ export interface ApiOptions {
   tilesPublic?: boolean;
   /**
    * Where the module answers /health, for the `worldserver` identity on
-   * /api/info. Defaults to loopback; the compose network does not publish the
-   * port to the host, so a host-side viewer reports `null` unless it is given
-   * a reachable URL.
+   * /api/info and the admin page's wrath-mcp status. Absent is the module's
+   * default on loopback, tried as such (the admin page reads a failure there
+   * as no module configured); the compose network does not publish the port
+   * to the host, so a host-side viewer reports `null` unless it is given a
+   * reachable URL.
    */
   moduleUrl?: string;
   /**
@@ -187,40 +189,8 @@ export interface ApiOptions {
   sessionStore?: string | null;
 }
 
-/** How long one /health answer (or one failure) stands in for the next. */
-export const HEALTH_CACHE_MS = 10_000;
-
-/**
- * Read the worldserver's build identity off /health, tolerating a server that
- * is down (null) or a module that predates the field (null). One fetch per
- * cache window however many browsers poll.
- */
-function worldserverIdentity(moduleUrl: string): () => Promise<ApiInfoResponse["worldserver"]> {
-  let cached: { at: number; value: ApiInfoResponse["worldserver"] } | undefined;
-  let inflight: Promise<ApiInfoResponse["worldserver"]> | undefined;
-  const read = async (): Promise<ApiInfoResponse["worldserver"]> => {
-    try {
-      const res = await fetch(`${moduleUrl}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(2_000) });
-      if (!res.ok) return null;
-      const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
-      if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;
-      return { build: o.build, startedAtMs: o.startedAtMs };
-    } catch {
-      return null;
-    }
-  };
-  return async () => {
-    if (cached !== undefined && Date.now() - cached.at < HEALTH_CACHE_MS) return cached.value;
-    if (inflight === undefined) {
-      inflight = read().then((value) => {
-        cached = { at: Date.now(), value };
-        inflight = undefined;
-        return value;
-      });
-    }
-    return inflight;
-  };
-}
+/* The module's /health read moved to `module-health.ts`; its window is re-exported here unchanged. */
+export { HEALTH_CACHE_MS } from "./module-health";
 
 /** Where the inspector's API is mounted on a private handle. */
 export const INSPECTOR_BASE = "/api/inspector";
@@ -403,10 +373,16 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * only with the switch on, so a handle without it never loads the write
    * surface, the credential store or the codex login behind them.
    */
+  /*
+   * The module's /health, one cached read (`module-health.ts`): `/api/info`'s
+   * worldserver identity, and the admin page's wrath-mcp status off the same
+   * fetch.
+   */
+  const moduleHealth = moduleHealthReader(opts.moduleUrl);
   const configApi = admin ? import("./config-api") : null;
   const adminApi = admin
     ? import("./admin-api").then((m) =>
-        m.createAdminApi({ groups, runsDir, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
+        m.createAdminApi({ groups, runsDir, moduleHealth, ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}) }),
       )
     : null;
   const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
@@ -453,7 +429,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
   // The home page's clip, on a short window: it reads every listed run's camera directory.
   let highlightCache: { at: number; value: HighlightResponse } | undefined;
-  const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
+  const worldserver = async (): Promise<ApiInfoResponse["worldserver"]> => worldserverOf(await moduleHealth());
 
   /** Each run's closed trace windows, for its track (see `release` for why it is never dropped). */
   const closedWindows = closedWindowsMemo();
@@ -1118,6 +1094,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const res = await handleConfigRequest(req, url, path, {
         ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
         e90Profile,
+        groups,
       });
       // Anything but a read may have changed the roster: the next poll reads it afresh.
       if (req.method !== "GET" && req.method !== "HEAD") rosterHeld = undefined;

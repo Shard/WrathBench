@@ -8,7 +8,9 @@
  *
  *   GET    /api/admin                     the groups, the credentials with their
  *                                         status, the providers a credential may
- *                                         name, and publishing
+ *                                         name, publishing, and the agent stack
+ *                                         (`wrathMcp`: the module's allowlisted
+ *                                         /health and the session store's sessions)
  *   PUT    /api/admin/secrets/<NAME>      store a credential's secret, sealed
  *                                         ({ value }; write-only)
  *   DELETE /api/admin/secrets/<NAME>      remove it: the environment's stands again
@@ -45,14 +47,19 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { MODULE_SECRET_ENV, moduleSecret } from "@wrathbench/mcp/module-auth";
+import { SessionStore } from "@wrathbench/mcp/record/read";
+import { LIVE_WINDOW_MS } from "../src/run-list";
+import { bareSessionId, sessionStoreOf } from "../src/session-store";
 import { codexLoginDir, effectiveCodexLogin, readCodexLogin, readCodexLoginRequest, requestCodexLogin } from "../src/codex-login";
 import { configDbPath, ConfigStore } from "../src/config-store";
 import { credentialHealth } from "../src/credential-health";
 import { CREDENTIAL_PROVIDERS, describeBudget, parseCredentials, providerById, type Credential } from "../src/credential-slots";
 import { clearStoreSecret, SecretRefused, setStoreSecret, storedSecretsAt, storeKeyOf, type StoredSecretMeta } from "../src/store-secrets";
 import { publishViewFromEnv } from "../../infra/publish-settings";
-import type { AdminCodexLoginView, AdminCredentialView, AdminPublishView, AdminResponse, FleetResponse } from "./api-types";
+import type { AdminCodexLoginView, AdminCredentialView, AdminPublishView, AdminResponse, FleetResponse, WrathMcpStoreView, WrathMcpView } from "./api-types";
+import type { ModuleRead } from "./module-health";
 import { actorOf } from "./config-api";
 import { ADMIN_API_PREFIX, type Groups } from "./groups";
 import { json } from "./http";
@@ -71,6 +78,66 @@ export interface AdminApiOptions {
   runsDir: string;
   env?: Record<string, string | undefined>;
   now?: () => number;
+  /** The module's `/health`, the handle's one cached read (`module-health.ts`). Absent reads as no module configured. */
+  moduleHealth?: () => Promise<ModuleRead>;
+}
+
+/**
+ * The session store's side of the wrath-mcp section: the sessions that
+ * reached the world (as the runs page lists them), how many are live, and the
+ * stack each reports. A session is named by its viewer id only: its
+ * directory's name and `session.json`'s `id` are its token's fingerprint, and
+ * `owner` and `group` are a host's labels, so none of them is read here.
+ */
+export function storeView(storeDir: string, now: number): WrathMcpStoreView {
+  const versions = new Map<string, { version: string; commit: string | null; sessions: number }>();
+  const liveSessions: WrathMcpStoreView["liveSessions"] = [];
+  let sessions = 0;
+  for (const s of new SessionStore(storeDir).list()) {
+    const character = s.session.character?.name;
+    if (typeof character !== "string" || character === "") continue;
+    sessions += 1;
+    const version = typeof s.session.stack?.version === "string" ? s.session.stack.version : "unknown";
+    const commit = typeof s.session.stack?.commit === "string" ? s.session.stack.commit : null;
+    const key = `${version}\0${commit ?? ""}`;
+    const v = versions.get(key) ?? { version, commit, sessions: 0 };
+    v.sessions += 1;
+    versions.set(key, v);
+    const beat = s.live?.ts;
+    if (s.session.ended === null && typeof beat === "number" && now - beat < LIVE_WINDOW_MS) {
+      liveSessions.push({ id: bareSessionId(basename(s.dir)), character, version, commit });
+    }
+  }
+  return {
+    sessions,
+    live: liveSessions.length,
+    versions: [...versions.values()].sort((a, b) => b.sessions - a.sessions || (a.version < b.version ? 1 : a.version > b.version ? -1 : 0)),
+    liveSessions,
+  };
+}
+
+/** The wrath-mcp section: the module's allowlisted health, and the store's sessions. */
+async function wrathMcpView(o: {
+  moduleHealth: (() => Promise<ModuleRead>) | undefined;
+  storeDir: string | null;
+  env: Record<string, string | undefined>;
+  now: number;
+}): Promise<WrathMcpView> {
+  const read: ModuleRead = o.moduleHealth === undefined ? { view: null, error: "unset", status: null } : await o.moduleHealth();
+  let store: WrathMcpStoreView | null = null;
+  if (o.storeDir !== null) {
+    try {
+      store = storeView(o.storeDir, o.now);
+    } catch {
+      store = null;
+    }
+  }
+  return {
+    module: read.view,
+    moduleError: read.view === null ? (read.error ?? "unreachable") : null,
+    secret: { env: MODULE_SECRET_ENV, set: moduleSecret(o.env) !== undefined },
+    store,
+  };
 }
 
 /** The credentials the store holds, or none when it holds none or does not read. */
@@ -311,7 +378,7 @@ export function createAdminApi(opts: AdminApiOptions): (req: Request, path: stri
     return r.ok ? json({ id, state: "requested" }, 202) : json({ error: r.why }, 409);
   };
 
-  return (req, path) => {
+  return async (req, path) => {
     if (path !== ADMIN_API_PREFIX && !path.startsWith(`${ADMIN_API_PREFIX}/`)) return null;
     const rest = path.slice(ADMIN_API_PREFIX.length + 1).split("/");
     if (rest.length === 2 && rest[0] === "secrets" && rest[1] !== "") return secretRoute(req, decodeURIComponent(rest[1]!));
@@ -339,6 +406,7 @@ export function createAdminApi(opts: AdminApiOptions): (req: Request, path: stri
       }),
       providers: CREDENTIAL_PROVIDERS.map((p) => ({ id: p.id, label: p.label, bill: p.bill, envBase: p.envBase, holds: p.holds, budgets: p.budgets })),
       publishing: { ...publishViewFromEnv(env), last: lastPass() },
+      wrathMcp: await wrathMcpView({ moduleHealth: opts.moduleHealth, storeDir: sessionStoreOf(opts.runsDir), env, now: t }),
       now: t,
     };
     return json(body);
