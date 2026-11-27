@@ -95,7 +95,9 @@ async function resume(runsDir: string, runId: string, extra: string[] = []): Pro
   const proc = Bun.spawn({
     cmd: [process.execPath, RUN_TS, "--resume", runId, "--runs-dir", runsDir, ...extra],
     cwd: runsDir,
-    env: { ...process.env, WRATHBENCH_MODULE_URL: "http://127.0.0.1:9" },
+    // A checkout's own .env reaches this process through Bun; with a port secret in it the
+    // resume waits on the unreachable module instead of failing fast, so it is not passed on.
+    env: { ...process.env, WRATHBENCH_MODULE_URL: "http://127.0.0.1:9", WRATHBENCH_MODULE_SECRET: undefined },
     stdout: "pipe",
     stderr: "pipe",
   });
