@@ -22,7 +22,7 @@ import { colorOf, liveListOrder, mapName, pipName } from "../lib/mapview";
 import { memberClass } from "../lib/party";
 import { ModelIcon } from "./ModelIcon";
 
-export interface LiveListProps {
+interface LiveListProps {
   rows: readonly AgentPosition[];
   onPick: (runId: string) => void;
   /** A party's members: each row's place in the party, which orders the rows and colours the swatch. */

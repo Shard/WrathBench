@@ -291,7 +291,7 @@ export function keepRowIdentity<T extends { runId: string }>(prev: readonly T[],
  * row first, so page 1 of a sort is the true top of it and the counts are the
  * whole set's; the page only decides which hundred are drawn.
  */
-export const PAGE_SIZE = 100;
+const PAGE_SIZE = 100;
 
 /** The `?page=` param: a page number from 1; anything else is page 1. */
 export function pageParam(v: string | string[] | undefined): number {

@@ -93,7 +93,7 @@ export const ROUTING_KEYS = ["order", "sort", "allowFallbacks", "requireParamete
  * Pin those by naming the provider in the entry, which is what the decision
  * asks for anyway: a third party is a named datapoint.
  */
-export const LAB_PROVIDERS: Readonly<Record<string, readonly string[]>> = {
+const LAB_PROVIDERS: Readonly<Record<string, readonly string[]>> = {
   cohere: ["Cohere"],
   google: ["Google", "Google AI Studio"],
   meta: ["Meta"],
@@ -105,14 +105,14 @@ export const LAB_PROVIDERS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** The author prefix of a slug, or null for a bare id (`omen-alpha`). */
-export function authorOf(model: string): string | null {
+function authorOf(model: string): string | null {
   const slash = model.indexOf("/");
   if (slash <= 0) return null;
   return model.slice(0, slash).toLowerCase();
 }
 
 /** The model author's own provider names, or null when none is known. */
-export function labProvidersOf(model: string): string[] | null {
+function labProvidersOf(model: string): string[] | null {
   const author = authorOf(model);
   if (author === null) return null;
   const names = LAB_PROVIDERS[author];

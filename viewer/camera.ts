@@ -268,7 +268,7 @@ export function fileResponse(req: Request, file: string, stat: { size: number; m
  * One `bytes=` range as inclusive offsets, null for "serve it whole" (no
  * header, a malformed one, several ranges), or "unsatisfiable".
  */
-export function parseRange(header: string | null, size: number): [number, number] | null | "unsatisfiable" {
+function parseRange(header: string | null, size: number): [number, number] | null | "unsatisfiable" {
   if (header === null) return null;
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (m === null) return null;

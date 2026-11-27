@@ -70,7 +70,7 @@ export interface Placeable {
   y: number;
 }
 
-export function clampScale(s: number): number {
+function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 }
 
@@ -81,7 +81,7 @@ export function project(view: View, x: number, y: number): { sx: number; sy: num
 }
 
 /** A view centred on a world-pixel point at a given scale. */
-export function centreOn(screen: Screen, px: number, py: number, scale: number): View {
+function centreOn(screen: Screen, px: number, py: number, scale: number): View {
   const s = clampScale(scale);
   return { scale: s, ox: screen.w / 2 - px * s, oy: screen.h / 2 - py * s };
 }
@@ -137,7 +137,7 @@ export const DEFAULT_MAP = 0;
 const DEFAULT_ROW = 46.2;
 const DEFAULT_COL = 31.1;
 /** At or above `TILE_MIN_PX / TILE_PX`, so the default frame draws the native tiles. */
-export const DEFAULT_SCALE = 0.4;
+const DEFAULT_SCALE = 0.4;
 
 export function defaultView(screen: Screen, map: number = DEFAULT_MAP): View {
   if (map !== DEFAULT_MAP) return worldView(screen);
@@ -152,7 +152,7 @@ export function defaultView(screen: Screen, map: number = DEFAULT_MAP): View {
  * here knows where a continent sits in its grid, and the pyramid draws real
  * ground at this zoom, so the whole of it is the honest first frame.
  */
-export function worldView(screen: Screen): View {
+function worldView(screen: Screen): View {
   const side = GRID * TILE_PX;
   return centreOn(screen, side / 2, side / 2, Math.min(screen.w, screen.h) / side);
 }
@@ -209,8 +209,8 @@ export function pinchView(start: View, from: readonly [Touch, Touch], to: readon
 }
 
 /** How close in time and place a second tap must land to zoom in, as a phone map does. */
-export const DOUBLE_TAP_MS = 300;
-export const DOUBLE_TAP_PX = 30;
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_PX = 30;
 
 export function isDoubleTap(prev: (Touch & { t: number }) | null, now: Touch & { t: number }): boolean {
   return prev !== null && now.t - prev.t <= DOUBLE_TAP_MS && Math.hypot(now.x - prev.x, now.y - prev.y) <= DOUBLE_TAP_PX;
@@ -280,12 +280,12 @@ export function tileLevel(scale: number, screen: Screen, withArt = false): numbe
  */
 
 /** At or below this many screen pixels per ADT, the art covers the minimap entirely. */
-export const ART_FADE_START_PX = 48;
+const ART_FADE_START_PX = 48;
 /** At or above this many, the art is not drawn and the minimap stands alone. */
-export const ART_FADE_END_PX = 384;
+const ART_FADE_END_PX = 384;
 
 /** Screen pixels one ADT spans under a scale (a native tile's on-screen size). */
-export function pxPerAdt(scale: number): number {
+function pxPerAdt(scale: number): number {
   return TILE_PX * scale;
 }
 
@@ -296,7 +296,7 @@ export function pxPerAdt(scale: number): number {
  * same amount, and the halfway point is the geometric mean of the two ends
  * (about 136 px per ADT with the values above, near the art's own z1).
  */
-export function minimapAlpha(pxPerAdtNow: number): number {
+function minimapAlpha(pxPerAdtNow: number): number {
   if (!(pxPerAdtNow > ART_FADE_START_PX)) return 0;
   if (pxPerAdtNow >= ART_FADE_END_PX) return 1;
   const t = Math.log(pxPerAdtNow / ART_FADE_START_PX) / Math.log(ART_FADE_END_PX / ART_FADE_START_PX);
@@ -320,10 +320,10 @@ export function artLevel(z: number): number {
  * step of two percent at the ends is smaller than one wheel notch moves the
  * blend anywhere near them.
  */
-export const BLEND_SNAP = 0.02;
+const BLEND_SNAP = 0.02;
 
 /** A blend weight, with the last `BLEND_SNAP` at either end taken to that end. */
-export function snapBlend(alpha: number): number {
+function snapBlend(alpha: number): number {
   if (alpha < BLEND_SNAP) return 0;
   if (alpha > 1 - BLEND_SNAP) return 1;
   return alpha;
@@ -447,7 +447,7 @@ export function worldPerPixel(scale: number): number {
 }
 
 /** Screen pixels per world yard under a scale: the inverse of `worldPerPixel`. */
-export function pxPerYard(scale: number): number {
+function pxPerYard(scale: number): number {
   return 1 / worldPerPixel(scale);
 }
 
@@ -458,8 +458,8 @@ export function pxPerYard(scale: number): number {
  * pixels — and their names show unhovered only further in still. The map
  * asks for units under the same gate, so a zoomed-out map fetches none.
  */
-export const NEARBY_MIN_PX_PER_YD = 1;
-export const NEARBY_NAME_PX_PER_YD = 2.5;
+const NEARBY_MIN_PX_PER_YD = 1;
+const NEARBY_NAME_PX_PER_YD = 2.5;
 /** A unit's dot, and how close a pointer must come to name it. */
 export const NEARBY_DOT_R = 3;
 export const NEARBY_HIT_R = 8;
@@ -559,7 +559,7 @@ export function hitTest<T extends Placeable>(
  * machines, which is what makes a pip recognisable between sessions. FNV-1a
  * over the id, folded onto the hue circle.
  */
-export function hueOf(runId: string): number {
+function hueOf(runId: string): number {
   let h = 2166136261;
   for (let i = 0; i < runId.length; i++) {
     h ^= runId.charCodeAt(i);
@@ -719,7 +719,7 @@ export const MOVE_PX = 0.5;
  * radius and the wedge past it): a turn moves the tip by the angle times this,
  * so it is held to `MOVE_PX` the same way.
  */
-export const HEADING_REACH_PX = 26;
+const HEADING_REACH_PX = 26;
 
 /** A pip as last drawn: where on screen, facing where, on which map, flying or not. */
 export interface DrawnPose {
@@ -736,7 +736,7 @@ export function drawnPose(view: View, pip: Pip): DrawnPose {
 }
 
 /** Whether one pip has moved, turned, flown or changed map enough to show since `prev`. */
-export function poseMoved(prev: DrawnPose, next: DrawnPose, px = MOVE_PX): boolean {
+function poseMoved(prev: DrawnPose, next: DrawnPose, px = MOVE_PX): boolean {
   if (prev.map !== next.map || prev.flying !== next.flying || (prev.o === null) !== (next.o === null)) return true;
   if (Math.hypot(next.sx - prev.sx, next.sy - prev.sy) >= px) return true;
   if (prev.o === null || next.o === null) return false;

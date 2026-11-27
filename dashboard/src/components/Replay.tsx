@@ -31,7 +31,7 @@ import { captionAt, lastAtOrBefore, partAt, partStarts, runToVideo, totalSeconds
 import { chaptersOf } from "@viewer/timeline-marks";
 
 /** A chapter's label: our own short detail, or its kind. */
-export function chapterLabel(c: ChapterView): string {
+function chapterLabel(c: ChapterView): string {
   return c.detail !== "" ? c.detail : c.type;
 }
 
@@ -47,7 +47,7 @@ function partTitle(p: VideoPartView): string {
   return `${from} – ${to} UTC`;
 }
 
-export interface RunVideoProps {
+interface RunVideoProps {
   clips: ClipsResponse;
   /** The map replay's sidebar: the player alone, no heading. */
   compact?: boolean;
@@ -417,9 +417,9 @@ export function VideoExcerpt(props: { runId: string; model: string | null; part:
 }
 
 /** How often the live still is re-read: about the camera's own interval. */
-export const LIVE_FRAME_POLL_MS = 10_000;
+const LIVE_FRAME_POLL_MS = 10_000;
 /** Past this a still reads stale: three missed reads. */
-export const LIVE_FRAME_STALE_MS = 3 * LIVE_FRAME_POLL_MS;
+const LIVE_FRAME_STALE_MS = 3 * LIVE_FRAME_POLL_MS;
 
 /**
  * The newest camera frame of a run that is still playing, with its age, on the

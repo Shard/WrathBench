@@ -65,7 +65,7 @@ export function formatRouting(value: unknown): string {
 }
 
 /** Thrown by `parseRouting` for text that is neither a name nor JSON. */
-export class RoutingParseError extends Error {
+class RoutingParseError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RoutingParseError";

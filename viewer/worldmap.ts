@@ -27,24 +27,24 @@ export const GRID = 64;
 export const TILE_PX = 256;
 
 /** Fractional tile coordinates: integer part names the tile, fraction the spot in it. */
-export interface TilePoint {
+interface TilePoint {
   row: number;
   col: number;
 }
 
 /** Pixel coordinates in the full-world image (row-major, `TILE_PX` per tile). */
-export interface PixelPoint {
+interface PixelPoint {
   px: number;
   py: number;
 }
 
 /** One axis of the transform: world yards → fractional tile index. */
-export function coordToTile(coord: number): number {
+function coordToTile(coord: number): number {
   return 32 - coord / TILE_SIZE;
 }
 
 /** The inverse: fractional tile index → world yards. */
-export function tileToCoord(tile: number): number {
+function tileToCoord(tile: number): number {
   return (32 - tile) * TILE_SIZE;
 }
 

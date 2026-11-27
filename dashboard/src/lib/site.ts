@@ -15,9 +15,9 @@
 import type { ApiInfoResponse, ApiSiteInfo, SiteTheme, ThemeToken } from "@viewer/api-types";
 import type { PageSite } from "@viewer/groups";
 
-export const DEFAULT_NAME = "WrathBench";
+const DEFAULT_NAME = "WrathBench";
 /** Where `index.html`'s first script finds the last site it saw; the script names it too. */
-export const SITE_CACHE_KEY = "wb.site";
+const SITE_CACHE_KEY = "wb.site";
 const STYLE_ID = "site-theme";
 const HEX = /^#[0-9a-f]{6}$/;
 

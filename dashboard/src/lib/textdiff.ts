@@ -82,7 +82,7 @@ function words(s: string): string[] {
  * longest common subsequence over words. Null when the table would be too big
  * to be worth it.
  */
-export function wordRanges(before: string, after: string): { before: Range[]; after: Range[] } | null {
+function wordRanges(before: string, after: string): { before: Range[]; after: Range[] } | null {
   const x = words(before);
   const y = words(after);
   if (x.length * y.length > WORDS_MAX_CELLS) return null;

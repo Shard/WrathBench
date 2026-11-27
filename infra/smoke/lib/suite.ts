@@ -90,7 +90,7 @@ export function refusals(members: readonly SuiteMember[]): string[] {
  * that share any account are in one chain, in member order, because one
  * account holds one live session. Chains are in the order of their first member.
  */
-export function chainsOf(members: readonly SuiteMember[]): SuiteMember[][] {
+function chainsOf(members: readonly SuiteMember[]): SuiteMember[][] {
   const chains: { accounts: Set<string>; members: SuiteMember[] }[] = [];
   for (const m of members) {
     const mine = accountsOf(m);

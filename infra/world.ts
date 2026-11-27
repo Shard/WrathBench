@@ -63,7 +63,7 @@ export const WORLD_ID_LABEL = `${LABEL_PREFIX}world`;
 export const WORLD_ID_ANNOTATION = `${LABEL_PREFIX}world-id`;
 /** The headless Service a world's pod is named under (templates/worlds.yaml). */
 export const WORLDS_SERVICE = "worlds";
-export const WORLD_POD_TEMPLATE_ENV = "WRATHBENCH_WORLD_POD_TEMPLATE";
+const WORLD_POD_TEMPLATE_ENV = "WRATHBENCH_WORLD_POD_TEMPLATE";
 export const DEFAULT_WORLD_POD_TEMPLATE = "/etc/wrathbench/run-pod/world.json";
 /** A world's own records, `data/worlds/<id>/`: outside `runs/`, where every entry reads as a run. */
 export const WORLDS_DIR = join("data", "worlds");
@@ -98,11 +98,11 @@ export function newWorldId(random: (n: number) => Uint8Array = (n) => crypto.get
   return id;
 }
 
-export function isWorldId(id: unknown): id is string {
+function isWorldId(id: unknown): id is string {
   return typeof id === "string" && WORLD_ID_RE.test(id);
 }
 
-export function schemaOf(id: string): string {
+function schemaOf(id: string): string {
   if (!isWorldId(id)) throw new Error(`not a world id: ${JSON.stringify(id)}`);
   return `acore_characters_${id}`;
 }

@@ -32,17 +32,17 @@ export function statusStamp(status: CharacterStatus): string {
 }
 
 /** One period of the rest glyph's drift, in ms. Slow: this is a snore, not a blink. */
-export const REST_PERIOD_MS = 2600;
+const REST_PERIOD_MS = 2600;
 
 /** How far the glyph rises over one period, in css pixels. */
-export const REST_RISE_PX = 5;
+const REST_RISE_PX = 5;
 
 /**
  * How often the drifting glyph redraws the map on its own. It rises five
  * pixels over half a period, at most four tenths of a pixel a frame at this rate,
  * so fifteen frames a second draw the same drift that sixty did.
  */
-export const REST_FRAME_MS = 66;
+const REST_FRAME_MS = 66;
 
 /** Whether the glyph alone is due a redraw; never under reduced motion, where it does not move. */
 export function restFrameDue(lastDraw: number, now: number, reduced: boolean): boolean {

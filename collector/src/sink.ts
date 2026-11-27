@@ -38,7 +38,7 @@ export interface SinkOptions {
 export const RETRY_BASE_MS = 1_000;
 export const RETRY_MAX_MS = 30_000;
 
-export function retryDelayMs(attempt: number): number {
+function retryDelayMs(attempt: number): number {
   return Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(attempt, 10));
 }
 
@@ -59,7 +59,7 @@ export class SinkAborted extends Error {
  * string column in this store never distinguishes "empty" from "absent",
  * because nothing reading it does either.
  */
-export function jsonEachRow(rows: readonly unknown[]): string {
+function jsonEachRow(rows: readonly unknown[]): string {
   let out = "";
   for (const r of rows) out += `${JSON.stringify(r)}\n`;
   return out;

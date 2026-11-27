@@ -206,7 +206,7 @@ async function read(a: Args, env: Io["env"]): Promise<{ text: string; writtenAt:
   return { text: readFileSync(path, "utf8"), writtenAt: statSync(path).mtimeMs, log: log.code === 0 ? log.stdout.split("\n") : [] };
 }
 
-export async function run(argv: readonly string[], io: Io, now = Date.now()): Promise<number> {
+async function run(argv: readonly string[], io: Io, now = Date.now()): Promise<number> {
   if (argv.includes("-h") || argv.includes("--help")) {
     io.out(USAGE);
     return 0;

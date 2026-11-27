@@ -32,7 +32,7 @@ export const HASH_FILE_KEY = 3;
  * Normalise an MPQ path the way the game does before hashing: forward slashes
  * become backslashes and everything is upper-cased (ASCII).
  */
-export function normalizePath(name: string): string {
+function normalizePath(name: string): string {
   return name.replace(/\//g, "\\").toUpperCase();
 }
 

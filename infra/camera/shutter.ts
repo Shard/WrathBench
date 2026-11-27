@@ -97,10 +97,10 @@ export interface ShutterOptions {
   ringMs?: number;
 }
 
-export const DEFAULT_LEAD_MS = 30_000;
-export const DEFAULT_TAIL_MS = 10_000;
+const DEFAULT_LEAD_MS = 30_000;
+const DEFAULT_TAIL_MS = 10_000;
 /** The lead plus the session writer's drain lag, with room. */
-export const DEFAULT_RING_MS = DEFAULT_LEAD_MS + 15_000;
+const DEFAULT_RING_MS = DEFAULT_LEAD_MS + 15_000;
 
 export class Shutter {
   private readonly intervalMs: number;

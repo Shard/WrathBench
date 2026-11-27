@@ -11,7 +11,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ConfigRefusal,
-  type EpisodeId,
   type FleetConfig,
   type FleetJob,
   type FleetPreflight,
@@ -70,7 +69,7 @@ import { CONTAINER, type FleetState, foreignRosters, jobArgv, rosterResumes, job
 import { readMeta } from "../runner/src/trajectory";
 import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy, accountHolders } from "./run-roster";
-import { EPISODE_LIST, EPISODES } from "../runner/src/episodes";
+import { EPISODE_LIST, EPISODES, type EpisodeId } from "../runner/src/episodes";
 import { className as classNameOf, raceName as raceNameOf } from "../runner/src/characters";
 import { readImageRecord, runPodsHere } from "./run-pod";
 import { runCampaignFile } from "../runner/src/campaign-file";
@@ -83,7 +82,6 @@ import {
   credentialStatuses,
   formatCredentialStatus,
   publishedReads,
-  readCredentialUsage,
   type ReadHold,
   readHoldsOf,
   SlotBook,
@@ -94,7 +92,7 @@ import type { CredentialRead } from "../runner/src/credential-health";
 import { worldsHere } from "./world";
 import { formatModelLists } from "./run-fleet-model-lists";
 import { readModelListsSidecar } from "../runner/src/model-lists";
-import type { SubscriptionUsage } from "../runner/src/subscription-usage";
+import { readCredentialUsage, type SubscriptionUsage } from "../runner/src/subscription-usage";
 import { providerById } from "../runner/src/credential-slots";
 import { rosterPriceGap } from "../viewer/pricing";
 import { catalogueKeyOf } from "./model-catalogue";
@@ -116,7 +114,7 @@ import { GROUPS_ENV, groupsEnvValue, groupsFromEnv, type Groups } from "../viewe
  * `chooseStart`, which set its freeplay start and nothing a scored episode
  * plays. Nothing when no entry carries one. Pure.
  */
-export function formatStartKeys(roster: Readonly<Record<string, Pick<FleetRosterEntry, "race" | "class" | "chooseStart">>>): string[] {
+function formatStartKeys(roster: Readonly<Record<string, Pick<FleetRosterEntry, "race" | "class" | "chooseStart">>>): string[] {
   const own = Object.entries(roster).filter(([, e]) => e.race !== undefined || e.class !== undefined || e.chooseStart === true);
   if (own.length === 0) return [];
   const fixed = EPISODE_LIST.flatMap((t) =>
@@ -132,7 +130,7 @@ export function formatStartKeys(roster: Readonly<Record<string, Pick<FleetRoster
   ];
 }
 
-export function formatCharacters(
+function formatCharacters(
   roster: Record<string, FleetRosterEntry>,
   characters: ReadonlyMap<string, Character>,
   occupants: ReadonlyMap<string, Occupant>,
@@ -179,7 +177,7 @@ export function formatCharacters(
  * run of another harness series, which `planResumes` neither resumes, ends
  * nor lists — left out of every plan, with why.
  */
-export function formatPausedAccountNote(o: {
+function formatPausedAccountNote(o: {
   run: Pick<RunFact, "runId" | "pause" | "episodeMs" | "harnessSeries">;
   progress?: { level: number; xp: number };
   plan: { resume: readonly Pick<ResumePlan, "runId">[]; listed: readonly Pick<PausedListing, "runId">[]; end: readonly EndedRun[] };
@@ -211,7 +209,7 @@ export function formatPausedAccountNote(o: {
 }
 
 /** One line per run the supervisor would end rather than resume, for --status and --dry-run. */
-export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean): string[] {
+function formatEnded(ended: readonly EndedRun[], fleetUp: boolean): string[] {
   if (ended.length === 0) return [];
   return [
     `lapsed runs the supervisor ${fleetUp ? "ends on its next tick" : "will end when it starts"} (${ended.length}):`,
@@ -238,7 +236,7 @@ export function formatEndedRun(e: EndedRun): string {
  * operator-only, never on `PausedListing`, whose `why` the public fleet page
  * carries.
  */
-export function formatPaused(listed: readonly PausedListing[], detailOf?: (l: PausedListing) => string | undefined): string[] {
+function formatPaused(listed: readonly PausedListing[], detailOf?: (l: PausedListing) => string | undefined): string[] {
   if (listed.length === 0) return [];
   return [
     `paused runs not resumed (${listed.length}):`,
@@ -271,12 +269,12 @@ export function pauseDetailLine(detail: string | undefined | null, max = 120): s
  * The detail lookup `formatPaused` takes: an `infrastructure-failed` pause's
  * own words, off the run's meta.json pause mark; nothing for any other pause.
  */
-export function pauseDetailOf(runsDir: string = RUNS_DIR): (l: PausedListing) => string | undefined {
+function pauseDetailOf(runsDir: string = RUNS_DIR): (l: PausedListing) => string | undefined {
   return (l) => (l.reason === "infrastructure-failed" ? pauseDetailLine(readMeta(join(runsDir, l.runId))?.pause?.detail) : undefined);
 }
 
 /** The volume line for a Codex home credential: how full the directory its variable names here is. */
-export function codexHomeVolume(c: Pick<CredentialStatus, "provider" | "secretEnv">, env: Record<string, string | undefined> = process.env): string | undefined {
+function codexHomeVolume(c: Pick<CredentialStatus, "provider" | "secretEnv">, env: Record<string, string | undefined> = process.env): string | undefined {
   if (providerById(c.provider)?.holds !== "home") return undefined;
   const dir = env[c.secretEnv];
   return dir !== undefined && dir.length > 0 ? volumeUsage(dir) : undefined;
@@ -331,7 +329,7 @@ export function localCredentialStatuses(
  * rejected since when, and that the store's enabled flags are not what is
  * running.
  */
-export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: number | undefined): string[] {
+function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: number | undefined): string[] {
   if (rej === undefined) return [];
   return [
     `!! config REJECTED since ${new Date(rej.since).toLocaleString()}: ${rej.error}` +
@@ -350,7 +348,7 @@ export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: n
  * the supervisor's log line. `!` rather than the banner's `!!`: the fleet is
  * running, one pin is not.
  */
-export function formatRefusals(refusals: readonly ConfigRefusal[], inForce = true): string[] {
+function formatRefusals(refusals: readonly ConfigRefusal[], inForce = true): string[] {
   if (refusals.length === 0) return [];
   // `inForce` false means the banner above already said the file is NOT what
   // the supervisor is running — a fixed file within a tick of being re-read, or
@@ -381,7 +379,7 @@ export function formatCampaignRefusals(refusals: readonly CampaignRefusal[]): st
  * (`concluded`). Pure. The row stays enabled and launches nothing, which
  * would otherwise read as a sweep stuck in silence.
  */
-export function formatConcludedCampaigns(campaigns: readonly Pick<Campaign, "name" | "version" | "enabled" | "concluded">[]): string[] {
+function formatConcludedCampaigns(campaigns: readonly Pick<Campaign, "name" | "version" | "enabled" | "concluded">[]): string[] {
   const out = campaigns
     .filter((c) => c.enabled && isConcluded(c, c.version))
     .map((c) => `   campaigns/${c.name}: ${c.name}@${c.version} is concluded — point version at a newer one, or set enabled: false`);
@@ -430,7 +428,7 @@ export function formatCatalogueGaps(roster: Readonly<Record<string, FleetRosterE
 }
 
 /** --status / --dry-run rendering of a gate record. Pure. */
-export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight): string[] {
+function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight): string[] {
   const accounts = preflightAccounts(pf);
   const head =
     `preflight ${pf.enabled ? "enabled" : "disabled"} (${pf.smokes.length} smoke(s) on ${accounts.join(",")}, ` +
@@ -488,7 +486,7 @@ export interface JobRow {
 }
 
 /** The marker a stuck run's account row carries. */
-export const STUCK_MARK = "!! STUCK:";
+const STUCK_MARK = "!! STUCK:";
 
 /** The tail a stuck run's row ends with, pointing at the view that says why. */
 export function stuckTail(runId: string, flag: string | undefined): string {
@@ -516,7 +514,7 @@ export type AccountKind = "pinned" | "pool";
  * elapsed) or free/cooling. Pure over rows the caller assembled. `max` is
  * the pool's cap when it is below the pool's size.
  */
-export function formatAccounts(rows: readonly AccountRow[], max?: number): string[] {
+function formatAccounts(rows: readonly AccountRow[], max?: number): string[] {
   const n = (k: AccountKind): number => rows.filter((r) => r.kind === k).length;
   const cap = max !== undefined && max < n("pool") ? ` (at most ${max} live at once)` : "";
   const out: string[] = [`accounts: ${n("pinned")} pinned, ${n("pool")} pool${cap}`];
@@ -663,7 +661,7 @@ export function formatHeld(held: readonly Pick<TickHold, "name" | "episode" | "w
  * The models table says this in place of the projection's verdict, so a model
  * the projection calls schedulable but the tick holds reads as held. Pure.
  */
-export function plannedVerdicts(plan: TickPlan): Map<string, PlannedVerdict> {
+function plannedVerdicts(plan: TickPlan): Map<string, PlannedVerdict> {
   const out = new Map<string, PlannedVerdict>();
   const launches = new Set(plan.spawns.filter((sp) => sp.enabled).map((sp) => sp.name));
   const say = (refs: readonly string[], text: string, held = false): void => {
@@ -780,7 +778,7 @@ export function printLiveRuns(): number {
  * up-to-60s window where the file says stop and jobs are still being spawned.
  * Pure.
  */
-export function formatPauseBanner(onDisk: FleetPause | undefined, inEffect: FleetPause | undefined): string[] {
+function formatPauseBanner(onDisk: FleetPause | undefined, inEffect: FleetPause | undefined): string[] {
   if (onDisk === undefined && inEffect === undefined) return [];
   if (onDisk === undefined) {
     return [
@@ -856,7 +854,7 @@ export function runningRefsOf(jobs: ReadonlyMap<string, StateJob>): Set<string> 
  * says so. An exited job leaves its account free, and the row then says what
  * holds it, if anything. Pure.
  */
-export function showsJob(j: StateJob, isAlive: (j: StateJob) => boolean): boolean {
+function showsJob(j: StateJob, isAlive: (j: StateJob) => boolean): boolean {
   return isAlive(j) || typeof j.pid !== "number" || typeof j.spawnedAt !== "number";
 }
 
@@ -866,7 +864,7 @@ export function showsJob(j: StateJob, isAlive: (j: StateJob) => boolean): boolea
  * one its log launched (`lastLaunched`, for a loop's later cycles). The newest
  * spawn wins. Pure.
  */
-export function jobOfRun(
+function jobOfRun(
   runId: string,
   jobs: ReadonlyMap<string, StateJob>,
   lastLaunched: (name: string, j: StateJob) => string | undefined = () => undefined,
@@ -892,7 +890,7 @@ export function jobOfRun(
  * not launch is "not fleet-managed": a fleet run pod used to be called that
  * too.
  */
-export function formatHolder(h: {
+function formatHolder(h: {
   runId: string;
   progress?: { level: number; xp: number };
   owner?: { name: string; j: StateJob; alive: boolean };
@@ -919,7 +917,7 @@ export function formatHolder(h: {
  * first one's fleet. The state cannot say which orchestrator runs the
  * container, so the quickstart's is named too.
  */
-export function fleetLogsHint(env: Readonly<Record<string, string | undefined>>): string {
+function fleetLogsHint(env: Readonly<Record<string, string | undefined>>): string {
   const pick = (k: string): string => (env[k] !== undefined && env[k] !== "" ? env[k]! : "wrathbench");
   const ns = pick("WRATHBENCH_K8S_NAMESPACE");
   const release = pick("WRATHBENCH_K8S_RELEASE");
@@ -1257,7 +1255,7 @@ export function printStatus(groups: Groups = groupsFromEnv(process.env)): void {
 // ------------------------------------------------------------------ dry run
 
 /** Something already running when the dry-run plans, with what its account row needs. */
-export interface InFlightRun {
+interface InFlightRun {
   /** The job name; for a run no job owns, its run id. */
   name: string;
   account: string;
@@ -1288,7 +1286,7 @@ export interface InFlightRun {
  * run-pod cap but no driver cap, as on the tick, and its row says what follows
  * (`planDryRun`).
  */
-export function inFlightRuns(opts: {
+function inFlightRuns(opts: {
   jobs: ReadonlyMap<string, StateJob>;
   runs: readonly RunFact[];
   roster: Readonly<Record<string, FleetRosterEntry>>;
@@ -1476,7 +1474,7 @@ export interface DryRunPlan {
  * as running (`inFlightRuns`); the plan holds the same runs' accounts and
  * models because its snapshot names them. Pure.
  */
-export function planDryRun(opts: {
+function planDryRun(opts: {
   plan: TickPlan;
   /** The accounts' holders the plan read (`TickSnapshot.holders`). */
   holders: ReadonlyMap<string, string>;

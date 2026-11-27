@@ -35,7 +35,7 @@ import { groupsOf } from "./nav";
 export const HOME_PRELOAD_EPISODE = "e90";
 
 /** What a preload reads of the router's arguments. */
-export interface PreloadArgs {
+interface PreloadArgs {
   params: Readonly<Record<string, string | undefined>>;
   location: { query: Readonly<Record<string, string | string[] | undefined>> };
   intent: string;

@@ -262,7 +262,7 @@ export function rosterModels(fleetJson: string): string[] {
  * The runs a `--runs` file names: the viewer's `/api/runs` body (`{ runs }`) or
  * a bare list, each with a `model` and, where known, its `driver` and `apiBase`.
  */
-export function runLaunches(text: string): Launch[] {
+function runLaunches(text: string): Launch[] {
   const parsed = JSON.parse(text) as unknown;
   const rows = Array.isArray(parsed) ? parsed : ((parsed as { runs?: unknown }).runs ?? []);
   if (!Array.isArray(rows)) throw new Error("--runs: expected a list of runs, or an object with one under `runs`");
@@ -310,7 +310,7 @@ type Doc = {
 } & Record<string, unknown>;
 
 /** Every OpenRouter id the catalogue already carries a block for: the standing asks. */
-export function catalogueOpenRouterIds(doc: Doc): string[] {
+function catalogueOpenRouterIds(doc: Doc): string[] {
   return Object.values(doc.models).flatMap((e) => Object.keys(e.prices?.openrouter ?? {}));
 }
 
@@ -365,7 +365,7 @@ export function applyOpenRouterWindows(doc: Doc, windows: Readonly<Record<string
  * a window appended, or today's replaced by a second sync. A window an
  * earlier sync wrote today, unchanged, is not news.
  */
-export function movedToday(before: readonly SyncedWindow[], after: readonly SyncedWindow[], today: string): boolean {
+function movedToday(before: readonly SyncedWindow[], after: readonly SyncedWindow[], today: string): boolean {
   const last = after[after.length - 1];
   if (last?.from !== today) return false;
   const was = before[before.length - 1];
@@ -383,7 +383,7 @@ export function movedToday(before: readonly SyncedWindow[], after: readonly Sync
  * gets its paid listing. A bare key (`kimi-k3.1-pro`) is no OpenRouter id and
  * is not asked for.
  */
-export function openRouterAsks(l: Launch): string[] {
+function openRouterAsks(l: Launch): string[] {
   const ids = catalogueIds(l.model, l.driver);
   const out = new Set(ids);
   for (const id of ids) {
@@ -554,7 +554,7 @@ export function listingAsks(doc: Doc, providerId: string, launches: readonly Lau
  * no entry lists, and one whose entry already has a row on this provider for
  * another id (`clash`). Hand-held rows are never touched.
  */
-export function applyListingWindows(
+function applyListingWindows(
   doc: Doc,
   providerId: string,
   windows: Readonly<Record<string, SyncedWindow[]>>,
@@ -669,7 +669,7 @@ export function foldListing(doc: Doc, providerId: string, listing: readonly List
 }
 
 /** `--fleet <file>` and `--runs <file>`: the roster and runs as files, for a checkout that has neither. */
-export function parseArgs(argv: readonly string[]): { fleet: string | null; runs: string | null } {
+function parseArgs(argv: readonly string[]): { fleet: string | null; runs: string | null } {
   const out = { fleet: null as string | null, runs: null as string | null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;

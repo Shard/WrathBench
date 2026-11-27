@@ -55,15 +55,12 @@ import {
   EXHAUSTED_PCT,
   gateClassOf,
   newestByCredential,
-  readCredentialUsage,
   thresholdOf,
   usageHold,
   type SubscriptionUsage,
   type UsageHold,
 } from "../runner/src/subscription-usage";
 import type { FleetRosterEntry, JobSpawn } from "./run-fleet-config";
-
-export { readCredentialUsage, CREDENTIAL_USAGE_SIDECAR };
 
 // ------------------------------------------------------------------ the budgets
 
@@ -448,7 +445,7 @@ export function placeResume(
  * key still reaches it, because it names the same key (`readHoldsOf`).
  * Enabled-ness is the caller's: a reader polls only enabled credentials.
  */
-export function readsGoUsage(c: Pick<Credential, "provider" | "billing" | "budget">): boolean {
+function readsGoUsage(c: Pick<Credential, "provider" | "billing" | "budget">): boolean {
   return c.provider === "opencode-go" && (c.billing === "paid" || c.budget?.kind === "usage");
 }
 

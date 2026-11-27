@@ -112,7 +112,7 @@ const USAGE = `usage: bun infra/fixtures/apply.ts --account <ACCOUNT> --characte
 
 scenarios: ${SCENARIO_NAMES.join(", ")}`;
 
-export function parseArgs(argv: string[]): Args {
+function parseArgs(argv: string[]): Args {
   const raw: Record<string, string | boolean> = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;

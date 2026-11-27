@@ -13,7 +13,7 @@ import { readRunFact, utcDay, type RunFact } from "../runner/src/run-fact";
 import { loadRunConfig } from "../runner/src/config";
 import { Trajectory, type RunMeta } from "../runner/src/trajectory";
 import { parseCredentials } from "../runner/src/credential-slots";
-import type { SubscriptionUsage } from "../runner/src/subscription-usage";
+import { CREDENTIAL_USAGE_SIDECAR, readCredentialUsage, type SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../viewer/public-projection";
 import type { EntrySummary } from "../viewer/api-types";
 import type { FleetResponse, ResumeHoldCode } from "../viewer/api-types-runner";
@@ -21,7 +21,6 @@ import { parseFleet, planResumes, resumeNotBefore, rosterModels, type FleetConfi
 import { planOf } from "./fixtures/tick";
 import type { JobSpawn } from "./run-fleet-config";
 import {
-  CREDENTIAL_USAGE_SIDECAR,
   credentialGate,
   credentialStatuses,
   FleetGoUsage,
@@ -30,7 +29,6 @@ import {
   placeRef,
   publishedReads,
   type ReadHold,
-  readCredentialUsage,
   readHoldsOf,
   resumeHoldOf,
   SlotBook,

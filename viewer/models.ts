@@ -53,7 +53,7 @@ import { redactSecrets } from "./tail";
  * The roster's rows, its names and the `site` block are `roster.ts`'s, which
  * every handle reads; what this adds is what only the scheduler's pages need.
  */
-export interface RosterRead extends RosterNames {
+interface RosterRead extends RosterNames {
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
   /**
@@ -210,7 +210,7 @@ export interface LastError {
  * recorded token is struck out of the string itself, which a key-name rule
  * cannot do when the value is interpolated into a URL.
  */
-export function lastErrorOf(dir: string, runId: string): LastError | null {
+function lastErrorOf(dir: string, runId: string): LastError | null {
   const path = join(dir, "trajectory.jsonl");
   if (!existsSync(path)) return null;
   let text: string;

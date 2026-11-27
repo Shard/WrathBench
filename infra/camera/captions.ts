@@ -23,7 +23,7 @@ export interface Said {
 const PAD_TOOL = /(?:^|__|\.)(write|edit)_scratchpad$/;
 
 /** One line of plain text: whitespace folded, markdown markers dropped, cut at `max` on a word. */
-export function captionLine(text: string, max: number = CAPTION_CHARS): string {
+function captionLine(text: string, max: number = CAPTION_CHARS): string {
   const flat = text
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]*)`/g, "$1")

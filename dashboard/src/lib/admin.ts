@@ -123,7 +123,7 @@ export function fixLabel(f: CredentialFix, fmt: (t: number) => string): string {
  * deployment drives one. Policy, accounts and preflight are the supervisor's,
  * so the runner group's; the site's settings are every deployment's.
  */
-export const CONFIG_SECTIONS = [
+const CONFIG_SECTIONS = [
   { id: "wrath-mcp", label: "wrath-mcp", group: null },
   { id: "providers", label: "providers", group: "runner" },
   { id: "roster", label: "roster", group: "runner" },

@@ -16,7 +16,7 @@ export const FANOUT_RUN = "fanout-probe";
 /** In `roster.json` only: a body that carries it read a file nothing may read. */
 export const FANOUT_ROSTER_TOKEN = "fanout-roster-token-0f0f0f0f0f0f";
 
-export interface FanoutCharacter {
+interface FanoutCharacter {
   name: string;
   guid: string;
   readings: TraceReading[];

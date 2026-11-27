@@ -92,7 +92,7 @@ export function empiricalCeiling(runs: readonly ResultRun[]): EmpiricalCeiling |
 }
 
 /** The line's label: what it is a maximum over, named so it cannot be misread as a target. */
-export function ceilingLabel(episode: string, series: string | null): string {
+function ceilingLabel(episode: string, series: string | null): string {
   return `best observed ${episode}, harness ${series ?? "—"}`;
 }
 
@@ -269,7 +269,7 @@ export function scriptedReference(
 }
 
 /** The line's label: what it is, the tier and the series, so it cannot be read as a target. */
-export function scriptedReferenceLabel(episode: string, series: string | null): string {
+function scriptedReferenceLabel(episode: string, series: string | null): string {
   return `scripted reference, ${episode}, harness ${series ?? "—"}`;
 }
 

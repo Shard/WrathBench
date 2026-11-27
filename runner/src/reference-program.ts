@@ -25,7 +25,7 @@ import type { RunConfig } from "./config";
 
 /** Where the program sits in a build that carries it: the runner image's `runner/src/reference/`. */
 export const REFERENCE_PROGRAM_DIR = join(import.meta.dir, "reference");
-export const REFERENCE_PROGRAM_PATH = join(REFERENCE_PROGRAM_DIR, "index.ts");
+const REFERENCE_PROGRAM_PATH = join(REFERENCE_PROGRAM_DIR, "index.ts");
 
 /**
  * Test seam only: a launch reads the program from this path instead of the

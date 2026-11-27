@@ -550,7 +550,7 @@ function textOf(v: unknown): string {
  * A failed snippet's class: the error's name off the line after the harness's
  * `error (Nms)`, `timeout` for the snippet ceiling, else its first words.
  */
-export function errorClass(text: string): string {
+function errorClass(text: string): string {
   const lines = text.split("\n", 3);
   const body = (/^error \(\d+ms\)$/.test(lines[0] ?? "") ? lines[1] : lines[0]) ?? "";
   if (body.startsWith("snippet evaluation exceeded")) return "timeout";
@@ -3901,7 +3901,7 @@ export const HINT_BLOCK_HEAD = "--- harness ---";
  * text on a line of its own never reads as one; the label is the snippet's
  * code, parentheses and all, so it ends at the first `): `.
  */
-export const HINT_LINE = /^([A-Za-z_$][\w$.]*) ([a-z][a-z0-9_]*)(?: ×(\d+))?(?: \(from an earlier snippet.*?\))?: /;
+const HINT_LINE = /^([A-Za-z_$][\w$.]*) ([a-z][a-z0-9_]*)(?: ×(\d+))?(?: \(from an earlier snippet.*?\))?: /;
 /** How a served event names a decode failure (EventSummary, runner/src/context.ts). */
 export const SCHEMA_ERROR_KEY = '"schemaError"';
 
@@ -4877,7 +4877,7 @@ export const STALL_DEFAULT_MS = 5 * 60_000;
  * `maxGapMs`, and nothing before the first reading. What is not covered is
  * never a stall: nothing recorded is not no progress. Pure.
  */
-export function stallSpans(
+function stallSpans(
   all: readonly ProgressSample[],
   w: { since: number; until: number },
   t: { moveYards: number; maxGapMs: number; stallMs: number },

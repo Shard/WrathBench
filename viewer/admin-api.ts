@@ -169,7 +169,7 @@ export function modelKeysFromEnv(env: Record<string, string | undefined>): strin
  * status by id when the supervisor is up. A credential the supervisor has not
  * seen yet (written since its last tick) reads as unknown, not as unset.
  */
-export function credentialViews(o: {
+function credentialViews(o: {
   stored: readonly Credential[];
   fleet: Pick<FleetResponse, "credentials">;
   up: boolean;

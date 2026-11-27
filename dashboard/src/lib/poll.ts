@@ -58,7 +58,7 @@ export function isStalled(lastSettledAt: number, now: number, intervalMs: number
  * cannot be serialised (nothing the API returns, but the poller is generic)
  * gets no key and is always taken as new, which is the old behaviour.
  */
-export function contentKey(v: unknown): string | null {
+function contentKey(v: unknown): string | null {
   try {
     const key = JSON.stringify(v);
     return typeof key === "string" ? key : null;
@@ -106,11 +106,11 @@ export interface PollOptions {
 
 /**
  * How long until the next tick is due, from the last one: zero once it is
- * overdue. Pure, and exported, so the resume rule is asserted rather than the
+ * overdue. Pure, so the resume rule is read off its inputs rather than the
  * timer: a tab that comes back after a tick fell due polls at once, and one
  * that comes back sooner waits out the rest of its period.
  */
-export function dueIn(lastTickAt: number, now: number, intervalMs: number): number {
+function dueIn(lastTickAt: number, now: number, intervalMs: number): number {
   return Math.max(0, lastTickAt + intervalMs - now);
 }
 

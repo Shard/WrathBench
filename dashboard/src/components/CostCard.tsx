@@ -26,7 +26,7 @@ const priced = (c: Figure | undefined): c is Figure & { usd: number } =>
 /** "2026-10", or "undated": the price row's month, so a stale rate reads as stale. */
 const month = (c: Figure): string => (c.asOf === null ? "undated" : c.asOf.slice(0, 7));
 
-export interface CostReading {
+interface CostReading {
   /** The headline figure. */
   value: string;
   /** Its own hover: the headline figure's note. */

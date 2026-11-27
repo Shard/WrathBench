@@ -613,15 +613,15 @@ export const TICK_FONT = 11;
  */
 export const CHAR_W = 0.6 * LABEL_FONT;
 /** The label box above its baseline: one em covers ascenders and the internal leading. */
-export const LABEL_H = LABEL_FONT;
+const LABEL_H = LABEL_FONT;
 /**
  * …and below it: a quarter em, the descender depth of g, p, q and y. The
  * previous box stopped at the baseline, so a label's descenders were free to
  * sit on the row beneath.
  */
-export const LABEL_DESC = 0.25 * LABEL_FONT;
+const LABEL_DESC = 0.25 * LABEL_FONT;
 /** One label row — the box's full height, the pitch the outer rings and the character chart's stack step by. */
-export const LABEL_ROW = LABEL_H + LABEL_DESC;
+const LABEL_ROW = LABEL_H + LABEL_DESC;
 /** Breathing room either side of the letters, so two labels on one row never touch. */
 export const LABEL_PAD = 2;
 /** Cap height, 0.7 em: what a label centred on a mark is centred by. */
@@ -673,13 +673,13 @@ export const LABEL_GAP = MARK_RING_R + 1.5;
  * never interpolated against. The gutter exists only when something is
  * actually free.
  */
-export const COST_FLOOR = 0.01;
+const COST_FLOOR = 0.01;
 
 /** The gutter's width in viewBox units, when there is one. */
-export const FREE_GUTTER_W = 54;
+const FREE_GUTTER_W = 54;
 
 /** The narrowest the axis is allowed to be, so an all-cheap view is not a sliver. */
-export const COST_CEILING_MIN = 10;
+const COST_CEILING_MIN = 10;
 
 /**
  * What a log axis is parameterised by. Cost's values are the constants above;
@@ -766,19 +766,14 @@ export function logScale(values: readonly number[], x0: number, x1: number, opts
 }
 
 /** The cost axis: `logScale` at cost's floor, ceiling and gutter. */
-export function costScale(costs: readonly number[], x0: number, x1: number): CostScale {
+function costScale(costs: readonly number[], x0: number, x1: number): CostScale {
   return logScale(costs, x0, x1, COST_LOG);
-}
-
-/** A decade tick's label: cents below a dollar, dollars at and above one. `COST.format`, kept under the name callers know. */
-export function fmtCostTick(usd: number): string {
-  return COST.format(usd);
 }
 
 /* ------------------------------------------------------- label placement */
 
 /** Whether two boxes share any area. Touching edges do not count. */
-export function rectsOverlap(a: Rect, b: Rect): boolean {
+function rectsOverlap(a: Rect, b: Rect): boolean {
   return a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
 }
 
@@ -794,7 +789,7 @@ function overlapArea(a: Rect, b: Rect): number {
  * The standard orientation test; collinear or end-touching pairs do not count,
  * which for two leaders is the right call: only a genuine X misleads the eye.
  */
-export function segmentsCross(a: Leader, b: Leader): boolean {
+function segmentsCross(a: Leader, b: Leader): boolean {
   const orient = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): number =>
     Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
   const o1 = orient(a.x1, a.y1, a.x2, a.y2, b.x1, b.y1);
@@ -1767,7 +1762,7 @@ export function timeTicks(maxMs: number, want = 6): number[] {
 export const CHARACTER_ICON_GAP = 8;
 export const CHARACTER_LABEL_GAP = 4;
 export const characterIconCx = (endCx: number): number => endCx + CHARACTER_ICON_GAP + MARK_R;
-export const characterLabelX = (endCx: number): number => endCx + CHARACTER_ICON_GAP + MARK_R * 2 + CHARACTER_LABEL_GAP;
+const characterLabelX = (endCx: number): number => endCx + CHARACTER_ICON_GAP + MARK_R * 2 + CHARACTER_LABEL_GAP;
 
 export interface PlacedCharacter {
   series: CharacterSeries;

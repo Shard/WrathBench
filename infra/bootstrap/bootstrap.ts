@@ -462,7 +462,7 @@ function harnessAccountName(raw: string): string | { error: string } {
  * comma-separated, blanks around a name ignored, uppercased and deduplicated.
  * Unset or empty is none.
  */
-export function extraAccountsOf(env: Record<string, string | undefined>): { names: string[] } | { error: string } {
+function extraAccountsOf(env: Record<string, string | undefined>): { names: string[] } | { error: string } {
   const names: string[] = [];
   for (const part of (env["WRATHBENCH_EXTRA_ACCOUNTS"] ?? "").split(",")) {
     const raw = part.trim();

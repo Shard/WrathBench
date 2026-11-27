@@ -25,7 +25,7 @@ export const ECHO_TOLERANCE_MS = 1;
 export const SHOWN_TOLERANCE_MS = 500;
 
 /** Which clock leads: the video while it plays, the map otherwise. */
-export function leader(videoPlaying: boolean): "video" | "map" {
+function leader(videoPlaying: boolean): "video" | "map" {
   return videoPlaying ? "video" : "map";
 }
 

@@ -80,13 +80,13 @@
  */
 
 /** Yards covered by one 256px WMO minimap tile. Measured, see above. */
-export const WMO_TILE_SIZE = 128;
+const WMO_TILE_SIZE = 128;
 
 /** A full WMO minimap tile is the same 256px square an ADT one is. */
 export const WMO_TILE_PX = 256;
 
 /** The scale that follows: 2 px per yard, four times the ADT minimap's. */
-export const WMO_PX_PER_YARD = WMO_TILE_PX / WMO_TILE_SIZE;
+const WMO_PX_PER_YARD = WMO_TILE_PX / WMO_TILE_SIZE;
 
 /** A 3-component vector as the chunks store it. */
 export type Vec3 = readonly [number, number, number];

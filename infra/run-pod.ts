@@ -56,22 +56,22 @@ const MODULE_SECRET_ENV = "WRATHBENCH_MODULE_SECRET";
 export const RUN_POD_COMPONENT = "run";
 const LABEL_PREFIX = "wrathbench.shard.page/";
 /** A run id can exceed 63 characters, so the label is its hash and the id is an annotation. */
-export const RUN_HASH_LABEL = `${LABEL_PREFIX}run`;
+const RUN_HASH_LABEL = `${LABEL_PREFIX}run`;
 /** The roster process that owns the pod, so the fleet's drain can ask "does this roster have an episode in flight". */
 export const ROSTER_PID_LABEL = `${LABEL_PREFIX}roster-pid`;
-export const RUN_ID_ANNOTATION = `${LABEL_PREFIX}run-id`;
+const RUN_ID_ANNOTATION = `${LABEL_PREFIX}run-id`;
 /** The image as the arm (or the release) named it, before digest resolution. */
 export const IMAGE_ANNOTATION = `${LABEL_PREFIX}image`;
 /** This repository's runner, when an arm names no command. */
 export const DEFAULT_RUN_COMMAND = ["bun", "runner/src/run.ts"];
 /** Where the chart mounts the rendered template and the launcher's own settings into the fleet pod. */
-export const RUN_POD_TEMPLATE_ENV = "WRATHBENCH_RUN_POD_TEMPLATE";
+const RUN_POD_TEMPLATE_ENV = "WRATHBENCH_RUN_POD_TEMPLATE";
 export const RUN_POD_LAUNCHER_ENV = "WRATHBENCH_RUN_POD_LAUNCHER";
 export const DEFAULT_RUN_POD_TEMPLATE = "/etc/wrathbench/run-pod/pod.json";
 export const DEFAULT_RUN_POD_LAUNCHER = "/etc/wrathbench/run-pod/launcher.json";
 export const IMAGE_RECORD_FILE = "image.json";
 
-export function runHashLabel(runId: string): string {
+function runHashLabel(runId: string): string {
   return new Bun.CryptoHasher("sha256").update(runId).digest("hex").slice(0, 16);
 }
 

@@ -164,12 +164,12 @@ export const SNAP_PREFIX = "v1/snap/";
  * follow it. Five rather than the runs' two because the aggregates are what a
  * stale manifest points at, and they are small.
  */
-export const DEFAULT_KEEP_GENS = 5;
+const DEFAULT_KEEP_GENS = 5;
 /**
  * Content versions kept per run while it is changing. See `planPrune` for why
  * two is enough, and `settleRun` for the one a run that stopped changing keeps.
  */
-export const DEFAULT_KEEP_RUN_VERSIONS = 2;
+const DEFAULT_KEEP_RUN_VERSIONS = 2;
 /** In-flight PUTs (or deletes) per wave. Waves themselves are barriers. */
 export const DEFAULT_CONCURRENCY = 8;
 /**
@@ -264,7 +264,7 @@ export type WaveName = (typeof WAVES)[number];
  * never name a segment that is not there yet. The track it shares the wave with
  * is reachable only through that manifest, so their order inside it is free.
  */
-export function waveOf(path: string): WaveName {
+function waveOf(path: string): WaveName {
   const c = classifyPath(path);
   if (c.kind === "run" || c.kind === "trace" || c.kind === "clip") return "run";
   if (c.kind === "mutable") return "mutable";
@@ -845,7 +845,7 @@ export interface PublishReport {
  * exists to avoid, so the caller hands over the means to hash rather than a
  * hash.
  */
-export function needsPut(path: string, bodyHash: () => string, state: PublishState, gen: string): boolean {
+function needsPut(path: string, bodyHash: () => string, state: PublishState, gen: string): boolean {
   const c = classifyPath(path);
   // A closed window never changes, so a segment is immutable by its key too;
   // its record is the packed window list rather than `uploaded`.
@@ -1550,7 +1550,7 @@ export interface PublishLoopSummary {
 }
 
 /** A sleep that a shutdown can cut short. */
-export function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (signal?.aborted === true || ms <= 0) return resolve();
     let timer: ReturnType<typeof setTimeout>;

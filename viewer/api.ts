@@ -191,7 +191,7 @@ const CONTENT_TYPES: Record<string, string> = {
  * A plain 404 would read as a broken route. The viewer is run straight from a
  * git checkout, so "not built yet" is the common case, not a failure.
  */
-export const UNBUILT_NOTICE =
+const UNBUILT_NOTICE =
   "The dashboard has not been built. Run `bun install && bun run --cwd dashboard build`.";
 
 function unbuilt(): Response {

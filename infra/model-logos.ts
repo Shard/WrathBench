@@ -68,7 +68,7 @@ export interface IconEntry {
 }
 
 /** Path of an icon slug inside the package tarball. */
-export function iconPath(slug: string): string {
+function iconPath(slug: string): string {
   return `package/icons/${slug}.svg`;
 }
 
@@ -79,7 +79,7 @@ export function iconPath(slug: string): string {
  * title comes out at extraction; every consumer and the idempotence compare
  * then see the same bytes.
  */
-export function prepareSvg(svg: Uint8Array): Uint8Array {
+function prepareSvg(svg: Uint8Array): Uint8Array {
   const text = new TextDecoder().decode(svg);
   const prepared = paintWhiteAsText(text.replace(/<title[^>]*>[\s\S]*?<\/title>/g, ""));
   return prepared === text ? svg : new TextEncoder().encode(prepared);
@@ -96,7 +96,7 @@ export function prepareSvg(svg: Uint8Array): Uint8Array {
  * document, which is what the pucks draw. A white fill inside a `<clipPath>`
  * or `<mask>` is geometry rather than paint and is left alone.
  */
-export function paintWhiteAsText(svg: string): string {
+function paintWhiteAsText(svg: string): string {
   return svg
     .split(/(<(clipPath|mask)\b[\s\S]*?<\/\2>)/)
     .map((part, i) => (i % 3 === 0 ? part.replace(/\bfill="(#fff|#ffffff|white)"/gi, 'fill="currentColor"') : i % 3 === 1 ? part : ""))

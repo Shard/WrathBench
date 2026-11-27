@@ -64,7 +64,7 @@ export function uncatalogued(ids: ReadonlyMap<string, ReadonlySet<string>>): { i
 }
 
 /** The catalogue text in its one spelling, validated first. Pure. */
-export function reformat(text: string): string {
+function reformat(text: string): string {
   parseCatalogue(text);
   const out = formatCatalogue(JSON.parse(text));
   parseCatalogue(out);

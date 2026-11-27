@@ -20,7 +20,7 @@ import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewe
 import { effortLabel, fmtDuration, fmtEstimate, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
 import { partyHref } from "./party";
 
-export type CampaignState = CampaignView["state"];
+type CampaignState = CampaignView["state"];
 export type CampaignArm = CampaignView["arms"][number];
 export type CampaignCell = CampaignView["cells"][number];
 export type CampaignColumn = CampaignView["columns"][number];
@@ -51,7 +51,7 @@ export function findCampaign(body: CampaignsResponse, id: string, version: strin
  * operator's off switch is the warning; a campaign nothing is assigned to is
  * dim. Queued is plain: enabled and owed, nothing wrong with it.
  */
-export function stateClass(state: CampaignState): string {
+function stateClass(state: CampaignState): string {
   switch (state) {
     case "running":
       return "ok";
@@ -67,7 +67,7 @@ export function stateClass(state: CampaignState): string {
 }
 
 /** The state word's hover. */
-export function stateTitle(state: CampaignState): string {
+function stateTitle(state: CampaignState): string {
   switch (state) {
     case "running":
       return "a run of it is live";
@@ -83,7 +83,7 @@ export function stateTitle(state: CampaignState): string {
 }
 
 /** The hover on a version the operator concluded: complete by verdict, not by its squares. */
-export const CONCLUDED_TITLE = "concluded by the operator: finished whatever its squares hold, which show what the runs counted";
+const CONCLUDED_TITLE = "concluded by the operator: finished whatever its squares hold, which show what the runs counted";
 
 /**
  * The state word as the page shows it: the word, its class and its hover. A
@@ -363,7 +363,7 @@ export function selectedSquare(
 /* ------------------------------------------------------------ comparison */
 
 /** How an arm's runs ended, most common first: `level-target 3 · episode-limit 1`. */
-export function terminationMix(t: Readonly<Record<string, number>>): string {
+function terminationMix(t: Readonly<Record<string, number>>): string {
   const rows = Object.entries(t)
     .filter(([, n]) => n > 0)
     .sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
@@ -371,7 +371,7 @@ export function terminationMix(t: Readonly<Record<string, number>>): string {
 }
 
 /** The harness builds an arm's runs were stamped with, short. */
-export function buildsText(builds: readonly string[]): string {
+function buildsText(builds: readonly string[]): string {
   return builds.length === 0 ? "—" : builds.map(shortHarness).join(", ");
 }
 

@@ -262,7 +262,7 @@ export const TOOL_CALLS: AxisSpec = {
   note: "Tool calls are the unit the episode's ceiling is enforced in",
 };
 
-export const LEVEL: AxisSpec = {
+const LEVEL: AxisSpec = {
   key: "level",
   label: "level",
   caption: () => "avg highest level reached",

@@ -20,11 +20,8 @@ import type { LevelUpFacts } from "./api-types";
 
 import { isChapter, MARK_KINDS, type MarkKind, type MarkRole } from "../runner/src/mark-kinds";
 
-/* The kinds and their roles, from the import-free leaf the camera's layout reads too. */
-export { CHAPTER_KINDS, isChapter, MARK_KINDS, markRole, type MarkKind, type MarkRole } from "../runner/src/mark-kinds";
-
 /** Creature rank 3 is a boss (`creature_template.rank`). */
-export const BOSS_RANK = 3;
+const BOSS_RANK = 3;
 
 /**
  * Whether a recorded kill is a boss kill: the creature's rank says so, or its
@@ -81,7 +78,7 @@ export interface BossKill {
  * marks (a public snapshot, a run from before the marks) is read by; the
  * samples are a minute apart, so it is a minute coarser than a mark.
  */
-export function levelUpsOf(states: readonly { ts: number; level: number | null }[]): { ts: number; from: number; to: number }[] {
+function levelUpsOf(states: readonly { ts: number; level: number | null }[]): { ts: number; from: number; to: number }[] {
   const out: { ts: number; from: number; to: number }[] = [];
   let level: number | null = null;
   for (const s of states) {

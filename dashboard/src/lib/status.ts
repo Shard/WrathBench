@@ -167,7 +167,7 @@ function exhaustEta(lo: number | null, hi: number | null): string {
 }
 
 /** `pool 4/5` — busy over total in the pool; left out when it has no accounts. */
-export function accountsBusy(f: Pick<FleetResponse, "accounts" | "jobs">): string[] {
+function accountsBusy(f: Pick<FleetResponse, "accounts" | "jobs">): string[] {
   const busy = new Set(f.jobs.filter((j) => j.alive).map((j) => j.account.toUpperCase()));
   const parts: string[] = [];
   for (const cls of ["pool"] as const) {

@@ -76,7 +76,7 @@ const d = (one: string, many = `${one}s`): KindDef => ({ tier: "decision", one, 
 const a = (one: string, many = `${one}s`): KindDef => ({ tier: "action", one, many });
 
 /** Every kind, in the order the collapsed line lists its counts. */
-export const KINDS: Readonly<Record<FeedKind, KindDef>> = {
+const KINDS: Readonly<Record<FeedKind, KindDef>> = {
   turn: d("turn"),
   response: d("response"),
   snippet: d("snippet"),
@@ -120,7 +120,7 @@ export function tierOf(kind: FeedKind): Tier {
 /* ------------------------------------------------------------ the tables */
 
 /** A tool call, by the tool's name as the trajectory records it (the CLI drivers' `mcp__…__` prefix already cut). */
-export const TOOLS: Readonly<Record<string, FeedKind>> = {
+const TOOLS: Readonly<Record<string, FeedKind>> = {
   run_snippet: "snippet",
   reflect: "reflect",
   log_status: "log",
@@ -159,7 +159,7 @@ export interface Surface {
 }
 
 /** A plain record, by its `t`. Milestones, harness records and responses are read further below. */
-export const RECORDS: Readonly<Record<string, FeedKind>> = {
+const RECORDS: Readonly<Record<string, FeedKind>> = {
   meta: "meta",
   character: "meta",
   driver: "meta",
@@ -213,7 +213,7 @@ export const RECORDS: Readonly<Record<string, FeedKind>> = {
 export const FAILED_RECORDS: ReadonlySet<string> = new Set(["codex_tool_error", "pi_error", "claude_unparseable", "codex_unparseable", "pi_unparseable"]);
 
 /** A `milestone` record, by its `kind`. One this build does not know is a milestone, in full. */
-export const MILESTONES: Readonly<Record<string, FeedKind>> = {
+const MILESTONES: Readonly<Record<string, FeedKind>> = {
   level: "level",
   death: "death",
   quest: "quest",
@@ -228,7 +228,7 @@ export const MILESTONES: Readonly<Record<string, FeedKind>> = {
 };
 
 /** A dispatched action (`ActionNoteView.action`), for the counts of an action log. One not listed is `other`. */
-export const ACTIONS: Readonly<Record<string, FeedKind>> = {
+const ACTIONS: Readonly<Record<string, FeedKind>> = {
   move_to: "move",
   stop: "move",
   face: "move",

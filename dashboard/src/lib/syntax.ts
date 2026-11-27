@@ -223,7 +223,7 @@ function flatJson(value: unknown): string {
  * so a quest log entry, `[183, "The Boar Hunter", [{ kind: "kill", … }]]`,
  * takes one or two lines rather than ten.
  */
-export function compactJson(value: unknown, indent = "", lead = 0): string {
+function compactJson(value: unknown, indent = "", lead = 0): string {
   const one = flatJson(value);
   if (value === null || typeof value !== "object" || indent.length + lead + one.length <= JSON_WIDTH) return one;
   const inner = `${indent}  `;

@@ -76,7 +76,7 @@ export function levelTilePath(map: number, layer: LodLayer, z: number, row: numb
 }
 
 /** The path of a map's tile index (`@viewer/tileindex`), beside its tiles. */
-export function tileIndexPath(map: number): string {
+function tileIndexPath(map: number): string {
   return `/tiles/${map}/${TILE_INDEX_NAME}`;
 }
 
@@ -113,7 +113,7 @@ function trim(s: string): string {
  * and not runtime probes, so one flag produces one bundle and the unset case
  * dead-code-eliminates behind a constant.
  */
-export function tileBasesFromEnv(env: Record<string, unknown>): { tiles: string; snapshot: string } {
+function tileBasesFromEnv(env: Record<string, unknown>): { tiles: string; snapshot: string } {
   const read = (name: string): string => {
     const v = env[name];
     return typeof v === "string" ? trim(v) : "";

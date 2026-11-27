@@ -136,7 +136,7 @@ export const ACHIEVEMENT_LEVEL_10 = 6;
  * WoW orientation is the standard atan2(dy, dx) with +x east and +y north; the
  * client and the core both store it in radians on that convention.
  */
-export function facing(from: { x: number; y: number }, to: { x: number; y: number }): number {
+function facing(from: { x: number; y: number }, to: { x: number; y: number }): number {
   const o = Math.atan2(to.y - from.y, to.x - from.x);
   return o < 0 ? o + 2 * Math.PI : o;
 }

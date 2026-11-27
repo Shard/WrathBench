@@ -77,7 +77,7 @@ export const SNAPSHOT_KEYED_MAX = 256;
  * keeps one reader's burst small beside the zone's rate limit on `/v1/run/`
  * (60 requests per 10 s per IP, `infra/cloudflare/README.md`).
  */
-export const CHARACTER_TRACK_CONCURRENCY = 6;
+const CHARACTER_TRACK_CONCURRENCY = 6;
 
 /**
  * Past this age the banner turns warning-coloured.
@@ -99,10 +99,10 @@ export const SNAPSHOT_STALE_MS = 600_000;
  * then learns the real period from the horizons it sees (`createLiveClock`),
  * so a change of cadence costs a few passes of holding, not a broken map.
  */
-export const SNAPSHOT_RENDER_MS = 420_000;
+const SNAPSHOT_RENDER_MS = 420_000;
 
 /** The edge's TTL on the mutable objects, which the client memo sits behind. */
-export const SNAPSHOT_EDGE_TTL_MS = 30_000;
+const SNAPSHOT_EDGE_TTL_MS = 30_000;
 
 /** The server's own `?episode=` default, reproduced client-side. */
 const DEFAULT_EPISODE: EpisodeIdView = "e90";
@@ -283,14 +283,6 @@ interface CacheEntry {
   value: Promise<unknown>;
 }
 
-/*
- * `sweepExpired` moved to `client.ts` when the live path grew the same memo:
- * one sweep rule, not two. Re-exported here because this module's own test
- * imports it from here, and because a reader of this memo should find it
- * beside the memo it belongs to.
- */
-export { sweepExpired };
-
 /**
  * The slot a keyed object occupies in the cache, from its bucket key: one per
  * aggregate name and one per run and file, whatever the version, so a newer
@@ -298,7 +290,7 @@ export { sweepExpired };
  * window is its own slot (its window is its identity), and so is anything the
  * layout does not name.
  */
-export function keyedSlot(key: string): string {
+function keyedSlot(key: string): string {
   const snap = /^v1\/snap\/[^/]+\/([^/]+)$/.exec(key);
   if (snap !== null) return `snap:${snap[1]}`;
   const run = /^v1\/run\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(key);
@@ -311,7 +303,7 @@ export function keyedSlot(key: string): string {
  * order whatever order they settle in. The character page's track walk, so a
  * curve is stitched in attempt order however the network answers.
  */
-export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
   const worker = async (): Promise<void> => {

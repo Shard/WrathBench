@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ResultRun } from "../src/api/client";
-import { homeLadderRuns } from "../src/lib/homeladder";
+import { HOME_EPISODE, homeLadderRuns } from "../src/lib/homeladder";
+import { HOME_PRELOAD_EPISODE } from "../src/lib/routepreload";
 
 const run = (id: string, harnessVersion: string, billing?: ResultRun["billing"]): ResultRun =>
   ({ runId: id, harnessVersion, billing } as unknown as ResultRun);
@@ -40,4 +41,8 @@ describe("homeLadderRuns", () => {
       expect(homeLadderRuns(runs, true, null, { choice: "latest", available: ["1.1", ...available] })).toEqual([]);
     });
   });
+});
+
+test("the route preload's tier is the one the homepage reads", () => {
+  expect(HOME_PRELOAD_EPISODE).toBe(HOME_EPISODE);
 });

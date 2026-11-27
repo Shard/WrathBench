@@ -116,7 +116,7 @@ export function withT(href: string, focus: number | null): string {
 /* ----------------------------------------------------------------- zoom */
 
 /** Past this much run time the bar can be zoomed: under it a pixel is already seconds. */
-export const ZOOM_SPAN_MS = 24 * 3_600_000;
+const ZOOM_SPAN_MS = 24 * 3_600_000;
 /** The closest zoom: ten minutes across the bar. */
 export const MIN_VIEW_MS = 10 * 60_000;
 /** One wheel notch. */
@@ -212,7 +212,7 @@ export function fmtRunClock(ms: number): string {
 }
 
 /** A tick's label: the largest units that say it, "45m", "6h", "1d 12h". */
-export function fmtTick(ms: number): string {
+function fmtTick(ms: number): string {
   const total = Math.round(ms / MIN);
   if (total === 0) return "0";
   const d = Math.floor(total / 1440);
