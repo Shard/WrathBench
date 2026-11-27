@@ -29,7 +29,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { cliBaseEnv, readLines } from "./adapter-shared";
-import { homeLooksLoggedIn } from "./adapter-codex";
+import { homeLooksLoggedIn } from "./codex-home";
 import { configDbPath } from "./config-store";
 import { isCredentialId, providerById, type Credential } from "./credential-slots";
 
