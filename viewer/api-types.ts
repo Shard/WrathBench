@@ -9,9 +9,6 @@
  * takes as types, from modules that are import-free themselves; the run row
  * and the run totals are declared in `runner/src/run-types.ts` and
  * re-exported here.
- *
- * The server-side modules (`runs.ts`, `tail.ts`) re-export the names they used
- * to declare, so nothing that imported them before has to move.
  */
 
 import type { CredentialFix, CredentialHealth, CredentialHold, CredentialRead, CredentialWindow, ResumeHoldCode } from "../runner/src/credential-health";

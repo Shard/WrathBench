@@ -53,9 +53,6 @@ import { DEADMINES_END_ENTRY, DEADMINES_EXTRA_ENTRY, DEADMINES_REQUIRED } from "
 /** The derivation's version: bumped when what a row says or how rows order changes. */
 export const DUNGEON_BOARD_VERSION = 4;
 
-/* The Deadmines' bosses and map, from the leaf a run page and the camera read them from. */
-export { DEADMINES_BOSSES, DEADMINES_END_ENTRY, DEADMINES_EXTRA_ENTRY, DEADMINES_MAP, DEADMINES_REQUIRED } from "./deadmines";
-
 /** One character's milestones, as its session record's `events` stream holds them. */
 export interface CharacterMarks {
   character: string;

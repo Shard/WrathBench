@@ -157,9 +157,6 @@ export function coldRuns(rows: readonly RunListingRow[], now: number): Set<strin
   return out;
 }
 
-/* The store's shared reads moved to `shared-store.ts`, which every handle builds; re-exported here unchanged. */
-export { sharedStore, STORE_SHARE_MS } from "./shared-store";
-
 /** Keyed by the union, so the compiler holds this set to `FleetServerView["phase"]` both ways. */
 const SERVER_PHASE_KEYS: Record<FleetServerView["phase"], true> = {
   running: true,

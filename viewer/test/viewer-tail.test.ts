@@ -6,13 +6,8 @@ import { join } from "node:path";
 import { platformOf } from "../../runner/src/platform";
 import { readRun } from "../../runner/src/run-list";
 import { playtimeMs, segmentsFrom } from "../../runner/src/sessions";
-import {
-  TrajectoryTail,
-  reflectMarkOf,
-  reflectionWindowsFrom,
-  summarize,
-  travelMarksOf,
-} from "../tail";
+import { TrajectoryTail, summarize } from "../tail";
+import { reflectMarkOf, reflectionWindowsFrom, travelMarksOf } from "../run-marks";
 import {
   claudeModelTurns,
   areaFactsFrom,

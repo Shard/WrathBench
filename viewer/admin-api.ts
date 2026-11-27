@@ -66,9 +66,6 @@ import { ADMIN_API_PREFIX, type Groups } from "./groups";
 import { json } from "./http";
 import type { WriteHold } from "./write-hold";
 
-/* Where the admin pages' status is mounted (`groups.ts`, which a handle reads it from). */
-export { ADMIN_API_PREFIX };
-
 /** A supervisor whose heartbeat is older than this is not up (`HEARTBEAT_STALE_MS`, three ticks). */
 export const FLEET_UP_MS = 3 * 60_000;
 

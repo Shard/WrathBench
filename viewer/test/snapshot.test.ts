@@ -28,7 +28,8 @@ import {
   type SnapshotArtifact,
   type SnapshotResult,
 } from "../snapshot";
-import { createApi, WINDOW_MAX } from "../api";
+import { createApi } from "../api";
+import { WINDOW_MAX } from "../api-run";
 import { ENTRIES_WINDOW } from "../public-keys";
 import { emptyState, publishPass, type HeldBackRun, type ObjectStore } from "../../infra/publish-core";
 import { verifyPublication } from "../../infra/publish-accept";

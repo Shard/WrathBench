@@ -46,12 +46,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle, inScope, type SessionEntry, type SessionHandle, type SessionScope, type SessionSource } from "@wrathbench/inspector";
 import type { SessionFile } from "@wrathbench/mcp/record";
-import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, sessionDirOfRun, SESSIONS_DIR } from "../runner/src/run-reader";
+import { FANOUT_SEP, fanoutCharacters, fanoutSessionDir, fanoutSessionId, isFanoutRunDir, isV1RunDir, parseFanoutSessionId, sessionDirOfRun } from "../runner/src/run-reader";
 import { listBareSessions, sessionStoreOf, type BareSession } from "../runner/src/session-store";
 import { legacy05Session } from "./legacy05-source";
 import { runDir } from "../runner/src/run-list";
-
-export { FANOUT_SEP, fanoutSessionId, SESSIONS_DIR };
 
 /** The session record's directory inside a run directory (`runner/src/session-record.ts`). */
 export const SESSION_DIR = "session";

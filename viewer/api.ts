@@ -103,19 +103,6 @@ import { createTailCache } from "./api-tails";
 import { createResultsApi } from "./api-results";
 import { createRunApi } from "./api-run";
 
-/*
- * The store's shared reads (`shared-store.ts`), re-exported here unchanged. The
- * fleet readers are `api-fleet.ts`'s and are imported from there: a static
- * re-export here would load the runner group's module into every handle.
- */
-export { sharedStore, STORE_SHARE_MS } from "./shared-store";
-/* The tail cache moved to `api-tails.ts`; its bounds are re-exported here unchanged. */
-export { TAIL_CACHE_BYTES, TAIL_IDLE_MS } from "./api-tails";
-/* The results builder is `api-results.ts`; its eval-field strip is re-exported here unchanged. */
-export { withoutEvalFields } from "./api-results";
-/* The run routes moved to `api-run.ts`; their constants and helpers are re-exported here unchanged. */
-export { entriesWindowAt, POLL_MS, streamStart, TRACK_MEMO_RUNS, TRACK_SETTLE_MS, WINDOW_MAX } from "./api-run";
-
 export interface ApiOptions {
   runsDir: string;
   tilesDir: string;
@@ -198,9 +185,6 @@ export interface ApiOptions {
    */
   writeHold?: WriteHold | null;
 }
-
-/* The module's /health read moved to `module-health.ts`; its window is re-exported here unchanged. */
-export { HEALTH_CACHE_MS } from "./module-health";
 
 /** Where the inspector's API is mounted on a private handle. */
 export const INSPECTOR_BASE = "/api/inspector";
