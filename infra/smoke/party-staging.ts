@@ -37,6 +37,7 @@ import { moduleBase } from "./lib/module";
 import { assertStagedMember, deleteMembers, loginMember, membersOf, smokeRequest } from "./lib/party";
 import { stageParty } from "../fixtures/stage-party";
 import type { WrathClient } from "@wrathbench/sdk";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const argv = Bun.argv.slice(2);
@@ -47,7 +48,7 @@ const request = smokeRequest("party-staging");
 const party = membersOf(request);
 
 const started = Date.now();
-const log = (m: string) => console.log(`[party-staging +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("party-staging", started, 6);
 
 let ok = false;
 const clients: WrathClient[] = [];

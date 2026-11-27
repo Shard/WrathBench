@@ -44,8 +44,9 @@
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { taggedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -60,9 +61,7 @@ const TAXI_IRONFORGE = 6;
 const TAXI_THELSAMAR = 8;
 const ACHIEVEMENT_LEVEL_10 = 6; // Achievement.dbc: "Level 10", 10 points, planted by the fixture
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
+const log = taggedLog("probe");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -74,18 +73,7 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 async function createSession(): Promise<any> {
   // Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.

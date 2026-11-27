@@ -51,9 +51,10 @@
 import { connect, type StreamEvent, type UnitView, type WrathClient } from "@wrathbench/sdk";
 import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "SMOKE4";
@@ -69,10 +70,7 @@ const DUNGEON_NORMAL = 0;
 const DUNGEON_HEROIC = 1;
 
 const started = Date.now();
-const log = (m: string) => console.log(`[stack-wave3 +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("stack-wave3", started);
 
 type Verdict = "PASS" | "FAIL" | "SKIP" | "INFO";
 const results: { verdict: Verdict; name: string; detail: string }[] = [];
@@ -171,7 +169,7 @@ async function login(suffix: string): Promise<WrathClient> {
 let serverDifficulty: number | undefined;
 let session: WrathClient | undefined;
 try {
-  const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<{ ok?: boolean; build?: string }>);
+  const health = await moduleHealth(BASE);
   if (health?.ok !== true) fail(`health not ok: ${show(health)}`);
   log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER} on ${ACCOUNT}`);
   await ensureFixtureCharacter(fixtureCtx);

@@ -57,6 +57,7 @@ import { accountFixtureName, applyScenario, ensureFixtureCharacter, type Fixture
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -71,7 +72,7 @@ const DROP_MIN_DZ = 2.0;
 const RECLAIM_RADIUS = 39;
 
 const started = Date.now();
-const log = (m: string): void => console.log(`[edge +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("edge", started, 6);
 
 class SmokeFailed extends Error {}
 function fail(m: string): never {

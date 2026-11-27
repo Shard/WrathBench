@@ -44,9 +44,10 @@
 import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { deleteThroughLinger, moveRetryReason, RETRY_MARK } from "./lib/transient";
+import { taggedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -82,9 +83,7 @@ const VENDOR_POS = { x: -8909.5, y: -104.2, z: 82.0 };
 const WALK_TIMEOUT_MS = 15000;
 const REPLY_TIMEOUT_MS = 3000;
 
-function log(msg: string) {
-  console.log(`[qaccept] ${msg}`);
-}
+const log = taggedLog("qaccept");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -96,24 +95,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 // ---------------------------------------------------------------- event feed
 const events: any[] = [];

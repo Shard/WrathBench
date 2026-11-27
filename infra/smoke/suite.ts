@@ -24,7 +24,8 @@
  */
 
 import { join } from "node:path";
-import { moduleRequest, reclaimAccount } from "./lib/reclaim";
+import { moduleRequest } from "./lib/module";
+import { reclaimAccount } from "./lib/reclaim";
 import { smokeToken } from "./lib/session";
 import { accountsOf, formatSummary, refusals, runSuite, select, spawnMember, SUITE_MEMBERS } from "./lib/suite";
 

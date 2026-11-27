@@ -43,8 +43,9 @@ import { connect, type StreamEvent, type WrathClient } from "@wrathbench/sdk";
 import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, characterNames, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const JUMPER_ACCOUNT = process.env.MODULE_ACCOUNT ?? "SMOKE4";
@@ -60,7 +61,7 @@ const LANDING_MS = 3000;
 type Vec = { x: number; y: number; z: number };
 
 const started = Date.now();
-const log = (m: string): void => console.log(`[jump-knockback +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("jump-knockback", started, 6);
 const fmt = (p: Vec): string => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(2)})`;
 
 class SmokeFailed extends Error {}
@@ -129,7 +130,7 @@ async function jump(client: WrathClient, token: string, forward: boolean): Promi
   return { landed: (ev.data as { pos: Vec }).pos, ...(ack.etaMs !== undefined ? { ackMs: ack.etaMs } : {}) };
 }
 
-const health0 = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<{ ok?: boolean; build?: string }>);
+const health0 = await moduleHealth(BASE);
 if (health0.ok !== true) {
   console.log(`FAIL: module health not ok: ${JSON.stringify(health0)}`);
   process.exit(1);

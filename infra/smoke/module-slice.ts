@@ -14,8 +14,9 @@
  */
 
 import { authHeaders } from "./lib/auth";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { failAndExit as fail, taggedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -34,28 +35,9 @@ function randomName(): string {
 const CHARACTER = randomName();
 const SAY_TEXT = "hello world";
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 // Collect events off the WebSocket into a shared buffer.
 const events: any[] = [];

@@ -97,6 +97,7 @@ import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./li
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -145,8 +146,7 @@ const CHARACTER = FROM
   : probeName("Tr");
 
 const started = Date.now();
-const log = (m: string) =>
-  console.log(`[travel +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("travel", started, 6);
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);

@@ -37,8 +37,9 @@
 
 import { connect, WrathClient } from "@wrathbench/sdk";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -46,11 +47,7 @@ const TOKEN = smokeToken("reattach-state");
 const CHARACTER = "Smokeratt";
 
 const started = Date.now();
-const log = (m: string) =>
-  console.log(`[reattach-state +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("reattach-state", started);
 
 async function deletePreviousCharacter(): Promise<void> {
   for (let attempt = 0; attempt < 4; ++attempt) {
@@ -99,7 +96,7 @@ function same(what: string, a: unknown, b: unknown): void {
   if (ja !== jb) fail(`${what} differs after the reattach:\n  before ${ja}\n  after  ${jb}`);
 }
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
+const health = await moduleHealth(BASE);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER}`);
 await deletePreviousCharacter();

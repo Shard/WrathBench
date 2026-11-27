@@ -65,9 +65,10 @@ import { connect, type MovePoint, type MoveResultData, type WrathClient } from "
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -84,7 +85,7 @@ const DROP_MIN_DZ = 2.0;
 const DROP_SLOPE = 1.2;
 
 const started = Date.now();
-const log = (m: string): void => console.log(`[steep +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("steep", started, 6);
 
 class StartFailed extends Error {}
 function fail(m: string): never {
@@ -324,7 +325,7 @@ interface ReplanRow {
   replanPointCount?: number;
 }
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<{ ok?: boolean; build?: string }>);
+const health = await moduleHealth(BASE);
 if (health.ok !== true) {
   console.log(`FAIL: module health not ok: ${JSON.stringify(health)}`);
   process.exit(1);

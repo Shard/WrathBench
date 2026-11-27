@@ -29,6 +29,7 @@
  */
 
 import { AdapterError, OpenAiChatAdapter, SILENCE_TIMEOUT_MS } from "../../runner/src/adapter";
+import { failAndExit as fail, taggedLog } from "./lib/report";
 
 const BASE = (process.env.MODEL_BASE ?? "http://192.0.2.20:1234/v1").replace(/\/+$/, "");
 const MODEL = process.env.MODEL_ID ?? "qwen/qwen3.8-27b";
@@ -36,13 +37,7 @@ const MODEL = process.env.MODEL_ID ?? "qwen/qwen3.8-27b";
 const KEY = process.env.LMSTUDIO_KEY ?? "lm-studio";
 const SILENCE_MS = Number(process.env.MODEL_TIMEOUT_MS ?? String(SILENCE_TIMEOUT_MS));
 
-function log(msg: string): void {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
 // One tool, chosen so a helpful model has to call it rather than answer from
 // its own knowledge: today's local weather is not something the model can know.

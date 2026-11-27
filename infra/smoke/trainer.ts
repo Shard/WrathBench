@@ -44,8 +44,9 @@ const TOKEN = smokeToken("trainer");
 import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { taggedLog } from "./lib/report";
 
 const CHARACTER = probeName("Bt");
 
@@ -58,9 +59,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // walks the last few yards to whichever one it picks.
 const ABBEY = { x: -8902.6, y: -162.6, z: 82.0 };
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
+const log = taggedLog("probe");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -72,26 +71,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 // ---------------------------------------------------------------- event feed
 type Vec = { x: number; y: number; z: number };

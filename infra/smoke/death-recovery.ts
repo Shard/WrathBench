@@ -63,8 +63,9 @@ import { applyScenario, characterNames, deleteFixtureCharacters, ensureFixtureCh
 import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { taggedLog } from "./lib/report";
 
 const CHARACTER = probeName("Bd");
 // The resurrection leg's priest: a throwaway on an account no gate or deploy
@@ -80,9 +81,7 @@ let priest: WrathClient | undefined;
 const ENTRY_VERMIN = 6; // Kobold Vermin, Northshire vineyards
 const VINEYARDS = { x: -8790, y: -160, z: 82.5 };
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
+const log = taggedLog("probe");
 
 let cleanupStarted = false;
 let priestCleaned = false;
@@ -118,24 +117,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 // ---------------------------------------------------------------- event feed
 const events: any[] = [];

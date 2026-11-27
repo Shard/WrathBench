@@ -22,37 +22,13 @@
  * which proves the reclaim itself against the live module.
  */
 
-import { authHeaders } from "./auth";
-import { moduleBase } from "./module";
+import type { ModuleReply, ModuleRequest } from "./module";
 import { probeName } from "./name";
 import { smokeSubToken } from "./session";
 
-/** A module reply as a smoke reads it, field by field: the status and the JSON body, or undefined for none. */
-export interface ModuleReply {
-  status: number;
-  json: any;
-}
-
-/** One request to the module's HTTP surface. */
-export type ModuleRequest = (method: string, path: string, body?: unknown) => Promise<ModuleReply>;
-
-/** Requests to the module at `base` with the smoke's credential (lib/auth.ts). */
-export function moduleRequest(base: string = moduleBase()): ModuleRequest {
-  return async (method, path, body) => {
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    let json: ModuleReply["json"];
-    try {
-      json = await res.json();
-    } catch {
-      // not JSON
-    }
-    return { status: res.status, json };
-  };
-}
+// The request helper itself is lib/module.ts's; the reply type is re-exported
+// here only because infra/smoke-reclaim.test.ts imports it from this file.
+export type { ModuleReply } from "./module";
 
 type Sleep = (ms: number) => Promise<void>;
 const bunSleep: Sleep = (ms) => Bun.sleep(ms);

@@ -25,11 +25,12 @@
 
 import { connect } from "@wrathbench/sdk";
 import { DEADMINES_ENTRANCE_TRIGGER, DEADMINES_STAGING } from "../fixtures/scenarios";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
+import { MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
-import { moduleBase } from "./lib/module";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { dist2d, fmt, walkTo } from "./lib/party";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -42,12 +43,9 @@ const OUTSIDE_ARRIVAL = { x: -11208.3, y: 1672.52, z: 24.66 };
 const DEADMINES_MAP = 36;
 
 const started = Date.now();
-const log = (m: string) => console.log(`[deadmines-entry +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("deadmines-entry", started, 6);
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<{ ok?: boolean; build?: string }>);
+const health = await moduleHealth(BASE);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}; ${CHARACTER} on ${ACCOUNT}`);
 

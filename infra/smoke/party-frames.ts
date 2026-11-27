@@ -37,10 +37,11 @@
 import { connect } from "@wrathbench/sdk";
 import type { StreamEvent } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { dist2d, fmt } from "./lib/party";
 import { smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT_A = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -52,10 +53,7 @@ const NAME_B = probeName("Pfb");
 const VINEYARDS = { x: -8790, y: -160, z: 82.5 };
 
 const started = Date.now();
-const log = (m: string) => console.log(`[party-frames +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("party-frames", started);
 
 /** Poll until `read` returns a value, or fail naming `what`. */
 async function until<T>(read: () => T | undefined, what: string, timeoutMs: number): Promise<T> {
@@ -68,7 +66,7 @@ async function until<T>(read: () => T | undefined, what: string, timeoutMs: numb
   }
 }
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
+const health = await moduleHealth(BASE);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}; ${NAME_A} on ${ACCOUNT_A}, ${NAME_B} on ${ACCOUNT_B}`);
 

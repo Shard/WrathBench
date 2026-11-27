@@ -54,6 +54,7 @@ import { accountFixtureName } from "./lib/fixture";
 import { moduleBase } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { RETRY_MARK } from "./lib/transient";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "SMOKE4";
@@ -72,7 +73,7 @@ const REPLY_MS = 5_000;
 const PREDATES = "the module predates the limits (wrath-mcp#57)";
 
 const started = Date.now();
-const log = (m: string) => console.log(`[module-limits +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
+const log = stampedLog("module-limits", started);
 
 const held: Socket[] = [];
 let leased = false;

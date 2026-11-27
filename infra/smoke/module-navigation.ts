@@ -101,9 +101,10 @@ import { DEADMINES_ENTRANCE_TRIGGER, NAV_KHARANOS_JARVEN, SCENARIOS } from "../f
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { applyScenario, type FixtureContext } from "./lib/fixture";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { deleteThroughLinger, moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
+import { taggedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -117,9 +118,7 @@ const TOKEN = smokeToken("module-navigation");
 const CHARACTER = "Smokenav";
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
-function log(msg: string) {
-  console.log(`[nav] ${msg}`);
-}
+const log = taggedLog("nav");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit). The
 // session logged in now: the main legs', or an optional leg's own.
@@ -133,20 +132,7 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 const events: any[] = [];
 

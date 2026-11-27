@@ -32,9 +32,10 @@
  */
 
 import { authHeaders } from "./lib/auth";
-import { moduleWsBase } from "./lib/module";
-import { createWithReclaim as createReclaiming, deleteCharacterRetrying, moduleRequest } from "./lib/reclaim";
+import { moduleRequest, moduleWsBase } from "./lib/module";
+import { createWithReclaim as createReclaiming, deleteCharacterRetrying } from "./lib/reclaim";
 import { smokeToken } from "./lib/session";
+import { failAndExit as fail, taggedLog } from "./lib/report";
 
 const WS = moduleWsBase();
 const req = moduleRequest();
@@ -58,13 +59,7 @@ function randomName(): string {
 const CHAR_A = randomName();
 const CHAR_B = randomName();
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
 function openEvents(token: string, buf: any[]): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
