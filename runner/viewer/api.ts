@@ -26,7 +26,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { json, notFound, withheld } from "./http";
-import { harnessSeries } from "../src/comparability";
+import { harnessSeries } from "../src/comparability-tuple";
 import type { SiteSettings } from "../src/site-settings";
 import { siteInfoField } from "./site-info";
 import { moduleAuthHeaders } from "@wrathbench/mcp/module-auth";

@@ -38,7 +38,7 @@ import { fanoutLead, fanoutReadings, isFanoutRunDir, isV1RunDir, latestReading, 
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { bareSessionDir, isBareSessionDir, isBareSessionId, sessionStoreOf } from "./session-store";
-import { harnessOfRun, parseComparability } from "./comparability";
+import { harnessOfRun, parseComparability } from "./comparability-tuple";
 import { runCredentialOf } from "./credential-slots";
 import { platformOf } from "./platform";
 

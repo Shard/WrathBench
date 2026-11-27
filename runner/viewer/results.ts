@@ -21,7 +21,7 @@
  */
 
 import { runBilling } from "../src/billing";
-import { harnessSeries } from "../src/comparability";
+import { harnessSeries } from "../src/comparability-tuple";
 import { DRIVER_STAMPS, isDriver } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import { stillbornOf } from "../src/models";

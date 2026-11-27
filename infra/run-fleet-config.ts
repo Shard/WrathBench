@@ -8,7 +8,7 @@
 
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
-import { harnessSeries } from "../runner/src/comparability";
+import { harnessSeries } from "../runner/src/comparability-tuple";
 import { compactWindowDriverRefusal, driverHasCompactWindow, harnessClash, parseEntryCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting, type RoutingSpec } from "../runner/src/routing";
