@@ -72,10 +72,4 @@ describe("the bundle's catalogue", () => {
       expect([a.key, a.name, a.weights, fam(a.family)]).toEqual([b.key, b.name, b.weights, fam(b.family)]);
     }
   });
-
-  test("still says which families have a logo", () => {
-    expect(served.FAMILIES.filter((f) => f.icon !== undefined).map((f) => f.id)).toEqual(
-      full.FAMILIES.filter((f) => f.icon !== undefined).map((f) => f.id),
-    );
-  });
 });

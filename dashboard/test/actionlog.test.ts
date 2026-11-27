@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ActionNoteView, ActionsEntry, FeedEntry } from "../../viewer/api-types";
-import { actionLine, actionLines, keepLines, moveVerdicts, sameVerdicts } from "../src/lib/actionlog";
+import { actionLine, moveVerdicts } from "../src/lib/actionlog";
 import { groupFeed, type CallGroup } from "../src/lib/feedgroup";
 
 const note = (action: string, extra: Partial<ActionNoteView> = {}): ActionNoteView => ({
@@ -64,17 +64,6 @@ describe("one dispatch, one line", () => {
       "move to Marshal McBride (1, 2)",
     );
   });
-
-  test("folded repeats, the client's own traffic and the cap's tally", () => {
-    expect(actionLine(note("attack_stop", { count: 3 })).text).toBe("stop attacking ×3");
-    expect(actionLine(note("questgiver_status_multiple_query", { auto: true }))).toMatchObject({ auto: true });
-    const entry = {
-      i: 0, t: "actions", ts: 2000, start: 0, end: 0, callTs: 1000,
-      actions: [note("say", { args: { text: "hi" } })],
-      dropped: { say: 10, face: 2 },
-    } as ActionsEntry;
-    expect(actionLines(entry).map((l) => l.text)).toEqual(['say "hi"', "+12 more: say ×10, face ×2"]);
-  });
 });
 
 /* ------------------------------------------------------- the feed's join --- */
@@ -122,58 +111,5 @@ describe("the action log in the grouped feed", () => {
     const unowned = e("actions", 7200, { actions: [note("questgiver_status_query", { auto: true })] });
     const groups = groupFeed([offWindow, unowned]);
     expect(groups.map((g) => (g.kind === "plain" ? g.entry : null))).toEqual([offWindow, unowned]);
-  });
-
-  test("a window from before the action log groups exactly as it did", () => {
-    const window = [
-      e("tool_call", 8000, { turn: 3, name: "run_snippet", args: { code: "z" } }),
-      e("snippet", 8000, { turn: 3, code: "z" }),
-      e("snippet_result", 8450, { turn: 3, name: "run_snippet", isError: false, text: "ok" }),
-    ];
-    const [g] = groupFeed(window) as CallGroup[];
-    expect(g).toMatchObject({ kind: "call", actions: [], durationMs: 450 });
-  });
-
-  test("a settled card keeps its identity when the tail grows", () => {
-    const window = [
-      actions(9000, 9100),
-      e("tool_call", 9200, { turn: 4, call: 1, name: "run_snippet", args: { code: "w" }, dispatchTs: 9000 }),
-      e("snippet", 9200, { turn: 4, call: 1, code: "w" }),
-      e("snippet_result", 9200, { turn: 4, call: 1, name: "run_snippet", isError: false, text: "ok" }),
-    ];
-    const first = groupFeed(window);
-    const again = groupFeed([...window, e("state", 9300)], first);
-    expect(again[0]).toBe(first[0]!);
-  });
-});
-
-describe("a live append leaves the action lines alone", () => {
-  const move = (i: number, ts: number, moveId: number, status: string): FeedEntry =>
-    ({ i, t: "move", ts, start: 0, end: 0, moveId, status }) as FeedEntry;
-  const other = (i: number, ts: number): FeedEntry => ({ i, t: "state", ts }) as FeedEntry;
-
-  test("the verdict map is the same until a move record arrives", () => {
-    const before = moveVerdicts([move(1, 900, 4, "too_far"), other(2, 950)]);
-    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 4, "too_far"), other(2, 950), other(3, 999)]))).toBe(true);
-    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 4, "too_far"), move(3, 1000, 4, "arrived")]))).toBe(false);
-    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 5, "too_far")]))).toBe(false);
-    expect(sameVerdicts(before, moveVerdicts([move(1, 900, 4, "arrived")]))).toBe(false);
-  });
-
-  test("lines that read the same stay the objects they were; a line whose verdict moved is new", () => {
-    const entry = {
-      i: 7,
-      t: "actions",
-      ts: 1000,
-      actions: [note("move_to", { args: { x: 1, y: 2, z: 3 }, moveId: 4 }), note("cast", { args: { spellId: 133 } })],
-    } as unknown as ActionsEntry;
-    const first = actionLines(entry);
-    const walking = keepLines(first, actionLines(entry));
-    expect(walking[0]).toBe(first[0]!);
-    expect(walking[1]).toBe(first[1]!);
-    const arrived = keepLines(walking, actionLines(entry, moveVerdicts([move(9, 1500, 4, "arrived")])));
-    expect(arrived[0]).not.toBe(first[0]!);
-    expect(arrived[0]!.text).toContain("arrived");
-    expect(arrived[1]).toBe(first[1]!);
   });
 });

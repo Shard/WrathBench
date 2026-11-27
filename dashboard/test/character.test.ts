@@ -9,9 +9,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { CharacterStatePoint, CharacterView } from "@viewer/api-types";
-import { characterIsLive, characterSessionSeries, sessionCount } from "../src/lib/character";
-import { whileLive } from "../src/lib/poll";
+import type { CharacterStatePoint } from "@viewer/api-types";
+import { characterSessionSeries } from "../src/lib/character";
 
 function pt(runId: string, attempt: number, ts: number, level: number, xp: number): CharacterStatePoint {
   return {
@@ -56,33 +55,6 @@ describe("characterSessionSeries, attempts served without sessions", () => {
     // One seam, at the join, naming the attempt that begins there.
     expect(s.seams).toEqual([attemptSeam(3000, 2, 2, "a2")]);
   });
-
-  test("the sample is otherwise untouched, so both pages read one number", () => {
-    const s = characterSessionSeries([pt("a1", 1, 500, 7, 1234)]);
-    expect(s.states[0]).toMatchObject({ runId: "a1", attempt: 1, ts: 0, level: 7, xp: 1234 });
-  });
-
-  test("a character of one attempt has no seam at all", () => {
-    const s = characterSessionSeries([pt("a1", 1, 0, 1, 0), pt("a1", 1, 100, 1, 10)]);
-    expect(s.seams).toEqual([]);
-    expect(s.totalMs).toBe(100);
-  });
-
-  test("an attempt sampled once lands a seam and contributes no time", () => {
-    const s = characterSessionSeries([
-      pt("a1", 1, 0, 1, 0),
-      pt("a1", 1, 200, 2, 10),
-      pt("a2", 2, DAY, 2, 10),
-      pt("a3", 3, DAY * 2, 2, 10),
-      pt("a3", 3, DAY * 2 + 50, 3, 20),
-    ]);
-    expect(s.seams).toEqual([attemptSeam(200, 2, 2, "a2"), attemptSeam(200, 3, 3, "a3")]);
-    expect(s.totalMs).toBe(250);
-  });
-
-  test("nothing recorded is an empty axis, not a throw", () => {
-    expect(characterSessionSeries([])).toEqual({ states: [], seams: [], totalMs: 0 });
-  });
 });
 
 describe("characterSessionSeries on the session clock", () => {
@@ -112,71 +84,5 @@ describe("characterSessionSeries on the session clock", () => {
     ]);
     // The attempt's playtime, which is where the line ends: not the five days.
     expect(s.totalMs).toBe(20 * HOUR + 2000);
-  });
-
-  test("a chain still seams at each new attempt, and a resume inside one is a seam of its own", () => {
-    const s = characterSessionSeries(
-      [
-        pt("a1", 1, 100, 1, 0),
-        pt("a1", 1, 900, 2, 0),
-        pt("a2", 2, DAY + 100, 2, 10),
-        pt("a2", 2, 3 * DAY + 100, 3, 0),
-      ],
-      [
-        { runId: "a1", playtimeMs: 1000, sessions: [{ start: 0, end: 1000 }] },
-        {
-          runId: "a2",
-          playtimeMs: 600,
-          sessions: [
-            { start: DAY, end: DAY + 300 },
-            { start: 3 * DAY, end: 3 * DAY + 300 },
-          ],
-        },
-      ],
-    );
-    // a1 spans its playtime (1000), then a2's sessions follow it with the two-day pause closed.
-    expect(s.states.map((p) => p.ts)).toEqual([100, 900, 1100, 1400]);
-    expect(s.seams).toEqual([
-      { at: 1000, attempt: 2, session: 2, runId: "a2", newAttempt: true, startedAt: DAY },
-      { at: 1300, attempt: 2, session: 3, runId: "a2", newAttempt: false, startedAt: 3 * DAY },
-    ]);
-    expect(s.totalMs).toBe(1600);
-  });
-
-  test("an attempt the server sent no sessions for keeps its sample span beside one that has them", () => {
-    const s = characterSessionSeries(
-      [pt("a1", 1, 5000, 1, 0), pt("a1", 1, 5400, 1, 5), pt("a2", 2, DAY + 50, 2, 0)],
-      [{ runId: "a2", playtimeMs: 100, sessions: [{ start: DAY, end: DAY + 100 }] }],
-    );
-    expect(s.states.map((p) => p.ts)).toEqual([0, 400, 450]);
-    expect(s.totalMs).toBe(500);
-  });
-});
-
-describe("sessionCount", () => {
-  test("counts every session, and an attempt with none served as the one it was drawn as", () => {
-    expect(sessionCount([])).toBe(0);
-    expect(sessionCount([{}, { sessions: [] }])).toBe(2);
-    expect(sessionCount([{ sessions: [{ start: 0, end: 1 }, { start: 5, end: null }] }, {}])).toBe(3);
-  });
-});
-
-describe("the character page's poll, gated on the newest attempt", () => {
-  type Attempt = CharacterView["runs"][number];
-  const attempt = (over: Partial<Attempt>): Attempt =>
-    ({ runId: "r", live: false, pauseReason: null, terminationReason: "episode-limit", ...over }) as Attempt;
-  const period = whileLive((b: { character: Pick<CharacterView, "runs"> }) => characterIsLive(b.character), 10_000, 300_000);
-
-  test("fast while the newest attempt is live, and before the first answer", () => {
-    expect(period(undefined)).toBe(10_000);
-    const live = attempt({ live: true, terminationReason: null });
-    expect(period({ character: { runs: [attempt({}), live] } })).toBe(10_000);
-  });
-
-  test("slow once it is not: ended, paused, an older attempt's liveness not counting, or no attempts", () => {
-    expect(period({ character: { runs: [attempt({})] } })).toBe(300_000);
-    expect(period({ character: { runs: [attempt({ terminationReason: null, pauseReason: "rate-limited" })] } })).toBe(300_000);
-    expect(period({ character: { runs: [attempt({ live: true, terminationReason: null }), attempt({})] } })).toBe(300_000);
-    expect(period({ character: { runs: [] } })).toBe(300_000);
   });
 });

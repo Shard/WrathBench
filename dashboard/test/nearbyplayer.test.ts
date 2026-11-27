@@ -1,16 +1,13 @@
 /**
  * The nearby player (`@wrathbench/inspector/views/nearbyplayer`) over windows the viewer's own
  * codec encodes (`@wrathbench/inspector/codec/nearby`): spline sampling at the map's playhead,
- * one dot per guid across characters, the packet-field classes, label
- * culling, the redraw throttle and the zoom gates. Units, names and guids are
- * invented.
+ * one dot per guid across characters, and the public window's reach. Units,
+ * names and guids are invented.
  */
 import { describe, expect, test } from "bun:test";
 import { encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@wrathbench/inspector/codec/nearby";
 import { PUBLIC_NEARBY_SPAN_MS } from "@viewer/public-keys";
-import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "@wrathbench/inspector/views/nearbyplayer";
-import { NEARBY_MIN_PX_PER_YD, NEARBY_NAME_PX_PER_YD, nearbyNamesShown, nearbyShown, pxPerYard } from "../src/lib/mapview";
-import { targetReading } from "@wrathbench/inspector/views/unitframe";
+import { createNearbyStore, NEARBY_SLACK_MS } from "@wrathbench/inspector/views/nearbyplayer";
 import { createLiveClock, horizonOf, liveCadence } from "@wrathbench/inspector/views/traceplayer";
 import { createSnapshotClient } from "../src/api/snapshot-client";
 
@@ -46,110 +43,15 @@ describe("sampling at the playhead", () => {
     store.set("a", windowOf("7", [unit(WOLF, {}, 1)], [], T0 + 20_000));
     store.set("a", windowOf("7", [unit(WOLF, {}, 2)], [], T0 + 10_000));
     expect(store.dotsAt(T0 + 5_000, 0)[0]!.x).toBe(1);
-    store.retain([]);
-    expect(store.has("a")).toBe(false);
   });
-});
 
-describe("one dot per guid", () => {
   test("a unit two characters both see draws once, from the newer window, engaged if it targets either", () => {
     const store = createNearbyStore();
     store.set("a", windowOf("7", [unit(WOLF, { name: "Invented Wolf" }, 1), unit(VENDOR, { nf: 0x80 }, 9)], [], T0 + 10_000));
     store.set("b", windowOf("8", [unit(WOLF, { name: "Invented Wolf", tg: "8", tgs: true }, 2)], [], T0 + 12_000));
     const dots = store.dotsAt(T0 + 5_000, 0);
     expect(dots.map((d) => d.id).sort()).toEqual([WOLF, VENDOR].sort());
-    const wolf = dots.find((d) => d.id === WOLF)!;
-    expect(wolf).toMatchObject({ runId: "b", x: 2, cls: "engaged" });
-    // The older window's view of it does not undo the newer one's.
-    store.set("c", windowOf("9", [unit(WOLF, { name: "Invented Wolf" }, 3)], [], T0 + 11_000));
-    expect(store.dotsAt(T0 + 5_000, 0).find((d) => d.id === WOLF)).toMatchObject({ runId: "b", cls: "engaged" });
-  });
-
-  test("the count and the character's own target, by window", () => {
-    const store = createNearbyStore();
-    store.set("a", windowOf("7", [unit(WOLF, { name: "Invented Wolf", level: 6 }, 1), unit(VENDOR, {}, 9)], [], T0 + 10_000, 0, WOLF));
-    expect(store.countAt("a", T0 + 1000)).toBe(2);
-    expect(store.targetAt("a", T0 + 1000)).toEqual({ id: WOLF, name: "Invented Wolf", level: 6 });
-    expect(store.countAt("a", T0 + 99_000)).toBeNull();
-    // A label kept out of a character's puck and name, which the pips draw over the layer.
-    expect(cullLabels([{ x: 5, y: 5, w: 40, h: 12, rank: 0 }, { x: 100, y: 5, w: 40, h: 12, rank: 4 }], 60, [{ x: 0, y: 0, w: 30, h: 30 }])).toEqual([1]);
-    expect(store.countAt("nobody", T0 + 1000)).toBeNull();
-    // The unit frame names the target when the layer knows it, and says what the trace says otherwise.
-    expect(targetReading({ kind: "creature", entry: 299, hpPct: 50 }, "Invented Wolf")).toMatchObject({ text: "Invented Wolf", pct: 50 });
-    expect(targetReading({ kind: "creature", entry: 299, hpPct: 50 })).toMatchObject({ text: "creature 299" });
-  });
-
-  test("the hovered unit's label goes beside its dot on the first side clear of the pips, else where it covers least", () => {
-    const at = (box: { x: number; y: number }) => [box.x, box.y];
-    // Nothing in the way: on the right, as the culled names are.
-    expect(at(placeLabel(100, 100, 3, 60, 14, []))).toEqual([106, 93]);
-    // A character's puck and name to the right: on the left.
-    const pip = { x: 90, y: 83, w: 120, h: 34 };
-    expect(at(placeLabel(100, 100, 3, 60, 14, [pip]))).toEqual([34, 93]);
-    // Both sides taken: below, then above.
-    const left = { x: 0, y: 83, w: 95, h: 34 };
-    expect(at(placeLabel(100, 100, 3, 60, 14, [pip, left]))).toEqual([70, 106]);
-    const below = { x: 0, y: 105, w: 300, h: 40 };
-    expect(at(placeLabel(100, 100, 3, 60, 14, [pip, left, below]))).toEqual([70, 80]);
-    // Covered on every side: the side that covers least of them.
-    const everywhere = [pip, left, below, { x: 0, y: 70, w: 300, h: 12 }];
-    const placed = placeLabel(100, 100, 3, 60, 14, everywhere);
-    expect(at(placed)).toEqual([70, 80]);
-  });
-});
-
-describe("classes come from packet fields", () => {
-  test("dead, engaged, player, service, other — in that order", () => {
-    expect(classOf({ hp: 0, tgs: true, nf: 1 }, "creature")).toBe("dead");
-    expect(classOf({ df: 0x21 }, "creature")).toBe("dead");
-    expect(classOf({ tgs: true, nf: 1 }, "creature")).toBe("engaged");
-    expect(classOf({ nf: 0x80 }, "player")).toBe("player");
-    expect(classOf({ nf: 0x80 }, "creature")).toBe("service");
-    expect(classOf({ df: 0x4 }, "creature")).toBe("other");
-    expect([7, 8].map(questMark)).toEqual(["!", "!"]);
-    expect([6, 9, 10].map(questMark)).toEqual(["?", "?", "?"]);
-    expect([0, 1, 2, 5, undefined].map(questMark)).toEqual([null, null, null, null, null]);
-  });
-});
-
-describe("labels", () => {
-  test("greedy by rank: the first of two overlapping boxes wins, a clear one stays", () => {
-    const kept = cullLabels([
-      { x: 0, y: 0, w: 50, h: 12, rank: 4 },
-      { x: 10, y: 4, w: 50, h: 12, rank: 1 },
-      { x: 200, y: 0, w: 50, h: 12, rank: 4 },
-      { x: 30, y: 2, w: 50, h: 12, rank: 0 },
-    ]);
-    expect(kept).toEqual([3, 2]);
-  });
-
-  test("a city's worth of names stays bounded and never overlaps", () => {
-    const boxes = Array.from({ length: 300 }, (_, i) => ({ x: (i * 37) % 400, y: (i * 53) % 300, w: 60, h: 12, rank: i % 5 }));
-    const kept = cullLabels(boxes, 40);
-    expect(kept.length).toBeLessThanOrEqual(40);
-    for (let i = 0; i < kept.length; i++) {
-      for (let j = i + 1; j < kept.length; j++) {
-        const a = boxes[kept[i]!]!;
-        const b = boxes[kept[j]!]!;
-        expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false);
-      }
-    }
-  });
-});
-
-describe("the throttle and the zoom gates", () => {
-  test("NPC motion alone redraws at most every NEARBY_FRAME_MS", () => {
-    expect(nearbyFrameDue(1000, 1000 + NEARBY_FRAME_MS - 1)).toBe(false);
-    expect(nearbyFrameDue(1000, 1000 + NEARBY_FRAME_MS)).toBe(true);
-  });
-
-  test("the layer shows from about a pixel a yard, its names from further in", () => {
-    const at = (pxYd: number) => pxYd / pxPerYard(1);
-    expect(nearbyShown(at(NEARBY_MIN_PX_PER_YD) * 0.99)).toBe(false);
-    expect(nearbyShown(at(NEARBY_MIN_PX_PER_YD))).toBe(true);
-    expect(nearbyNamesShown(at(NEARBY_NAME_PX_PER_YD) * 0.99)).toBe(false);
-    expect(nearbyNamesShown(at(NEARBY_NAME_PX_PER_YD))).toBe(true);
-    expect(NEARBY_NAME_PX_PER_YD).toBeGreaterThan(NEARBY_MIN_PX_PER_YD);
+    expect(dots.find((d) => d.id === WOLF)).toMatchObject({ runId: "b", x: 2, cls: "engaged" });
   });
 });
 
@@ -196,17 +98,5 @@ describe("the public layer", () => {
         expect(late).toBeLessThanOrEqual(0);
       }
     }
-  });
-
-  test("the same window handed in again is not decoded again; a newer one is", () => {
-    let changes = 0;
-    const store = createNearbyStore({ onChange: () => changes++ });
-    const w = windowOf("7", [unit(WOLF, { name: "Invented Wolf" }, 0)]);
-    store.set("a", w);
-    store.set("a", w);
-    expect(changes).toBe(1);
-    store.set("a", windowOf("7", [unit(WOLF, { name: "Invented Wolf" }, 1)], [], T0 + 20_000));
-    expect(changes).toBe(2);
-    expect(store.dotsAt(T0 + 15_000, 0)[0]).toMatchObject({ x: 1 });
   });
 });

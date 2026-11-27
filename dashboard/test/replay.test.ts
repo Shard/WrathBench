@@ -3,13 +3,15 @@
  *
  * The property that keeps the one-renderer design intact is that a cursor
  * produces the same `AgentPosition[]` shape the live feed produces; these pin
- * that, and the `?run=` parameter. The cursor maths and the route are the
- * inspector's, tested there.
+ * that, the readings it carries at the cursor, and the `?run=` parameter. The
+ * cursor maths, the route and the intent overlay are the inspector's, tested
+ * there.
  */
 
 import { describe, expect, test } from "bun:test";
-import type { TrackPoint, TrackResponse } from "../../viewer/api-types";
+import type { MoveIntentView, TrackPoint, TrackResponse } from "../../viewer/api-types";
 import { trackSpan } from "@wrathbench/inspector/views/replay";
+import { intentToDraw } from "@wrathbench/inspector/views/mapintent";
 import { positionsAt, runParam } from "../src/lib/replay";
 
 function point(ts: number, map: number, x: number, y: number): TrackPoint {
@@ -29,7 +31,7 @@ const TRACK: TrackResponse = {
 };
 
 describe("positionsAt", () => {
-  test("produces the live feed's shape at the cursor", () => {
+  test("produces the live feed's shape at the cursor, and nothing before the first position", () => {
     const [p] = positionsAt(TRACK, 250);
     expect(p).toMatchObject({
       runId: "run-1",
@@ -40,22 +42,14 @@ describe("positionsAt", () => {
       y: 2,
       ts: 200,
       harnessVersion: "harness-0.2",
-      // The frame replays with the sample, so a replayed pip lights up too.
       health: 140,
       maxHealth: 220,
-      power: 30,
-      maxPower: 100,
-      powerType: 0,
       nextLevelXp: 2100,
     });
-  });
-
-  test("before the first recorded position there is nothing to draw", () => {
     expect(positionsAt(TRACK, 1)).toEqual([]);
   });
 
   test("the quest count is the track's at the cursor, so the replay's end reads the run's", () => {
-    // Points as the viewer builds them: the run's count so far, across a resume (`trackFrom`).
     const counts = [4, 6, 9];
     const track: TrackResponse = { ...TRACK, points: TRACK.points.map((p, i) => ({ ...p, questsCompleted: counts[i]! })) };
     expect(positionsAt(track, 150)[0]?.questsCompleted).toBe(4);
@@ -63,33 +57,28 @@ describe("positionsAt", () => {
     // A track published before the count was filled reads as not recorded.
     expect(positionsAt(TRACK, 300)[0]?.questsCompleted).toBeNull();
   });
+
+  test("the movement intention is the one standing at the cursor, aged against the cursor and never the wall clock", () => {
+    const move = (over: Partial<MoveIntentView>): MoveIntentView => ({ ts: 0, map: 0, x: -6100, y: 400, z: 380, target: null, status: null, ...over });
+    const track: TrackResponse = { ...TRACK, moves: [move({ ts: 150 }), move({ ts: 190, status: "too_far" })] };
+    expect(positionsAt(track, 100)[0]!.move).toBeNull();
+    expect(positionsAt(track, 160)[0]!.move!.status).toBeNull();
+    expect(positionsAt(track, 200)[0]!.move!.status).toBe("too_far");
+    // What `positionsAt` hands the renderer is a recording: ageing it against
+    // `Date.now()` would drop every intention a replay ever had.
+    const at = positionsAt(track, 160)[0]!.move!;
+    expect(intentToDraw(at, 0, 160)).not.toBeNull();
+    expect(intentToDraw(at, 0, Date.now())).toBeNull();
+    // A track published before intentions existed replays without them.
+    expect(positionsAt(TRACK, 200)[0]!.move).toBeNull();
+  });
 });
 
 describe("runParam", () => {
-  /*
-   * `/map` and `/map?run=<id>` are the page's two states, so this is the whole
-   * of the mapping between a URL and a mode. A repeated parameter arrives as an
-   * array and an empty one as "": neither names a run, and both mean live.
-   */
-  test("a non-empty single value is the run id", () => {
+  test("a non-empty single value is the run id; absent, empty and repeated all mean the live map", () => {
     expect(runParam("run-1")).toBe("run-1");
-  });
-
-  test("absent, empty and repeated all mean the live map", () => {
     expect(runParam(undefined)).toBeUndefined();
     expect(runParam("")).toBeUndefined();
     expect(runParam(["run-1", "run-2"])).toBeUndefined();
-  });
-});
-
-describe("a run's feed over the edges of its track", () => {
-  test("one position is one pip; none is no feed", () => {
-    expect(positionsAt({ ...TRACK, points: [point(100, 0, 1, 1)] }, 100)).toHaveLength(1);
-    expect(positionsAt({ ...TRACK, points: [] }, 0)).toEqual([]);
-  });
-
-  test("the feed carries no inventory: the sidebar reads it off the track", () => {
-    const t: TrackResponse = { ...TRACK, points: [1, 2, 3].map((ts) => point(ts, 0, 0, 0)), inv: { items: [["Linen Cloth", 2589, 1]], at: [[1, [[255, 23, 0, 3]]]] } };
-    expect(Object.keys(positionsAt(t, 3)[0]!)).not.toContain("items");
   });
 });

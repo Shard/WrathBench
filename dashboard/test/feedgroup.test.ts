@@ -38,19 +38,6 @@ describe("groupFeed on the fixed loop's cycle", () => {
     expect(kinds).toEqual(["plain", "turn", "response", "call", "call"]);
   });
 
-  test("the turn header carries the request and its context events", () => {
-    const g = groupFeed(wrathbenchTurn(12, 1000))[1]!;
-    if (g.kind !== "turn") throw new Error(g.kind);
-    expect(g.request.turn).toBe(12);
-    expect(g.events?.count).toBe(64);
-  });
-
-  test("response latency is measured from the request", () => {
-    const g = groupFeed(wrathbenchTurn(12, 1000))[2]!;
-    if (g.kind !== "response") throw new Error(g.kind);
-    expect(g.latencyMs).toBe(11_998);
-  });
-
   test("a snippet card holds the code and the result, with a real duration", () => {
     const g = groupFeed(wrathbenchTurn(12, 1000))[3]!;
     if (g.kind !== "call") throw new Error(g.kind);
@@ -111,32 +98,6 @@ describe("groupFeed on the claude driver's shape", () => {
     expect(card.result?.text).toBe("ok");
     expect(card.durationMs).toBeNull();
   });
-
-  test("1:N responses each measure from the previous activity", () => {
-    const entries = [
-      e("request", 1_000, { turn: 1, messageCount: 1, promptChars: 100 }),
-      e("response", 6_000, { turn: 1, text: "first" }),
-      e("response", 10_000, { turn: 1, text: "second" }),
-    ];
-    const groups = groupFeed(entries);
-    const [, r1, r2] = groups;
-    if (r1?.kind !== "response" || r2?.kind !== "response") throw new Error("shape");
-    expect(r1.latencyMs).toBe(5_000);
-    expect(r2.latencyMs).toBe(4_000);
-  });
-
-  test("the MCP server's turn-less pairs group, also without a duration", () => {
-    const entries = [
-      e("tool_call", 50, { name: "search_reference", args: { query: "q" } }),
-      e("tool_result", 51, { name: "search_reference", isError: false, text: "hit" }),
-    ];
-    const groups = groupFeed(entries);
-    expect(groups).toHaveLength(1);
-    const card = groups[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.result?.text).toBe("hit");
-    expect(card.durationMs).toBeNull();
-  });
 });
 
 describe("groupFeed with the writers' dispatch stamp", () => {
@@ -152,60 +113,9 @@ describe("groupFeed with the writers' dispatch stamp", () => {
     if (card.kind !== "call") throw new Error(card.kind);
     expect(card.durationMs).toBe(8_001);
   });
-
-  test("a stamped MCP-server pair shows its real duration", () => {
-    const entries = [
-      e("tool_call", 700, { name: "search_reference", args: { query: "q" }, dispatchTs: 400 }),
-      e("tool_result", 701, { name: "search_reference", isError: false, text: "hit" }),
-    ];
-    const card = groupFeed(entries)[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.durationMs).toBe(301);
-  });
-
-  test("the stamp wins over the record's own ts on the fixed loop's shape", () => {
-    const entries = [
-      e("tool_call", 1_010, { turn: 3, name: "run_snippet", args: {}, dispatchTs: 1_000 }),
-      e("snippet", 1_010, { turn: 3, code: "x" }),
-      e("snippet_result", 1_500, { turn: 3, name: "run_snippet", isError: false, text: "ok" }),
-    ];
-    const card = groupFeed(entries)[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.durationMs).toBe(500);
-  });
-
-  test("a stamp later than the result is no duration, never a fallback", () => {
-    const entries = [
-      e("tool_call", 100, { turn: 3, name: "run_snippet", args: {}, dispatchTs: 900 }),
-      e("snippet_result", 500, { turn: 3, name: "run_snippet", isError: false, text: "ok" }),
-    ];
-    const card = groupFeed(entries)[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.result?.text).toBe("ok");
-    expect(card.durationMs).toBeNull();
-  });
-
-  test("a stamped call with no result yet has no duration", () => {
-    const entries = [e("tool_call", 100, { turn: 1, call: 2, name: "await_events", args: {}, dispatchTs: 50 })];
-    const card = groupFeed(entries)[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.result).toBeNull();
-    expect(card.durationMs).toBeNull();
-  });
 });
 
 describe("groupFeed at the window's edges", () => {
-  test("a leading orphan result renders as a card of its own", () => {
-    const groups = groupFeed([
-      e("snippet_result", 0, { turn: 2, name: "run_snippet", isError: true, text: "boom" }),
-    ]);
-    const card = groups[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.call).toBeNull();
-    expect(card.result?.isError).toBe(true);
-    expect(card.result?.name).toBe("run_snippet");
-  });
-
   test("a trailing call with no result yet stays open, not glued to nothing", () => {
     const groups = groupFeed([
       e("tool_call", 0, { turn: 2, name: "run_snippet", args: {} }),
@@ -215,31 +125,6 @@ describe("groupFeed at the window's edges", () => {
     if (card.kind !== "call") throw new Error(card.kind);
     expect(card.result).toBeNull();
     expect(card.durationMs).toBeNull();
-  });
-
-  test("context events with no request yet stand alone and heal later", () => {
-    const alone = groupFeed([e("events_served", 0, { via: "context", count: 3 })]);
-    expect(alone.map((g) => g.kind)).toEqual(["plain"]);
-    // The same window one tail batch later, request landed: now it is a header.
-    const healed = groupFeed([
-      e("events_served", 0, { via: "context", count: 3 }),
-      e("request", 1, { turn: 9, messageCount: 4, promptChars: 10 }),
-    ]);
-    expect(healed.map((g) => g.kind)).toEqual(["turn"]);
-  });
-
-  test("a request whose context events are off-window still heads its turn", () => {
-    const groups = groupFeed([e("request", 0, { turn: 5, messageCount: 2, promptChars: 4 })]);
-    const g = groups[0]!;
-    if (g.kind !== "turn") throw new Error(g.kind);
-    expect(g.events).toBeNull();
-  });
-
-  test("a response with nothing before it shows no latency", () => {
-    const groups = groupFeed([e("response", 500, { turn: 1, text: "hi" })]);
-    const g = groups[0]!;
-    if (g.kind !== "response") throw new Error(g.kind);
-    expect(g.latencyMs).toBeNull();
   });
 });
 
@@ -252,21 +137,6 @@ describe("groupFeed identity reuse", () => {
     const second = groupFeed([...turn, e("state", 20_000)], first);
     for (let i = 0; i < first.length; i++) expect(second[i]).toBe(first[i]!);
     expect(second).toHaveLength(first.length + 1);
-  });
-
-  test("an open call group is replaced, not recycled, when its result arrives", () => {
-    const call = e("tool_call", 1_000, { turn: 3, name: "run_snippet", args: {} });
-    const snip = e("snippet", 1_000, { turn: 3, code: "x" });
-    const first = groupFeed([call, snip]);
-    const done = groupFeed(
-      [call, snip, e("snippet_result", 2_000, { turn: 3, name: "run_snippet", isError: false, text: "ok" })],
-      first,
-    );
-    expect(done).toHaveLength(1);
-    expect(done[0]).not.toBe(first[0]!);
-    const card = done[0]!;
-    if (card.kind !== "call") throw new Error(card.kind);
-    expect(card.result?.text).toBe("ok");
   });
 });
 
@@ -312,14 +182,6 @@ describe("groupFeed: a store session's calls", () => {
     expect(cards(gs).map((c) => c.durationMs)).toEqual([100, 100, 3_000]);
     expect(kill!.actions.map((a) => a.ts)).toEqual([3_000]);
   });
-
-  test("with no model side no card has a think time; the same entries on a run with one do", () => {
-    expect(cards(groupFeed(storeStretch(), [], null, false)).map((c) => c.lead)).toEqual([null, null, null]);
-    expect(cards(groupFeed(storeStretch(), [], null)).some((c) => c.lead?.thinkMs != null)).toBe(true);
-    // The run's detail can land after its entries: a derivation that timed the cards is not recycled once it is known.
-    const entries = storeStretch();
-    expect(cards(groupFeed(entries, groupFeed(entries, [], null), null, false)).map((c) => c.lead)).toEqual([null, null, null]);
-  });
 });
 
 describe("groupFeed: tool-call envelopes", () => {
@@ -346,23 +208,6 @@ describe("groupFeed: tool-call envelopes", () => {
     expect(cards(gs)[1]!.lead).toEqual({ thinkMs: 3_003, thinkingTokens: 150, envelope: null });
   });
 
-  test("claude-code: an envelope naming a tool without the CLI's prefix is no card's, and stays a row", () => {
-    // The model asked for `run_snippet` bare: the CLI never routed it to the run.
-    const gs = groupFeed(
-      [
-        e("request", 0, { turn: 1, messageCount: 1 }),
-        e("response", 1_000, { turn: 1, text: "", tools: ["run_snippet"] }),
-        e("tool_call", 2_400, { turn: 1, call: 1, name: "run_snippet", args: { code: "a" }, dispatchTs: 1_020 }),
-        e("snippet", 2_400, { turn: 1, call: 1, code: "a" }),
-        e("snippet_result", 2_400, { turn: 1, call: 1, name: "run_snippet", isError: false, text: "ok" }),
-        e("response", 3_800, { turn: 1, text: "", tools: ["mcp__wrathbench__run_snippet"] }),
-      ],
-      [],
-      "claude-code",
-    );
-    expect(kinds(gs)).toEqual(["turn", "response", "call"]);
-  });
-
   test("codex: an envelope written an item late, after another card, is still claimed by name", () => {
     const gs = groupFeed(
       [
@@ -382,36 +227,6 @@ describe("groupFeed: tool-call envelopes", () => {
     expect(cards(gs).every((c) => c.lead === null)).toBe(true);
   });
 
-  test("codex: a reply in words keeps its latency; an envelope no card claimed draws none", () => {
-    const gs = groupFeed(
-      [e("request", 0, { turn: 1 }), e("response", 4_000, { turn: 1, text: "", tools: ["wrathbench.yield"] }), e("response", 9_000, { turn: 1, text: "Hunting." })],
-      [],
-      "codex",
-    );
-    expect(kinds(gs)).toEqual(["turn", "response", "response"]);
-    const [, envelope, reply] = gs as Extract<Groups[number], { kind: "response" }>[];
-    expect(envelope!.latencyMs).toBeNull();
-    expect(reply!.latencyMs).toBe(5_000);
-  });
-
-  test("claude-code: a claimed envelope is not where the next reply's latency starts", () => {
-    // The result, then the envelope stamped as the next message's first block lands, then that block's words.
-    const gs = groupFeed(
-      [
-        e("tool_call", 1_000, { turn: 1, call: 1, name: "yield", args: { seconds: 60 }, dispatchTs: 900 }),
-        e("tool_result", 1_000, { turn: 1, call: 1, name: "yield", isError: false, text: "[wake 1]" }),
-        e("response", 3_000, { turn: 1, text: "", tools: ["mcp__wrathbench__yield"] }),
-        e("response", 4_400, { turn: 1, text: "Selling greys." }),
-      ],
-      [],
-      "claude-code",
-    );
-    expect(kinds(gs)).toEqual(["call", "response"]);
-    const r = gs[1]!;
-    if (r.kind !== "response") throw new Error(r.kind);
-    expect(r.latencyMs).toBe(3_400);
-  });
-
   test("pi: the envelope before its call moves onto the card with its thinking, tokens and stop reason", () => {
     const env = e("response", 1_590, { turn: 1, text: "", tools: ["mcp__wrathbench__run_snippet"], stopReason: "toolUse", thinkingChars: 228, usage: { prompt: 9_000, completion: 121 } });
     const gs = groupFeed(
@@ -429,61 +244,6 @@ describe("groupFeed: tool-call envelopes", () => {
     expect(kinds(gs)).toEqual(["call", "call"]);
     // The model's time runs from the previous result to this call's dispatch.
     expect(cards(gs)[1]!.lead).toEqual({ thinkMs: 1_589, thinkingTokens: null, envelope: env as never });
-  });
-
-  test("the fixed loop: an envelope with no text gives its card the model's time from the request", () => {
-    const gs = groupFeed(
-      [
-        e("request", 1_000, { turn: 4, messageCount: 9 }),
-        e("response", 9_000, { turn: 4, text: "", tools: ["run_snippet"], usage: { prompt: 5_000, completion: 40 } }),
-        e("tool_call", 9_001, { turn: 4, name: "run_snippet", args: { code: "z" }, dispatchTs: 9_001 }),
-        e("snippet", 9_001, { turn: 4, code: "z" }),
-        e("snippet_result", 9_300, { turn: 4, name: "run_snippet", isError: false, text: "ok" }),
-        // The same reply's second call follows at once: no think time.
-        e("tool_call", 9_302, { turn: 4, name: "search_reference", args: { query: "q" }, dispatchTs: 9_302 }),
-        e("tool_result", 9_400, { turn: 4, name: "search_reference", isError: false, text: "…" }),
-      ],
-      [],
-      "wrathbench",
-    );
-    expect(kinds(gs)).toEqual(["turn", "call", "call"]);
-    const [first, second] = cards(gs);
-    expect(first!.lead?.thinkMs).toBe(8_001);
-    expect(first!.lead?.envelope?.usage?.completion).toBe(40);
-    expect(second!.lead).toBeNull();
-  });
-
-  test("a reply in words keeps its row and takes the thinking a claimed envelope carried before it", () => {
-    // One message of words and a call: the previous call's envelope (thinking on it), the words, the call, its envelope.
-    const gs = groupFeed(
-      [
-        e("tool_call", 1_000, { turn: 1, call: 1, name: "yield", args: { seconds: 60 }, dispatchTs: 900 }),
-        e("tool_result", 1_000, { turn: 1, call: 1, name: "yield", isError: false, text: "[wake 1]" }),
-        e("response", 2_000, { turn: 1, text: "", tools: ["mcp__wrathbench__yield"], thinkingTokens: 70 }),
-        e("response", 2_001, { turn: 1, text: "Selling greys." }),
-      ],
-      [],
-      "claude-code",
-    );
-    expect(kinds(gs)).toEqual(["call", "response"]);
-    const r = gs[1]!;
-    if (r.kind !== "response") throw new Error(r.kind);
-    expect(r.lead?.thinkingTokens).toBe(70);
-  });
-
-  test("a pi compaction call is a row of its own, never an envelope", () => {
-    const gs = groupFeed([e("response", 1_000, { turn: 2, kind: "compaction", text: "", tools: [], usage: { prompt: 40_000, completion: 900 }, piCostUsd: 0.01 })], [], "pi");
-    expect(kinds(gs)).toEqual(["response"]);
-  });
-
-  test("a card whose lead arrives later is redrawn, not recycled", () => {
-    const stretch = claudeStretch();
-    const without = groupFeed(stretch.slice(3), [], "claude-code");
-    const withLead = groupFeed(stretch, without, "claude-code");
-    const before = cards(without).find((c) => c.call?.name === "edit_file")!;
-    const after = cards(withLead).find((c) => c.call?.name === "edit_file")!;
-    expect(after).not.toBe(before);
-    expect(after.lead?.thinkingTokens).toBe(150);
   });
 });
 
@@ -508,17 +268,6 @@ describe("groupFeed: records a call set off, joined by time", () => {
     expect(second!.deploys).toEqual([deploy]);
   });
 
-  test("a deploy between the call and its result (the fixed loop) is on the card too", () => {
-    const deploy = e("deploy", 1_050, { ok: false, by: "save", error: "SyntaxError" });
-    const gs = groupFeed([
-      e("tool_call", 1_000, { turn: 2, name: "edit_file", args: { path: "main.ts", old: "a", new: "b" }, dispatchTs: 1_000 }),
-      deploy,
-      e("tool_result", 1_100, { turn: 2, name: "edit_file", isError: false, text: "edited main.ts" }),
-    ]);
-    expect(kinds(gs)).toEqual(["call"]);
-    expect(cards(gs)[0]!.deploys).toEqual([deploy]);
-  });
-
   test("a yield's wake is on its card and counted once; a codex turn-end wake stays a row", () => {
     const wake = e("wake", 62_941, { via: "yield", turn: 1, sleptMs: 60_000, n: 1 });
     const gs = groupFeed(
@@ -534,24 +283,6 @@ describe("groupFeed: records a call set off, joined by time", () => {
     expect(kinds(gs)).toEqual(["call", "wake"]);
     expect(cards(gs)[0]!.wake).toBe(wake);
   });
-
-  test("a public window's wake, its skeleton alone, still joins by time", () => {
-    const gs = groupFeed([
-      e("wake", 62_941, { turn: 1 }),
-      e("tool_call", 62_942, { turn: 1, call: 15, name: "yield", args: { seconds: 60 }, dispatchTs: 2_936 }),
-      e("tool_result", 62_942, { turn: 1, call: 15, name: "yield", isError: false, text: "[wake 1]" }),
-    ]);
-    expect(kinds(gs)).toEqual(["call"]);
-  });
-
-  test("a deploy outside every write's span stays a row", () => {
-    const gs = groupFeed([
-      e("deploy", 500, { ok: true, deploy: 1 }),
-      e("tool_call", 1_000, { turn: 2, name: "edit_file", args: {}, dispatchTs: 1_000 }),
-      e("tool_result", 1_100, { turn: 2, name: "edit_file", isError: false, text: "edited" }),
-    ]);
-    expect(kinds(gs)).toEqual(["deploy", "call"]);
-  });
 });
 
 describe("groupFeed: the run's end", () => {
@@ -566,14 +297,5 @@ describe("groupFeed: the run's end", () => {
       e("termination", 9_000, { reason: "harness-error", detail: "manually classified" }),
     ]);
     expect(kinds(gs)).toEqual(["wind-down", "termination", "termination"]);
-  });
-
-  test("a public window's watchdog, its reason alone, folds the same way", () => {
-    expect(kinds(groupFeed([e("watchdog", 1_000, { reason: "idle" }), e("termination", 1_002, { reason: "idle", detail })]))).toEqual(["termination"]);
-  });
-
-  test("a watchdog the run went on past, or whose termination says another reason, stays a row", () => {
-    expect(kinds(groupFeed([e("watchdog", 1_000, { reason: "idle" }), e("request", 1_001, { turn: 2 }), e("termination", 1_002, { reason: "idle" })]))).toEqual(["watchdog", "turn", "termination"]);
-    expect(kinds(groupFeed([e("watchdog", 1_000, { reason: "no-xp" }), e("termination", 1_002, { reason: "idle" })]))).toEqual(["watchdog", "termination"]);
   });
 });

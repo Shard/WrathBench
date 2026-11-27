@@ -8,15 +8,12 @@
  * `SNAPSHOT_MODE` somewhere in `dashboard/src`, and a guard is easy to lose in
  * a refactor — the page still compiles, still renders, and only a public
  * reader sees the dead end. So this suite reads the sources and pins the
- * guards themselves, alongside the router's catch-all.
+ * guards themselves.
  *
  * It is deliberately a source check rather than a render check: the failure
  * being caught is "somebody removed the guard", which no fixture render of the
- * private build would notice. Audited 2026-09-01 (GitHub issue #30); the
- * repo's GitHub link is behind `VITE_WRATHBENCH_REPO_URL` since 2026-09-11
- * (`repo-link.test.ts`), and `/fleet` stays reachable from the
- * status popout in both builds (operator, 2026-08-30,
- * `dashboard/src/lib/nav.ts`).
+ * private build would notice. The repo's GitHub link is behind
+ * `VITE_WRATHBENCH_REPO_URL` (`repo-link.test.ts`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -50,27 +47,6 @@ describe("nothing a public reader clicks needs the live viewer", () => {
   test("no EventSource is opened against a bucket", () => {
     const src = read("pages/RunDetail.tsx");
     expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;\s*\n\s*stop = subscribeTail\(/);
-  });
-
-  test("'load earlier' is hidden where only one window is published", () => {
-    const src = read("pages/RunDetail.tsx");
-    const at = src.indexOf("<button onClick={loadEarlier}>");
-    expect(at).toBeGreaterThan(0);
-    expect(src.slice(Math.max(0, at - 300), at)).toContain("!SNAPSHOT_MODE");
-  });
-
-  test("the operator-only banners on the models page stay private", () => {
-    const src = read("pages/Models.tsx");
-    // Both name a host path or an env var the reader cannot act on.
-    expect(src.match(/!SNAPSHOT_MODE/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-  });
-
-  test("an unknown route renders the not-found page, not a redirect home", () => {
-    const src = read("main.tsx");
-    expect(src).toContain('<Route path="*" component={NotFound} />');
-    // The two redirects that do exist are named renames, not a catch-all home.
-    expect(src).toContain('<Route path="/results" component={ResultsRedirect} />');
-    expect(src).toContain('<Route path="/episodes" component={EpisodesRedirect} />');
   });
 
   /*

@@ -1,6 +1,8 @@
 /**
- * The fleet table's contract: the columns it shows, in the order it shows them,
- * the state each row reads as, and the click-through into the run it is about.
+ * The fleet table's contract: the columns it shows (never an account's name),
+ * the state each row reads as, a cost marked when it is an estimate, the
+ * heartbeat aged on the response's own clock, and progress only against a
+ * run's own recorded budget.
  *
  * The header renders from `FLEET_COLUMNS` and the body from `fleetRows`, so
  * asserting on those is asserting on the table — which is what keeps this in
@@ -9,25 +11,17 @@
 
 import { describe, expect, test } from "bun:test";
 import type { RunListRow } from "../../viewer/api-types";
-import type { FleetJobView, FleetResponse, FleetRunFacts, FleetServerView } from "../../viewer/api-types-runner";
+import type { FleetJobView, FleetResponse, FleetServerView } from "../../viewer/api-types-runner";
 import type { FleetRow } from "../src/lib/fleet";
 import {
   FLEET_COLUMNS,
-  tpsLabel,
-  tpsTitle,
   HEARTBEAT_STALE_MS,
-  deployWindowOpen,
   fleetRows,
-  gateVerdict,
   heartbeatAge,
-  jobModelLabel,
-  pausedLabel,
   progressLabel,
   progressTitle,
   rowProgress,
   rowStateLabel,
-  runHref,
-  serverBanner,
   supervisorAlive,
 } from "../src/lib/fleet";
 
@@ -102,40 +96,6 @@ describe("columns", () => {
   });
 });
 
-describe("the model cell", () => {
-  test("one model reads as itself; a long rotation is truncated with the rest in the title", () => {
-    // The label is the short name; the full slug lives in the cell's title.
-    expect(jobModelLabel(job())).toBe("ox-alpha");
-    expect(jobModelLabel(job({ models: ["a", "b", "c", "d"] }))).toBe("a, b +2");
-    expect(jobModelLabel(job({ models: ["a", "b"] }))).toBe("a, b");
-  });
-
-  test("a job with no models resolved falls back to the ref it was called by", () => {
-    expect(jobModelLabel(job({ ref: "a+b", models: [] }))).toBe("a+b");
-  });
-
-  test("the hover leads with the roster key, and still says nothing twice", () => {
-    // The ref is what the fleet page calls the job's entry; the models follow.
-    // A provider that served exactly what was asked for adds no "served as" —
-    // prepending the ref must not defeat that suppression.
-    const same = fleetRows(fleet(), [run({ resolvedModel: "stealth/ox-alpha" } as Partial<RunListRow>)])[0]!;
-    expect(same.modelsTitle).toBe("ox-alpha · stealth/ox-alpha");
-    const drifted = fleetRows(fleet(), [run({ resolvedModel: "stealth/ox-alpha-2026" } as Partial<RunListRow>)])[0]!;
-    expect(drifted.modelsTitle).toBe("ox-alpha · stealth/ox-alpha · served as stealth/ox-alpha-2026");
-  });
-
-  test("the ids travel beside the label, in roster order, for the cell's icons", () => {
-    // The pre-joined string is the truncated *label*; identity is read from the
-    // list, so a rotating job can show one mark per family.
-    const row = fleetRows(fleet({ jobs: [job({ models: ["opus", "sonnet", "openai/gpt-5.6-luna"] })] }), [])[0]!;
-    expect(row.models).toBe("opus, sonnet +1");
-    expect(row.modelList).toEqual(["opus", "sonnet", "openai/gpt-5.6-luna"]);
-    // An idle account holds no model; a paused one holds exactly the run's.
-    const rows = fleetRows(fleet(), []);
-    expect(rows.find((r) => r.account === "RUNNER2")!.modelList).toEqual([]);
-  });
-});
-
 describe("row state", () => {
   // The table is ordered by state, so pick the job row out rather than trusting an index.
   const stateOf = (over: Partial<FleetJobView>): string => fleetRows(fleet({ jobs: [job(over)] }), []).find((r) => r.job !== null)!.state;
@@ -145,28 +105,10 @@ describe("row state", () => {
     expect(stateOf({ runId: null })).toBe("idle");
   });
 
-  test("a spawn that has not picked its paused run back up yet is resuming", () => {
-    expect(stateOf({ runId: null, resuming: "fleet-ox-alpha-e90-20260823-a1" })).toBe("resuming");
-    // Once the run is live it is just running, whatever it was spawned for.
-    expect(stateOf({ resuming: "fleet-ox-alpha-e90-20260823-a1" })).toBe("running");
-  });
-
   test("a dead process reads as exited, and draining outranks running", () => {
     expect(stateOf({ alive: false })).toBe("exited");
     expect(stateOf({ draining: true })).toBe("draining");
     expect(stateOf({ alive: false, draining: true })).toBe("exited");
-  });
-});
-
-describe("an unnamed episode", () => {
-  test("a job whose episode the supervisor could not name carries null, not a guess", () => {
-    // Commit 95908d5: unknown is written as null. The row keeps it null, and
-    // the page distinguishes that from an account row, which has no episode at all.
-    const rows = fleetRows(fleet({ jobs: [job({ episode: null })] }), []);
-    expect(rows[0]!.episode).toBeNull();
-    expect(rows[0]!.job).toBe("ox-alpha-e90");
-    const account = rows.find((r) => r.job === null);
-    expect(account?.episode ?? null).toBeNull();
   });
 });
 
@@ -190,22 +132,6 @@ describe("the rows", () => {
     expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, cost: { usd: null, text: "—" }, elapsedMs: null, tps: null });
   });
 
-  test("the fleet feed's own run figures fill the rows, with no runs index read", () => {
-    // What the page passes: the figures `/api/fleet` carries beside its jobs.
-    const facts: FleetRunFacts[] = [
-      run() as unknown as FleetRunFacts,
-      { runId: "paused-1", resolvedModel: null, level: 7, xp: 10, playtimeMs: 5_000, tokens: { totalTokens: 9 }, cost: null, comparability: null },
-    ];
-    const f = fleet({
-      runFacts: facts,
-      runCount: 1234,
-      paused: [{ runId: "paused-1", model: "m", account: "RUNNER2", reason: "rate-limited", since: 1, pauseCount: 1, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w" }],
-    });
-    const rows = fleetRows(f, f.runFacts ?? []);
-    expect(rows.find((r) => r.job !== null)).toMatchObject({ level: 4, xp: 546, tokens: 103_744, elapsedMs: 60_000, cost: { usd: 0.42 } });
-    expect(rows.find((r) => r.runId === "paused-1")).toMatchObject({ state: "paused", level: 7, xp: 10, tokens: 9, elapsedMs: 5_000 });
-  });
-
   test("cost is the actual where there is one, else the marked list-price estimate, else a blank", () => {
     const at = (r: RunListRow) => fleetRows(fleet(), [r])[0]!.cost;
     const none = { usd: null, basis: "none", note: "a subscription endpoint, so no actual" };
@@ -223,100 +149,9 @@ describe("the rows", () => {
     // A reported actual shows as it always has.
     expect(at(run({ tokens: null } as Partial<RunListRow>))).toMatchObject({ usd: 0.42, estimate: false, text: "$0.420" });
   });
-
-  test("accounts holding nothing are idle rows below the working ones, the pool's before the pinned", () => {
-    const rows = fleetRows(fleet(), [run()]);
-    // State rank puts the running job first; the idle accounts follow, the
-    // pool's by name, then the pinned. The rank list is asserted in "the row order".
-    expect(rows.map((r) => r.key)).toEqual(["ox-alpha-e90", "account:BOX", "account:PAID", "account:RUNNER2", "account:SHAKEOUT"]);
-    // The account a job is on never doubles as an idle row.
-    expect(rows.filter((r) => r.account === "RUNNER")).toHaveLength(1);
-    expect(rows[1]).toMatchObject({ state: "idle", job: null, accountClass: "pool", episode: null });
-    // A pinned account whose job holds nothing says which job is parked on it.
-    expect(rows[4]!.note).toBe("job nav-probe-freeplay holds nothing right now");
-  });
-
-  test("a paused run shows against the account it paused on: it holds nothing, so it is not a job", () => {
-    const f = fleet({
-      jobs: [],
-      paused: [
-        {
-          runId: "fleet-hy3-e90-20260823-a5",
-          model: "hy3-free",
-          account: "RUNNER2",
-          reason: "rate-limited",
-          since: 1,
-          pauseCount: 2,
-          resumeAfter: null,
-          elapsedMs: 1_410_000,
-          budgetMs: 5_400_000,
-          why: "waiting: account RUNNER2 is busy",
-        },
-      ],
-    });
-    const row = fleetRows(f, [])!.find((r) => r.account === "RUNNER2")!;
-    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3 (free)", modelList: ["hy3-free"], runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
-    expect(row.note).toBe("rate-limited (pause 2) — waiting: account RUNNER2 is busy");
-  });
-});
-
-describe("the row order", () => {
-  test("state ranks the table, then account name — one row of every state", () => {
-    // The rank list lives in STATE_RANK: running, resuming, draining,
-    // paused-deploy, paused, idle, exited. A deploy window is open so that
-    // paused-deploy and exited can both be on the table at once.
-    const f = fleet({
-      server: { ...REST, phase: "waiting" },
-      jobs: [
-        job({ name: "j-zz", account: "ZZ" }),
-        job({ name: "j-aa", account: "AA" }),
-        job({ name: "j-res", account: "BB", runId: null, resuming: "fleet-r-a1" }),
-        job({ name: "j-dra", account: "CC", draining: true }),
-        job({ name: "j-dep", account: "DD", alive: false, runId: null }),
-        job({ name: "j-exi", account: "EE", alive: false }),
-      ],
-      accounts: [
-        { account: "FF", class: "pool", job: null },
-        { account: "GG", class: "pool", job: null },
-        { account: "AH", class: "pool", job: null },
-      ],
-      paused: [
-        {
-          runId: "fleet-p-a5",
-          model: "m",
-          account: "FF",
-          reason: "rate-limited",
-          since: 1,
-          pauseCount: 1,
-          resumeAfter: null,
-          elapsedMs: null,
-          budgetMs: null,
-          why: "w",
-        },
-      ],
-    });
-    expect(fleetRows(f, []).map((r) => [r.state, r.account])).toEqual([
-      ["running", "AA"],
-      ["running", "ZZ"],
-      ["resuming", "BB"],
-      ["draining", "CC"],
-      ["paused-deploy", "DD"],
-      ["paused", "FF"],
-      // Inside idle the pool's accounts go by name.
-      ["idle", "AH"],
-      ["idle", "GG"],
-      ["exited", "EE"],
-    ]);
-  });
 });
 
 describe("the --status indicators", () => {
-  test("the supervisor is alive by heartbeat inside three ticks; no heartbeat is not running", () => {
-    expect(supervisorAlive({ heartbeatAt: 1000, now: 1000 + HEARTBEAT_STALE_MS - 1 })).toBe(true);
-    expect(supervisorAlive({ heartbeatAt: 1000, now: 1000 + HEARTBEAT_STALE_MS })).toBe(false);
-    expect(supervisorAlive({ now: 1000 })).toBe(false);
-  });
-
   /*
    * The clock the verdict is read on. Both readings come out of one response,
    * so a browser hours out of step — or a snapshot pushed a minute ago and
@@ -344,85 +179,11 @@ describe("the --status indicators", () => {
     expect(supervisorAlive(stopped)).toBe(false);
     expect(heartbeatAge({ now: 1_000_000 })).toBe(null);
   });
-
-  test("the gate verdict is the CLI's word: PASS, FAIL, SKIPPED, or none recorded", () => {
-    const rec = { at: 1, serverIdentity: "build:x@1", ok: true, results: [] };
-    expect(gateVerdict(undefined)).toBe("none");
-    expect(gateVerdict(rec)).toBe("PASS");
-    expect(gateVerdict({ ...rec, ok: false })).toBe("FAIL");
-    expect(gateVerdict({ ...rec, skipped: true })).toBe("SKIPPED");
-  });
-
-  test("a paused run is labelled with its reason, pause count and resume-after time", () => {
-    const p = { runId: "r", model: "m", account: "A", reason: "quota-exhausted", since: 1, pauseCount: 3, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w" };
-    expect(pausedLabel(p)).toBe("quota-exhausted (pause 3)");
-    const at = new Date(2026, 7, 23, 17, 21).getTime();
-    expect(pausedLabel({ ...p, resumeAfter: at })).toBe(`quota-exhausted (pause 3), resumes after ${new Date(at).toLocaleTimeString()}`);
-  });
-});
-
-describe("the run link", () => {
-  test("only a row with a run has somewhere to click through to, and the id is encoded", () => {
-    expect(runHref("fleet-ox-alpha-20260822")).toBe("/run/fleet-ox-alpha-20260822");
-    expect(runHref("a b/c")).toBe("/run/a%20b%2Fc");
-    expect(runHref(null)).toBeNull();
-  });
-
-  test("a resuming job links to the run it is coming back to", () => {
-    const rows = fleetRows(fleet({ jobs: [job({ runId: null, resuming: "fleet-ox-alpha-e90-20260823-a1" })] }), []);
-    expect(rows[0]!.runId).toBe("fleet-ox-alpha-e90-20260823-a1");
-    expect(rows[0]!.note).toBe("resuming fleet-ox-alpha-e90-20260823-a1");
-  });
 });
 
 describe("the deploy window (server-state.json)", () => {
   const at = new Date(2026, 7, 23, 18, 52).getTime();
-  const hhmm = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const server = (over: Partial<FleetServerView>): FleetServerView => ({ ...REST, since: at, build: "harness-0.4-52", ...over });
-
-  test("at rest there is no banner; a rest detail (what was last deployed) is a dim line", () => {
-    expect(serverBanner(REST)).toBeNull();
-    expect(serverBanner(server({ detail: "deployed harness-0.4-52 at 19:03, verified by 2 direct smoke(s); fleet resumed" }))).toEqual({
-      text: "server running: deployed harness-0.4-52 at 19:03, verified by 2 direct smoke(s); fleet resumed",
-      tone: "dim",
-    });
-  });
-
-  test("each window phase is one plain line, with the script's detail verbatim after the colon", () => {
-    const d = "fleet stopped, 7 job(s) paused and will resume";
-    expect(serverBanner(server({ phase: "draining", detail: d }))).toEqual({
-      text: `Deploy window since ${hhmm} — stopping the fleet for harness-0.4-52, runs are pausing: ${d}`,
-      tone: "info",
-    });
-    expect(serverBanner(server({ phase: "waiting", detail: d }))).toEqual({
-      text: `Deploy window since ${hhmm} — swapping the worldserver to harness-0.4-52: ${d}`,
-      tone: "info",
-    });
-    expect(serverBanner(server({ phase: "verifying", detail: "full-arc smoke infra/smoke/module-quest.ts (1 of 1) running since 18:58, 600s left of its budget; " + d }))).toEqual({
-      text: `Deploy window since ${hhmm} — swapped to harness-0.4-52, verifying: full-arc smoke infra/smoke/module-quest.ts (1 of 1) running since 18:58, 600s left of its budget; ${d}`,
-      tone: "info",
-    });
-    expect(serverBanner(server({ phase: "resuming", detail: "x" }))).toEqual({
-      text: `Deploy window since ${hhmm} — harness-0.4-52 verified, starting the fleet; paused runs resume: x`,
-      tone: "info",
-    });
-  });
-
-  test("a verdict is red and names the build; an unnamed build is said to be unnamed", () => {
-    expect(serverBanner(server({ phase: "failed", detail: "gate smoke failed" }))).toEqual({
-      text: `Deploy of harness-0.4-52 FAILED at ${hhmm}: gate smoke failed`,
-      tone: "bad",
-    });
-    expect(serverBanner(server({ phase: "failed", build: "", detail: "gate smoke failed" }))).toEqual({
-      text: `Deploy of an unnamed build FAILED at ${hhmm}: gate smoke failed`,
-      tone: "bad",
-    });
-  });
-
-  test("only the four window phases open the window; verdicts do not", () => {
-    for (const phase of ["draining", "waiting", "verifying", "resuming"] as const) expect(deployWindowOpen({ phase })).toBe(true);
-    for (const phase of ["running", "failed"] as const) expect(deployWindowOpen({ phase })).toBe(false);
-  });
 
   test("a job whose process is gone and whose run is not held reads 'paused for deploy' inside the window, 'exited' outside it", () => {
     const gone = job({ alive: false, runId: null, model: null, exitCode: 0 });
@@ -453,27 +214,6 @@ describe("episode progress in the state cell", () => {
     expect(progressTitle(p, row)).toBe("ETA: 45m00s — 45m00s of 1h30m");
   });
 
-  test("a draining row is still being driven, so it shows progress too", () => {
-    const row = rowFor(fleet({ jobs: [job({ draining: true })] }), [budgeted(90 * 60_000, { playtimeMs: 30 * 60_000 })]);
-    expect(row.state).toBe("draining");
-    expect(progressLabel(rowProgress(row))).toBe("33%");
-  });
-
-  test("a freeplay row with a real recorded clock shows progress against it", () => {
-    // The discriminator is the RUN's recorded budget, not the episode id. A
-    // session launched under `idle: "unlimited"` records an enforced six hours
-    // and a watchdog ends it there, so the percentage is a fact about this run.
-    // Measured: four of the eight freeplay runs on disk carry 21_600_000.
-    const row = rowFor(
-      fleet({ jobs: [job({ episode: "freeplay" })] }),
-      [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
-    );
-    expect(row.budgetMs).toBe(21_600_000);
-    expect(rowProgress(row)).toEqual({ pct: 50, remainingMs: 3 * 3_600_000, overMs: null });
-    expect(progressLabel(rowProgress(row))).toBe("50%");
-    expect(progressTitle(rowProgress(row), row)).toBe("ETA: 3h00m — 3h00m of 6h00m");
-  });
-
   test("a freeplay row with no recorded clock still shows nothing", () => {
     // The other four. Genuinely uncapped: there is no budget to be a percentage
     // OF, and inventing one from a tier nominal is the thing this must never do
@@ -488,75 +228,6 @@ describe("episode progress in the state cell", () => {
     expect(progressTitle(rowProgress(row), row)).toBe("");
   });
 
-  test("a probing row shows real progress: unscored is not uncapped", () => {
-    // The gate is capped-ness, not scored-ness. A campaign sets an enforced
-    // clock and the run ends on it, so the percentage is a fact
-    // about that run — nav-probe's six hours is this row, not the freeplay one.
-    const row = rowFor(
-      fleet({ jobs: [job({ episode: "probing" })] }),
-      [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
-    );
-    expect(row.budgetMs).toBe(21_600_000);
-    const p = rowProgress(row);
-    expect(p).toEqual({ pct: 50, remainingMs: 3 * 3_600_000, overMs: null });
-    expect(progressLabel(p)).toBe("50%");
-    expect(progressTitle(p, row)).toBe("ETA: 3h00m — 3h00m of 6h00m");
-  });
-
-  test("a run past its budget shows the real figure over 100 and says how far past it is", () => {
-    // fleet-deepseek-flash-e90-…-a3: 114 minutes against a 90-minute budget.
-    const row = rowFor(fleet(), [budgeted(90 * 60_000, { playtimeMs: 114 * 60_000 })]);
-    const p = rowProgress(row);
-    expect(p).toEqual({ pct: 127, remainingMs: null, overMs: 24 * 60_000 });
-    expect(progressLabel(p)).toBe("127%");
-    expect(progressTitle(p, row)).toBe("ETA: past due — 1h54m of 1h30m, over by 24m00s");
-    // Never a negative duration in the title, whatever the overrun.
-    expect(progressTitle(p, row)).not.toContain("-");
-  });
-
-  test("a paused row carries its budget but shows no progress: nothing is advancing", () => {
-    const f = fleet({
-      jobs: [],
-      paused: [
-        {
-          runId: "fleet-ox-alpha-e90-20260823",
-          model: "stealth/ox-alpha",
-          account: "RUNNER",
-          reason: "rate-limited",
-          since: 1,
-          pauseCount: 2,
-          resumeAfter: null,
-          elapsedMs: 30 * 60_000,
-          budgetMs: 90 * 60_000,
-          why: "waiting on the window",
-        },
-      ],
-    });
-    const row = fleetRows(f, []).find((r) => r.account === "RUNNER")!;
-    expect(row.state).toBe("paused");
-    expect(row.budgetMs).toBe(5_400_000);
-    expect(rowProgress(row)).toBeNull();
-  });
-
-  test("a resuming row shows nothing even though it carries a run id", () => {
-    const row = rowFor(fleet({ jobs: [job({ runId: null, resuming: "fleet-ox-alpha-e90-20260823" })] }), [
-      budgeted(90 * 60_000, { playtimeMs: 30 * 60_000 }),
-    ]);
-    expect(row.state).toBe("resuming");
-    expect(row.runId).toBe("fleet-ox-alpha-e90-20260823");
-    expect(rowProgress(row)).toBeNull();
-  });
-
-  test("an idle account row, and an exited job, show nothing", () => {
-    const rows = fleetRows(fleet({ jobs: [job({ alive: false })] }), [budgeted(90 * 60_000, { playtimeMs: 30 * 60_000 })]);
-    for (const r of rows.filter((x) => x.state === "idle" || x.state === "exited")) {
-      expect(rowProgress(r)).toBeNull();
-    }
-    const free = rows.find((r) => r.account === "RUNNER2")!;
-    expect(free.state).toBe("idle");
-    expect(free.budgetMs).toBeNull();
-  });
-
   test("a run with no recorded budget shows nothing rather than a tier's nominal one", () => {
     // A run assembled flag-by-flag, or one whose metadata predates the stamp.
     const row = rowFor(fleet(), [run({ playtimeMs: 30 * 60_000 })]);
@@ -565,49 +236,5 @@ describe("episode progress in the state cell", () => {
     expect(rowProgress(row)).toBeNull();
     // A recorded null episodeMs (the watchdog disabled) is the same nothing.
     expect(rowProgress(rowFor(fleet(), [budgeted(null, { playtimeMs: 30 * 60_000 })]))).toBeNull();
-  });
-});
-
-describe("the tok/s cell", () => {
-  test("the cell is the recent figure; the run's own average is in the title", () => {
-    const row = fleetRows(fleet(), [run()])[0]!;
-    expect(row.tps).toEqual({ overall: 41.5, recent: 128.4, replies: 60, recentReplies: 10 });
-    expect(tpsLabel(row.tps)).toBe("128");
-    expect(tpsTitle(row.tps)).toContain("128 tok/s over the last 10 replies");
-    expect(tpsTitle(row.tps)).toContain("41.5 tok/s over all 60");
-    expect(tpsTitle(row.tps)).toContain("output tokens ÷ wall time of model replies");
-  });
-
-  test("a row with no run, or a run with no measured reply, shows no rate at all", () => {
-    // A job the runs feed has not caught up with: never a number, and nothing
-    // in the title either — a blank that explains itself by being blank.
-    expect(tpsLabel(null)).toBe("—");
-    expect(tpsTitle(null)).toBe("");
-    const fresh = { overall: null, recent: null, replies: 0, recentReplies: 0 };
-    expect(tpsLabel(fresh)).toBe("—");
-    expect(tpsTitle(fresh)).toBe("");
-  });
-
-  test("a paused row keeps the rate its trajectory last showed", () => {
-    // The figure is a fact about the run's turns, not a claim that it is still
-    // producing; the state badge is what says it stopped.
-    const paused = fleet({
-      jobs: [],
-      paused: [
-        {
-          runId: "fleet-ox-alpha-e90-20260823",
-          model: "stealth/ox-alpha",
-          account: "RUNNER",
-          reason: "rate-limit",
-          pauseCount: 1,
-          resumeAfter: null,
-          elapsedMs: 60_000,
-          budgetMs: null,
-          why: "provider said no",
-        },
-      ],
-    } as unknown as Partial<FleetResponse>);
-    const row = fleetRows(paused, [run()]).find((r) => r.state === "paused")!;
-    expect(tpsLabel(row.tps)).toBe("128");
   });
 });

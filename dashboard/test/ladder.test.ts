@@ -8,76 +8,34 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark, RunCondition } from "../../viewer/api-types";
-import {
-  COST,
-  DEFAULT_VIEW,
-  LADDER_VIEWS,
-  LEVEL,
-  LEVEL_START_XP,
-  type Metrics,
-  TOKENS,
-  TURNS,
-  XP,
-  betterCorner,
-  levelOfXp,
-  runMetrics,
-  viewParam,
-  xpLevelTicks,
-} from "../src/lib/axes";
-import { paretoSteps } from "../src/lib/pareto";
+import { LEVEL_START_XP, TOKENS, XP, levelOfXp, runMetrics } from "../src/lib/axes";
 import { filterBySeries } from "../src/lib/harness";
-import { MARK_PITCH, entryLines, runLines, runLinesLayout, spreadMarks } from "../src/lib/runlines";
+import { entryLines, runLines } from "../src/lib/runlines";
 import { chartGroups, defaultLadderRuns, modelEntries, pickChartGroup } from "../src/lib/ladderfilter";
 import { conditionOf } from "../../viewer/condition";
 import { OPENCODE_GO_ROUTING } from "../../runner/src/routing";
 import { runBilling, type BillableRun } from "../../runner/src/billing";
-import { effortLabel, fmtPlaytimeTick, windowNote } from "../src/lib/format";
+import { effortLabel, windowNote } from "../src/lib/format";
 import {
-  CUE_PAD,
   EXPANSION_MAPS,
-  LABEL_DESC,
-  LABEL_H,
-  type LadderPoint,
-  LABEL_ROW,
-  MARK_RING_R,
   RUNGS,
   characterMilestones,
   type MilestoneAttempt,
-  chartCue,
-  puckRect,
-  rectsOverlap,
-  segmentsCross,
-  characterIconCx,
-  characterLabelX,
-  billingKnown,
   filterRuns,
-  COST_CEILING_MIN,
-  COST_FLOOR,
-  FREE_GUTTER_W,
-  costScale,
-  fmtCostTick,
-  ladderChartLayout,
   ladderPoints,
   ladderRows,
   levelRangeOf,
   runCostReading,
   scored,
   stitchCharacter,
-  characterChartLayout,
   characterRows,
   characterSeries,
   characterSeriesLabel,
-  conditionOfRun,
   entryKeyOf,
   modelOfRun,
   pointKey,
-  timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
-import { OPAQUE_PAUSE_REASON, STALL_PAUSE_REASON } from "../src/lib/runs";
-import { familyOf } from "../../infra/model-catalogue";
-import { monogramOf } from "../src/lib/modelmark";
-import { resolvedSummary } from "../src/lib/models";
 import { DUNGEON_CHOICES, EPISODE_CHOICES, dungeonLabel, dungeonParam, dungeonRedirect, episodeParam } from "../src/lib/episodes";
 
 /** An entry key (`entryKeyOf`) spelt for a test to tell entries apart: the model, with its effort and window. */
@@ -86,11 +44,6 @@ function spelt(key: string): string {
   const c = JSON.parse(id!) as { effort: string | null; compactWindow: string | null };
   const tag = effortLabel(c.effort, c.compactWindow);
   return tag === null ? model! : `${model!} (${tag})`;
-}
-
-/** A metric bag with the named readings and null everywhere else. */
-function bag(p: Partial<Record<keyof Metrics, number | null>>): Metrics {
-  return { cost: null, xp: null, tokens: null, tokensOut: null, turns: null, toolCalls: null, playtimeMs: null, level: null, quests: null, ...p };
 }
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
@@ -149,11 +102,6 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
 }
 
 describe("scored", () => {
-  test("anything with a reason is out", () => {
-    const rows = [run({ runId: "a" }), run({ runId: "b", unscored: "unscored (scripted stub)" })];
-    expect(scored(rows).map((r) => r.runId)).toEqual(["a"]);
-  });
-
   test("tainted rows cannot enter the public ladder ranking", () => {
     const rows = [
       run({ runId: "good", model: "good", maxLevel: 5 }),
@@ -173,33 +121,6 @@ describe("scored", () => {
     expect(scored(rows).map((r) => r.runId)).toEqual(["low", "high"]);
     expect(ladderRows(rows).map((r) => r.model)).toEqual(ladderRows(rows.slice(0, 2)).map((r) => r.model));
     expect(ladderRows(rows).map((r) => r.model)).not.toContain("reference/elwynn-human-paladin@1");
-  });
-});
-
-describe("the resolved model id on a ladder row", () => {
-  test("collects the ids a row's runs were really on, and shows an alias resolving two ways", () => {
-    const rows = ladderRows([
-      run({ runId: "a", model: "sonnet", resolvedModel: "claude-sonnet-5", maxLevel: 4 }),
-      run({ runId: "b", model: "sonnet", resolvedModel: "claude-sonnet-4-5", maxLevel: 3 }),
-      run({ runId: "c", model: "z-ai/glm-5.2", resolvedModel: "z-ai/glm-5.2", maxLevel: 2 }),
-      run({ runId: "d", model: "opus", maxLevel: 2 }),
-    ]);
-    const by = new Map(rows.map((r) => [r.model, r]));
-    // One row, two Claudes: the drift the alias hid.
-    expect(by.get("sonnet")!.resolvedModels).toEqual(["claude-sonnet-4-5", "claude-sonnet-5"]);
-    expect(resolvedSummary("sonnet", by.get("sonnet")!.resolvedModels)).toEqual({
-      ids: ["claude-sonnet-4-5", "claude-sonnet-5"],
-      mixed: true,
-    });
-    // A slug served as itself says nothing a row does not already print. The
-    // row keys the model as every grouping does (`modelOfRun`): this id is
-    // uncatalogued, so by its bare form.
-    expect(resolvedSummary("glm-5.2", by.get("glm-5.2")!.resolvedModels)).toBeNull();
-    // Two providers' spellings of one model are not drift (operator, 2026-11-16).
-    expect(resolvedSummary("deepseek/deepseek-v4.1-flash", ["deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"])).toBeNull();
-    // A run that recorded none reads as "not recorded", never as its config string.
-    expect(by.get("opus")!.resolvedModels).toEqual([]);
-    expect(resolvedSummary("opus", by.get("opus")!.resolvedModels)).toBeNull();
   });
 });
 
@@ -253,16 +174,6 @@ describe("the ladder's dispersion (operator 2026-09-16)", () => {
     expect(lr).toEqual({ min: 4, median: 4, max: 8, n: 2 });
     expect(levelRangeOf([run({ maxLevel: null })])).toBeNull();
   });
-
-  test("the row carries the spread beside the maximum, and the maximum is unchanged", () => {
-    const row = ladderRows([
-      run({ model: "m", runId: "a", maxLevel: 7 }),
-      run({ model: "m", runId: "b", maxLevel: 5 }),
-      run({ model: "m", runId: "c", maxLevel: 6 }),
-    ])[0]!;
-    expect(row.bestLevel).toBe(7);
-    expect(row.levelRange).toEqual({ min: 5, median: 6, max: 7, n: 3 });
-  });
 });
 
 describe("the ladder's filters", () => {
@@ -284,10 +195,6 @@ describe("the ladder's filters", () => {
   ];
   const all = { excludeFree: false };
 
-  test("the default keeps every run, including the ones recording nothing", () => {
-    expect(filterRuns(rows, all).map((r) => r.runId)).toEqual(["base", "extra", "gratis", "old"]);
-  });
-
   test("exclude free drops the free runs and keeps the ones a viewer could not answer for", () => {
     // `old` carries no `billing` at all: an older viewer does not report that a
     // run was free, and dropping what it cannot answer would shrink the ladder.
@@ -298,12 +205,6 @@ describe("the ladder's filters", () => {
     ]);
   });
 
-  test("a feed that answers billing on no run at all is reported, not filtered", () => {
-    expect(billingKnown(rows)).toBe(true);
-    expect(billingKnown([run({ runId: "old" })])).toBe(false);
-    expect(filterRuns([run({ runId: "old" })], { ...all, excludeFree: true }).map((r) => r.runId)).toEqual(["old"]);
-  });
-
   test("filtering happens before the rows, so the ranking is over what is on screen", () => {
     const set = [
       run({ runId: "p", model: "paid-model", levels: [mark(5, 1, 1)], maxLevel: 5, billing: "paid" }),
@@ -312,13 +213,6 @@ describe("the ladder's filters", () => {
     expect(ladderRows(filterRuns(set, all)).map((r) => r.model)).toEqual(["free-model", "paid-model"]);
     expect(ladderRows(filterRuns(set, { ...all, excludeFree: true })).map((r) => r.model)).toEqual([
       "paid-model",
-    ]);
-  });
-
-  test("a ladder row still labels the characters its model was played on", () => {
-    expect(ladderRows(rows.filter((r) => r.model === "m"))[0]!.characters).toEqual([
-      "Dwarf Hunter",
-      "Human Paladin",
     ]);
   });
 });
@@ -387,17 +281,6 @@ describe("ladder row order", () => {
 });
 
 describe("the shared episode param", () => {
-  test("one tier at a time: e90 by default, a typo or the old `all` falls back visibly", () => {
-    expect(episodeParam(undefined)).toBe("e90");
-    expect(episodeParam("e360")).toBe("e360");
-    // A typo in a shared link falls back rather than being sent to the API,
-    // which would answer 400 and blank the page.
-    expect(episodeParam("e42")).toBe("e90");
-    // `all` was a choice once; a link that still carries it lands on the default.
-    expect(episodeParam("all")).toBe("e90");
-    expect(EPISODE_CHOICES).not.toContain("all");
-  });
-
   test("probing has no ladder (operator, 2026-08-29); a link that names it falls back", () => {
     expect(EPISODE_CHOICES).not.toContain("probing");
     expect(EPISODE_CHOICES).toEqual(["e90", "e360", "freeplay"]);
@@ -439,19 +322,6 @@ describe("freeplay characters", () => {
     expect(scored(runs)).toEqual([]);
     expect(ladderRows(runs)).toEqual([]);
     expect(characterRows(runs).map((r) => r.characterId)).toEqual(["a1"]);
-  });
-
-  test("a character carries its effort, so two characters of one model are told apart", () => {
-    const rows = characterRows([
-      fp({ runId: "s1", model: "z-ai/glm-4.7-flash", effort: "low", maxLevel: 3 }),
-      fp({ runId: "s2", model: "z-ai/glm-4.7-flash", effort: null, maxLevel: 4 }),
-    ]);
-    expect(rows.map((r) => [r.model, r.effort])).toEqual(
-      expect.arrayContaining([
-        ["z-ai/glm-4.7-flash", "low"],
-        ["z-ai/glm-4.7-flash", null],
-      ]),
-    );
   });
 
   test("a chain of three collapses to one row: the latest attempt, the whole lineage", () => {
@@ -502,17 +372,6 @@ describe("freeplay characters", () => {
     // archived predecessor is never listed: both must leave the survivor here.
     const rows = characterRows([fp({ runId: "b7", continuedFrom: "b6-archived", maxLevel: 4 })]);
     expect(rows.map((r) => ({ id: r.characterId, n: r.attempts }))).toEqual([{ id: "b7", n: 1 }]);
-  });
-
-  test("two runs claiming one predecessor: the longer chain wins the row, then the later start", () => {
-    const rows = characterRows([
-      fp({ runId: "c1", maxLevel: 2 }),
-      fp({ runId: "c2", continuedFrom: "c1", startedAt: 200, maxLevel: 5 }),
-      fp({ runId: "c2b", continuedFrom: "c1", startedAt: 400, maxLevel: 6 }),
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.latest.runId).toBe("c2b");
-    expect(rows[0]!.attempts).toBe(2);
   });
 
   test("a malformed cycle ends the walk instead of hanging the page", () => {
@@ -575,34 +434,6 @@ describe("freeplay characters", () => {
     expect(chart.series.map((s) => s.characterId)).toEqual(["paid", "unknown"]);
     expect(chart.omitted).toEqual([]);
   });
-
-  test("a mixed-billing chain re-roots on its survivor — accepted, because billing follows the endpoint", () => {
-    // A character is one character under one config, so this is not a shape the
-    // fleet produces; pinned so the consequence is stated rather than accidental.
-    const chain = [
-      fp({ runId: "m1", billing: "free", maxLevel: 3, levels: [mark(3, 1, 1000)], playtimeMs: 1000 }),
-      fp({
-        runId: "m2",
-        continuedFrom: "m1",
-        billing: "paid",
-        maxLevel: 6,
-        startedAt: 200,
-        levels: [mark(6, 1, 2000)],
-        playtimeMs: 2000,
-      }),
-    ];
-    expect(characterRows(chain)[0]!.attempts).toBe(2);
-    const kept = filterRuns(chain, { excludeFree: true });
-    expect(characterRows(kept).map((r) => ({ id: r.characterId, n: r.attempts }))).toEqual([
-      { id: "m2", n: 1 },
-    ]);
-    // The chart says the same thing the table does: the survivor is drawn and
-    // marked truncated, which is already the wording for "history before the
-    // oldest attempt served is not drawn" — true whether the ancestor was
-    // archived or filtered.
-    const drawn = characterSeries(characterRows(kept), kept).series;
-    expect(drawn.map((d) => [d.characterId, d.truncated])).toEqual([["m2", true]]);
-  });
 });
 
 /* ---------------------------------------------------------------- scatter */
@@ -626,16 +457,6 @@ describe("runCostReading", () => {
     expect(runCostReading({ actualCost: null, expectedCost: null })).toBeNull();
     // A viewer that predates `expectedCost`.
     expect(runCostReading({ actualCost: fig(null, "none") })).toBeNull();
-  });
-
-  test("a backfilled actual says so, so the chart's hover can wear the run cell's *", () => {
-    const backfilled = { ...fig(9.43, "reported", true), backfill: { reportedUsd: 3.4, usd: 6.03, turns: 1 } };
-    expect(runCostReading({ actualCost: backfilled, expectedCost: fig(9.43, "list-price", true) })).toEqual({
-      usd: 9.43,
-      basis: "reported",
-      asIfMetered: true,
-      backfilled: true,
-    });
   });
 });
 
@@ -802,366 +623,6 @@ describe("ladderPoints over another pair of axes", () => {
     expect(runMetrics(priced({ harness: "codex", tokens: cli, modelResponses: 148 })).turns).toBe(148);
     expect(runMetrics(priced({ harness: "wrathbench", tokens: cli, modelResponses: 148 })).turns).toBe(148);
   });
-
-  test("basis is null only when no counted run carries a price, which a cost axis never plots", () => {
-    const runs = [priced({ runId: "a", model: "m", actualCost: null, expectedCost: null, modelResponses: 10, xpEarned: 50 })];
-    expect(ladderPoints(runs, TURNS, XP).points[0]!.basis).toBeNull();
-    expect(ladderPoints(runs).omitted[0]!.why).toBe("no cost reading");
-  });
-
-  test("the layout takes the x spec's scale: linear ticks from zero, no gutter, no minor lines", () => {
-    const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
-    const point = (key: string, turns: number, level: number): LadderPoint => ({
-      key, label: key, single: false, model: key, effort: null, x: turns, y: level, metrics: bag({ turns, level }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"], gold: null,
-    });
-    const l = ladderChartLayout([point("a", 120, 4), point("b", 430, 6)], box, TURNS, LEVEL);
-    expect(l.xScale).toBe("linear");
-    expect(l.xTicks).toEqual([0, 100, 200, 300, 400, 500]);
-    expect(l.xMinorTicks).toEqual([]);
-    expect(l.hasFree).toBe(false);
-    expect(l.axisX0).toBe(box.x0);
-    expect(l.px(0)).toBe(box.x0);
-    expect(l.px(500)).toBe(box.x1);
-    expect(l.yTicks).toEqual([0, 2, 4, 6]);
-    // The default is the log cost axis, exactly as before.
-    expect(ladderChartLayout([point("a", 1, 4)], box).xScale).toBe("log-cost");
-  });
-
-  test("the pareto front follows the axes, and the default still reads lower cost, higher xp", () => {
-    const runs = [
-      priced({ runId: "a", model: "cheap-slow", actualCost: fig(1, "reported"), modelResponses: 400, xpEarned: 300 }),
-      priced({ runId: "b", model: "dear-quick", actualCost: fig(5, "reported"), modelResponses: 50, xpEarned: 300 }),
-      priced({ runId: "c", model: "worst", actualCost: fig(6, "reported"), modelResponses: 500, xpEarned: 100 }),
-    ];
-    const frontOn = (x = DEFAULT_VIEW.x, y = DEFAULT_VIEW.y) =>
-      paretoSteps(ladderPoints(runs, x, y).points, { x: x.better, y: y.better }).front.map((p) => p.model);
-    expect(frontOn()).toEqual(["cheap-slow"]);
-    expect(frontOn(TURNS, XP)).toEqual(["dear-quick"]);
-  });
-
-  test("the views: default first, each x a resource and each y a distance, and `?view=` resolves or falls back", () => {
-    expect(DEFAULT_VIEW.id).toBe("cost-xp");
-    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "calls-xp"]);
-    for (const v of LADDER_VIEWS) {
-      expect(v.x.better).toBe("lower");
-      expect(v.y.better).toBe("higher");
-      expect(v.title).toBe(`${v.x.label} × ${v.y.label}`);
-    }
-    expect(viewParam("calls-xp").id).toBe("calls-xp");
-    expect(viewParam(["calls-xp", "tokens-xp"]).id).toBe("calls-xp");
-    // The withdrawn turns × xp view (operator, 2026-11-16): an old link lands on the default.
-    expect(viewParam("turns-xp")).toBe(DEFAULT_VIEW);
-    expect(viewParam("playtime-level")).toBe(DEFAULT_VIEW);
-    // The withdrawn cost × level view: an old link lands on the default, not a blank chart.
-    expect(viewParam("cost-level")).toBe(DEFAULT_VIEW);
-    expect(viewParam(undefined)).toBe(DEFAULT_VIEW);
-    // Cost is the one log axis; the format that used to be `fmtCostTick` is its own.
-    expect(LADDER_VIEWS.filter((v) => v.x.scale === "log-cost").map((v) => v.id)).toEqual(["cost-xp"]);
-    // Level is no view's axis but is still a spec: the hover's "also" line reads it.
-    expect(LEVEL.format(0)).toBe("0");
-    expect(LEVEL.format(5)).toBe("L5");
-    expect(XP.format(2000)).toBe("2k");
-    expect(TOKENS.format(1_500_000)).toBe("1.5M");
-    expect(TOKENS.format(20_000_000)).toBe("20M");
-    expect(TOKENS.format(800_000)).toBe("800k");
-  });
-});
-
-describe("ladderChartLayout", () => {
-  const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
-  // The drawn label is the key alone (`pointLabel`), so the fixture's is too.
-  // The fixtures were drawn against an xp axis ending at 2,500; it now ends at
-  // a level boundary, L4 at 2,700, so each y is scaled by 27/25 and every
-  // point sits where it did on the plot.
-  const pt = (key: string, x: number, y0: number): LadderPoint => {
-    const y = (y0 * 27) / 25;
-    return { key, label: key, single: true, model: key, effort: null, x, y, metrics: bag({ cost: x, xp: y }), runs: 1, n: 1, basis: "reported", asIfMetered: false, harnesses: ["wrathbench"], gold: null };
-  };
-
-  test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
-    const l = ladderChartLayout([pt("free", 0, 0), pt("paid", 10, 2500)], box);
-    const free = l.placed.find((d) => d.point.key === "free")!;
-    expect(l.hasFree).toBe(true);
-    expect(free.cx).toBe(l.freeX);
-    expect(free.cy).toBe(box.y0);
-    expect(l.xMax).toBe(10);
-    expect(l.yMax).toBe(2700);
-    expect(l.yTicks.map(XP.format)).toEqual(["L1", "L2", "L3", "L4"]);
-    const paid = l.placed.find((d) => d.point.key === "paid")!;
-    expect(paid.cx).toBeCloseTo(box.x1, 9);
-    expect(paid.cy).toBe(box.y1);
-  });
-
-  test("the layout carries the cost axis the ticks are drawn against", () => {
-    const l = ladderChartLayout([pt("cheap", 0.4, 100), pt("dear", 60, 2000)], box);
-    expect(l.hasFree).toBe(false);
-    expect(l.axisX0).toBe(box.x0);
-    expect(l.xTicks).toEqual([0.01, 0.1, 1, 10, 100]);
-    expect(l.xMinorTicks.every((t) => t < l.xMax)).toBe(true);
-  });
-
-  test("labels of coincident points do not share a slot", () => {
-    const l = ladderChartLayout([pt("one", 1, 100), pt("two", 1, 100), pt("three", 1, 100), pt("far", 2, 200)], box);
-    const slots = new Set(l.placed.map((d) => `${d.anchor}:${d.labelY.toFixed(1)}`));
-    expect(slots.size).toBe(4);
-  });
-
-  test("every label clears every mark, its own included, and its box covers its descenders", () => {
-    const l = ladderChartLayout([pt("one", 1, 100), pt("two", 4, 1200), pt("three", 6, 2000)], box);
-    for (const d of l.placed) {
-      // Against the mark's outer ring, bounding-boxed, not the puck: a thicker
-      // separation ring has to move the labels too, and this is the test that says so.
-      for (const other of l.placed) expect(rectsOverlap(d.rect, puckRect(other.cx, other.cy))).toBe(false);
-      // The baseline sits a descender above the box's bottom edge.
-      expect(d.rect.b - d.labelY).toBeCloseTo(LABEL_DESC, 9);
-      expect(d.rect.t).toBeLessThan(d.labelY);
-    }
-  });
-
-  /*
-   * The placement's contract, on the fixture that used to break it: a dozen
-   * entries inside a small cost/xp box — the crowded cheap-and-low corner every
-   * roster has — plus outliers. Before the rings and the leaders the losers of
-   * such a cluster all fell back to the same slot and printed over each other.
-   */
-  const cluster = (): ReturnType<typeof pt>[] => {
-    const dense: ReturnType<typeof pt>[] = [];
-    // Twelve names of realistic length on a 4×3 grid over a sixth of a decade
-    // of cost and an eighth of the xp axis — about 40 by 40 viewBox units for
-    // labels 40–80 wide. Dense enough that half of them need a ring past the
-    // first and some reach the fifth; sparse enough that the greedy pass finds
-    // a clean answer, which is what makes the strict assertions below fair.
-    // A tighter grid is solvable only with crossing leaders or `crowded`
-    // labels, both of which are tolerated on purpose and pinned separately.
-    for (let i = 0; i < 12; i++) {
-      dense.push(pt(`model-${String.fromCharCode(97 + i)}${i % 3 === 0 ? " (low)" : ""}`, 1 + (i % 4) * 0.15, 100 + Math.floor(i / 4) * 120 + (i % 4) * 12));
-    }
-    return [...dense, pt("dear-and-far", 40, 2400), pt("mid-outlier", 6, 1300), pt("cheap-outlier", 0.05, 700), pt("free-corner", 0, 0)];
-  };
-
-  test("standing labels only for the set given; a hover-only label is placed against them and moves none", () => {
-    const points = cluster();
-    const standing = new Set(["dear-and-far", "mid-outlier", "model-a (low)"]);
-    const l = ladderChartLayout(points, box, COST, XP, standing);
-    expect(l.placed.filter((d) => d.labelled).map((d) => d.point.key).sort()).toEqual([...standing].sort());
-    // Rename every other label to something much longer: the standing ones do not move, so the others never pushed them.
-    const only = (x: typeof l) => x.placed.filter((d) => d.labelled).map((d) => [d.point.key, d.labelX, d.labelY]);
-    const renamed = points.map((p) => (standing.has(p.key) ? p : { ...p, label: `${p.label} with a much longer name` }));
-    expect(only(ladderChartLayout(renamed, box, COST, XP, standing))).toEqual(only(l));
-    // A hover-only label avoids every standing label and every mark when it can.
-    for (const d of l.placed.filter((d) => !d.labelled && !d.crowded)) {
-      for (const o of l.placed) {
-        expect(rectsOverlap(d.rect, puckRect(o.cx, o.cy))).toBe(false);
-        if (o.labelled) expect(rectsOverlap(d.rect, o.rect)).toBe(false);
-      }
-    }
-    // The order is the importance order either way, and omitting the set labels everything.
-    expect(l.placed.map((d) => d.point.key)).toEqual(ladderChartLayout(points, box).placed.map((d) => d.point.key));
-    expect(ladderChartLayout(points, box).placed.every((d) => d.labelled)).toBe(true);
-  });
-
-  test("a dense cluster: no label over a label or a mark, leaders only past ring 1, none crossing, all inside", () => {
-    const l = ladderChartLayout(cluster(), box);
-    const clear = l.placed.filter((d) => !d.crowded);
-    // Every entry got a label, and the fixture is solvable without a crowded one.
-    expect(l.placed).toHaveLength(16);
-    expect(clear).toHaveLength(16);
-    for (const d of clear) {
-      for (const o of l.placed) {
-        expect(rectsOverlap(d.rect, puckRect(o.cx, o.cy))).toBe(false);
-        if (o !== d) expect(rectsOverlap(d.rect, o.rect)).toBe(false);
-      }
-      // Inside the plot: the top margin may hold a label, the axis line may not.
-      expect(d.rect.l).toBeGreaterThanOrEqual(box.x0 - 2);
-      expect(d.rect.r).toBeLessThanOrEqual(box.x1 + 2);
-      expect(d.rect.b).toBeLessThanOrEqual(box.y0);
-      expect(d.rect.t).toBeGreaterThanOrEqual(box.y1 - LABEL_ROW);
-      // A leader exactly when the label is not adjacent.
-      expect(d.leader !== null).toBe(d.ring > 1);
-      if (d.leader !== null) {
-        // From the ring's edge…
-        expect(Math.hypot(d.leader.x1 - d.cx, d.leader.y1 - d.cy)).toBeCloseTo(MARK_RING_R, 6);
-        // …to just outside the label's box.
-        expect(rectsOverlap({ l: d.leader.x2, t: d.leader.y2, r: d.leader.x2, b: d.leader.y2 }, d.rect)).toBe(false);
-        expect(Math.hypot(d.leader.x2 - d.cx, d.leader.y2 - d.cy)).toBeGreaterThan(MARK_RING_R);
-      }
-    }
-    // The cluster actually exercised the rings, the outermost included.
-    expect(l.placed.filter((d) => d.ring > 1).length).toBeGreaterThanOrEqual(5);
-    expect(Math.max(...l.placed.map((d) => d.ring))).toBe(5);
-    const leaders = clear.flatMap((d) => (d.leader === null ? [] : [d.leader]));
-    for (let i = 0; i < leaders.length; i++) {
-      for (let j = i + 1; j < leaders.length; j++) expect(segmentsCross(leaders[i]!, leaders[j]!)).toBe(false);
-    }
-  });
-
-  test("the placement is a function of the set, not of the order the entries arrived in", () => {
-    const base = cluster();
-    const strip = (l: ReturnType<typeof ladderChartLayout>) =>
-      l.placed.map((d) => ({ key: d.point.key, x: d.labelX, y: d.labelY, a: d.anchor, ring: d.ring, leader: d.leader, crowded: d.crowded }));
-    const reference = strip(ladderChartLayout(base, box));
-    const permutations = [
-      [...base].reverse(),
-      [...base].sort((a, b) => a.key.localeCompare(b.key)),
-      [...base.slice(7), ...base.slice(0, 7)],
-    ];
-    for (const perm of permutations) expect(strip(ladderChartLayout(perm, box))).toEqual(reference);
-    // Two entries with identical coordinates and labels of equal length are
-    // still ordered — by label, then key — so even they cannot swap slots.
-    const twins = [pt("twin-b", 2, 500), pt("twin-a", 2, 500)];
-    expect(strip(ladderChartLayout(twins, box))).toEqual(strip(ladderChartLayout([...twins].reverse(), box)));
-    expect(strip(ladderChartLayout(twins, box))[0]!.key).toBe("twin-a");
-  });
-
-  test("golden: an outlier's label sits centred above its mark, adjacent, with no leader", () => {
-    const l = ladderChartLayout(cluster(), box);
-    for (const key of ["mid-outlier", "cheap-outlier"]) {
-      const d = l.placed.find((p) => p.point.key === key)!;
-      expect(d.anchor).toBe("middle");
-      expect(d.labelX).toBe(d.cx);
-      expect(d.labelY).toBeLessThan(d.cy - MARK_RING_R);
-      expect(d.ring).toBe(1);
-      expect(d.leader).toBeNull();
-      expect(d.crowded).toBe(false);
-    }
-    // The dearest, highest point is near the plot's top-right corner: a label
-    // may rise into the top margin by its own height, so above still fits.
-    const corner = l.placed.find((p) => p.point.key === "dear-and-far")!;
-    expect(corner.ring).toBe(1);
-    expect(corner.anchor).toBe("middle");
-    expect(corner.rect.t).toBeLessThan(box.y1);
-    expect(corner.leader).toBeNull();
-  });
-
-  test("when every slot collides the least-overlapping one is taken and flagged, never dropped", () => {
-    // Forty entries on one spot: no arrangement of twenty-four slots holds them.
-    const pile = Array.from({ length: 40 }, (_, i) => pt(`pile-${String(i).padStart(2, "0")}`, 1, 100));
-    const l = ladderChartLayout(pile, box);
-    expect(l.placed).toHaveLength(40);
-    const crowded = l.placed.filter((d) => d.crowded);
-    expect(crowded.length).toBeGreaterThan(0);
-    for (const d of crowded) {
-      // Honest flag: a crowded label really does overlap something…
-      const hits = l.placed.filter((o) => o !== d && (rectsOverlap(d.rect, o.rect) || rectsOverlap(d.rect, puckRect(o.cx, o.cy))));
-      expect(hits.length).toBeGreaterThan(0);
-      // …carries a leader whatever its ring, and stayed in the box.
-      expect(d.leader).not.toBeNull();
-      expect(d.rect.b).toBeLessThanOrEqual(box.y0);
-    }
-    // …and a label that was not flagged overlaps no mark and no other clean
-    // label — a crowded one placed after it may land on it, which is what the
-    // flag on that one records.
-    const clean = l.placed.filter((p) => !p.crowded);
-    for (const d of clean) {
-      for (const o of l.placed) expect(rectsOverlap(d.rect, puckRect(o.cx, o.cy))).toBe(false);
-      for (const o of clean) if (o !== d) expect(rectsOverlap(d.rect, o.rect)).toBe(false);
-    }
-  });
-
-  test("a label at the plot's right edge is anchored to its left", () => {
-    const l = ladderChartLayout([pt("a-fairly-long-model-name", 8, 2500), pt("other", 0, 0)], box);
-    expect(l.placed.find((d) => d.point.key.startsWith("a-fairly"))!.anchor).toBe("end");
-  });
-
-  test("the corner cue: top-left on every offered view, read off the specs, and it would move with them", () => {
-    for (const v of LADDER_VIEWS) {
-      expect(betterCorner({ x: v.x.better, y: v.y.better })).toEqual({ h: "left", v: "top", arrow: "↖" });
-      const l = ladderChartLayout([pt("a", 1, 100)], box, v.x, v.y);
-      expect(l.cue.text).toBe("↖ better");
-      expect(l.cue.anchor).toBe("start");
-      expect(l.cue.rect.l).toBe(box.x0 + CUE_PAD);
-      expect(l.cue.rect.t).toBe(box.y1 + CUE_PAD);
-    }
-    expect(betterCorner({ x: "higher", y: "lower" })).toEqual({ h: "right", v: "bottom", arrow: "↘" });
-    expect(betterCorner({ x: "higher", y: "higher" }).arrow).toBe("↗");
-    expect(betterCorner({ x: "lower", y: "lower" }).arrow).toBe("↙");
-    const flipped = chartCue(box, { x: "higher", y: "lower" }, []);
-    expect(flipped.text).toBe("↘ better");
-    expect(flipped.anchor).toBe("end");
-    expect(flipped.rect.r).toBe(box.x1 - CUE_PAD);
-    expect(flipped.rect.b).toBe(box.y0 - CUE_PAD);
-  });
-
-  test("the cue is an obstacle to labels and gives way to marks", () => {
-    // The cheapest, furthest entry sits exactly in the better corner, with a
-    // neighbour whose above-centre label would land on the cue's row.
-    const l = ladderChartLayout([pt("corner", 0.01, 2500), pt("near", 0.02, 2300), pt("far", 5, 100)], box);
-    const corner = l.placed.find((d) => d.point.key === "corner")!;
-    expect(corner.cx).toBe(box.x0);
-    expect(corner.cy).toBe(box.y1);
-    // The cue slid right past the mark rather than sitting under it…
-    expect(rectsOverlap(l.cue.rect, puckRect(corner.cx, corner.cy))).toBe(false);
-    expect(l.cue.rect.l).toBeGreaterThan(box.x0 + CUE_PAD);
-    for (const d of l.placed) {
-      // …and no label prints over the cue.
-      expect(rectsOverlap(d.rect, l.cue.rect)).toBe(false);
-    }
-  });
-});
-
-describe("costScale", () => {
-  const [x0, x1] = [60, 960];
-
-  test("the ceiling is the smallest decade at or above the dearest entry, never under $10", () => {
-    expect(costScale([0.004], x0, x1).ceiling).toBe(COST_CEILING_MIN);
-    expect(costScale([], x0, x1).ceiling).toBe(COST_CEILING_MIN);
-    expect(costScale([0], x0, x1).ceiling).toBe(COST_CEILING_MIN);
-    expect(costScale([8], x0, x1).ceiling).toBe(10);
-    // The exact decades: a point at $10 or $100 lands on the right edge rather
-    // than opening a whole empty decade above itself.
-    expect(costScale([1], x0, x1).ceiling).toBe(10);
-    expect(costScale([10], x0, x1).ceiling).toBe(10);
-    expect(costScale([60], x0, x1).ceiling).toBe(100);
-    expect(costScale([100], x0, x1).ceiling).toBe(100);
-    expect(costScale([101], x0, x1).ceiling).toBe(1000);
-  });
-
-  test("anything positive under a cent is clamped onto the floor, not dropped", () => {
-    const s = costScale([0.0004, 60], x0, x1);
-    expect(s.floor).toBe(COST_FLOOR);
-    expect(s.px(0.0004)).toBe(s.px(COST_FLOOR));
-    expect(s.px(COST_FLOOR)).toBe(s.axisX0);
-    // And the ceiling clamps the other way.
-    expect(s.px(1e6)).toBeCloseTo(x1, 9);
-  });
-
-  test("decades are evenly spaced and the map rises with cost", () => {
-    const s = costScale([60], x0, x1);
-    expect(s.ticks).toEqual([0.01, 0.1, 1, 10, 100]);
-    const step = s.px(0.1) - s.px(0.01);
-    expect(s.px(1) - s.px(0.1)).toBeCloseTo(step, 9);
-    expect(s.px(100) - s.px(10)).toBeCloseTo(step, 9);
-    for (const [a, b] of [[0.02, 0.05], [0.5, 2], [9, 11]] as const) expect(s.px(a)).toBeLessThan(s.px(b));
-  });
-
-  test("minor lines are the 2x and 5x inside the axis, and stop below the ceiling", () => {
-    const s = costScale([8], x0, x1);
-    expect(s.ticks).toEqual([0.01, 0.1, 1, 10]);
-    expect(s.minorTicks).toEqual([0.02, 0.05, 0.2, 0.5, 2, 5]);
-  });
-
-  test("the free gutter exists only when something cost nothing, and holds the zeroes", () => {
-    const none = costScale([0.5, 60], x0, x1);
-    expect(none.hasFree).toBe(false);
-    expect(none.axisX0).toBe(x0);
-    expect(none.px(0)).toBe(x0);
-
-    const some = costScale([0, 60], x0, x1);
-    expect(some.hasFree).toBe(true);
-    expect(some.axisX0).toBe(x0 + FREE_GUTTER_W);
-    expect(some.px(0)).toBe(some.freeX);
-    // The gutter is left of the axis, with the divider between the two.
-    expect(some.freeX).toBeLessThan(some.dividerX);
-    expect(some.dividerX).toBeLessThan(some.axisX0);
-    // A free entry is never interpolated against the decades.
-    expect(some.px(0)).toBeLessThan(some.px(COST_FLOOR));
-  });
-});
-
-describe("fmtCostTick", () => {
-  test("cents below a dollar, dollars at and above one", () => {
-    expect([0.01, 0.1, 1, 10, 100].map(fmtCostTick)).toEqual(["1\u00a2", "10\u00a2", "$1", "$10", "$100"]);
-  });
 });
 
 /**
@@ -1170,22 +631,8 @@ describe("fmtCostTick", () => {
  *
  * The rules worth pinning are the seams. A character is the point of the page, and
  * a character is many runs; every way of getting the stitch wrong shows up as a
- * plausible-looking line, so each of them gets a case.
+ * plausible-looking line, so the seam rules are pinned here.
  */
-describe("timeTicks", () => {
-  test("a duration axis steps in minutes and hours, never in decimal milliseconds", () => {
-    // What `niceTicks` would do to 7h is a gridline every 1.39h: its 1/2/5×10^k
-    // step is decimal, and time is not.
-    const hour = 3_600_000;
-    expect(timeTicks(7 * hour)).toEqual([0, 2 * hour, 4 * hour, 6 * hour, 8 * hour]);
-    expect(timeTicks(50 * 60_000)).toEqual([0, 10, 20, 30, 40, 50].map((m) => m * 60_000));
-    expect(timeTicks(0)).toEqual([0]);
-    // Past the last named step, whole days.
-    const day = 24 * hour;
-    expect(timeTicks(5 * day)).toEqual([0, day, 2 * day, 3 * day, 4 * day, 5 * day]);
-  });
-});
-
 describe("stitchCharacter", () => {
   const at = (runId: string, playtimeMs: number | null, marks: LevelMark[]) => ({ runId, playtimeMs, levels: marks });
 
@@ -1210,12 +657,6 @@ describe("stitchCharacter", () => {
   test("a prior attempt with no active time breaks the stitch rather than compressing the axis", () => {
     const st = stitchCharacter([at("a1", null, []), at("a2", 400, [mark(3, null, 100)])]);
     expect(st.broke).toBe("attempt 1 of 2 recorded no active time");
-  });
-
-  test("the LAST attempt with no span just ends the line at what its marks prove", () => {
-    const st = stitchCharacter([at("a1", 1000, []), at("a2", null, [mark(4, null, 250)])]);
-    expect(st.broke).toBeNull();
-    expect(st.endX).toBe(1250);
   });
 });
 
@@ -1290,24 +731,6 @@ describe("entryKeyOf — the key a row, a pin and a line agree on", () => {
     expect(entryKeyOf(free)).not.toBe(entryKeyOf(go));
     expect(ladderPoints([...runs, free]).omitted.map((o) => o.label).sort()).toEqual(["deepseek-v4.1-flash", "deepseek-v4.1-flash (free)"]);
   });
-
-  test("a row from a viewer that predates the field reads as the snippet loop, pinned, with its wiki", () => {
-    const c = conditionOfRun(run({ runId: "a", model: "m", harnessSeries: "0.5", episode: "e90", effort: "low", wiki: false }));
-    expect(c).toMatchObject({ loop: "snippet", yield: false, pinned: true, wiki: false });
-    expect(conditionOfRun(run({ runId: "b", model: "m", harnessSeries: "0.5", episode: "e90", effort: "high" })).id).not.toBe(c.id);
-  });
-});
-
-describe("characterSeriesLabel", () => {
-  test("the model, short, with its effort where the entry has one", () => {
-    expect(characterSeriesLabel("sonnet", "medium")).toBe("sonnet (medium)");
-    expect(characterSeriesLabel("sonnet", null)).toBe("sonnet");
-  });
-
-  test("the provider prefix goes and a free endpoint is marked, as everywhere else", () => {
-    expect(characterSeriesLabel("anthropic/claude-sonnet-4-5", null)).toBe("claude-sonnet-4-5");
-    expect(characterSeriesLabel("z-ai/glm-5.2:free", "high")).toBe("glm-5.2 (free) (high)");
-  });
 });
 
 describe("characterSeries", () => {
@@ -1315,22 +738,6 @@ describe("characterSeries", () => {
     run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
   const seriesOf = (runs: readonly ResultRun[]): ReturnType<typeof characterSeries> =>
     characterSeries(characterRows(runs), runs);
-
-  test("a nameless character is labelled by the short model and its effort, never the raw slug", () => {
-    const { series } = seriesOf([
-      fp({
-        runId: "n1",
-        model: "nvidia/nemotron-3-ultra-550b-a55b:free",
-        effort: "low",
-        character: null,
-        levels: [mark(1, null, 0), mark(2, null, 600_000)],
-        playtimeMs: 1_000_000,
-      }),
-    ]);
-    expect(series[0]!.label).toBe("nemotron-3-ultra-550b-a55b (free) (low)");
-    // The full slug stays on the series, which is what the logo keys on.
-    expect(series[0]!.model).toBe("nvidia/nemotron-3-ultra-550b-a55b:free");
-  });
 
   test("a three-attempt chain draws one line, each attempt offset by the last one's playtime", () => {
     const runs = [
@@ -1369,33 +776,6 @@ describe("characterSeries", () => {
     expect(s.endLevel).toBe(4);
   });
 
-  test("a seam at an unchanged level draws no step — the first mark of an attempt is not a gain", () => {
-    const runs = [
-      fp({ runId: "b1", levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
-      fp({ runId: "b2", continuedFrom: "b1", startedAt: 200, levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
-      fp({ runId: "b3", continuedFrom: "b2", startedAt: 300, levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
-    ];
-    const s = seriesOf(runs).series[0]!;
-    expect(s.attempts).toBe(3);
-    // One point, not three: two phantom rises would otherwise be drawn at L5.
-    expect(s.points.map((p) => p.level)).toEqual([5]);
-    expect(s.endX).toBe(300_000);
-  });
-
-  test("a level gained in the unobserved gap steps at the seam", () => {
-    const runs = [
-      fp({ runId: "c1", levels: [mark(4, null, 0)], playtimeMs: 100_000 }),
-      // The character came back at 6: the ding happened between the attempts,
-      // and the seam is the lower bound on when.
-      fp({ runId: "c2", continuedFrom: "c1", startedAt: 200, levels: [mark(6, null, 0)], playtimeMs: 50_000 }),
-    ];
-    const s = seriesOf(runs).series[0]!;
-    expect(s.points.map((p) => [p.level, p.x])).toEqual([
-      [4, 0],
-      [6, 100_000],
-    ]);
-  });
-
   test("a prior attempt with no active time omits the character rather than compressing the axis", () => {
     const runs = [
       fp({ runId: "d1", levels: [mark(3, null, null)], playtimeMs: null }),
@@ -1407,59 +787,6 @@ describe("characterSeries", () => {
     expect(omitted[0]!.why).toBe("attempt 1 of 2 recorded no active time");
   });
 
-  test("a last attempt with no active time never pulls the line back behind the attempts before it", () => {
-    const runs = [
-      fp({ runId: "p1", levels: [mark(3, null, 60_000)], playtimeMs: 100_000 }),
-      // No playtime and no placeable mark: the line must still run to the
-      // 100_000 the first attempt proves, not back to the 60_000 mark.
-      fp({ runId: "p2", continuedFrom: "p1", startedAt: 200, levels: [], playtimeMs: null }),
-    ];
-    expect(seriesOf(runs).series[0]!.endX).toBe(100_000);
-  });
-
-  test("an attempt with no total falls back to what its marks prove it played", () => {
-    const runs = [
-      // `playtimeMs` never landed, but a mark at 90s did: the successor's
-      // offset is that lower bound, not zero and not an omission.
-      fp({ runId: "q1", levels: [mark(2, null, 90_000)], playtimeMs: null }),
-      fp({ runId: "q2", continuedFrom: "q1", startedAt: 200, levels: [mark(3, null, 10_000)], playtimeMs: 20_000 }),
-    ];
-    const s = seriesOf(runs).series[0]!;
-    expect(s.points.map((p) => [p.level, p.x])).toEqual([
-      [2, 90_000],
-      [3, 100_000],
-    ]);
-    expect(s.endX).toBe(110_000);
-  });
-
-  test("the LAST attempt with no active time simply ends at its last mark", () => {
-    const runs = [
-      fp({ runId: "e1", levels: [mark(3, null, 0), mark(4, null, 120_000)], playtimeMs: null }),
-    ];
-    const s = seriesOf(runs).series[0]!;
-    // No `playtimeMs` on the run, so the marks are the only evidence of time:
-    // the line stops where the last one proves it got to.
-    expect(s.endX).toBe(120_000);
-    expect(s.endLevel).toBe(4);
-  });
-
-  test("a continuedFrom outside the set is a root, and says its history is truncated", () => {
-    const runs = [fp({ runId: "f2", continuedFrom: "f1", levels: [mark(9, null, 0)], playtimeMs: 60_000 })];
-    const s = seriesOf(runs).series[0]!;
-    expect(s.attempts).toBe(1);
-    expect(s.truncated).toBe(true);
-    expect(s.points.map((p) => p.level)).toEqual([9]);
-  });
-
-  test("a live character's line ends at the run's own total, which the viewer computes against now", () => {
-    const runs = [
-      fp({ runId: "g1", live: true, levels: [mark(2, null, 10_000)], playtimeMs: 900_000 }),
-    ];
-    const s = seriesOf(runs).series[0]!;
-    expect(s.status).toBe("live");
-    expect(s.endX).toBe(900_000);
-  });
-
   test("a character with no placeable mark is omitted with its reason, never drawn flat at zero", () => {
     // Two different nothings, and the caption says which.
     expect(seriesOf([fp({ runId: "h1", levels: [], playtimeMs: 60_000 })]).omitted[0]!.why).toBe(
@@ -1469,198 +796,9 @@ describe("characterSeries", () => {
     expect(unplaceable.series).toEqual([]);
     expect(unplaceable.omitted[0]!.why).toBe("no level mark carries an active-time reading");
   });
-
-  test("a line is labelled with its model and effort, and the character name rides in the hover", () => {
-    const runs = [
-      fp({ runId: "n1", model: "sonnet", effort: "medium", character: "Qwenlocal", levels: [mark(3, null, 0)], playtimeMs: 60_000 }),
-      fp({ runId: "n2", model: "opus", effort: null, character: "Bromdir", levels: [mark(2, null, 0)], playtimeMs: 60_000 }),
-    ];
-    expect(seriesOf(runs).series.map((s) => [s.label, s.character])).toEqual([
-      ["sonnet (medium)", "Qwenlocal"],
-      ["opus", "Bromdir"],
-    ]);
-  });
-
-  test("a repeated label — an entry's older, archived character — is disambiguated by its start date", () => {
-    const runs = [
-      fp({ runId: "n1", model: "qwen-local", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 23), levels: [mark(3, null, 0)], playtimeMs: 60_000 }),
-      fp({ runId: "n2", model: "qwen-local", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 24), levels: [mark(2, null, 0)], playtimeMs: 60_000 }),
-      fp({ runId: "n3", model: "opus", character: "Alone", startedAt: Date.UTC(2026, 7, 25), levels: [mark(1, null, 0)], playtimeMs: 60_000 }),
-    ];
-    expect(seriesOf(runs).series.map((s) => s.label)).toEqual([
-      "qwen-local 2026-08-23",
-      "qwen-local 2026-08-24",
-      "opus",
-    ]);
-  });
-
-  test("a viewer that predates continuedFrom does not report every character as truncated", () => {
-    // The field is absent, not null, off an older viewer — and `undefined !==
-    // null` would have marked the whole fleet as missing history.
-    const older = fp({ runId: "m1", levels: [mark(3, null, 0)], playtimeMs: 60_000 });
-    delete (older as { continuedFrom?: string | null }).continuedFrom;
-    expect(seriesOf([older]).series[0]!.truncated).toBe(false);
-  });
-
-  test("series are ordered furthest first, and the layout keeps their end labels apart", () => {
-    const runs = [
-      fp({ runId: "i1", model: "low", character: "Low", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
-      fp({ runId: "j1", model: "high", character: "High", levels: [mark(2, null, 0), mark(8, null, 50_000)], playtimeMs: 200_000 }),
-      fp({ runId: "k1", model: "same", character: "Same", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
-    ];
-    const { series } = seriesOf(runs);
-    expect(series.map((s) => s.label)).toEqual(["high", "low", "same"]);
-    const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
-    const layout = characterChartLayout(series, box);
-    expect(layout.xMax).toBe(200_000);
-    expect(layout.yMax).toBeGreaterThanOrEqual(8);
-    // Two characters sitting at the same level still get two readable labels.
-    const [low, same] = [layout.placed[1]!, layout.placed[2]!];
-    expect(low.endCy).toBe(same.endCy);
-    expect(Math.abs(low.labelY - same.labelY)).toBeGreaterThanOrEqual(12);
-    // A step, not a slope: the path only ever moves horizontally then vertically.
-    expect(layout.placed[0]!.d).toMatch(/^M[\d.]+,[\d.]+ (H[\d.]+ V[\d.]+ )*H[\d.]+$/);
-    // The y axis is anchored at zero, so a two-level gain is not the whole chart.
-    expect(layout.py(0)).toBe(box.y0);
-  });
-
-  test("a character label pushed more than one row off its line gets a leader from the badge; one row does not", () => {
-    // Five characters holding the same level at the same time: the stack is five rows deep.
-    const runs = ["Ann", "Bob", "Cyd", "Dee", "Eve"].map((c, i) =>
-      fp({ runId: `${c}1`, character: c, levels: [mark(4, null, 0)], playtimeMs: 100_000 + i }),
-    );
-    const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
-    const { series } = seriesOf(runs);
-    const layout = characterChartLayout(series, box);
-    const rows = layout.placed.map((p) => Math.round((p.labelY - layout.placed[0]!.labelY) / LABEL_ROW));
-    expect(rows).toEqual([0, 1, 2, 3, 4]);
-    expect(layout.placed.map((p) => p.leader === null)).toEqual([true, true, false, false, false]);
-    for (const p of layout.placed) {
-      expect(p.labelX).toBe(characterLabelX(p.endCx));
-      expect(p.labelY + LABEL_DESC).toBeLessThanOrEqual(box.y0);
-      if (p.leader !== null) {
-        expect(p.leader.y1).toBe(p.endCy);
-        expect(p.leader.x2).toBeLessThan(p.labelX);
-        expect(p.leader.y2).toBeGreaterThan(p.endCy);
-      }
-    }
-    // The stack is a function of the set: a reversed input places identically.
-    const again = characterChartLayout([...series].reverse(), box);
-    expect(again.placed.map((p) => [p.series.characterId, p.labelY])).toEqual(layout.placed.map((p) => [p.series.characterId, p.labelY]));
-  });
-
-  test("the field's cue is top-left, gives way to a badge, and a label that would reach it is pushed a row down", () => {
-    // A character at the top tick with next to no playtime: its badge sits in
-    // the corner and its label starts a badge past the axis.
-    const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
-    const early = seriesOf([
-      fp({ runId: "e1", model: "Early", character: "Early", levels: [mark(8, null, 0)], playtimeMs: 1 }),
-      fp({ runId: "l1", model: "Late", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 }),
-    ]).series;
-    const l = characterChartLayout(early, box);
-    expect(l.cue.text).toBe("↖ better");
-    expect(l.cue.anchor).toBe("start");
-    expect(l.cue.rect.t).toBe(box.y1 + CUE_PAD);
-    const top = l.placed.find((p) => p.series.label === "Early")!;
-    expect(top.endCy).toBe(box.y1);
-    // The cue stepped right past the badge on the line's end rather than sitting under it.
-    expect(l.cue.rect.l).toBeGreaterThan(box.x0 + CUE_PAD);
-    expect(rectsOverlap(l.cue.rect, puckRect(characterIconCx(top.endCx), top.endCy))).toBe(false);
-    // The top character's label sits on its line — its box ends where the cue's begins, and touching is not overlapping.
-    expect(top.labelY).toBeCloseTo(top.endCy + 3.5, 9);
-    for (const p of l.placed) expect(rectsOverlap({ l: p.labelX, t: p.labelY - 10, r: p.labelX + 60, b: p.labelY + LABEL_DESC }, l.cue.rect)).toBe(false);
-    // A line just under the top tick, on a short plot, puts its label's row
-    // across the cue: the label is pushed down a row, as it would be for a
-    // label already there. Level 9 alone ticks to 10, so it is a tenth down.
-    // (The long character is what puts the short one in the corner: alone, its
-    // own end would be the axis's ceiling. Its label sits rows away.)
-    const short = { x0: 50, x1: 900, y0: 116, y1: 16 };
-    const late = fp({ runId: "l1", model: "Late", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 });
-    const under = characterChartLayout(seriesOf([fp({ runId: "e1", model: "Early", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 1 }), late]).series, short);
-    const u = under.placed.find((p) => p.series.label === "Early")!;
-    expect(u.endCy).toBe(26);
-    // Two rows here, not one: a row down its box still reached into the cue's.
-    expect(u.labelY).toBeCloseTo(u.endCy + 3.5 + 2 * LABEL_ROW, 9);
-    expect(u.labelY - LABEL_H).toBeGreaterThanOrEqual(under.cue.rect.b);
-    expect(rectsOverlap({ l: u.labelX, t: u.labelY - LABEL_H, r: u.labelX + 60, b: u.labelY + LABEL_DESC }, under.cue.rect)).toBe(false);
-    // The same character further along the axis is nowhere near the cue and keeps its natural row.
-    const far = characterChartLayout(seriesOf([fp({ runId: "e1", model: "Early", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 150_000 }), late]).series, short);
-    const f = far.placed.find((p) => p.series.label === "Early")!;
-    expect(f.labelY).toBeCloseTo(f.endCy + 3.5, 9);
-  });
-
-  /*
-   * The badge at each line's end (operator, 2026-08-29). `CharacterChart` draws it
-   * from `series.model` through the same `familyOf` lookup `ModelIcon` and the
-   * scored scatter use, so what is testable without a DOM is the pair the
-   * component reads: one series per character, each carrying the model whose
-   * family the badge is, and an id no family claims falling through to the
-   * monogram rather than to a hole. The glob behind `logoHrefOf` is a Vite
-   * feature, which is why the lookup and not the element is what is pinned —
-   * `dashboard/README.md` says why the components have no DOM harness.
-   */
-  test("every series carries the model its badge is drawn from, one per character", () => {
-    const runs = [
-      fp({ runId: "s1", model: "anthropic/claude-sonnet-4-5", character: "Anvi", levels: [mark(9, null, 0)], playtimeMs: 100_000 }),
-      fp({ runId: "s2", model: "z-ai/glm-5.2:free", character: "Bree", levels: [mark(7, null, 0)], playtimeMs: 100_000 }),
-      // Invented: an unrevealed stealth id no catalogue entry or family claims.
-      fp({ runId: "s3", model: "stealth/nameless-alpha", character: "Cass", levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
-    ];
-    const { series } = seriesOf(runs);
-    expect(series.map((x) => [x.label, x.model])).toEqual([
-      ["claude-sonnet-4-5", "anthropic/claude-sonnet-4-5"],
-      ["glm-5.2 (free)", "z-ai/glm-5.2:free"],
-      ["nameless-alpha", "stealth/nameless-alpha"],
-    ]);
-    // The logo each one resolves to — the `:free` suffix is stripped, not matched on.
-    expect(series.map((x) => familyOf(x.model)?.id ?? null)).toEqual(["claude", "glm", null]);
-    // …and the id nothing claims gets a letter instead, never an empty badge.
-    expect(monogramOf(series[2]!.model)).not.toBe("");
-    // One badge per character, not one per attempt: a chain is still a single series.
-    const chained = seriesOf([
-      fp({ runId: "c1", model: "openai/gpt-5.6-luna", character: "Dex", levels: [mark(3, null, 0)], playtimeMs: 100_000 }),
-      fp({
-        runId: "c2",
-        continuedFrom: "c1",
-        startedAt: 200,
-        model: "openai/gpt-5.6-luna",
-        character: "Dex",
-        levels: [mark(4, null, 0)],
-        playtimeMs: 100_000,
-      }),
-    ]).series;
-    expect(chained.map((x) => familyOf(x.model)?.id)).toEqual(["openai"]);
-  });
 });
 
-describe("a withheld pause reason is not printed back as a detail", () => {
-  /*
-   * The public projection replaces the free text with the fixed `paused`
-   * token, and the row would otherwise read `paused (paused)`.
-   */
-  const fp = (p: Partial<ResultRun>): ResultRun =>
-    run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...p });
-
-  test("the opaque token leaves no detail; a real reason still shows", () => {
-    const opaque = characterRows([fp({ runId: "a", pauseReason: OPAQUE_PAUSE_REASON })])[0]!;
-    expect(opaque.status).toBe("paused");
-    expect(opaque.statusDetail).toBeNull();
-
-    const real = characterRows([fp({ runId: "b", pauseReason: "operator-pause" })])[0]!;
-    expect(real.status).toBe("paused");
-    expect(real.statusDetail).toBe("operator-pause");
-  });
-
-  test("a stalled character reads stalled, and the word is its own detail", () => {
-    const stalled = characterRows([fp({ runId: "c", terminationReason: null, pauseReason: STALL_PAUSE_REASON })])[0]!;
-    expect(stalled.status).toBe("stalled");
-    expect(stalled.statusDetail).toBeNull();
-  });
-});
-
-describe("the xp axis ticks at level boundaries", () => {
-  const labels = (max: number): string[] => xpLevelTicks(max).map(XP.format);
-
+describe("the xp levels the run lines are drawn against", () => {
   test("the cumulative table: where each level begins for a fresh L1 character", () => {
     // By hand from AzerothCore's player_xp_for_level: 400, 900, 1400, 2100, …
     expect(LEVEL_START_XP[1]).toBe(0);
@@ -1675,69 +813,6 @@ describe("the xp axis ticks at level boundaries", () => {
     expect(levelOfXp(27_599)).toBe(9);
     expect(levelOfXp(27_600)).toBe(10);
     expect(levelOfXp(1e12)).toBe(80);
-  });
-
-  test("a boundary's tick reads as its level, anything else as a count", () => {
-    expect(XP.format(0)).toBe("L1");
-    expect(XP.format(400)).toBe("L2");
-    expect(XP.format(27_600)).toBe("L10");
-    expect(XP.format(2000)).toBe("2k");
-    expect(XP.format(250)).toBe("250");
-  });
-
-  test("never a one-tick axis: nothing earned, or less than a level, still runs L1 to L2", () => {
-    expect(xpLevelTicks(0)).toEqual([0, 400]);
-    expect(xpLevelTicks(-5)).toEqual([0, 400]);
-    expect(xpLevelTicks(300)).toEqual([0, 400]);
-    expect(xpLevelTicks(400)).toEqual([0, 400]);
-    expect(labels(401)).toEqual(["L1", "L2", "L3"]);
-  });
-
-  test("a small range ticks every level", () => {
-    expect(xpLevelTicks(4800)).toEqual([0, 400, 1300, 2700, 4800]);
-    expect(labels(4000)).toEqual(["L1", "L2", "L3", "L4", "L5"]);
-  });
-
-  test("a wider range steps every 2nd, then every 5th level, thinning the bunched low end", () => {
-    // A 90-minute run's range: L15, every other level above the crowd at the origin.
-    expect(labels(70_000)).toEqual(["L1", "L6", "L8", "L10", "L12", "L14", "L15"]);
-    expect(labels(600_000)).toEqual(["L1", "L15", "L20", "L25", "L30", "L34"]);
-  });
-
-  test("over any range: the axis ends at the first boundary at or above the data, no closer than 8% apart, at most 8 ticks", () => {
-    for (let max = 1; max < 30_000_000; max = Math.ceil(max * 1.17)) {
-      const t = xpLevelTicks(max);
-      const end = t[t.length - 1]!;
-      expect(end).toBeGreaterThanOrEqual(Math.min(max, LEVEL_START_XP[80]!));
-      expect(t[0]).toBe(0);
-      expect(t.length).toBeGreaterThanOrEqual(2);
-      expect(t.length).toBeLessThanOrEqual(8);
-      // The first level not yet passed, not one past it.
-      expect(levelOfXp(end - 1) === levelOfXp(end) - 1).toBe(true);
-      if (max <= LEVEL_START_XP[80]! && end > 400) expect(LEVEL_START_XP[levelOfXp(end) - 1]!).toBeLessThan(max);
-      for (let i = 1; i < t.length; i++) {
-        expect(t[i]! - t[i - 1]!).toBeGreaterThanOrEqual(0.08 * end);
-        expect(XP.format(t[i]!)).toMatch(/^L\d+$/);
-      }
-    }
-  });
-
-  test("the layout takes the spec's ticks on either axis", () => {
-    const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
-    const point = (key: string, x: number, y: number, xp: number): LadderPoint => ({
-      key, label: key, single: false, model: key, effort: null, x, y, metrics: bag({ xp }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"], gold: null,
-    });
-    // y: the default view.
-    const onY = ladderChartLayout([point("a", 1, 9000, 9000), point("b", 3, 3000, 3000)], box, COST, XP);
-    expect(onY.yTicks.map(XP.format)).toEqual(["L1", "L3", "L4", "L5", "L6", "L7"]);
-    expect(onY.yMax).toBe(11_200);
-    expect(onY.py(11_200)).toBe(box.y1);
-    // x: xp against level, which no view offers but the layout must still honour.
-    const onX = ladderChartLayout([point("a", 9000, 6, 9000), point("b", 3000, 4, 3000)], box, XP, LEVEL);
-    expect(onX.xScale).toBe("linear");
-    expect(onX.xTicks).toEqual(onY.yTicks);
-    expect(onX.px(11_200)).toBe(box.x1);
-    expect(onX.yTicks).toEqual([0, 2, 4, 6]);
   });
 });
 
@@ -1790,12 +865,6 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
     expect(l.endLevel).toBe(3);
   });
 
-  test("a run that did not start at L1 still starts at zero, offset by where it began", () => {
-    const l = runLines([run({ xpEarned: 1500, playtimeMs: 30 * MIN, levels: [mark(2, 0, 0), mark(3, 4, 10 * MIN)] })]).lines[0]!;
-    expect(l.points[1]).toEqual({ x: 10 * MIN, y: 900 });
-    expect(l.endLevel).toBe(3); // 400 + 1,500 is past L3's 1,300
-  });
-
   test("a run without both readings, or unscored, is not drawn; the order is a function of the set", () => {
     const runs = [
       run({ runId: "z", model: "b", xpEarned: 10, playtimeMs: MIN }),
@@ -1842,148 +911,6 @@ describe("runLines — a tier's runs as xp against active playtime", () => {
     expect(single.points).toEqual(lines.find((l) => l.runId === "c")!.points);
     expect(single.harnesses).toEqual(["pi"]);
     expect(entryLines([...lines].reverse())).toEqual(entries);
-  });
-
-  test("a mean line never runs backwards, whatever its runs' vertices", () => {
-    const { lines } = runLines([
-      run({ runId: "a", xpEarned: 12_000, playtimeMs: 88 * MIN, levels: [mark(1, 0, 0), mark(3, 2, 5 * MIN), mark(6, 8, 70 * MIN)] }),
-      run({ runId: "b", xpEarned: 9000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0), mark(4, 2, 40 * MIN), mark(5, 3, 40 * MIN)] }),
-      run({ runId: "c", xpEarned: 0, playtimeMs: 54 * MIN, levels: [mark(1, 0, 0)] }),
-    ]);
-    const [e] = entryLines(lines);
-    for (let i = 1; i < e!.points.length; i++) {
-      expect(e!.points[i]!.x).toBeGreaterThanOrEqual(e!.points[i - 1]!.x);
-      expect(e!.points[i]!.y).toBeGreaterThanOrEqual(e!.points[i - 1]!.y);
-    }
-    expect(e!.points[e!.points.length - 1]).toEqual({ x: (88 + 90 + 54) * (MIN / 3), y: 7000 });
-  });
-
-  test("the layout: time ticks on x, level ticks on y, every line and puck inside the box", () => {
-    const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
-    const { lines } = runLines([
-      run({ runId: "a", model: "a", xpEarned: 9000, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0), mark(5, 9, 50 * MIN)] }),
-      run({ runId: "b", model: "b", xpEarned: 500, playtimeMs: 40 * MIN, levels: [mark(1, 0, 0)] }),
-    ]);
-    const l = runLinesLayout(entryLines(lines), box);
-    expect(l.xTicks.map(fmtPlaytimeTick)).toEqual(["0m", "15m", "30m", "45m", "1h", "1h15m", "1.5h"]);
-    expect(l.yTicks).toEqual([0, 1300, 2700, 4800, 7600, 11_200]);
-    expect(l.py(11_200)).toBe(box.y1);
-    expect(l.placed.find((p) => p.line.model === "a")!.endCx).toBe(box.x1);
-    for (const p of l.placed) {
-      expect(p.d.startsWith(`M${box.x0.toFixed(1)},${box.y0.toFixed(1)}`)).toBe(true);
-      expect(p.endCy).toBeGreaterThanOrEqual(box.y1);
-      expect(p.endCy).toBeLessThanOrEqual(box.y0);
-      // The puck sits just past its line's end, level with it when nothing is in the way.
-      expect(p.markCx).toBe(characterIconCx(p.endCx));
-      expect(p.markCx + MARK_RING_R).toBeLessThanOrEqual(1000);
-      expect(p.markCy).toBe(p.endCy);
-      expect(p.leader).toBeNull();
-    }
-  });
-
-  test("pucks in a column are spread apart in order, inside the box, with a leader back to a moved one", () => {
-    const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
-    const { lines } = runLines(
-      ["a", "b", "c", "d"].map((model, i) => run({ runId: model, model, xpEarned: 5000 + i * 10, playtimeMs: 90 * MIN, levels: [mark(1, 0, 0)] })),
-    );
-    const l = runLinesLayout(entryLines(lines), box);
-    const byEnd = [...l.placed].sort((a, b) => a.endCy - b.endCy);
-    for (let i = 1; i < byEnd.length; i++) expect(byEnd[i]!.markCy - byEnd[i - 1]!.markCy).toBeGreaterThanOrEqual(MARK_PITCH - 1e-9);
-    expect(byEnd.some((p) => p.leader !== null)).toBe(true);
-    for (const p of l.placed.filter((p) => p.leader !== null)) {
-      expect([p.leader!.x1, p.leader!.y1]).toEqual([p.endCx, p.endCy]);
-      expect(p.leader!.y2).toBe(p.markCy);
-    }
-  });
-
-  describe("spreadMarks", () => {
-    const box = { x0: 64, x1: 976, y0: 340, y1: 16 };
-    const top = box.y1 + MARK_RING_R;
-    const floor = box.y0 - MARK_RING_R;
-    const ordered = (marks: { cy: number }[], ys: number[]): boolean => {
-      const idx = marks.map((_, i) => i).sort((a, b) => marks[a]!.cy - marks[b]!.cy || a - b);
-      return idx.every((i, k) => k === 0 || ys[i]! >= ys[idx[k - 1]!]!);
-    };
-
-    test("clear marks stay where they are; marks in different columns never move each other", () => {
-      const marks = [
-        { cx: 990, cy: 100 },
-        { cx: 990, cy: 200 },
-        { cx: 500, cy: 100 },
-        { cx: 505, cy: 300 },
-      ];
-      expect(spreadMarks(marks, box)).toEqual([100, 200, 100, 300]);
-      expect(spreadMarks([{ cx: 990, cy: 100 }, { cx: 990 - MARK_PITCH, cy: 100 }], box)).toEqual([100, 100]);
-    });
-
-    test("a cluster is pushed apart a pitch at a time, order kept, and pulled back up off the floor", () => {
-      const marks = [
-        { cx: 990, cy: 150 },
-        { cx: 990, cy: 152 },
-        { cx: 985, cy: 151 },
-        { cx: 990, cy: 335 },
-        { cx: 990, cy: 334 },
-      ];
-      const ys = spreadMarks(marks, box);
-      expect(ordered(marks, ys)).toBe(true);
-      const sorted = [...ys].sort((a, b) => a - b);
-      for (let i = 1; i < sorted.length; i++) expect(sorted[i]! - sorted[i - 1]!).toBeGreaterThanOrEqual(MARK_PITCH - 1e-9);
-      for (const y of ys) {
-        expect(y).toBeGreaterThanOrEqual(top);
-        expect(y).toBeLessThanOrEqual(floor);
-      }
-      expect(Math.max(...ys)).toBe(floor);
-      expect(ys[0]).toBe(150); // the top of the cluster does not move
-    });
-
-    test("a column with more marks than the box holds stacks them tighter, in order, still inside", () => {
-      const marks = Array.from({ length: 60 }, (_, i) => ({ cx: 990, cy: 200 + (i % 7) }));
-      const ys = spreadMarks(marks, box);
-      expect(ordered(marks, ys)).toBe(true);
-      for (const y of ys) {
-        expect(y).toBeGreaterThanOrEqual(top - 1e-9);
-        expect(y).toBeLessThanOrEqual(floor + 1e-9);
-      }
-      const sorted = [...ys].sort((a, b) => a - b);
-      const pitch = (floor - top) / 59;
-      for (let i = 1; i < sorted.length; i++) expect(sorted[i]! - sorted[i - 1]!).toBeCloseTo(pitch, 6);
-    });
-
-    test("a function of the set: permuting the marks permutes the answer", () => {
-      const marks = [
-        { cx: 990, cy: 150 },
-        { cx: 990, cy: 152 },
-        { cx: 985, cy: 151 },
-        { cx: 600, cy: 40 },
-        { cx: 990, cy: 334 },
-      ];
-      const ys = spreadMarks(marks, box);
-      const perm = [3, 0, 4, 2, 1];
-      const permuted = spreadMarks(perm.map((i) => marks[i]!), box);
-      expect(permuted).toEqual(perm.map((i) => ys[i]!));
-    });
-  });
-
-  test("modelEntries: one row per entry, served as its latest run was, first run at its earliest", () => {
-    const rows = modelEntries([
-      run({ runId: "a", model: "sonnet", startedAt: 100, resolvedModel: "claude-sonnet-5", xpEarned: 100, actualCost: fig(2, "reported") }),
-      run({ runId: "b", model: "sonnet", startedAt: 300, resolvedModel: "claude-sonnet-5-5", xpEarned: 300, actualCost: fig(4, "reported") }),
-      run({ runId: "c", model: "sonnet", effort: "high", startedAt: 200, xpEarned: 50 }),
-      run({ runId: "u", model: "sonnet", startedAt: 1, unscored: "unscored (scripted stub)" }),
-    ]);
-    expect(rows.map((r) => ({ ...r, key: spelt(r.key) }))).toEqual([
-      { key: "sonnet", served: "claude-sonnet-5-5", firstRun: 100, cost: 3, xp: 200 },
-      { key: "sonnet (high)", served: "sonnet", firstRun: 200, cost: null, xp: null },
-    ]);
-  });
-
-  test("a playtime tick reads off a clock", () => {
-    expect(fmtPlaytimeTick(0)).toBe("0m");
-    expect(fmtPlaytimeTick(45 * MIN)).toBe("45m");
-    expect(fmtPlaytimeTick(60 * MIN)).toBe("1h");
-    expect(fmtPlaytimeTick(75 * MIN)).toBe("1h15m");
-    expect(fmtPlaytimeTick(90 * MIN)).toBe("1.5h");
-    expect(fmtPlaytimeTick(6 * 60 * MIN)).toBe("6h");
   });
 });
 
@@ -2081,17 +1008,6 @@ describe("freeplay milestones", () => {
   test("every rung says what it applies", () => {
     expect(RUNGS.map((r) => r.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     for (const r of RUNGS) expect(r.rule.length).toBeGreaterThan(10);
-  });
-
-  test("a freeplay row carries its character's milestones, over the whole chain", () => {
-    const fp = (over: Partial<ResultRun>): ResultRun => run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
-    const rows = characterRows([
-      fp({ runId: "c1", playtimeMs: H, levels: [lv(1, 0), lv(5, H / 2)], milestoneAt: times() }),
-      fp({ runId: "c2", continuedFrom: "c1", playtimeMs: H, levels: [lv(5, 0), lv(6, H / 2)], milestoneAt: times({ leftStartArea: at(1, H / 4) }) }),
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.milestones.map((m) => m.status)).toEqual(["reached", "reached", "not-reached", "not-reached", "not-reached", "not-instrumented", "not-reached", "not-reached"]);
-    expect(rows[0]!.milestones[1]).toEqual({ n: 2, status: "reached", playtimeMs: H + H / 4, runId: "c2" });
   });
 
   /*

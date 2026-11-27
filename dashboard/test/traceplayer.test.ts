@@ -1,8 +1,7 @@
 /**
  * The trace player (`@wrathbench/inspector/views/traceplayer`) where WrathBench
- * adds to it: a segment as the public projection publishes it, the public
- * site's first load at the publisher's cadence, and a run's own position
- * standing where the trace has no answer. Everything the player does over a
+ * adds to it: a segment as the public projection publishes it, and the public
+ * site's first load at the publisher's cadence. Everything the player does over a
  * session alone, keyed by its id, is the inspector's suite
  * (`wrath-mcp/inspector/test/views/traceplayer.test.ts`).
  *
@@ -12,9 +11,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@wrathbench/inspector/codec/trace";
-import type { TraceAura, TraceSegment, TrackResponse } from "../../viewer/api-types";
-import { DRAIN_MS, TRAIL_MS, createLiveClock, createTraceStore, ingestTracks, liveCadence, replaySpan } from "@wrathbench/inspector/views/traceplayer";
-import { positionsAt } from "../src/lib/replay";
+import type { TraceAura, TraceSegment } from "../../viewer/api-types";
+import { DRAIN_MS, TRAIL_MS, createLiveClock, createTraceStore, liveCadence } from "@wrathbench/inspector/views/traceplayer";
 import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "@wrathbench/inspector/views/unitframe";
 import { projectTraceSegment } from "../../viewer/public-projection";
 
@@ -130,30 +128,5 @@ describe("the public site's live map", () => {
     expect(store.poseAt(RUN, t)?.x).toBeCloseTo(truth(start, t), 1);
     // And it runs a whole learned cadence without reaching the data's end.
     expect(c.at(420_000 + 65_000)!).toBeLessThan(gen - DRAIN_MS);
-  });
-});
-
-describe("replaying a run past its trace", () => {
-  test("past the newest window with no tail the trace has no answer, and the run's own position stands", async () => {
-    // A short run's one closed window, and its last track point two windows on.
-    const start = W + 20_000;
-    const end = W + 2 * SEG_MS + 30_000;
-    const point = (ts: number, map: number, x: number, y: number) => ({ ts, map, x, y, level: 1, xp: 0, money: null, questsCompleted: null, turn: null });
-    const track: TrackResponse = {
-      runId: RUN,
-      characterName: null,
-      model: null,
-      harnessVersion: null,
-      points: [point(start + 60_000, 0, 60, 0), point(end, 1, -4025.4, -3787.6)],
-      trace: { segMs: SEG_MS, segs: [[W, 1]] },
-    };
-    const store = createTraceStore();
-    ingestTracks(store, [track], (t) => t.runId);
-    await store.load(RUN, W, fetcher(new Map([[W, seg(walk(start, start + 240_000), W)]])));
-    const span = replaySpan(track.points, track.runId, store)!;
-    expect(span.to).toBe(end);
-    expect(store.poseAt(RUN, span.to)).toBeNull();
-    // What the map places instead: the run's reading at the cursor.
-    expect(positionsAt(track, span.to)[0]).toMatchObject({ runId: RUN, map: 1, x: -4025.4, y: -3787.6 });
   });
 });

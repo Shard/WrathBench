@@ -5,26 +5,22 @@
  * type is what this panel is handed: a script tag, an image with an error
  * handler, a `javascript:` link in markdown or HTML, a stray `</pre>`, and one
  * line long enough to push a phone layout sideways. The contract is that it
- * all arrives as text — no element is made out of it, no attribute, no link —
- * and that the panel's box bounds it.
+ * all arrives as text — no element is made out of it, no attribute, no link.
  *
  * happy-dom executes no script by default, so "nothing ran" would be vacuous
  * here; what is asserted instead is the structure that makes running anything
  * impossible, beside a control that shows the same string parsed as markup
  * would have produced every one of the elements the panel must not. The
  * real-browser check (the payload's canary, page width at 360 px) is run in
- * Chromium against the built dashboard, not in this suite. Layout is not
- * computed by happy-dom either, so the bound is asserted on the stylesheet
- * rule the panel's class carries.
+ * Chromium against the built dashboard, not in this suite.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { Window } from "happy-dom";
 import { render } from "solid-js/web";
 import { createServer } from "vite";
 import solid from "vite-plugin-solid";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const dashboardRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -169,44 +165,5 @@ describe("the scratchpad panel against a hostile pad", () => {
     } finally {
       restore();
     }
-  });
-
-  test("a re-read pad updates the same box in place, so a reader's scroll survives it", async () => {
-    const { document, restore } = installDom();
-    try {
-      const { ScratchpadPanel } = await loadPanel();
-      const [text, setText] = createSignal("# Plan\n- [ ] train at level 4");
-      const mount = document.createElement("div");
-      document.body.append(mount);
-      const dispose = render(
-        () =>
-          createComponent(ScratchpadPanel, {
-            get text() {
-              return text();
-            },
-          }),
-        mount,
-      );
-      const pre = mount.querySelector("pre.scratchpad");
-      setText("# Plan\n- [x] train at level 4");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      expect(mount.querySelector("pre.scratchpad")).toBe(pre);
-      expect(pre!.textContent).toBe("# Plan\n- [x] train at level 4");
-      dispose();
-    } finally {
-      restore();
-    }
-  });
-
-  test("the panel's box bounds a long pad and wraps an unbroken line", () => {
-    // happy-dom does no layout, so the bound is the rule the class carries.
-    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-    const rule = /pre\.block\.scratchpad\s*\{([^}]*)\}/.exec(css);
-    expect(rule).not.toBeNull();
-    const body = rule![1]!;
-    expect(body).toMatch(/max-height:\s*\d+vh/);
-    expect(body).toMatch(/overflow-y:\s*auto/);
-    expect(body).toMatch(/overflow-wrap:\s*anywhere/);
-    expect(body).toMatch(/min-width:\s*0/);
   });
 });

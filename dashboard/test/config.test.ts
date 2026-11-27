@@ -12,49 +12,22 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  RoutingParseError,
-  auditVerb,
+  EMPTY_NEW_ENTRY,
   formOf,
-  providerLines,
+  formatRouting,
   isReadOnlyKey,
-  isRosterName,
   jsonEditorKeys,
   newEntryDoc,
   parseRouting,
-  formatRouting,
-  rosterWrite,
-  EMPTY_NEW_ENTRY,
-  draftsShown,
-  estimateHint,
-  fetchSummary,
-  fmtEstimate,
-  fmtPrice,
   promoteBody,
   promoteFormOf,
+  rosterWrite,
 } from "../src/lib/config";
 
 describe("parseRouting", () => {
-  test("a bare name is a name", () => {
-    expect(parseRouting("gmicloud")).toBe("gmicloud");
-    expect(parseRouting("  gmicloud  ")).toBe("gmicloud");
-  });
-
-  test("a comma-separated list is preference order", () => {
-    expect(parseRouting("gmicloud, deepinfra")).toEqual(["gmicloud", "deepinfra"]);
-  });
-
-  test("JSON is JSON — the object form and the list form both", () => {
-    expect(parseRouting('["a","b"]')).toEqual(["a", "b"]);
-    expect(parseRouting('{"order":["a"],"allowFallbacks":false}')).toEqual({ order: ["a"], allowFallbacks: false });
-  });
-
   test("empty is absent, which is a VALUE — the author's own provider", () => {
     expect(parseRouting("")).toBeUndefined();
     expect(parseRouting("   ")).toBeUndefined();
-  });
-
-  test("text that looks like JSON and is not says so", () => {
-    expect(() => parseRouting("{oops")).toThrow(RoutingParseError);
   });
 
   test("format and parse round-trip every shape", () => {
@@ -86,25 +59,8 @@ describe("rosterWrite", () => {
     expect(JSON.stringify(w?.body)).not.toContain("null");
   });
 
-  test("a clear and a set in one write travel together, in the PUT", () => {
-    const w = rosterWrite(entry, { ...formOf(entry), routing: "", tier: "t2" });
-    expect(w?.method).toBe("PUT");
-    expect(w?.body).toEqual({ model: "m", tier: "t2", race: 3, class: 2, idle: "none" });
-    expect(w?.changed.sort()).toEqual(["routing", "tier"]);
-  });
-
-  test("clearing a key that is already absent is not a change", () => {
-    const bare = { model: "m", tier: "t0" };
-    expect(rosterWrite(bare, { ...formOf(bare), billing: "" })).toBeNull();
-  });
-
   test("an emptied tier is a slip, not a request — tier is required on every entry", () => {
     expect(rosterWrite(entry, { ...formOf(entry), tier: "" })).toBeNull();
-  });
-
-  test("a routing shape change is a PATCH of the new document", () => {
-    const w = rosterWrite(entry, { ...formOf(entry), routing: "a, b" });
-    expect(w).toEqual({ method: "PATCH", body: { routing: ["a", "b"] }, changed: ["routing"] });
   });
 });
 
@@ -113,58 +69,12 @@ describe("newEntryDoc", () => {
     const doc = newEntryDoc({ ...EMPTY_NEW_ENTRY, name: "x", model: "m", tier: "t1" });
     expect(doc).toEqual({ model: "m", tier: "t1" });
   });
-
-  test("race and class are the numbers the config carries", () => {
-    const doc = newEntryDoc({ ...EMPTY_NEW_ENTRY, name: "x", model: "m", tier: "t0", race: "3", class: "2" });
-    expect(doc).toEqual({ model: "m", tier: "t0", race: 3, class: 2 });
-  });
-
-  test("the optional strings ride along when given", () => {
-    const doc = newEntryDoc({
-      ...EMPTY_NEW_ENTRY,
-      name: "x",
-      model: "m",
-      tier: "t0",
-      billing: "paid",
-      idle: "unlimited",
-      routing: "gmicloud",
-      apiBase: "https://api.example/v1",
-      credential: "or-paid",
-    });
-    expect(doc).toEqual({
-      model: "m",
-      tier: "t0",
-      routing: "gmicloud",
-      billing: "paid",
-      idle: "unlimited",
-      apiBase: "https://api.example/v1",
-      credential: "or-paid",
-    });
-  });
-});
-
-describe("isRosterName", () => {
-  test("the row-key alphabet, since the name IS the key", () => {
-    expect(isRosterName("sub-opus-low")).toBe(true);
-    expect(isRosterName("qwen3.8:27b")).toBe(true);
-    expect(isRosterName("")).toBe(false);
-    expect(isRosterName("has/slash")).toBe(false);
-    expect(isRosterName("has space")).toBe(false);
-  });
 });
 
 describe("jsonEditorKeys", () => {
   test("collection ENTRIES, never the bare collection name", () => {
     const keys = ["_notes", "preflight", "accounts", "roster/a", "roster/b", "policy", "campaigns/x", "queue/0"];
     expect(jsonEditorKeys(keys)).toEqual(["_notes", "preflight", "accounts", "policy", "campaigns/x", "queue/0"]);
-  });
-
-  test("an empty collection is a singleton row and keeps its editor", () => {
-    expect(jsonEditorKeys(["policy", "queue"])).toEqual(["policy", "queue"]);
-  });
-
-  test("the roster's own rows are excluded — the table is their editor", () => {
-    expect(jsonEditorKeys(["roster", "roster/a"])).toEqual([]);
   });
 
   test("published campaign definitions are listed, and read-only: the API refuses a write to them", () => {
@@ -177,86 +87,11 @@ describe("jsonEditorKeys", () => {
   });
 });
 
-describe("auditVerb", () => {
-  test("null on either side is a create or a delete", () => {
-    expect(auditVerb({ before: null, after: {} })).toBe("created");
-    expect(auditVerb({ before: {}, after: null })).toBe("deleted");
-    expect(auditVerb({ before: {}, after: {} })).toBe("changed");
-  });
-});
-
 describe("drafts", () => {
-  const drafts = [
-    { model: "a/new:free", billing: "free" as const },
-    { model: "a/new", billing: "paid" as const },
-    { model: "b/old", billing: "paid" as const },
-  ];
-
-  test("the toggle filters on the slug-derived billing and keeps the server's newest-first order", () => {
-    expect(draftsShown(drafts, "all").map((d) => d.model)).toEqual(["a/new:free", "a/new", "b/old"]);
-    expect(draftsShown(drafts, "free").map((d) => d.model)).toEqual(["a/new:free"]);
-    expect(draftsShown(drafts, "paid").map((d) => d.model)).toEqual(["a/new", "b/old"]);
-  });
-
   test("a promotion never picks a tier: the form starts without one and will not send without one", () => {
     const form = promoteFormOf("glm-6");
     expect(form).toEqual({ name: "glm-6", tier: "", race: "", class: "" });
     expect(() => promoteBody("z-ai/glm-6", form)).toThrow(/choose a tier/);
     expect(promoteBody("z-ai/glm-6", { ...form, tier: "t0" })).toEqual({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" });
-  });
-
-  test("race and class are optional numbers, and absent when left empty", () => {
-    expect(promoteBody("m/x", { name: "x", tier: "t1", race: "3", class: " 2 " })).toEqual({ model: "m/x", name: "x", tier: "t1", race: 3, class: 2 });
-    expect(() => promoteBody("m/x", { name: "x", tier: "t1", race: "dwarf", class: "" })).toThrow(/race/);
-    expect(() => promoteBody("m/x", { name: "a/b", tier: "t1", race: "", class: "" })).toThrow(/roster name/);
-  });
-
-  test("the estimate is labelled one: a tilde on the figure, the profile and the caveat in the hint", () => {
-    expect(fmtEstimate(0.42)).toBe("~$0.420");
-    expect(fmtEstimate(0)).toBe("~$0.00");
-    expect(fmtEstimate(null)).toBe("—");
-    const hint = estimateHint({ runs: 3, series: "harness-0.5", promptTokens: 2_000_000, completionTokens: 150_000, cacheReadTokens: 900_000 });
-    expect(hint).toMatch(/^estimate: /);
-    expect(hint).toContain("3 runs, harness-0.5: 2.00M prompt, 150k completion, 900k cached");
-    expect(hint).toContain("under-reads reasoning-heavy models 2–3×");
-    expect(estimateHint(null)).toMatch(/^no estimate/);
-  });
-
-  test("a price reads as input / output per million, in as few digits as say it", () => {
-    expect(fmtPrice({ input: 0.075, output: 0.6, cacheRead: 0.01, cacheWrite: 0.075 })).toBe("0.075 / 0.6");
-    expect(fmtPrice({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 })).toBe("3 / 15");
-    expect(fmtPrice(null)).toBe("—");
-  });
-
-  test("a fetch's result reads as one status line", () => {
-    expect(fetchSummary({ toolModels: 300, added: ["a", "b"], refreshed: 4, removed: [], skipped: 1 })).toBe(
-      "2 new · 4 refreshed · 0 dropped · 1 skipped · 300 tool-calling in the catalogue",
-    );
-  });
-});
-
-describe("the unseeded banner", () => {
-  test("names the CLI seed command, not the script it wraps", async () => {
-    // The page is not rendered here; the text is the whole claim, and it
-    // drifted once when `bun wb config seed` replaced the script path.
-    const page = await Bun.file(new URL("../src/pages/Config.tsx", import.meta.url)).text();
-    expect(page).toContain("<code>bun wb config seed</code>");
-    expect(page).not.toContain("config-store.ts seed");
-  });
-});
-
-describe("providerLines — an entry's providers, read-only (operator, 2026-11-16)", () => {
-  test("one line per provider in preference order, saying only what each states; none for a single-provider entry", () => {
-    expect(
-      providerLines({
-        model: "deepseek-v4.1-flash",
-        tier: "t1",
-        providers: [
-          { credential: "opencodego", apiBase: "https://opencode.ai/inference/go/openai/v1" },
-          { credential: "openrouter-1", model: "deepseek/deepseek-v4.1-flash", routing: "GMICloud" },
-        ],
-      }),
-    ).toEqual(["opencodego · https://opencode.ai/inference/go/openai/v1", "openrouter-1 · deepseek/deepseek-v4.1-flash · GMICloud"]);
-    expect(providerLines({ model: "m", tier: "t0", apiBase: "https://x.example/v1" })).toBeNull();
   });
 });

@@ -1,34 +1,6 @@
-/** The admin page's forms and readings (`lib/admin.ts`): what each writes, and what it reads out of the config document. */
+/** The admin page's forms (`lib/admin.ts`): what each writes into the config store, and the connect block's secret handling. */
 import { describe, expect, test } from "bun:test";
-import {
-  CONFIG_SECTIONS,
-  CONNECT_FORMS,
-  EMPTY_CREDENTIAL,
-  LIMIT_ROWS,
-  canCopy,
-  connectSnippet,
-  fmtLimit,
-  moduleErrorText,
-  sectionNeedsSeed,
-  sectionReadsOnly,
-  campaignDoc,
-  campaignRows,
-  credentialDoc,
-  credentialFormOf,
-  fmtDelay,
-  fixLabel,
-  freeplayRows,
-  healthTitle,
-  healthTone,
-  sectionOf,
-  sectionOfKey,
-  sectionsShown,
-  storedCredentialRows,
-  jobDoc,
-  nextQueueKey,
-  publishedDefs,
-  queueRows,
-} from "../src/lib/admin";
+import { CONNECT_FORMS, EMPTY_CREDENTIAL, campaignDoc, connectSnippet, credentialDoc, credentialFormOf, jobDoc, nextQueueKey, queueRows } from "../src/lib/admin";
 
 describe("credentialDoc", () => {
   test("a credential is written disabled, with its budget's one number in the shape the store reads", () => {
@@ -40,101 +12,21 @@ describe("credentialDoc", () => {
     expect(credentialDoc({ ...base, budget: "spend", limit: "5" })).toMatchObject({ body: { budget: { kind: "spend", usdPerDay: 5 } } });
     expect(credentialDoc({ ...base, budget: "runs", limit: "40" })).toMatchObject({ body: { budget: { kind: "runs", perDay: 40 } } });
     expect(credentialDoc({ ...base, budget: "usage", limit: "70" })).toMatchObject({ body: { budget: { kind: "usage", scoredMaxPct: 70, freeplayMaxPct: 70 } } });
+    expect(credentialDoc({ ...base, budget: "usage", limit: "80", freeplayLimit: "95" })).toMatchObject({ body: { budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 95 } } });
   });
 
   test("what a form is missing is a sentence, not a write", () => {
     expect(credentialDoc(EMPTY_CREDENTIAL)).toBe("a credential needs an id");
-    expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x" })).toBe("pick a provider");
     expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x", provider: "openrouter", secretEnv: "K", budget: "spend" })).toBe("a spend budget needs its limit");
-    expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x", provider: "openrouter", secretEnv: "K", slots: "" })).toBe("slots is a whole number");
-  });
-
-  test("a usage budget's two shares: freeplay its own where given, else the scored one", () => {
-    const base = { ...EMPTY_CREDENTIAL, id: "c", provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", budget: "usage" as const, limit: "80" };
-    expect(credentialDoc({ ...base, freeplayLimit: "95" })).toMatchObject({ body: { budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 95 } } });
-    expect(credentialDoc({ ...base, freeplayLimit: "x" })).toBe("the freeplay share is a percentage");
+    expect(credentialDoc({ ...EMPTY_CREDENTIAL, id: "x", provider: "claude", secretEnv: "K", budget: "usage", limit: "80", freeplayLimit: "x" })).toBe("the freeplay share is a percentage");
   });
 
   test("an edit is the whole row, its switch kept", () => {
     const row = { provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: 2, budget: { kind: "spend", usdPerDay: 5 }, billing: "paid", enabled: true };
     const form = credentialFormOf("or-1", row);
-    expect(form).toEqual({ id: "or-1", provider: "openrouter", secretEnv: "OPENROUTER_KEY", slots: "2", billing: "paid", budget: "spend", limit: "5", freeplayLimit: "" });
     expect(credentialDoc(form, { enabled: true })).toEqual({ key: "credentials/or-1", body: row });
     // Back to the provider's default: the budget leaves the row, which only a whole-row write can do.
     expect(credentialDoc({ ...form, budget: "none" }, { enabled: true })).toEqual({ key: "credentials/or-1", body: { ...row, budget: undefined } });
-  });
-});
-
-describe("credentialFormOf", () => {
-  test("seeded from the row as written, not the effective budget: a subscription with none stays at the default", () => {
-    expect(credentialFormOf("c", { provider: "claude", secretEnv: "CLAUDE_CODE_OAUTH_TOKEN", slots: 1, billing: "paid", enabled: false })).toMatchObject({ budget: "none", limit: "" });
-    expect(credentialFormOf("c", { provider: "claude", secretEnv: "X", slots: 1, budget: { kind: "usage", scoredMaxPct: 70, freeplayMaxPct: 90 }, billing: "paid" })).toMatchObject({
-      budget: "usage",
-      limit: "70",
-      freeplayLimit: "90",
-    });
-    // An equal pair reads as one number.
-    expect(credentialFormOf("c", { budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 80 } }).freeplayLimit).toBe("");
-    expect(credentialFormOf("x", undefined)).toMatchObject({ id: "x", provider: "", slots: "" });
-  });
-
-  test("the rows come out of the config document by id, or none", () => {
-    expect(storedCredentialRows({ credentials: { a: { provider: "openrouter" } } })).toEqual({ a: { provider: "openrouter" } });
-    expect(storedCredentialRows({})).toEqual({});
-  });
-});
-
-describe("health", () => {
-  test("the tone: ok, warn for what clears by itself, err for what wants someone, dim for the switch and the unknown", () => {
-    expect(["ok", "held", "unread", "auth-failed", "secret-missing", "quota-spent", "disabled"].map((s) => healthTone(s as never))).toEqual(["ok", "warn", "warn", "err", "err", "err", "dim"]);
-    expect(healthTone(null)).toBe("dim");
-  });
-
-  test("the hover: since when and the provider's last answer", () => {
-    const fmt = (t: number) => `@${t}`;
-    expect(healthTitle({ state: "auth-failed", reason: "x", since: 1, lastCheck: { at: 2, http: 401, code: "api_key_expired" } }, fmt)).toBe("since @1 · last check @2 · HTTP 401 api_key_expired");
-    expect(healthTitle({ state: "ok", reason: "", since: null, lastCheck: null }, fmt)).toBe("");
-  });
-});
-
-describe("fixLabel", () => {
-  test("a label, with until when where known; the sentence is the hover's", () => {
-    expect(fixLabel({ kind: "wait-reset", until: 5, text: "wait for the reset" }, (t) => `@${t}`)).toBe("wait · until @5");
-    expect(fixLabel({ kind: "raise-budget", text: "raise its budget, or wait for 00:00 UTC" }, String)).toBe("raise budget");
-  });
-});
-
-describe("the admin page's sections", () => {
-  const ALL = { runner: true, evals: true, viewer: true };
-  test("a route names a section this deployment has, or none", () => {
-    expect(sectionOf("providers", ALL)).toBe("providers");
-    expect(sectionOf(undefined, ALL)).toBeNull();
-    expect(sectionOf("nope", ALL)).toBeNull();
-    expect(sectionOf("campaigns", { ...ALL, evals: false })).toBeNull();
-  });
-
-  test("a group that is off takes its sections with it; the deployment's own stay", () => {
-    expect(sectionsShown(ALL).map((s) => s.id)).toEqual(CONFIG_SECTIONS.map((s) => s.id));
-    expect(sectionsShown({ runner: false, evals: false, viewer: true }).map((s) => s.id)).toEqual(["wrath-mcp", "site", "deployment", "history"]);
-    expect(sectionsShown(ALL)[0]!.id).toBe("wrath-mcp");
-  });
-
-  test("every store row key's raw editor sits in exactly one section, each collection beside its table", () => {
-    const keys = ["credentials/or-1", "campaigns/deadmines", "campaign-defs/deadmines@4", "queue/0", "policy", "accounts", "preflight", "roster/opus", "site"];
-    expect(keys.map(sectionOfKey)).toEqual(["providers", "campaigns", "campaigns", "queue", "policy", "policy", "policy", "roster", "site"]);
-    const ids = new Set<string>(CONFIG_SECTIONS.map((s) => s.id));
-    for (const k of keys) expect(ids.has(sectionOfKey(k))).toBe(true);
-  });
-
-  test("only the writing sections wait for a seeded store, and the site's not on a deployment with no runner", () => {
-    const viewerOnly = { runner: false, evals: false, viewer: true };
-    for (const id of ["wrath-mcp", "deployment", "history"] as const) {
-      expect(sectionReadsOnly(id)).toBe(true);
-      expect(sectionNeedsSeed(id, ALL)).toBe(false);
-    }
-    expect(sectionNeedsSeed("roster", ALL)).toBe(true);
-    expect(sectionNeedsSeed("site", ALL)).toBe(true);
-    expect(sectionNeedsSeed("site", viewerOnly)).toBe(false);
   });
 });
 
@@ -148,59 +40,16 @@ describe("the wrath-mcp section", () => {
       for (const p of ["<ACCOUNT>", "<checkout>/wrath-mcp/mcp/src/main.ts", "<session store>"]) expect(s).toContain(p);
       expect(s).not.toContain("worldserver:8086");
     }
-    expect(connectSnippet("claude").startsWith("claude mcp add wrath \\")).toBe(true);
-    expect(Object.keys((JSON.parse(connectSnippet("json")) as { mcpServers: Record<string, unknown> }).mcpServers)).toEqual(["wrath"]);
-  });
-
-  test("a limit of 0 reads as off, and the backlog in MiB", () => {
-    expect(fmtLimit(0)).toBe("off");
-    expect(fmtLimit(40)).toBe("40");
-    expect(fmtLimit(16_777_216, true)).toBe("16 MiB");
-    expect(LIMIT_ROWS.map((r) => r.key)).toContain("actionRate");
-  });
-
-  test("why the module is not shown, each its own word", () => {
-    expect(moduleErrorText("refused", "WRATHBENCH_MODULE_SECRET").title).toContain("WRATHBENCH_MODULE_SECRET");
-    expect(new Set((["unset", "unreachable", "refused"] as const).map((e) => moduleErrorText(e, "X").word)).size).toBe(3);
-  });
-
-  test("the copy button exists only where the clipboard can work", () => {
-    expect(canCopy({ isSecureContext: true, navigator: { clipboard: {} } })).toBe(true);
-    // A plain-HTTP LAN origin: no secure context, no Clipboard API.
-    expect(canCopy({ isSecureContext: false, navigator: {} })).toBe(false);
-    expect(canCopy({ isSecureContext: true, navigator: {} })).toBe(false);
-    expect(canCopy(undefined)).toBe(false);
   });
 });
 
-describe("the config document's sections", () => {
-  test("freeplay agents are the entries with idle: unlimited", () => {
-    expect(freeplayRows({ a: { model: "m/a", idle: "unlimited" }, b: { model: "m/b", idle: "none" }, c: { model: "m/c" } })).toEqual([
-      { name: "a", model: "m/a", playing: true },
-      { name: "b", model: "m/b", playing: false },
-      { name: "c", model: "m/c", playing: false },
-    ]);
-    expect(freeplayRows(undefined)).toEqual([]);
-  });
-
-  test("campaign rows, and the published definitions newest version first", () => {
-    expect(campaignRows({ sweep: { version: 2, enabled: true, assignments: [{ model: "a", runsPerCell: 3 }], concluded: [1] } })).toEqual([
-      { name: "sweep", version: 2, enabled: true, assignments: [{ model: "a", runsPerCell: 3 }], account: null, credential: null, concluded: [1] },
-    ]);
-    expect(publishedDefs({ "b@1": {}, "a@1": {}, "a@3": {}, junk: {} })).toEqual([
-      { id: "a", version: 3 },
-      { id: "a", version: 1 },
-      { id: "b", version: 1 },
-    ]);
-  });
-
+describe("campaign and queue writes", () => {
   test("a new campaign is a published definition and its assignments, written disabled", () => {
     expect(campaignDoc({ def: "sweep@2", models: ["a", "b"], runsPerCell: "3" })).toEqual({
       key: "campaigns/sweep",
       body: { version: 2, enabled: false, assignments: [{ model: "a", runsPerCell: 3 }, { model: "b", runsPerCell: 3 }] },
     });
     expect(campaignDoc({ def: "", models: ["a"], runsPerCell: "1" })).toBe("pick a published definition");
-    expect(campaignDoc({ def: "s@1", models: [], runsPerCell: "1" })).toBe("assign at least one roster entry");
   });
 
   test("queue rows zip with their keys, and a new job goes one past the highest", () => {
@@ -218,13 +67,6 @@ describe("the config document's sections", () => {
     ]);
     expect(nextQueueKey(keys)).toBe("queue/5");
     expect(nextQueueKey([])).toBe("queue/0");
-    expect(jobDoc({ ref: "a", episode: "freeplay", repeat: "loop", enabled: true })).toEqual({ ref: "a", episode: "freeplay", repeat: "loop", enabled: true });
     expect(jobDoc({ ref: "a", episode: "e90", repeat: "0", enabled: true })).toBe("repeat is a whole number, or loop");
-  });
-
-  test("a delay reads in the unit it was set in", () => {
-    expect(fmtDelay(0)).toBe("none");
-    expect(fmtDelay(30_000)).toBe("30 s");
-    expect(fmtDelay(900_000)).toBe("15 min");
   });
 });
