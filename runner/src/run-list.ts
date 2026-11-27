@@ -21,9 +21,13 @@
  * `run.sqlite`), because its whole subject is where a character is *this
  * second* and the store's state series is a five-second poll behind.
  *
- * The runner's own, not the viewer's: the archive CLI and the collector read
- * it, and neither imports the viewer. The viewer's per-run series readers
- * (`viewer/runs.ts`) read beside it.
+ * The second of four run readers: over one run's own records
+ * (`run-reader.ts`), this owns the directory — which ids are runs, where one
+ * lives (a bare session's store included), whether it is live, and when a
+ * bare session, which never writes a termination, reads as ended. The
+ * runner's own: the archive CLI, the supervisor and the collector read it,
+ * and none imports the viewer. The viewer's per-run series (`viewer/runs.ts`)
+ * and its session source (`viewer/runs-source.ts`) read beside it.
  */
 
 import { isTaskEpisode } from "./episodes";

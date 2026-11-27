@@ -1,9 +1,15 @@
 /**
  * A run's series off disk, read-only: its state samples, its bag's items, its
- * move intents and its scratchpad, for the viewer's direct reads. Nothing here
- * ever writes. The run listing these read beside (`listRuns`, `readRun`,
- * `runDir`) is the runner's, `runner/src/run-list.ts`, because the runner's
- * core reads it too and never imports the viewer.
+ * move intents and its scratchpad, for the viewer's run and map routes
+ * (`api.ts`, `api-run.ts`). Nothing here ever writes.
+ *
+ * The third of four run readers, and the thinnest: it maps what
+ * `runner/src/run-reader.ts` (one run's records) and `runner/src/run-list.ts`
+ * (a runs directory) read onto the wire shapes, and opens a run's moves
+ * through `runs-source.ts` (the inspector's `SessionSource`). The viewer's, not
+ * the runner's, because it returns `api-types.ts` shapes and reads through the
+ * session source, neither of which the runner's core may import; and one
+ * module rather than its two callers, so the state row's one mapping stays one.
  */
 
 import { existsSync, readFileSync } from "node:fs";
