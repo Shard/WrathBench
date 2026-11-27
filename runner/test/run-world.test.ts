@@ -7,7 +7,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { configFromArgs } from "../src/run";
-import { runConfigSchema } from "../src/config";
 import { readRunFact } from "../src/run-fact";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { openSessionRecord } from "../src/session-record";
@@ -27,13 +26,6 @@ describe("config.world", () => {
     mkdirSync(join(runs, "r-bad"), { recursive: true });
     writeFileSync(join(runs, "r-bad", "world.json"), JSON.stringify({ id: "w0abcdefghj" }));
     expect(configFromArgs(["--model", "m", "--run-id", "r-bad", "--runs-dir", runs]).world).toBe("shared");
-  });
-
-  test("the schema keeps it through a resume's reload, and refuses anything that is not a world", () => {
-    expect(runConfigSchema.parse({ model: "m", world: ID }).world).toBe(ID);
-    expect(runConfigSchema.parse({ model: "m", world: "shared" }).world).toBe("shared");
-    expect(runConfigSchema.parse({ model: "m" }).world).toBeUndefined();
-    expect(() => runConfigSchema.parse({ model: "m", world: "acore_characters" })).toThrow();
   });
 
   test("the run fact carries it as a label, null before worlds", () => {

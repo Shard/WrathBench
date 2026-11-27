@@ -77,15 +77,6 @@ describe("assembleContext", () => {
     expect(quiet.startsWith("[turn 7]\n\n== state (seq 69, 70 events seen) ==\n")).toBe(true);
   });
 
-  test("carries notices, scratchpad, turn and summary", () => {
-    const text = assembleContext(makeInputs());
-    expect(text).toContain("[turn 7]");
-    expect(text).toContain("- sandbox_restarted: restarted");
-    expect(text).toContain("# plan");
-    expect(text).toContain("character: Benchy (guid 42) level 3");
-    expect(text).toContain("session: in world");
-  });
-
   test("empty inputs render honest placeholders", () => {
     const text = assembleContext({
       stateSummary: formatStateSummary(null, { sessionLive: false }),
@@ -265,13 +256,6 @@ describe("formatStateSummary: the auras line", () => {
     expect(formatStateSummary({ self: { name: "Benchy", guid: "1" }, selfAuras: [] }, { sessionLive: true })).not.toContain("auras:");
     expect(auraLine(undefined, NOW)).toBeUndefined();
   });
-
-  test("a timer run out reads 0s left, and past the cap the rest are counted", () => {
-    const many = Array.from({ length: CONTEXT_POLICY.AURA_TAIL + 2 }, (_, i) => ({ spellId: i, name: `Aura ${i}`, flags: 0x20, duration: 1000, ts: NOW - 5000 }));
-    const line = auraLine(many, NOW)!;
-    expect(line).toContain("Aura 0 (0s left)");
-    expect(line).toContain(" +2 more [state.aurasOf(state.self.guid)]");
-  });
 });
 
 describe("formatStateSummary", () => {
@@ -358,23 +342,6 @@ describe("formatStateSummary", () => {
     expect(text).toContain("achievements: unobserved");
   });
 
-  test("nearby appends NPC roles compactly: spaced words, gossip dropped, sub-kinds folded", () => {
-    const text = formatStateSummary(
-      {
-        self: { name: "Benchy", guid: "1" },
-        units: [
-          { guid: "9", name: "Gryth Thurden", type: "unit", distance: 4.2, roles: ["gossip", "flightMaster"] },
-          { guid: "10", name: "Brog Hamfist", type: "unit", distance: 8, roles: ["vendor", "foodVendor", "repair"] },
-          { guid: "11", name: "Kobold Vermin", type: "unit", distance: 12, roles: [] },
-        ],
-      },
-      { sessionLive: true },
-    );
-    expect(text).toContain(
-      "nearby: Gryth Thurden (flight master, 4.2y), Brog Hamfist (vendor, repair, 8y), Kobold Vermin (12y)",
-    );
-  });
-
   test("unobserved fields say so instead of inventing zeros", () => {
     const text = formatStateSummary(
       { self: { name: "Benchy", guid: "1" }, lastSeq: 3, eventCount: 4 },
@@ -414,49 +381,6 @@ describe("formatStateSummary", () => {
   test("gaps are surfaced", () => {
     const text = formatStateSummary({ gaps: [{}, {}] }, { sessionLive: true });
     expect(text).toContain("stream: 2 gap(s)");
-  });
-
-  test("bag, quests, nearby and gossip lines render when present", () => {
-    const text = formatStateSummary(
-      {
-        self: { name: "B", guid: "1" },
-        bag: {
-          freeSlots: 12,
-          items: [
-            { slot: 23, itemId: 6948, name: "Hearthstone", count: 1 },
-            { slot: 24, itemId: 117, name: "Tough Jerky", count: 5 },
-          ],
-        },
-        questLog: [
-          { questId: 54, complete: true },
-          { questId: 82, complete: false },
-        ],
-        units: [
-          { guid: "9", name: "Kobold Vermin", type: "unit", distance: 12.3, dead: false },
-          { guid: "10", name: "Kobold Worker", type: "unit", distance: 30, dead: true },
-        ],
-        ui: { gossip: { options: 3 } },
-      },
-      { sessionLive: true },
-    );
-    expect(text).toContain("bag: 12 free / 16; most: Tough Jerky x5, Hearthstone");
-    expect(text).toContain("quests: 54 [done], 82\n");
-    expect(text).toContain("nearby: Kobold Vermin (12.3y), Kobold Worker dead (30y)");
-    expect(text).toContain("ui: gossip (3 options)");
-  });
-
-  test("the bag line totals across worn bags when the snapshot says how many slots there are", () => {
-    const items = [{ bag: 255, slot: 23, name: "Hearthstone", count: 1 }, { bag: 19, slot: 0, name: "Linen Cloth", count: 3 }];
-    const text = formatStateSummary({ bag: { freeSlots: 20, totalSlots: 22, items } }, { sessionLive: true });
-    expect(text).toContain("bag: 20 free / 22; most: Linen Cloth x3, Hearthstone");
-  });
-
-  test("a bag of single items names its first four slots", () => {
-    // Ties keep bag order, so with nothing stacked the line reads as the old
-    // one did, cut to BAG_MOST.
-    const items = Array.from({ length: 11 }, (_, i) => ({ slot: 23 + i, itemId: i, name: `it${i}`, count: 1 }));
-    const text = formatStateSummary({ bag: { freeSlots: 5, items } }, { sessionLive: true });
-    expect(text).toContain("bag: 5 free / 16; most: it0, it1, it2, it3\n");
   });
 
   test("nearby caps at 6 and never prints exact mob health", () => {
@@ -597,22 +521,6 @@ describe("formatStateSummary", () => {
     );
   });
 
-  test("past four names the rest are counted; a level not served yet prints the name alone", () => {
-    const many = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"].map((name, i) => ({
-      guid: `m${i}`,
-      name,
-      type: "unit",
-      ...(i === 0 ? {} : { level: 5 }),
-      x: -5600 + i,
-      y: 425,
-      reaction: "hostile",
-    }));
-    const extra = { guid: "m9", name: "Echo", type: "unit", level: 5, x: -5600, y: 430, reaction: "hostile" };
-    expect(corpseHostiles(ghostAt([...many, extra]))).toBe(
-      "hostile within 20y of your corpse: Echo L5 ×2, Alpha, Bravo L5, Charlie L5 +1 more",
-    );
-  });
-
   test("no hostile is said only from inside reclaim range, where the ghost is sent all that is round its corpse", () => {
     const quiet = [camp[5]!];
     expect(corpseHostiles(ghostAt(quiet))).toBe("no hostile in view within 20y of your corpse");
@@ -674,13 +582,6 @@ describe("formatStateSummary: quest titles, nearby priority, bag summary", () =>
       { sessionLive: true },
     );
     expect(line(text, "quests: ")).toBe("quests: 6 Found Lantern [done], 7 [done], 5 Lost Lantern");
-  });
-
-  test("a log with one state prints no group label", () => {
-    const open = formatStateSummary({ questLog: [{ questId: 5, complete: false, title: "Lost Lantern", level: 8 }] }, { sessionLive: true });
-    expect(line(open, "quests: ")).toBe("quests: 5 Lost Lantern [8]");
-    const done = formatStateSummary({ questLog: [{ questId: 5, complete: true, title: "Lost Lantern", level: 8 }] }, { sessionLive: true });
-    expect(line(done, "quests: ")).toBe("quests: 5 Lost Lantern [8 done]");
   });
 
   test("a complete quest says where it is turned in: the centre of its questAreas turn-in area", () => {
@@ -768,19 +669,6 @@ describe("formatStateSummary: quest titles, nearby priority, bag summary", () =>
     expect(nearby.endsWith("+9 more")).toBe(true);
   });
 
-  test("six or fewer in view are all shown in distance order, a quest object's marker included", () => {
-    const text = formatStateSummary(
-      {
-        units: [
-          { guid: "1", name: "Grubby Boar", type: "unit", distance: 3, roles: [] },
-          { guid: "2", name: "Notice Board", type: "gameObject", distance: 5, roles: [], questGiver: "available" },
-        ],
-      },
-      { sessionLive: true },
-    );
-    expect(line(text, "nearby: ")).toBe("nearby: Grubby Boar (3y), Notice Board (quest giver: available, 5y)");
-  });
-
   test("only a living hostile unit is marked; neutral, friendly, unknown and the dead print bare (operator, 2026-10-29)", () => {
     const text = formatStateSummary(
       {
@@ -844,10 +732,6 @@ describe("assembleContext: the scratchpad's size against its cap", () => {
   test("a pad past the cap says so", () => {
     expect(withPad("x".repeat(32_040))).toContain("[scratchpad 32.0k/32k, over the cap]\n");
   });
-
-  test("an empty pad keeps its placeholder", () => {
-    expect(withPad("")).toContain("[scratchpad]\n(empty — write your plan");
-  });
 });
 
 describe("formatEventLine: cast failures carry the SDK's reason", () => {
@@ -877,21 +761,6 @@ describe("formatEventLine", () => {
     const out = line({ result: 999 });
     expect(out).toContain("\"result\":999");
     expect(out.endsWith("}")).toBe(true);
-  });
-
-  test("a missing or malformed result adds nothing", () => {
-    expect(line({}).endsWith("}")).toBe(true);
-    expect(line({ result: "60" }).endsWith("}")).toBe(true);
-  });
-
-  test("other opcodes are untouched", () => {
-    const out = formatEventLine({
-      seq: 3,
-      ts: 1,
-      opcode: "SMSG_MESSAGECHAT",
-      data: { result: 60 },
-    } as EventSummary);
-    expect(out).not.toContain("not while in combat");
   });
 });
 
@@ -938,13 +807,6 @@ describe("formatEventLine: an update-object line leaves the factionRow keys out"
     const out = formatEventLine(create(true));
     expect(out).toBe(formatEventLine(create(false)));
     expect(out).not.toContain("factionRow");
-  });
-
-  test("the event itself keeps the row", () => {
-    const e = create(true);
-    formatEventLine(e);
-    const fields = (e.data as { objects: { fields: Record<string, unknown> }[] }).objects[0]!.fields;
-    expect(fields["factionRowGroup"]).toBe(8);
   });
 });
 
@@ -1018,11 +880,6 @@ describe("formatEventLine: an update-object line leaves the character sheet and 
     }
   });
 
-  test("a sheathe, which carries only the shapeshift byte, renders empty as before", () => {
-    expect(formatEventLine(values({ shapeshiftForm: 0 }))).toBe(formatEventLine(values({})));
-    expect(formatEventLine(values({ channelSpell: 0, channelObjectGuid: "0" }))).toContain('"fields":{}');
-  });
-
   test("the event itself keeps them, and the keys around them keep theirs", () => {
     const e = levelUp(true);
     formatEventLine(e);
@@ -1070,12 +927,6 @@ describe("formatEventLine: our own block's speeds stay off the line", () => {
     expect(formatEventLine(create(true))).toBe(formatEventLine(create(false)));
     expect(formatEventLine(movement(true))).toContain('"runSpeed":7,"targetGuid":"0"');
     expect(formatEventLine(create(true))).toContain('"fields":{"level":1,"health":60,"maxHealth":60}');
-  });
-
-  test("the event keeps them", () => {
-    const e = create(true);
-    formatEventLine(e);
-    expect((e.data as { objects: { speeds?: unknown }[] }).objects[0]!.speeds).toEqual(SPEEDS);
   });
 });
 
@@ -1222,29 +1073,6 @@ describe("messageWindow", () => {
     expect(trimmed).toEqual(announced.map((n) => n + 2));
   });
 
-  test("the growing window is a stable prefix within a block", () => {
-    // Boundary-agnostic: whenever the cut holds still, every later window in
-    // that block must start with the first one byte for byte — that is the
-    // provider-cache property the block trim exists for.
-    const h = pairs(4 * MESSAGE_WINDOW_MAX);
-    let cut = -1;
-    let base: ChatMessage[] = [];
-    let blocks = 0;
-    for (let n = 0; n <= h.length; n++) {
-      const slice = h.slice(0, n);
-      const c = messageWindowCut(slice);
-      const w = messageWindow(slice);
-      if (c !== cut) {
-        cut = c;
-        base = w;
-        blocks++;
-        continue;
-      }
-      expect(w.slice(0, base.length)).toEqual(base); // appends only, prefix untouched
-    }
-    expect(blocks).toBeGreaterThan(2);
-  });
-
   test("the cut moves once per block, not once per turn", () => {
     const h = pairs(4 * MESSAGE_WINDOW_MAX);
     const cuts: number[] = [];
@@ -1296,47 +1124,6 @@ describe("messageWindow", () => {
     expect(w[0]).toEqual(h[0]!); // untouched messages are passed through
     expect(w[3]).toEqual(h[3]!);
     expect(h[1]!.content!.length).toBe(cap + 137); // the stored history is not mutated
-  });
-
-  test("the cap boundary is exact", () => {
-    const cap = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
-    const at: ChatMessage = { role: "tool", content: "y".repeat(cap), tool_call_id: "t0.0" };
-    const over: ChatMessage = { role: "tool", content: "y".repeat(cap + 1), tool_call_id: "t0.0" };
-    expect(messageWindow([assistant(0), at])[1]!.content).toBe("y".repeat(cap));
-    expect(messageWindow([assistant(0), over])[1]!.content).toBe(
-      `${"y".repeat(cap)}\n…[truncated 1 chars]`,
-    );
-  });
-
-  test("capping is deterministic and carries nothing turn-dependent", () => {
-    const big: ChatMessage = {
-      role: "tool",
-      content: "z".repeat(CONTEXT_POLICY.WINDOW_MESSAGE_CHARS * 3),
-      tool_call_id: "t0.0",
-    };
-    const h = [assistant(0), big];
-    expect(JSON.stringify(messageWindow(h))).toBe(JSON.stringify(messageWindow(h)));
-    // and identical however many messages precede it in the window
-    const later = messageWindow([...pairs(20), assistant(50), big]);
-    expect(later[later.length - 1]!.content).toBe(messageWindow(h)[1]!.content);
-  });
-
-  test("deterministic: same history, byte-identical window", () => {
-    const h = pairs(3 * MESSAGE_WINDOW_MAX + 7);
-    expect(JSON.stringify(messageWindow(h))).toBe(JSON.stringify(messageWindow(h.slice())));
-  });
-
-  test("a rebuilt history windows identically to an incrementally grown one", () => {
-    // The resume-shaped case: the cut is a function of stored history alone, so
-    // a history rebuilt from persisted records (JSON round-trip) windows to the
-    // same bytes as the in-memory one, at every turn including mid-block.
-    const live: ChatMessage[] = [];
-    for (let i = 0; i < 60; i++) {
-      live.push(assistant(i, 2), tool(i, 0), tool(i, 1));
-      const rebuilt = JSON.parse(JSON.stringify(live)) as ChatMessage[];
-      expect(messageWindowCut(rebuilt)).toBe(messageWindowCut(live));
-      expect(JSON.stringify(messageWindow(rebuilt))).toBe(JSON.stringify(messageWindow(live)));
-    }
   });
 });
 

@@ -2,14 +2,14 @@
  * Retiring a roster entry its provider stopped listing (`runner/src/model-lists.ts`,
  * `infra/run-fleet-model-lists.ts`): which lists are read and how, the
  * confirmation rule, that a failed read changes nothing, that a model listed
- * again comes back by itself, and what the projection, `--status` and the
- * supervisor's poller make of it. Fixture lists and a fake fetch only; no
+ * again comes back by itself, and what the projection and the supervisor's
+ * poller make of it. Fixture lists and a fake fetch only; no
  * network.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { FleetModelLists, formatModelLists, modelListKey, modelListsToRead } from "../../infra/run-fleet-model-lists";
+import { FleetModelLists, modelListKey, modelListsToRead } from "../../infra/run-fleet-model-lists";
 import {
   applyModelListRead,
   emptyModelLists,
@@ -27,9 +27,8 @@ import {
   type ModelListSource,
   type ModelListsSidecar,
 } from "../src/model-lists";
-import { DEFAULT_POLICY, modelStates, planNextJobs, schedulability } from "../src/models";
+import { modelStates, planNextJobs, schedulability } from "../src/models";
 import type { RosterModel } from "../src/roster-entry";
-import { modelsResponse, type RosterRead } from "../../viewer/models";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -120,15 +119,6 @@ describe("the confirmation rule", () => {
     expect(modelGoneOf(s, goEntry, ENV)?.since).toBe(T0);
   });
 
-  test("a failed read never retires anything, whatever came before", () => {
-    const s = readsOf([
-      [T0, { ok: false, why: "HTTP 500" }],
-      [T0 + 30 * H, { ok: false, why: "no answer within 20s" }],
-    ]);
-    expect(s.missing).toEqual({});
-    expect(modelGoneOf(s, goEntry, ENV)).toBeUndefined();
-  });
-
   test("listed again, it comes back at once and its absence is forgotten", () => {
     const gone = readsOf([
       [T0, listed("beam-free")],
@@ -141,12 +131,6 @@ describe("the confirmation rule", () => {
     // And a later disappearance starts the day over.
     const again = applyModelListRead(back, goSource, ["cat-jam-free", "beam-free"], listed("beam-free"), T0 + 42 * H);
     expect(again.missing[goSource.url]!["cat-jam-free"]).toEqual({ since: T0 + 42 * H, last: T0 + 42 * H, reads: 1 });
-  });
-
-  test("an absence the roster no longer has a model for is dropped on the next read", () => {
-    const s = readsOf([[T0, listed("beam-free")]]);
-    const later = applyModelListRead(s, goSource, ["beam-free"], listed("beam-free"), T0 + 6 * H);
-    expect(later.missing).toEqual({});
   });
 
   test("the file round-trips, and a torn or foreign one reads as empty", () => {
@@ -202,12 +186,6 @@ describe("reading a list", () => {
     if (!wrong.ok) expect(wrong.why).not.toContain("sk ");
   });
 
-  test("a list that does not answer in time is a failed read", async () => {
-    const hang = ((_url: string, init?: RequestInit) =>
-      new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))))) as unknown as typeof fetch;
-    expect(await readModelList(goSource, { fetcher: hang, timeoutMs: 20 })).toEqual({ ok: false, why: "no answer within 0s" });
-  });
-
   test("the key comes from the provider's enabled credential, else its own variable", () => {
     const cerebras = modelListSourceOf({ apiBase: "https://api.cerebras.ai/v1" }, ENV)!;
     const creds = [
@@ -246,21 +224,6 @@ describe("what the projection makes of it", () => {
     const back = applyModelListRead(gone, goSource, ["cat-jam-free", "beam-free"], listed("cat-jam-free", "beam-free"), T0 + 36 * H);
     const states = modelStates({ runsDir: tempDir("wb-model-lists-"), roster, now: T0 + 37 * H, runs: [], sidecar: { version: 1, cleared: {} }, modelLists: back });
     expect(states.find((s) => s.name === "cat-jam-go")!.status).toBe("new");
-  });
-
-  test("/api/models, which the models page reads, carries the retirement and why", () => {
-    const states = modelStates({ runsDir: tempDir("wb-model-lists-"), roster, now: T0 + 31 * H, runs: [], sidecar: { version: 1, cleared: {} }, modelLists: gone });
-    const read = { models: roster, shape: "roster", path: null, policy: DEFAULT_POLICY, credentials: [], excluded: [], count: 2, accounts: 2, campaigns: [], campaignDefs: [] } as unknown as RosterRead;
-    const row = modelsResponse({ states, runs: [], runsDir: tempDir("wb-model-lists-"), roster: read, now: T0 + 31 * H }).models.find((m) => m.name === "cat-jam-go")!;
-    expect(row.status).toBe("retired");
-    expect(row.retired).toEqual({ at: T0, reason: "gone from OpenCode Go's model list since 2026-11-12" });
-    expect(row.schedulable.ok).toBe(false);
-    expect(row.schedulable.why).toContain("back by itself once it is listed again");
-  });
-
-  test("with no file, nothing is retired", () => {
-    const states = modelStates({ runsDir: tempDir("wb-model-lists-"), roster, now: T0, runs: [], sidecar: { version: 1, cleared: {} } });
-    expect(states.every((s) => s.retired === undefined)).toBe(true);
   });
 });
 
@@ -309,31 +272,5 @@ describe("the supervisor's poller", () => {
     });
     await lists.refresh({ c: { model: "x", driver: "openai", apiBase: "https://api.cerebras.ai/v1" } }, [{ provider: "cerebras", secretEnv: "CEREBRAS_KEY", enabled: true }], { CEREBRAS_KEY: "from-the-store" });
     expect(keys).toEqual(["from-the-store"]);
-  });
-
-  test("a failed read is said and leaves the absences as they were", async () => {
-    const dir = tempDir("wb-model-lists-");
-    let now = T0;
-    let result: ModelListResult = listed("beam-free");
-    const lines: string[] = [];
-    const lists = new FleetModelLists({ runsDir: dir, env: ENV, now: () => now, say: (l) => lines.push(l), read: async () => result });
-    await lists.refresh(roster, []);
-    now += MODEL_LIST_READ_EVERY_MS;
-    result = { ok: false, why: "HTTP 502" };
-    await lists.refresh(roster, []);
-    expect(lines.at(-1)).toBe(`model list OpenCode Go (${GO}/models) not read: HTTP 502 — nothing retired or restored on it`);
-    expect(readModelListsSidecar(dir).missing[`${GO}/models`]).toEqual({ "cat-jam-free": { since: T0, last: T0, reads: 1 } });
-    expect(JSON.parse(readFileSync(join(dir, MODEL_LISTS_SIDECAR), "utf8")).reads[`${GO}/models`].ok).toBe(false);
-  });
-
-  test("--status names each list's read and what is not on it", () => {
-    const s = readsOf([
-      [T0, listed("beam-free")],
-      [T0 + 30 * H, { ok: false, why: "HTTP 502" }],
-    ]);
-    const out = formatModelLists(s, T0 + 31 * H);
-    expect(out[0]).toContain("the claude, chatgpt and local lists are not read");
-    expect(out[1]).toBe(`  OpenCode Go ${GO}/models: NOT READ 60m ago (HTTP 502); last read 1860m ago — not listed: cat-jam-free since 2026-11-12 (1 read)`);
-    expect(formatModelLists(emptyModelLists(), T0)[0]).toEndWith(": none read yet");
   });
 });

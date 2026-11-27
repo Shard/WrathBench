@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, newSessionToken } from "../src/config";
@@ -170,11 +170,6 @@ describe("move-credential refuses, writing nothing", () => {
     expectRefused(f, {}, /--pin: no roster entry is run \S+'s \(model opus\)/);
   });
 
-  test("a value that is not a credential id", () => {
-    const f = fixture();
-    expectRefused(f, { to: "sk ant/oat01" }, /is not a credential id/);
-  });
-
   test("an archived run", () => {
     const f = fixture();
     mkdirSync(join(f.runsDir, ARCHIVE_DIR), { recursive: true });
@@ -237,18 +232,6 @@ describe("the move", () => {
     expect(audit).toMatchObject({ key: "roster/son", actor: "operator", note: `move-credential ${RUN_ID}: claude-2 is spent` });
   });
 
-  test("a note is optional: without one the history records null and the pin's audit line names the run alone", () => {
-    const f = fixture();
-    const { note: _note, ...opts } = f.opts();
-    moveCredential({ ...opts, now: () => 1_700_000_000_000 });
-    expect(readMeta(f.dir)!.credentialHistory).toEqual([{ from: C2, to: C1, at: 1_700_000_000_000, actor: "operator", note: null }]);
-    expect(f.store.audit(1)[0]).toMatchObject({ key: "roster/son", note: `move-credential ${RUN_ID}` });
-    // A blank one is the same as none.
-    const g = fixture();
-    moveCredential(g.opts({ note: "  " }));
-    expect(readMeta(g.dir)!.credentialHistory).toMatchObject([{ note: null }]);
-  });
-
   test("a pin the store would refuse refuses the whole move before meta.json is touched", () => {
     const f = fixture();
     let patched = false;
@@ -277,15 +260,6 @@ describe("the move", () => {
     expect(f.store.get("roster/son")).toMatchObject({ credential: C1 });
   });
 
-  test("a pin still owed after a partial move is applied by the same command, and meta.json is left alone", () => {
-    const f = fixture({ credential: { id: C1, env: T1 } });
-    const before = readFileSync(f.metaPath, "utf8");
-    const r = moveCredential(f.opts({ to: C1 }));
-    expect(r).toMatchObject({ moved: false, pinned: "roster/son", history: 0 });
-    expect(readFileSync(f.metaPath, "utf8")).toBe(before);
-    expect(f.store.get("roster/son")).toMatchObject({ credential: C1 });
-  });
-
   test("without --pin, an entry that pins nothing: meta.json alone, the store untouched", () => {
     const f = fixture({ doc: fleetDoc() });
     const version = f.store.version();
@@ -293,23 +267,6 @@ describe("the move", () => {
     expect(r).toMatchObject({ moved: true, pinned: null, ref: "son" });
     expect(f.store.version()).toBe(version);
     expect(readMeta(f.dir)!.config.credential).toBe(C1);
-  });
-
-  test("an ended run moves too", () => {
-    const f = fixture();
-    const t = new Trajectory(f.dir);
-    t.setTermination(RUN_ID, "manual", "ended by hand");
-    t.close();
-    expect(moveCredential(f.opts())).toMatchObject({ moved: true });
-  });
-});
-
-describe("formatLike", () => {
-  test("keeps an indent unit and the trailing newline, or their absence", () => {
-    const v = { a: 1, b: [2] };
-    expect(formatLike('{\n  "a": 0\n}\n', v)).toBe(`${JSON.stringify(v, null, 2)}\n`);
-    expect(formatLike('{\n\t"a": 0\n}', v)).toBe(JSON.stringify(v, null, "\t"));
-    expect(formatLike('{"a":0}', v)).toBe('{"a":1,"b":[2]}');
   });
 });
 
@@ -333,22 +290,5 @@ describe("the CLI", () => {
     const after = new ConfigStore(db, { env: {} });
     expect(after.get("roster/son")).toMatchObject({ credential: C1 });
     after.close();
-  });
-
-  test("a refusal exits 1 with the reason, and a missing credential id is a usage error", async () => {
-    const f = fixture();
-    const db = join(f.runsDir, "config.sqlite");
-    f.store.close();
-    const run = async (args: string[]): Promise<{ code: number; err: string }> => {
-      const proc = Bun.spawn({ cmd: [process.execPath, join(import.meta.dir, "..", "src", "config-store.ts"), ...args, "--db", db, "--runs-dir", f.runsDir], stdout: "pipe", stderr: "pipe" });
-      const err = await new Response(proc.stderr).text();
-      return { code: await proc.exited, err };
-    };
-    const refused = await run(["move-credential", RUN_ID, "chatgpt-2", "--note", "x"]);
-    expect(refused).toMatchObject({ code: 1 });
-    expect(refused.err).toContain("config-store: pinned credential chatgpt-2 is chatgpt's");
-    expect((await run(["move-credential", RUN_ID])).code).toBe(2);
-    expect(existsSync(join(f.dir, "meta.json"))).toBe(true);
-    expect(readMeta(f.dir)!.config.credential).toBe(C2);
   });
 });

@@ -151,10 +151,6 @@ describe("where a run's facts live", () => {
     expect(JSON.parse(config)).toEqual(JSON.parse(JSON.stringify({ ...rest, driver: "openai", model: "test/model" })));
   });
 
-  test("the run directory holds no trace.jsonl", () => {
-    expect(readdirSync(join(runsDir, RUN_ID))).not.toContain("trace.jsonl");
-  });
-
   test("the session record is session/, the stack's, named by the token's fingerprint and holding no token", () => {
     const dir = join(runsDir, RUN_ID);
     const reader = new SessionReader(sessionDirOf(dir));

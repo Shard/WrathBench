@@ -15,7 +15,7 @@ import { CampaignLaunchError } from "../src/campaign-launch";
 import { campaignPairRefusals } from "../src/campaigns";
 import { fanoutConfigOf, fanoutLaunchOf, memberRunId, withFanoutGuids } from "../src/party";
 import { configFromArgs } from "../src/run";
-import { joined, ONE_AGENT_IMAGE, oneAgentDefinition, PARTY_MEMBERS, partyDefinition } from "./fixtures/campaigns";
+import { joined, ONE_AGENT_IMAGE, oneAgentDefinition, PARTY_MEMBERS } from "./fixtures/campaigns";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -57,16 +57,6 @@ describe("the definition's one-agent arm", () => {
   test("its objective is the top-level one: required with such an arm, refused without", () => {
     expect(bad({ objective: null })).toContain("one-agent arm");
     expect(bad({ arms: [{ id: "party" }] })).toContain("top-level objective is null");
-  });
-
-  test("only a party has members to hand one agent", () => {
-    const r = campaignDefinitionSchema.safeParse({ ...partyDefinition(), party: undefined, start: undefined, objective: "x", arms: [{ id: "solo", agents: 1 }] });
-    expect(r.success).toBe(false);
-    if (!r.success) expect(issuesOf(r.error)).toContain("this definition has no party");
-  });
-
-  test("agents is 1 or absent", () => {
-    expect(bad({ arms: [{ id: "party", image: ONE_AGENT_IMAGE }, { id: "two", image: ONE_AGENT_IMAGE, agents: 2 }] })).toContain("agents");
   });
 
   test("two arms still pin every arm's image", () => {

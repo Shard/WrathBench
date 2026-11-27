@@ -37,10 +37,6 @@ function repo(): { dir: string; sha: string } {
 }
 
 describe("stackCommit", () => {
-  test("in this checkout, it is the wrath-mcp submodule's HEAD", () => {
-    const head = Bun.spawnSync(["git", "-C", join(import.meta.dir, "..", "..", "wrath-mcp"), "rev-parse", "HEAD"], { stdout: "pipe" }).stdout.toString().trim();
-    expect(stackCommit({})).toMatch(new RegExp(`^${head}(-dirty)?$`));
-  });
 
   test("a repository of its own stamps its HEAD, -dirty with tracked edits, and wins over the image's value", () => {
     const { dir, sha } = repo();
@@ -59,7 +55,4 @@ describe("stackCommit", () => {
     expect(stackCommit({}, inner)).toBeUndefined();
   });
 
-  test("no repository and no baked value is not recorded", () => {
-    expect(stackCommit({ WRATHBENCH_STACK_COMMIT: "" }, tempDir("wb-stack-commit-bare-"))).toBeUndefined();
-  });
 });

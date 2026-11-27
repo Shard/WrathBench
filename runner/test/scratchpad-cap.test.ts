@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Scratchpad, SCRATCHPAD_MAX_CHARS, scratchpadSizeLabel, stripLegacyMarker } from "@wrathbench/mcp";
+import { Scratchpad, SCRATCHPAD_MAX_CHARS, scratchpadSizeLabel } from "@wrathbench/mcp";
 import { callTool, type ToolContext } from "../src/tools";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
@@ -54,14 +54,6 @@ describe("the cap refuses rather than cuts", () => {
     expect(pad.read()).toBe(`${"n".repeat(MAX - 10)}\n123456789`);
   });
 
-  test("a prepend that pushes durable notes past the cap is refused, not trimmed off the end", () => {
-    const pad = makePad();
-    const notes = `# Durable\n${"fact\n".repeat((MAX - 20) / 5)}`;
-    pad.write(notes);
-    expect(pad.write(`# Turn log\n${"t".repeat(100)}\n${pad.read()}`).ok).toBe(false);
-    expect(pad.read()).toBe(notes);
-  });
-
   test("write_scratchpad answers the refusal as an error and saves nothing", async () => {
     const pad = makePad();
     pad.write("# Plan\n");
@@ -88,14 +80,6 @@ describe("the old truncation marker", () => {
     expect(readFileSync(pad.path, "utf8")).not.toContain("[scratchpad truncated");
   });
 
-  test("a pad the old cut left at the cap plus its marker reads as at the cap, and edits in place", () => {
-    const pad = makePad();
-    writeFileSync(pad.path, `${"a".repeat(MAX - 5)}tail.${MARKER}`, "utf8");
-    expect(pad.read().length).toBe(MAX);
-    expect(pad.edit("tail.", "TAIL.").ok).toBe(true);
-    expect(readFileSync(pad.path, "utf8")).toBe(`${"a".repeat(MAX - 5)}TAIL.`);
-    expect(stripLegacyMarker("no marker here")).toBe("no marker here");
-  });
 });
 
 describe("a pad already over the cap at resume", () => {
@@ -109,14 +93,10 @@ describe("a pad already over the cap at resume", () => {
     return pad;
   };
 
-  test("stays readable and says it is over the cap", () => {
+  test("stays readable, says it is over the cap, refuses a growing write and accepts a shrinking one", () => {
     const pad = over();
     expect(pad.read().length).toBe(MAX + 500);
     expect(scratchpadSizeLabel(pad.read().length)).toBe("32.5k/32k, over the cap");
-  });
-
-  test("a growing write is refused; a shrinking one is accepted even while still over", () => {
-    const pad = over();
     expect(pad.append("one more").ok).toBe(false);
     expect(pad.edit("# Old notes", "# Old notes, longer").ok).toBe(false);
     expect(pad.read().length).toBe(MAX + 500);

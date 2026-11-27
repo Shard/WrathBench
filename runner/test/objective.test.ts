@@ -202,23 +202,6 @@ describe("watchdog overrides", () => {
     now = 21_600_000;
     expect(w.check()?.reason).toBe("episode-limit");
   });
-
-  test("overrides are recorded in meta, so a probe's leash is readable after the fact", () => {
-    const dir = tempDir("wrathbench-objective-wd-");
-    const config = loadRunConfig({
-      runId: "run-wd",
-      watchdogs: { noXpMs: null, episodeMs: 21_600_000, idleMs: 1_200_000 },
-    });
-    const trajectory = new Trajectory(dir);
-    trajectory.writeMeta({ runId: "run-wd", harnessVersion: "t", startedAt: Date.now(), config });
-    expect(readMeta(dir)?.config.watchdogs).toEqual({
-      noXpMs: null,
-      episodeMs: 21_600_000,
-      idleMs: 1_200_000,
-      maxSandboxRestarts: 3,
-    });
-    trajectory.close();
-  });
 });
 
 describe("argv -> run config", () => {
@@ -273,24 +256,16 @@ describe("argv -> run config", () => {
     expect(config.maxToolCallsPerEpisode).toBe(500);
   });
 
-  test("--wiki-coords is a flag: bare, true/1 on; false/0 off; absent is names-first", () => {
+  test("flags and argv spellings: --wiki-coords and --extra bare or true/1, absent off; 0 disables --no-xp-ms and --max-tool-calls", () => {
     expect(configFromArgs(["--model", "m", "--wiki-coords", "--race", "1"]).wikiCoords).toBe(true);
     expect(configFromArgs(["--model", "m", "--wiki-coords", "1"]).wikiCoords).toBe(true);
     expect(configFromArgs(["--model", "m", "--wiki-coords", "false"]).wikiCoords).toBe(false);
     expect(configFromArgs(["--model", "m"]).wikiCoords).toBe(false);
-  });
-
-  test("--extra is a flag like --wiki-coords; absent is a counted run", () => {
+    // Absent --extra is a counted run.
     expect(configFromArgs(["--model", "m", "--extra", "true"]).extra).toBe(true);
     expect(configFromArgs(["--model", "m", "--extra", "--race", "3"]).extra).toBe(true);
     expect(configFromArgs(["--model", "m"]).extra).toBe(false);
-  });
-
-  test("--no-xp-ms 0 is the command-line spelling of disabled", () => {
     expect(configFromArgs(["--model", "m", "--no-xp-ms", "0"]).watchdogs.noXpMs).toBeNull();
-  });
-
-  test("--max-tool-calls 0 is the command-line spelling of no ceiling at all", () => {
     // Argv cannot carry null, so 0 is the transport spelling and it is
     // normalised the moment it is read: `maxToolCallsPerEpisode` is null or a
     // positive number, and the sentinel is never stored, compared or served.

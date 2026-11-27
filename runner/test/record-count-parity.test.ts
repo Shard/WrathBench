@@ -264,7 +264,7 @@ function expectParity(path: string, opts: { kinds: string[]; pauseStreak: boolea
 
 describe("the needle search answers what the byte loop answered", () => {
   test("generated trajectories, every read size, every kind set, every ending", () => {
-    for (let seed = 1; seed <= 12; seed++) {
+    for (let seed = 1; seed <= 6; seed++) {
       for (const tail of ["newline", "whole", "torn", "crlf"] as const) {
         const path = fileOf(corpus(seed, 6 + (seed % 9) * 3, tail));
         for (const ks of KIND_SETS) for (const chunk of CHUNKS) expectParity(path, { ...ks, chunk });

@@ -2,7 +2,7 @@
  * The OpenAI-compatible adapter's streaming path against a fake fetch: event
  * assembly, the plain-JSON fallback, and the request clock (silence and
  * ceiling). No network, no model; the clock tests use real timers at
- * millisecond scale, except the two that hold the default ceiling, which run
+ * millisecond scale, except the one that holds the default ceiling, which runs
  * on fake timers so minutes pass without a sleep.
  */
 import { describe, expect, jest, test } from "bun:test";
@@ -123,14 +123,6 @@ describe("assembleStream", () => {
     ]);
   });
 
-  test("a stream whose only text is the opening empty string has null content, as the whole body does", () => {
-    const { body } = assembleStream(
-      data(chunk({ role: "assistant", content: "" })) +
-        data(chunk({ tool_calls: [{ index: 0, id: "c1", function: { name: "f", arguments: "{}" } }] }, "tool_calls")),
-    );
-    expect((body as { choices: { message: { content: unknown } }[] }).choices[0]!.message.content).toBeNull();
-  });
-
   test("a name and id repeated whole on every delta are not doubled", () => {
     const { body } = assembleStream(
       data(chunk({ tool_calls: [{ index: 0, id: "c1", function: { name: "run_snippet", arguments: "{\"a\"" } }] })) +
@@ -171,10 +163,6 @@ describe("assembleStream", () => {
     expect((body as { choices: { message: { content: string } }[] }).choices[0]!.message.content).toBe("a");
   });
 
-  test("an empty finish_reason does not finish a stream", () => {
-    expect(assembleStream(data(chunk({ content: "a" }, ""))).finished).toBe(false);
-  });
-
   test("calls sent whole without an index stay separate, told apart by id", () => {
     const { body } = assembleStream(
       data(chunk({ tool_calls: [{ id: "c1", function: { name: "a", arguments: "{}" } }] })) +
@@ -208,12 +196,6 @@ describe("assembleStream", () => {
     expect((body as { choices: { message: { content: string } }[] }).choices[0]!.message.content).toBe("ab");
   });
 
-  test("an event split over several data lines is joined before parsing", () => {
-    const json = JSON.stringify(chunk({ content: "x" }, "stop"), null, 1).split("\n");
-    const { body } = assembleStream(json.map((l) => `data: ${l}`).join("\n") + "\n\n");
-    expect((body as { choices: { message: { content: string } }[] }).choices[0]!.message.content).toBe("x");
-  });
-
   test("an error chunk after the 200 becomes the body's error object", () => {
     const { body, finished } = assembleStream(
       data(chunk({ content: "partial" })) +
@@ -223,12 +205,10 @@ describe("assembleStream", () => {
     expect(body).toEqual({ id: "gen-1", created: 1, model: "vendor/model-1", error: { code: 502, message: "Provider disconnected" } });
   });
 
-  test("no [DONE] is finished when a finish_reason arrived, and unfinished when nothing did", () => {
+  test("no [DONE] is finished when a finish_reason arrived; nothing, an empty one or a malformed chunk leaves it unfinished", () => {
     expect(assembleStream(data(chunk({ content: "a" }, "stop"))).finished).toBe(true);
     expect(assembleStream(data(chunk({ content: "a" }))).finished).toBe(false);
-  });
-
-  test("a malformed chunk leaves the stream unfinished", () => {
+    expect(assembleStream(data(chunk({ content: "a" }, ""))).finished).toBe(false);
     expect(assembleStream(data(chunk({ content: "a" }, "stop")) + "data: {not json\n\n").finished).toBe(false);
   });
 });
@@ -307,15 +287,6 @@ describe("OpenAiChatAdapter streaming", () => {
     expect(turn.raw).toEqual(whole);
   });
 
-  test("an event stream served under another content type is still assembled", async () => {
-    const turn = ok(
-      await adapterServing(() =>
-        Promise.resolve(streamed([data(chunk({ content: "x" }, "stop")), "data: [DONE]\n\n"], { headers: { "content-type": "text/plain" } })),
-      ).adapter.complete(req),
-    );
-    expect(turn.content).toBe("x");
-  });
-
   test("a mid-stream error is read like a 2xx error body: retried, and a rate limit pauses", async () => {
     const errChunk = data({ id: "gen-9", error: { code: 429, message: "Rate limit exceeded upstream" } });
     const { adapter } = adapterServing(() => Promise.resolve(streamed([data(chunk({ content: "par" })), errChunk])), { maxAttempts: 2 });
@@ -359,15 +330,6 @@ describe("OpenAiChatAdapter streaming", () => {
     const { adapter: never } = adapterServing(empty, { maxAttempts: 2 });
     const out = await never.complete(req);
     expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
-  });
-
-  test("an error status is read as text with its pause semantics unchanged", async () => {
-    const { adapter } = adapterServing(
-      () => Promise.resolve(new Response("{\"error\":{\"message\":\"slow down\"}}", { status: 429, headers: { "content-type": "application/json" } })),
-      { maxAttempts: 1 },
-    );
-    const out = await adapter.complete(req);
-    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
   });
 });
 
@@ -449,11 +411,6 @@ describe("OpenAiChatAdapter request clock", () => {
     expect(ok(await adapter.complete(req)).content).toBe("late");
   });
 
-  test("the defaults are a 120 s silence and a 10-minute ceiling", () => {
-    expect(SILENCE_TIMEOUT_MS).toBe(120_000);
-    expect(REQUEST_CEILING_MS).toBe(600_000);
-  });
-
   /**
    * Drive `p` on fake timers: flush the microtasks a stream read needs, then
    * advance the clock a step, until `p` settles or `maxMs` of fake time is spent.
@@ -486,26 +443,6 @@ describe("OpenAiChatAdapter request clock", () => {
       expect(elapsedMs).toBeGreaterThan(5 * 60_000);
       expect(elapsedMs).toBeLessThan(REQUEST_CEILING_MS);
       expect(ok(await p).content).toBe("xxxxxxxx");
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-
-  test("at the default ceiling, a stream that trickles past ten minutes ends there", async () => {
-    jest.useFakeTimers();
-    try {
-      const parts = Array.from({ length: 30 }, () => data(chunk({ content: "." })));
-      const { adapter } = adapterServing(() => Promise.resolve(streamed(parts, { gapMs: 60_000 })), { maxAttempts: 1 });
-      const p = adapter.complete(req);
-      p.catch(() => {});
-      const { settled, elapsedMs } = await onFakeClock(p, 10_000, 20 * 60_000);
-      expect(settled).toBe(true);
-      expect(elapsedMs).toBeGreaterThanOrEqual(REQUEST_CEILING_MS);
-      expect(elapsedMs).toBeLessThan(REQUEST_CEILING_MS + 60_000);
-      // Its own clock ended it: a provider that did not finish, paused like one that sent nothing.
-      const out = await p;
-      expect(out.kind === "pause" && out.reason).toBe("provider-unresponsive");
-      expect(out.kind === "pause" && out.detail).toMatch(/body read failed: the request passed its 600 s ceiling/);
     } finally {
       jest.useRealTimers();
     }

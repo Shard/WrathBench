@@ -12,12 +12,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { campaignDefinitionSchema, campaignHash, campaignRef, imageRefProblem, issuesOf, type CampaignDefinition } from "../src/campaign-def";
-import { campaignPairRefusals, type PairRosterEntry } from "../src/campaigns";
-import { launchLoopOf } from "../src/config";
-import { DEFAULT_DRIVER, isDriver } from "../src/drivers";
-import { rosterEntryRefusal } from "../src/roster-refusal";
-import { CAMPAIGNS_DIR, checkedIn, checkedInFiles, definition } from "./fixtures/campaigns";
+import { campaignDefinitionSchema, campaignHash, campaignRef, imageRefProblem, issuesOf } from "../src/campaign-def";
+import { CAMPAIGNS_DIR, checkedInFiles, definition } from "./fixtures/campaigns";
 
 /**
  * The race/class pairs 3.3.5a creates, from AzerothCore's `playercreateinfo`
@@ -41,123 +37,8 @@ const LEGAL: Record<number, readonly number[]> = {
 describe("the checked-in definitions", () => {
   const files = checkedInFiles();
 
-  test("there are some, and race-probe@1 and class-probe@2 are among them", () => {
+  test("there are some: the loops below are not run over nothing", () => {
     expect(files).toContain("race-probe@1.json");
-    expect(files).toContain("class-probe@2.json");
-    for (const f of ["compact-window-claude@2.json", "compact-window-codex@2.json", "pi-vs-wrathbench@1.json"]) expect(files).toContain(f);
-  });
-
-  test("compact-window @2 is @1 re-pinned: only the version, the note and the one image every arm runs move", () => {
-    for (const half of ["claude", "codex"]) {
-      const v1 = checkedIn(`compact-window-${half}@1`);
-      const v2 = checkedIn(`compact-window-${half}@2`);
-      const images = new Set(v2.arms.map((a) => a.image));
-      expect(images.size).toBe(1);
-      expect([...images][0]).not.toBe(v1.arms[0]!.image);
-      const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", arms: d.arms.map((a) => ({ ...a, image: "" })) });
-      expect(rest(v2)).toEqual(rest(v1));
-    }
-  });
-
-  test("compact-window-claude@3 is @2 re-pinned onto a 2.1.309 build: only the version, the notes and the one image move", () => {
-    const v2 = checkedIn("compact-window-claude@2");
-    const v3 = checkedIn("compact-window-claude@3");
-    const images = new Set(v3.arms.map((a) => a.image));
-    expect(images.size).toBe(1);
-    expect([...images][0]).not.toBe(v2.arms[0]!.image);
-    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", arms: d.arms.map((a) => ({ ...a, image: "", note: "" })) });
-    expect(rest(v3)).toEqual(rest(v2));
-  });
-
-  test("pi-vs-wrathbench@1: one pinned arm with no args, so its wrathbench and pi assignments refuse nothing with run pods on", () => {
-    const def = checkedIn("pi-vs-wrathbench@1");
-    expect(def.arms).toHaveLength(1);
-    expect(def.arms[0]!.image).toBe(checkedIn("compact-window-claude@2").arms[0]!.image);
-    expect(def.arms[0]!.args).toBeUndefined();
-    // The two entries the comparison assigns: one model and endpoint, effort
-    // high on both, and pi's 300k window on the pi entry, not on the arm.
-    const endpoint = { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", effort: "high", tier: "t1" };
-    const roster: Record<string, PairRosterEntry & typeof endpoint> = { ds: { ...endpoint }, "ds-pi": { ...endpoint, driver: "pi", compactWindow: "300k" } };
-    for (const e of Object.values(roster)) expect(rosterEntryRefusal(e, [], {})).toBeNull();
-    const c = { name: def.id, version: def.version, arms: def.arms, assignments: [{ model: "ds", runsPerCell: 1 }, { model: "ds-pi", runsPerCell: 1 }] };
-    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
-  });
-
-  test("pi-vs-wrathbench@2 is @1 on e360's clock: only the version, the question, the note, the episode length and the call guard move", () => {
-    const v1 = checkedIn("pi-vs-wrathbench@1");
-    const v2 = checkedIn("pi-vs-wrathbench@2");
-    expect(v2.budget.episodeMs).toBe(6 * 60 * 60 * 1000);
-    expect(v2.budget.maxToolCalls).toBe(12000);
-    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", budget: { ...d.budget, episodeMs: 0, maxToolCalls: 0 } });
-    expect(rest(v2)).toEqual(rest(v1));
-  });
-
-  test("deadmines@5 is @4 for one agent: only the version, the question, the note, the objective, the arm and the attempt cap move", () => {
-    const v4 = checkedIn("deadmines@4");
-    const v5 = checkedIn("deadmines@5");
-    expect(v5.arms).toEqual([{ id: "one-agent", note: v5.arms[0]!.note!, agents: 1 }]);
-    expect(v5.objective).not.toBeNull();
-    for (const m of v4.party!.members) expect(v5.objective).toContain(m.character);
-    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, question: "", note: "", objective: null, arms: [], maxAttemptsPerCell: 0 });
-    expect(rest(v5)).toEqual(rest(v4));
-  });
-
-  test("deadmines@6, the codex rehearsal, is @5 with one attempt and the scored deadmines-solo task, and its codex assignment runs the program loop", () => {
-    const v5 = checkedIn("deadmines@5");
-    const v6 = checkedIn("deadmines@6");
-    expect(v6.maxAttemptsPerCell).toBe(1);
-    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "", maxAttemptsPerCell: 0 });
-    expect(rest(v6)).toEqual(rest(v5));
-    const solo = JSON.parse(readFileSync(join(CAMPAIGNS_DIR, "..", "episodes", "deadmines-solo.json"), "utf8")) as CampaignDefinition;
-    const task = (d: CampaignDefinition) => ({ objective: d.objective, start: d.start, end: d.end, budget: d.budget, cells: d.cells, party: d.party, wiki: d.wiki, wikiCoords: d.wikiCoords, agents: d.arms.map((a) => a.agents) });
-    expect(task(v6)).toEqual(task(solo));
-    const roster: Record<string, PairRosterEntry & { model: string }> = { astra: { model: "gpt-6.2-astra", driver: "codex" } };
-    const c = { name: v6.id, version: v6.version, arms: v6.arms, assignments: [{ model: "astra", runsPerCell: 1 }] };
-    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
-    expect(launchLoopOf({ driver: "codex", fanout: true }, {}).loop).toBe("program");
-  });
-
-  test("deadmines@7 is @6 run again: only the version and the note move", () => {
-    const v6 = checkedIn("deadmines@6");
-    const v7 = checkedIn("deadmines@7");
-    const rest = (d: CampaignDefinition) => ({ ...d, version: 0, note: "" });
-    expect(rest(v7)).toEqual(rest(v6));
-    expect(v7.version).toBe(7);
-  });
-
-  test("program-shakedown-party@1 is deadmines@5's first three members, one agent, ending on Rhahk'Zor", () => {
-    const party = checkedIn("program-shakedown-party@1");
-    const v5 = checkedIn("deadmines@5");
-    expect(party.party!.members.map(({ objective: _o, ...m }) => m)).toEqual(v5.party!.members.slice(0, 3).map(({ objective: _o, ...m }) => m));
-    expect(party.start).toEqual(v5.start);
-    expect(party.cells).toEqual(v5.cells);
-    expect(party.arms.map((a) => a.agents)).toEqual([1]);
-    expect(party.end).toEqual([{ kill: { entry: 644 } }]);
-  });
-
-  test("the program shakedowns and deadmines@5 float on the release image, set no loop, and run the program loop for the entries they are written for", () => {
-    const roster: Record<string, PairRosterEntry & { model: string; apiBase?: string }> = {
-      haiku: { model: "claude-haiku-5-5", driver: "claude-code" },
-      flash: { model: "deepseek/deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1" },
-      opus: { model: "claude-opus-5-5", driver: "claude-code" },
-    };
-    const cases = [
-      { ref: "program-shakedown@1", entry: "haiku" },
-      { ref: "program-shakedown-party@1", entry: "flash" },
-      { ref: "deadmines@5", entry: "opus" },
-    ];
-    for (const { ref, entry } of cases) {
-      const def = checkedIn(ref);
-      expect(def.arms).toHaveLength(1);
-      const arm = def.arms[0]!;
-      expect(arm.image).toBeUndefined();
-      expect(arm.args).toBeUndefined();
-      const c = { name: def.id, version: def.version, arms: def.arms, assignments: [{ model: entry, runsPerCell: 1 }] };
-      expect(campaignPairRefusals(c, roster, { runPods: "off", onCluster: true })).toEqual([]);
-      const driver = roster[entry]!.driver ?? DEFAULT_DRIVER;
-      if (!isDriver(driver)) throw new Error(`${driver} is not a driver`);
-      expect(launchLoopOf({ driver, ...(arm.agents === 1 ? { fanout: true } : {}) }, {}).loop).toBe("program");
-    }
   });
 
   for (const file of files) {

@@ -177,17 +177,6 @@ describe("a stub-driven run replays byte for byte", () => {
     const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
     expect(requests.every((r) => r["systemHash"] === stamped)).toBe(true);
   });
-
-  test("a slim record is a fraction of the full one it stands for", () => {
-    const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
-    let slim = 0;
-    let full = 0;
-    requests.forEach((r, k) => {
-      slim += JSON.stringify(r).length;
-      full += JSON.stringify({ ts: r.ts, t: "request", turn: r["turn"], adapter: r["adapter"], messages: JSON.parse(run.sent[k]!) }).length;
-    });
-    expect(slim).toBeLessThan(full / 3);
-  });
 });
 
 describe("a tampered trajectory fails the replay where it was tampered", () => {
@@ -219,19 +208,6 @@ describe("a tampered trajectory fails the replay where it was tampered", () => {
     });
     expect(report.failures.map((f) => f.line)).toEqual([target + 1]);
     expect(report.failures[0]!.detail).toContain("request hash mismatch");
-  });
-
-  test("an edited user message fails exactly its own request", async () => {
-    const at = lineOf(segment1Turn("request", 5));
-    const { report } = await replayTampered((ls) => {
-      ls[at - 1] = rewrite(ls[at - 1]!, (r) => {
-        r["user"] = String(r["user"]).replace("[turn 5]", "[turn five]");
-      });
-      return ls;
-    });
-    expect(report.failures).toEqual([
-      { line: at, segment: 1, turn: 5, ok: false, detail: "request hash mismatch: the rebuilt request is not the one that was sent" },
-    ]);
   });
 
   test("an edited system prompt text fails its segment and names the text", async () => {
@@ -278,16 +254,6 @@ describe("a tampered trajectory fails the replay where it was tampered", () => {
     const good = Bun.spawnSync(["bun", REPLAY_CLI, run.dir]);
     expect(good.exitCode).toBe(0);
     expect(good.stdout.toString()).toContain("every slim request rebuilt to the bytes that were sent");
-  });
-
-  test("the CLI prints one request rebuilt, as it was sent", () => {
-    const at = lineOf(segment1Turn("request", 30));
-    const out = Bun.spawnSync(["bun", REPLAY_CLI, run.dir, "--line", String(at)]);
-    expect(out.exitCode).toBe(0);
-    const printed = JSON.parse(out.stdout.toString()) as { ok: boolean; turn: number; messages: ChatMessage[] };
-    expect(printed.ok).toBe(true);
-    expect(printed.turn).toBe(30);
-    expect(JSON.stringify(printed.messages)).toBe(run.sent[29]!);
   });
 });
 

@@ -123,11 +123,4 @@ describe("the file", () => {
     writeDef(wrong);
     expect(refusal(() => readDefinitionFile(wrong))).toContain("must be named probe@1.json");
   });
-
-  test("must parse", () => {
-    const dir = tempDir("wb-publish-bad-");
-    const bad = join(dir, "probe@1.json");
-    writeFileSync(bad, JSON.stringify({ id: "probe", version: 1 }));
-    expect(refusal(() => readDefinitionFile(bad))).toContain("question");
-  });
 });

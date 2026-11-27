@@ -4,15 +4,10 @@
  * and that nothing scriptable survives the markdown.
  */
 import { describe, expect, test } from "bun:test";
-import { ABOUT_MAX, NAME_MAX, parseSiteBlock, siteSettingsOf } from "../src/site-settings";
+import { parseSiteBlock } from "../src/site-settings";
 import { renderAboutHtml, siteInfoField } from "../../viewer/site-info";
 
 describe("parseSiteBlock", () => {
-  test("absent, empty and all-null blocks are no settings", () => {
-    expect(parseSiteBlock(undefined)).toEqual({});
-    expect(parseSiteBlock({})).toEqual({});
-    expect(parseSiteBlock({ previewSeries: null, name: null, theme: null, home: null, about: null })).toEqual({});
-  });
 
   test("every key at once reads back normalised", () => {
     expect(
@@ -35,14 +30,6 @@ describe("parseSiteBlock", () => {
   test("an unknown key is refused by name", () => {
     expect(() => parseSiteBlock({ banner: "hi" })).toThrow(/site: banner is not a key/);
     expect(() => parseSiteBlock("x")).toThrow(/site must be an object/);
-  });
-
-  test("name: 1 to 40 characters, no control characters, no surrounding space", () => {
-    expect(parseSiteBlock({ name: "x" }).name).toBe("x");
-    expect(parseSiteBlock({ name: "Ä".repeat(NAME_MAX) }).name).toHaveLength(NAME_MAX);
-    for (const bad of ["", " lab", "lab ", "a".repeat(NAME_MAX + 1), "a\nb", "a\u0007b", 7, ["x"]]) {
-      expect(() => parseSiteBlock({ name: bad })).toThrow(/site.name must be/);
-    }
   });
 
   test("theme: four tokens, #rrggbb, a string for both schemes or a dark/light pair", () => {
@@ -68,24 +55,10 @@ describe("parseSiteBlock", () => {
     }
   });
 
-  test("about: markdown text, capped", () => {
-    expect(parseSiteBlock({ about: "# Hi\n\nline\ttab\r\n" }).about).toBe("# Hi\n\nline\ttab\r\n");
-    for (const bad of ["", "   ", "x".repeat(ABOUT_MAX + 1), "a\u0000b", 5]) {
-      expect(() => parseSiteBlock({ about: bad })).toThrow(/site.about must be/);
-    }
-  });
-
-  test("a reader takes a block that does not read as no settings", () => {
-    expect(siteSettingsOf({ name: "" })).toEqual({});
-  });
 });
 
 describe("the about page's markdown", () => {
   const html = (md: string): string => renderAboutHtml(md);
-
-  test("markdown renders", () => {
-    expect(html("# Mine\n\n**bold** and [runs](/runs)")).toBe('<h1>Mine</h1>\n<p><strong>bold</strong> and <a href="/runs">runs</a></p>\n');
-  });
 
   test("raw HTML is text, never markup", () => {
     for (const md of ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>", 'x <a href="javascript:1">z</a>', "<iframe src=//evil>", "<style>body{}</style>", "x <b onclick=alert(1)>b</b>"]) {

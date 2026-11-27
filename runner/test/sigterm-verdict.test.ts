@@ -94,7 +94,7 @@ describe("SIGTERM writes the pause before anything else", () => {
         "--race", "3", "--class", "2",
         // Long enough that the signal lands mid-sleep, short enough that the
         // loop comes round to honour it while the test is still watching.
-        "--step-interval-ms", "2500",
+        "--step-interval-ms", "1000",
       ],
       cwd: runsDir,
       env: { ...process.env, WRATHBENCH_MODULE_URL: "http://127.0.0.1:9", WRATHBENCH_MODULE_SECRET: undefined },

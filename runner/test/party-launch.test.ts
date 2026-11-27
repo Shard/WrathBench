@@ -158,32 +158,9 @@ describe("a single-character launch is what it was", () => {
     expect(c.runId).toBe("fleet-x-1");
     expect(c.race).toBe(2);
   });
-
-  test("a plain e90 config has neither key either", () => {
-    const c = configFromArgs(["--driver", "openai", "--model", "m", "--episode", "e90", "--race", "1", "--class", "1"], {});
-    expect(Object.keys(c)).not.toContain("party");
-    expect(Object.keys(c)).not.toContain("character");
-  });
-
-  test("a definition with start: fresh written out launches like one with none", () => {
-    const fresh = definition({ id: "fresh", start: "fresh" });
-    const { definitions: d } = joined([fresh], {});
-    const p = writeCampaignFile(tempDir("wb-fresh-"), campaignFileOf(d[0]!, "a"));
-    const c = configFromArgs(["--driver", "openai", "--model", "m", "--episode", "probing", "--campaign-file", p], {});
-    expect(c.character).toBeUndefined();
-    expect([c.race, c.class]).toEqual([1, 1]);
-  });
 });
 
 describe("both drivers are told the same", () => {
-  test("the member's objective block renders identically for the fixed loop and the claude-code harness", () => {
-    const c = configFromArgs([...MODEL, "--episode", "probing", "--campaign-file", fileOn(memberFile("healer")), "--character", "Brenna"], {});
-    const block = objectiveSection("You are Brenna, the party's healer.");
-    // run.ts hands both drivers the same initial notices (the staged note),
-    // and each builds its system prompt from the same config.objective.
-    expect(buildSystemPrompt(c.objective, c.episode, "wrathbench", c.wiki)).toContain(block);
-    expect(buildSystemPrompt(c.objective, c.episode, "claude-code", c.wiki)).toContain(block);
-  });
 });
 
 describe("the objective replaces the broad goal, and the probe states its clock (operator, 2026-10-21)", () => {

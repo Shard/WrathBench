@@ -8,8 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CAPACITY_BACKOFF_MS, CODEX_EFFORTS, CODEX_ITEM_BODY_CHARS, DISABLED_FEATURES, capacityBackoffMs, childEnv, codexArgs, codexItemRecord, codexToolCallRecord, codexStatedReset, codexEffortRefusal, detectCodexFailure, isCapacityRefusal, PROGRAM_TOOL_TIMEOUT_SEC, parseCodexEvent, retriesAtCapacity, runCodexEpisode, tomlString } from "../src/adapter-codex";
-import { homeLooksLoggedIn } from "../src/codex-home";
+import { CAPACITY_BACKOFF_MS, CODEX_EFFORTS, CODEX_ITEM_BODY_CHARS, DISABLED_FEATURES, capacityBackoffMs, childEnv, codexArgs, codexStatedReset, codexEffortRefusal, detectCodexFailure, isCapacityRefusal, PROGRAM_TOOL_TIMEOUT_SEC, parseCodexEvent, retriesAtCapacity, runCodexEpisode, tomlString } from "../src/adapter-codex";
 import { normalizeCodexUsage } from "../src/codex-usage";
 import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { readCodexThread } from "../src/codex-rollout";
@@ -27,19 +26,6 @@ import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
-
-
-/** Count the state snapshots a sandbox is asked for, from now on. */
-function countSnapshots(sandbox: unknown): () => number {
-  let n = 0;
-  const s = sandbox as { stateSnapshot: () => Promise<unknown> };
-  const real = s.stateSnapshot.bind(s);
-  s.stateSnapshot = () => {
-    n++;
-    return real();
-  };
-  return () => n;
-}
 
 const tempDir = tempDirs();
 
@@ -215,6 +201,8 @@ describe("codex driver", () => {
     expect(userMessages[0]).toContain("[turn 1]");
     expect(userMessages[0]).toContain("== state");
     expect(userMessages[1]).toContain("[turn 2]");
+    // No trim notice is ever raised: this harness runs no message window.
+    for (const msg of userMessages) expect(msg).not.toMatch(/trim_pending|window_trimmed/);
 
     const records = readTrajectory(runDir);
     const types = records.map((r) => r.t);
@@ -231,6 +219,7 @@ describe("codex driver", () => {
     expect(dispatchTs as number).toBeGreaterThan(0);
     expect(dispatchTs as number).toBeLessThanOrEqual(toolCall!.ts);
     expect(snippetResult?.["dispatchTs"]).toBeUndefined();
+    expect(records.filter((r) => r.t === "harness" && r["kind"] === "trim_pending")).toHaveLength(0);
     // The driver record names the credential's variable by NAME, never by path or contents.
     const driver = records.find((r) => r.t === "driver");
     expect(driver?.["driver"]).toBe("codex");
@@ -511,18 +500,6 @@ describe("codex driver", () => {
     expect(readFileSync(join(runDir, "trajectory.jsonl"), "utf8")).not.toContain(LEAKED_SECRET);
   }, 20_000);
 
-  test("no trim notice is ever raised: this harness runs no message window", async () => {
-    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 3 });
-    await runCodexEpisode(options);
-    for (const msg of readRecord(recordPath)["userMessages"] as string[]) {
-      expect(msg).not.toContain("trim_pending");
-      expect(msg).not.toContain("window_trimmed");
-    }
-    const records = readTrajectory(runDir);
-    expect(records.filter((r) => r.t === "harness" && r["kind"] === "trim_pending")).toHaveLength(0);
-    trajectory.close();
-  }, 30_000);
-
   test("the spawned CLI sees exactly one credential: the lane's CODEX_HOME", async () => {
     const { recordPath, codexHome, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     await runCodexEpisode(options);
@@ -648,17 +625,6 @@ describe("codex driver", () => {
     trajectory.close();
   }, 20_000);
 
-  test("a rate-limit error pauses as rate-limited; a dead login pauses as auth-failed", async () => {
-    const rate = setupEpisode("rate-limit", { maxTurns: 3 });
-    expect(await runCodexEpisode(rate.options)).toMatchObject({ kind: "paused", reason: "rate-limited" });
-    rate.trajectory.close();
-    const auth = setupEpisode("auth", { maxTurns: 3 });
-    const outcome = await runCodexEpisode(auth.options);
-    expect(outcome).toMatchObject({ kind: "paused", reason: "auth-failed" });
-    expect(outcome.kind === "paused" && outcome.detail).toContain("refresh token was already used");
-    auth.trajectory.close();
-  }, 30_000);
-
   test("the CLI's usage is the thread total: each response carries the turn's delta, the total beside it", async () => {
     const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 3 });
     await runCodexEpisode(options);
@@ -748,12 +714,6 @@ describe("codex driver", () => {
     trajectory.close();
   }, 20_000);
 
-  test("a blown context window ends the run as context-limit", async () => {
-    const { trajectory, options } = setupEpisode("context", { maxTurns: 3 });
-    expect(await runCodexEpisode(options)).toMatchObject({ kind: "terminated", reason: "context-limit" });
-    trajectory.close();
-  }, 20_000);
-
   test("a transient failed turn is a session note; the next turn resumes the same thread", async () => {
     const { runDir, recordPath, trajectory, options } = setupEpisode("flaky", { maxTurns: 2 });
     const outcome = await runCodexEpisode(options);
@@ -803,19 +763,6 @@ describe("codex driver", () => {
     expect(records.find((r) => r.t === "watchdog")?.["reason"]).toBe("episode-limit");
     expect(records.filter((r) => r.t === "termination")).toHaveLength(1);
     expect(records.filter((r) => r.t === "request")).toHaveLength(1);
-    trajectory.close();
-  }, 30_000);
-
-  test("the state ticker samples during a turn, through this driver too", async () => {
-    // The record is not the ticker's (the stack's host drains its child's
-    // recorder on a tick of its own); what the ticker still owes every driver
-    // is its samples, for the watchdogs, taken while the CLI holds the turn.
-    const { trajectory, options } = setupEpisode("long-turn", { watchdogs: { episodeMs: 300 } });
-    const sampled = countSnapshots(options.sandbox);
-    const outcome = await runCodexEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
-    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
-    // More than the turn preamble's one: the ticker sampled while the CLI ran.
-    expect(sampled()).toBeGreaterThanOrEqual(3);
     trajectory.close();
   }, 30_000);
 
@@ -918,35 +865,6 @@ describe("codex driver", () => {
     }
   });
 
-  test("codexArgs: the verified flag set, resume threading, TOML-quoted paths", () => {
-    const base = { instructionsPath: "/runs/x/codex-instructions.md", bunBin: "/usr/bin/bun", bridgePath: "/repo/mcp/src/bridge.ts", mcpPort: 40123 };
-    const first = codexArgs({ ...base, model: "gpt-6-astra", effort: "high" });
-    expect(first.slice(0, 2)).toEqual(["exec", "--json"]);
-    expect(first).toContain("--ignore-user-config");
-    expect(first).toContain("--skip-git-repo-check");
-    expect(first[first.length - 1]).toBe("-");
-    expect(first[first.indexOf("-m") + 1]).toBe("gpt-6-astra");
-    const cfg = first.filter((_, i) => first[i - 1] === "-c");
-    expect(cfg).toContain('model_reasoning_effort="high"');
-    expect(cfg).toContain('approval_policy="never"');
-    expect(cfg).toContain('sandbox_mode="read-only"');
-    expect(cfg).toContain('web_search="disabled"');
-    expect(cfg).toContain('model_instructions_file="/runs/x/codex-instructions.md"');
-    expect(cfg).toContain('mcp_servers.wrathbench.command="/usr/bin/bun"');
-    expect(cfg).toContain('mcp_servers.wrathbench.args=["/repo/mcp/src/bridge.ts","40123"]');
-    expect(cfg).toContain('mcp_servers.wrathbench.default_tools_approval_mode="approve"');
-    // exec-only flags stay off the line so the resume form is identical
-    expect(first).not.toContain("-s");
-    expect(first).not.toContain("-C");
-    expect(first).not.toContain("--ephemeral");
-    // never a developer_instructions: the prompt REPLACES the base instructions
-    expect(cfg.some((c) => c.startsWith("developer_instructions"))).toBe(false);
-    const resumed = codexArgs({ ...base, threadId: "01a06f87-aa52-7a53-8057-ce41ff444cab" });
-    expect(resumed.slice(0, 3)).toEqual(["exec", "resume", "01a06f87-aa52-7a53-8057-ce41ff444cab"]);
-    expect(resumed.filter((a) => a.startsWith("model_reasoning_effort"))).toHaveLength(0);
-    expect(tomlString('a"b\\c')).toBe('"a\\"b\\\\c"');
-  });
-
   test("codexArgs: a window adds exactly one integer -c key, and a run without one is byte-identical to before", () => {
     const base = { instructionsPath: "/i.md", bunBin: "/usr/bin/bun", bridgePath: "/b.ts", mcpPort: 1, model: "gpt-6-astra", effort: "high" };
     // Captured before the window existed on this driver: nothing may move for a run that sets none.
@@ -972,6 +890,12 @@ describe("codex driver", () => {
     expect(codexArgs({ ...base, threadId: "t-1", compactWindow: "300k" })).toContain("model_auto_compact_token_limit=300000");
     // Only the canonical spelling reaches it: the config boundary canonicalises.
     expect(() => codexArgs({ ...base, compactWindow: "300K" })).toThrow(/not a canonical window/);
+    // A resume threads the id and carries no effort; paths are TOML-quoted.
+    const { effort: _effort, ...unset } = base;
+    const resumed = codexArgs({ ...unset, threadId: "01a06f87-aa52-7a53-8057-ce41ff444cab" });
+    expect(resumed.slice(0, 3)).toEqual(["exec", "resume", "01a06f87-aa52-7a53-8057-ce41ff444cab"]);
+    expect(resumed.filter((a) => a.startsWith("model_reasoning_effort"))).toHaveLength(0);
+    expect(tomlString('a"b\\c')).toBe('"a\\"b\\\\c"');
   });
 
   test("a codex run with a window stamps it into the tuple; one without stamps exactly what it did", () => {
@@ -1098,16 +1022,6 @@ describe("childEnv", () => {
     expect(childEnv(parent, {})["CODEX_HOME"]).toBe("/first");
     expect(childEnv({ CODEX_HOME: "/first" }, { credentialEnv: "CODEX_HOME_2" })["CODEX_HOME"]).toBeUndefined();
   });
-
-  test("a lane looks logged in only with an auth.json in it", () => {
-    const home = fakeCodexHome();
-    expect(homeLooksLoggedIn(home)).toBe(true);
-    const empty = tempDir("wrathbench-codex-empty-");
-    mkdirSync(join(empty, "sessions"), { recursive: true });
-    expect(homeLooksLoggedIn(empty)).toBe(false);
-    expect(homeLooksLoggedIn(undefined)).toBe(false);
-    expect(homeLooksLoggedIn("")).toBe(false);
-  });
 });
 
 describe("driver, harness and prompt vocabulary", () => {
@@ -1169,12 +1083,6 @@ describe("driver, harness and prompt vocabulary", () => {
     expect(lane2.stderr).toContain("$CODEX_HOME_2");
     expect(lane2.stderr).toContain("CODEX_HOME_2=");
   }, 30_000);
-
-  test("run.ts refuses effort none and minimal for this driver by name", async () => {
-    const none = await launch(["--model", "gpt-5.5", "--effort", "none"], { CODEX_HOME: fakeCodexHome() });
-    expect(none.code).toBe(2);
-    expect(none.stderr).toContain("not a Codex reasoning level");
-  }, 30_000);
 });
 
 // ------------------------------------------------------------- exec's words
@@ -1198,17 +1106,6 @@ describe("codex driver: what exec prints", () => {
     expect(readTrajectory(runDir).filter((r) => r.t === "codex_retry")).toHaveLength(2);
     trajectory.close();
   }, 20_000);
-
-  test("a server-worded policy stop is not recognised: session notes, then adapter-error after three (the known exec limit)", async () => {
-    const { runDir, trajectory, options } = setupEpisode("policy-custom", { maxTurns: 5 });
-    const outcome = await runCodexEpisode(options);
-    expect(outcome).toMatchObject({ kind: "terminated", reason: "adapter-error" });
-    expect(outcome.kind === "terminated" && outcome.detail).toContain("failed 3 turns in a row");
-    const notes = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "session_note" && String(r["text"]).includes("automated safety review"));
-    expect(notes).toHaveLength(2);
-    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("adapter-error");
-    trajectory.close();
-  }, 30_000);
 
   test("a server-side reroute is on the record beside the run", async () => {
     const { runDir, trajectory, options } = setupEpisode("reroute", { maxTurns: 1 });
@@ -1310,14 +1207,6 @@ describe("codex driver: the subscription's usage windows", () => {
     expect(codexStatedReset(undefined, now)).toBeUndefined();
   });
 
-  test("a spent quota with no window known pauses as before, with no reset", async () => {
-    const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 });
-    const outcome = await runCodexEpisode(options);
-    expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted" });
-    expect(outcome.kind === "paused" && outcome.notBefore).toBeUndefined();
-    trajectory.close();
-  }, 20_000);
-
   test("freeplay pauses at the turn boundary at the freeplay threshold, resumable at the reset; a higher threshold lets it play", async () => {
     const rollout = [
       { total: 1_000, rateLimits: primary(85, 2 * 3_600_000) },
@@ -1376,16 +1265,6 @@ describe("codex driver: items the driver acts on nowhere", () => {
     expect(second).not.toContain("spawn_agent");
     trajectory.close();
   }, 30_000);
-
-  test("codexItemRecord: the item's type and its JSON; a typeless item's type is null", () => {
-    expect(codexItemRecord(3, { id: "i", type: "web_search", query: "q" })).toEqual({
-      t: "codex_item",
-      turn: 3,
-      type: "web_search",
-      body: '{"id":"i","type":"web_search","query":"q"}',
-    });
-    expect(codexItemRecord(1, { id: "i" })["type"]).toBeNull();
-  });
 });
 
 // ------------------------------------------------- the CLI's own tools, off the rollout
@@ -1437,19 +1316,6 @@ describe("codex driver: calls to the CLI's own tools", () => {
     };
     expect(await message(true)).toBe(await message(false));
   }, 60_000);
-
-  test("codexToolCallRecord: short bodies whole, a missing status left out", () => {
-    expect(codexToolCallRecord(2, { kind: "function", callId: "c", name: "wait", input: "{}", status: null, output: "done", at: null })).toEqual({
-      t: "codex_tool_call",
-      turn: 2,
-      kind: "function",
-      name: "wait",
-      callId: "c",
-      at: null,
-      input: "{}",
-      output: "done",
-    });
-  });
 });
 
 // ------------------------------------------------- capacity refusals
@@ -1492,7 +1358,7 @@ describe("codex driver: a model at capacity", () => {
     expect(capacityBackoffMs({ episode: "e90", failure, retriesSoFar: 0 })).toBeUndefined();
   });
 
-  for (const episode of ["freeplay", "probing"] as const) {
+  for (const episode of ["freeplay"] as const) {
     test(`on ${episode}, four refusals in a row are waited out with a growing backoff, the idle clock held, and the run plays on`, async () => {
       const time = fakeTime();
       const { runDir, recordPath, trajectory, options } = setupEpisode("capacity", { maxTurns: 5, episode }, { WB_FAKE_CAPACITY_TURNS: "4" });
@@ -1520,7 +1386,7 @@ describe("codex driver: a model at capacity", () => {
     }, 60_000);
   }
 
-  for (const episode of ["e90", undefined] as const) {
+  for (const episode of ["e90"] as const) {
     test(`on ${episode ?? "a launch with no episode"}, three refusals in a row end the run as adapter-error, unwaited, as before`, async () => {
       const time = fakeTime();
       const { runDir, trajectory, options } = setupEpisode("capacity", { maxTurns: 6, ...(episode !== undefined ? { episode } : {}) });

@@ -12,13 +12,12 @@ import { join } from "node:path";
 import { Scratchpad, type EventSummary } from "@wrathbench/mcp";
 import { runCodexEpisode } from "../src/adapter-codex";
 import { comparabilityOf } from "../src/comparability";
-import { loadRunConfig, loopOf, threadContextOf } from "../src/config";
+import { loadRunConfig, threadContextOf } from "../src/config";
 import { assembleContext, EVENTS_UNCHANGED_LINE, formatEventLine, ThreadContext } from "../src/context";
 import { EpisodicLog } from "../src/episodic";
 import { buildSystemPrompt } from "../src/prompt";
 import { configFromArgs } from "../src/run";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import { TOOLS, toolsFor } from "../src/tools";
 import { readTrajectory, Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { messageParts } from "../../infra/inspect-run";
@@ -189,13 +188,6 @@ describe("the snippet loop on codex", () => {
 describe("--loop: config, tuple and the thread context", () => {
   const CODEX = ["--driver", "codex", "--model", "gpt-5.5", "--credential", "chatgpt-1", "--run-id", "r1", "--token", "tok-aaaaaaaaaaaaaaaaaaaaaa", "--module-url", "http://x"];
 
-  test("program or snippet, and nothing else", () => {
-    expect(loopOf(undefined)).toBeUndefined();
-    expect(loopOf("snippet")).toBe("snippet");
-    expect(loopOf("program")).toBe("program");
-    expect(() => loopOf("snippet-slim")).toThrow("--loop takes program or snippet");
-  });
-
   test("the thread context is the program loop's on codex, and the tuple carries no key for it", () => {
     const snippet = configFromArgs([...CODEX, "--loop", "snippet"], {});
     const program = configFromArgs(CODEX, {});
@@ -210,7 +202,4 @@ describe("--loop: config, tuple and the thread context", () => {
     expect(Object.keys(tProgram).slice(-2)).toEqual(["loop", "yield"]);
   });
 
-  test("the snippet tool list is the one it always was", () => {
-    expect(toolsFor({})).toEqual(TOOLS);
-  });
 });

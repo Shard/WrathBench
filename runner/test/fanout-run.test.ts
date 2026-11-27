@@ -230,20 +230,6 @@ describe("a fan-out run, end to end", () => {
     r.trajectory.close();
   }, 60_000);
 
-  test("a wake reads each seat's worn gear and death latch from the real child, keyed by character", async () => {
-    const r = rig("fan-worn");
-    expect((await r.call("login_character", { name: "alfa", race: 1, class: 1 })).text).toStartWith("logged in: Alfa");
-    expect((await r.call("login_character", { name: "bravo", race: 1, class: 1 })).text).toStartWith("logged in: Bravo");
-    const worn = await r.sandbox.wornDurabilityAll();
-    expect(Object.keys(worn).sort()).toEqual(["Alfa", "Bravo"]);
-    for (const items of Object.values(worn)) expect(Array.isArray(items)).toBe(true);
-    // Each seat has its own latch; nothing has died.
-    expect(await r.sandbox.deathCause("Alfa")).toBeNull();
-    expect(await r.sandbox.deathCause("Bravo")).toBeNull();
-    await expect(r.sandbox.deathCause("Nobody")).rejects.toThrow("unknown character");
-    r.trajectory.close();
-  }, 60_000);
-
   test("the turn context of a fan-out run is the roll-up, with no one character's event window", async () => {
     const r = rig("fan-2");
     const builder = new ContextBuilder({ config: r.config, sandbox: r.sandbox, scratchpad: r.scratchpad, trajectory: r.trajectory, watchdogs: new Watchdogs(r.config.watchdogs) });

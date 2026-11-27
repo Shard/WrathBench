@@ -198,7 +198,7 @@ function searchesOf(ctx: ToolContext): Map<string, SearchMemoEntry> {
 }
 
 /** Case, punctuation and whitespace are not what makes two searches different. */
-export function normalizeSearchQuery(query: string): string {
+function normalizeSearchQuery(query: string): string {
   return query
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")

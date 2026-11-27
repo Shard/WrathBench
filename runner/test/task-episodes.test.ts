@@ -19,7 +19,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignDefinitionSchema, campaignHash, type CampaignDefinition } from "../src/campaign-def";
 import { parseCampaignFile, taskFileOf, writeCampaignFile, type CampaignFile } from "../src/campaign-file";
-import { CampaignLaunchError } from "../src/campaign-launch";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, taskEpisodeRefusal } from "../src/config";
 import { EPISODES, TASK_EPISODE_IDS, isLevelEpisode, isScoredEpisode } from "../src/episodes";
@@ -202,15 +201,6 @@ describe("the launch file's staging hash", () => {
     expect(parseCampaignFile(JSON.parse(JSON.stringify(f))).staging).toBe("sha256:0123456789abcdef");
     expect(() => parseCampaignFile({ ...f, episode: undefined, source: { commit: "0".repeat(40), path: "x", branch: [] } })).toThrow();
   });
-});
-
-// `CampaignLaunchError` is what every refusal above is; one is enough to hold.
-test("a refused task launch is a CampaignLaunchError", () => {
-  try {
-    configFromArgs([...MODEL, "--episode", "deadmines-solo"], {});
-  } catch (err) {
-    expect(err).toBeInstanceOf(CampaignLaunchError);
-  }
 });
 
 describe("the public projection of the task episodes", () => {

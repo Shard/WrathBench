@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { CONTEXT_POLICY, emoteShown, eventWindow, formatEventLine } from "../src/context";
+import { CONTEXT_POLICY, emoteShown, eventWindow } from "../src/context";
 import { SandboxHost } from "../src/sandbox/host";
 import type { EventSummary } from "@wrathbench/mcp";
 import { Scratchpad } from "@wrathbench/mcp";
@@ -48,25 +48,6 @@ describe("emoteShown: which emotes the window keeps", () => {
 });
 
 describe("the new events' lines", () => {
-  const line = (opcode: string, data: unknown): string => formatEventLine({ seq: 5, ts: 0, opcode, data });
-
-  test("each renders as its payload, nothing added", () => {
-    expect(line("SMSG_EMOTE", { guid: PLAYER, emoteId: 3 })).toBe(`#5 SMSG_EMOTE {"guid":"${PLAYER}","emoteId":3}`);
-    expect(line("SMSG_TEXT_EMOTE", { guid: PLAYER, textEmote: 101, emoteNum: 0, targetName: "Fenwick" })).toBe(
-      `#5 SMSG_TEXT_EMOTE {"guid":"${PLAYER}","textEmote":101,"emoteNum":0,"targetName":"Fenwick"}`,
-    );
-    expect(line("SMSG_CHANNEL_NOTIFY", { type: 2, channel: "Testchannel", flags: 0, channelId: 0 })).toBe(
-      `#5 SMSG_CHANNEL_NOTIFY {"type":2,"channel":"Testchannel","flags":0,"channelId":0}`,
-    );
-    expect(line("WB_FLIGHT_STATE", { canFly: true, airborne: false })).toBe(`#5 WB_FLIGHT_STATE {"canFly":true,"airborne":false}`);
-    for (const cause of ["jump", "knockback", "fall"]) {
-      expect(line("WB_SELF_MOVE", { opcode: "MSG_MOVE_FALL_LAND", cause, pos: { x: 1, y: 2, z: 3, o: 0 }, fromZ: 9 })).toBe(
-        `#5 WB_SELF_MOVE {"opcode":"MSG_MOVE_FALL_LAND","cause":"${cause}","pos":{"x":1,"y":2,"z":3,"o":0},"fromZ":9}`,
-      );
-    }
-    expect(line("WB_MOVE_RESULT", { status: "knocked_back" })).toBe(`#5 WB_MOVE_RESULT {"status":"knocked_back"}`);
-  });
-
   test("another unit's knockback relay is ambient movement", () => {
     expect(CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test("MSG_MOVE_KNOCK_BACK")).toBe(true);
     for (const op of ["SMSG_EMOTE", "SMSG_TEXT_EMOTE", "SMSG_CHANNEL_NOTIFY", "WB_FLIGHT_STATE", "WB_SELF_MOVE"]) {

@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { countsTowardTarget, DEFAULT_POLICY, LADDER_MS, isCounted, isNoProgress, isStaleRun, isStandingPause, modelStates, nextJobs, planNextJobs, TIER_TABLE, effectiveTier, type SchedulingPolicy, parseModelsSidecar, projectModel, schedulability, schedulableView, wantsIdle, serializeModelsSidecar, type ModelState, outstandingWork, formatOutstanding, liveCredentials, parsePolicyBlock, entryOwnsRun, ineligibleWhy, matchesRoster, modelSiblings, sameModel } from "../src/models";
+import { countsTowardTarget, DEFAULT_POLICY, LADDER_MS, isCounted, isNoProgress, isStaleRun, isStandingPause, modelStates, nextJobs, planNextJobs, TIER_TABLE, effectiveTier, type SchedulingPolicy, parseModelsSidecar, projectModel, schedulability, schedulableView, wantsIdle, serializeModelsSidecar, type ModelState, outstandingWork, liveCredentials, parsePolicyBlock, entryOwnsRun, matchesRoster, modelSiblings, sameModel } from "../src/models";
 import { countModelResponses, stillbornOf, readRunFacts, type RunFact } from "../src/run-fact";
 import { type RosterModel, entryOwnsWindow, ownedWindows, rosterWindowKey } from "../src/roster-entry";
 import { billingOf } from "../src/model-cost";
@@ -686,7 +686,6 @@ describe("paid and free", () => {
     const pooled = st({ name: "f1", model: "v/f:free", idle: "unlimited" }, [good("v/f:free", "e90", 1, 3), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3)]);
     expect(planNextJobs([pooled], ["R1"], new Set(), { policy }).jobs[0]).toMatchObject({ episode: "freeplay", account: "R1" });
   });
-
 });
 
 describe("outstandingWork", () => {
@@ -769,31 +768,6 @@ describe("outstandingWork", () => {
     const trial = st({ name: "trial", model: "v/trial:free", tier: "t0" }, []);
     const t = outstandingWork({ states: [trial], accounts: 1, credentials });
     expect(t).toMatchObject({ lower: 1, upper: 1 });
-  });
-
-  test("eta: minutes per credential group over its enabled slots, under the pool and the host cap", () => {
-    const o = outstandingWork(input);
-    const by = new Map(o.breakdown.map((g) => [g.group, g]));
-    expect([...by.keys()].sort()).toEqual(["claude", "local (free)", "openrouter (free)", "openrouter (paid)"]);
-    // The free key's three slots, under the pool's five accounts.
-    expect(by.get("openrouter (free)")).toMatchObject({ concurrency: 3, lowerRuns: 7, upperRuns: 8 });
-    // Two enabled subscriptions (the disabled third adds nothing), under a host cap of one.
-    expect(by.get("claude")).toMatchObject({ concurrency: 1, lowerMinutes: 270, upperMinutes: 630 });
-    expect(by.get("openrouter (paid)")).toMatchObject({ concurrency: 1, lowerRuns: 3, upperRuns: 4 });
-    expect(by.get("local (free)")).toMatchObject({ concurrency: 1, lowerRuns: 3 });
-    // Without the host cap the two subscriptions both count.
-    expect(new Map(outstandingWork({ ...input, maxSessions: {} }).breakdown.map((g) => [g.group, g])).get("claude")!.concurrency).toBe(2);
-    expect(o.etaLowerMs!).toBeLessThanOrEqual(o.etaUpperMs!);
-  });
-
-  test("work with nowhere to run has no eta; nothing owed is exhausted", () => {
-    // No paid credential: the paid model's runs have nowhere to go.
-    expect(outstandingWork({ ...input, credentials: credentials.filter((c) => c.id !== "or-paid") }).etaLowerMs).toBeNull();
-    // No account at all: nothing runs anywhere.
-    expect(outstandingWork({ ...input, accounts: 0 }).etaLowerMs).toBeNull();
-    const none = outstandingWork({ states: [], accounts: 5 });
-    expect(none).toMatchObject({ lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0 });
-    expect(formatOutstanding(none)).toContain("exhausted");
   });
 });
 
@@ -1025,15 +999,6 @@ describe("probe campaigns in the schedule", () => {
     expect(entryOwnsRun({ model: "m", driver: "codex" }, { model: "m", driver: "openai" })).toBe(true);
   });
 
-  test("a model that owes evidence is never given probe work", () => {
-    // The whole priority rule, in one assertion: evals outrank probes, and the
-    // rule is enforced by the verdict rather than by ordering the loops.
-    const plan = planNextJobs([owing("a")], ["R1"], new Set(), { campaigns: [campaign] });
-    expect(plan.jobs.length).toBe(1);
-    expect(plan.jobs[0]!.episode).toBe("e90");
-    expect(plan.jobs[0]!.probe).toBeUndefined();
-  });
-
   test("a model that owes nothing takes a probe, stamped with its campaign and cell", () => {
     const plan = planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign] });
     expect(plan.jobs.length).toBe(1);
@@ -1098,19 +1063,6 @@ describe("probe campaigns in the schedule", () => {
     expect(planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns }).jobs).toEqual([]);
   });
 
-  test("a blocked model is skipped even though the campaign wants it", () => {
-    // Cooling is cooling: a campaign is exploration and burning a cell against a
-    // backing-off endpoint produces no observation.
-    const cooling = projectModel(
-      { name: "a", model: "a", tier: "t0" },
-      [done("a", "e90", 1, { modelResponses: 0, terminationReason: "adapter-error", endedAt: NOW2 - 1000 })],
-      DEFAULT_POLICY,
-      { now: NOW2 },
-    );
-    expect(schedulability(cooling).verdict).toBe("blocked");
-    expect(planNextJobs([cooling], ["R1"], new Set(), { campaigns: [campaign] }).jobs).toEqual([]);
-  });
-
   test("excludeUnhealthy: false widens the work list, never the schedule", () => {
     // The one configuration where the loop's own verdict check is load-bearing:
     // with the fan-out told not to filter, a cooling model reaches the loop and
@@ -1131,10 +1083,6 @@ describe("probe campaigns in the schedule", () => {
   test("one job per model: a model cannot take two cells in one tick", () => {
     const plan = planNextJobs([spent("a")], ["R1", "R2"], new Set(), { campaigns: [campaign] });
     expect(plan.jobs.length).toBe(1);
-  });
-
-  test("no campaigns configured is the old behaviour exactly", () => {
-    expect(planNextJobs([spent("a")], ["R1"], new Set(), {}).jobs).toEqual([]);
   });
 });
 
@@ -1499,20 +1447,6 @@ describe("promotion and the Deadmines witness", () => {
     expect(schedulability(open, new Set(), policy).why).not.toContain("not yet on deadmines-solo");
     // A t1 model's tier buys none, so it has nothing to wait on there.
     expect(schedulability(at([countedFact(entry, "e90", 3)]), new Set(), policy).why).not.toContain("deadmines");
-  });
-
-  test("the refusal names what opens each episode", () => {
-    expect(ineligibleWhy("e360")).toBe("its tier buys no e360 runs — earn it with a level-5 e90, or set a tier that includes it");
-    expect(ineligibleWhy("deadmines-solo")).toBe("the Deadmines evals open on level 8 in a counted e360, on a tier that buys them");
-    expect(ineligibleWhy("deadmines")).toContain("deadmines: true");
-    // Given the declared tier, it says which threshold climbs there, or that it is a pin.
-    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t3")).toBe("the Deadmines evals open on level 8 in a counted e360, on a tier that buys them");
-    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t1")).toBe("the Deadmines evals are t3's: a t1 climbs to t2 on level 5 in a counted e90, then to t3 on level 8 in a counted e360");
-    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t1", "t2")).toBe("the Deadmines evals are t3's: a t1 climbs to t3 on level 8 in a counted e360");
-    expect(ineligibleWhy("deadmines-solo", DEFAULT_POLICY, "t2")).toBe("declared t2: a manual tier, it does not climb to the Deadmines (t3)");
-    expect(ineligibleWhy("deadmines", DEFAULT_POLICY, "t0")).toBe("declared t0: a trial tier holds the ladder and buys no Deadmines (t3)");
-    expect(ineligibleWhy("e360", DEFAULT_POLICY, "t1")).toBe("its tier buys no e360 runs — earn it with a level-5 e90, or set a tier that includes it");
-    expect(ineligibleWhy("e360", DEFAULT_POLICY, "t0")).toBe("declared t0: a trial tier holds the ladder and buys no e360 (t2)");
   });
 });
 

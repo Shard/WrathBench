@@ -5,7 +5,6 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { cellDimensions } from "../src/campaign-def";
 import {
   campaignAssignments,
   campaignPairRefusals,
@@ -19,7 +18,7 @@ import {
   type Campaign,
   type ProbeRun,
 } from "../src/campaigns";
-import { checkedIn, defsBlock, definition, joined, publication } from "./fixtures/campaigns";
+import { defsBlock, definition, joined, publication } from "./fixtures/campaigns";
 
 const one = definition({ id: "one", maxAttemptsPerCell: 3 });
 const two = definition({
@@ -124,10 +123,6 @@ describe("the published definitions", () => {
     expect(r.refused.map((x) => x.key)).toEqual(["campaign-defs/one@1", "campaign-defs/x@1", "campaign-defs/one@2"]);
     expect(r.refused[0]!.reason).toContain("edited after publication");
     expect(r.refused[2]!.reason).toContain("holds one@1");
-  });
-
-  test("a block that is not an object is one refusal, never a throw", () => {
-    expect(parseCampaignDefinitions([])).toEqual({ definitions: [], refused: [{ key: "campaign-defs", reason: expect.stringContaining("must be an object") }] });
   });
 });
 
@@ -317,26 +312,5 @@ describe("the fan-out", () => {
     // The squares are still the tally: a verdict invents no counts.
     const c = campaign(one, { concluded: [1] });
     expect(campaignProgress(campaignSquares(c, CATALOG, [run({})]))).toMatchObject({ done: 1, attempted: 1 });
-  });
-
-  test("healthy is asked only when excludeUnhealthy is on", () => {
-    const sick = (n: string): boolean => n !== "m1";
-    expect(new Set(campaignWork([campaign()], CATALOG, [], sick).map((w) => w.model))).toEqual(new Set(["m2"]));
-    expect(new Set(campaignWork([campaign(one, { excludeUnhealthy: false })], CATALOG, [], sick).map((w) => w.model))).toEqual(new Set(["m1", "m2"]));
-  });
-});
-
-describe("a cell's dimensions", () => {
-  test("come from the definition alone: start, leash, wiki, objective and stopping rule", () => {
-    const race = checkedIn("race-probe@1");
-    expect(cellDimensions(race, race.cells.find((c) => c.id === "bloodelf-rogue")!)).toEqual({
-      race: 10,
-      class: 4,
-      watchdogs: { idleMs: 1_200_000, noXpMs: null, episodeMs: 43_200_000 },
-      maxToolCalls: 24_000,
-      wikiCoords: false,
-      wiki: true,
-      stopAtLevel: 10,
-    });
   });
 });

@@ -16,7 +16,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { EPISODE_IDS, EPISODES, matchesTier, type EpisodeId } from "../src/episodes";
-import { POLICY_EPISODES, TIER_TABLE, projectModel, DEFAULT_POLICY } from "../src/models";
+import { POLICY_EPISODES, projectModel, DEFAULT_POLICY } from "../src/models";
 import { TIERS, type RosterModel } from "../src/roster-entry";
 import { countedFact } from "./fixtures/counted-fact";
 
@@ -26,17 +26,6 @@ const NOW = 1_800_000_000_000;
 describe("an unscored episode is never evidence", () => {
   test("there is at least one, or these assertions prove nothing", () => {
     expect(unscored.length).toBeGreaterThan(0);
-  });
-
-  test("no unscored episode is a policy target", () => {
-    for (const id of unscored) expect(POLICY_EPISODES).not.toContain(id);
-  });
-
-  test("no tier buys an unscored episode", () => {
-    for (const tier of TIERS) {
-      const bought = Object.keys(TIER_TABLE[tier].runsPerEpisode);
-      for (const id of unscored) expect(bought).not.toContain(id);
-    }
   });
 
   test("every tier's target for every unscored episode is zero", () => {

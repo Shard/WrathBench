@@ -271,13 +271,10 @@ describe("pi driver", () => {
     }
   });
 
-  test.each([
-    ["error402", { kind: "paused", reason: "quota-exhausted" }],
-    ["error429", { kind: "paused", reason: "rate-limited" }],
-  ])("%s pauses the run by status", async (mode, want) => {
-    const { options } = setup(mode);
-    const outcome = await runPiEpisode(options);
-    expect(outcome).toMatchObject(want);
+  test("a failed request pauses the run by its status", async () => {
+    // The status-to-reason table is `detectPiFailure`'s, below; this is the wiring.
+    const { options } = setup("error402");
+    expect(await runPiEpisode(options)).toMatchObject({ kind: "paused", reason: "quota-exhausted" });
   });
 
   test("an unclassified error is a session note, and three in a row end the run", async () => {
@@ -359,13 +356,6 @@ describe("pi driver", () => {
     expect(outcome).toMatchObject({ kind: "terminated", reason: "harness-error" });
     expect((outcome as { detail?: string }).detail).toContain("which pi runs as high");
     expect(entries(runDir).some((e) => e["t"] === "request")).toBe(false);
-  });
-
-  test("effort none is pi's off, and reaches it as --thinking", async () => {
-    const { recordPath, options } = setup("tools", { maxTurns: 1, effort: "none" });
-    await runPiEpisode(options);
-    const args = readRecord(recordPath)["argv"] as string[];
-    expect(args[args.indexOf("--thinking") + 1]).toBe("off");
   });
 });
 

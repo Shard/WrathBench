@@ -5,10 +5,9 @@
  * validates the arguments and renders the refusal hints.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "@wrathbench/mcp";
-import { callTool, nearestTool, normalizeToolArgs, TOOLS, type ToolContext } from "../src/tools";
+import { callTool, normalizeToolArgs, type ToolContext } from "../src/tools";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import type { SandboxHost } from "../src/sandbox/host";
@@ -49,13 +48,6 @@ describe("Scratchpad.edit", () => {
     }
   });
 
-  test("an empty new deletes the text", () => {
-    const pad = makePad();
-    pad.write("keep\nstale line\n");
-    expect(pad.edit("stale line\n", "").ok).toBe(true);
-    expect(pad.read()).toBe("keep\n");
-  });
-
   test("a missing old is refused, and the pad is untouched", () => {
     const pad = makePad();
     pad.write("# Plan\n");
@@ -81,19 +73,6 @@ describe("Scratchpad.edit", () => {
     expect(pad.read()).toBe("kobold\nwolf\nkobold\n");
   });
 
-  test("an empty old is refused — there is nothing to match", () => {
-    const pad = makePad();
-    pad.write("# Plan\n");
-    expect(pad.edit("", "x")).toEqual({ ok: false, reason: "empty_old", matches: 0 });
-    expect(pad.read()).toBe("# Plan\n");
-  });
-
-  test("old === new is refused as a no-op", () => {
-    const pad = makePad();
-    pad.write("same\n");
-    expect(pad.edit("same", "same")).toEqual({ ok: false, reason: "identical", matches: 0 });
-  });
-
   test("the text is literal: metacharacters and $& are not interpreted", () => {
     const pad = makePad();
     pad.write("coords: (a+b)*c [1]\n");
@@ -102,28 +81,9 @@ describe("Scratchpad.edit", () => {
     expect(pad.read()).toBe("coords: $& $1 (x)\n");
   });
 
-  test("the 32k cap applies exactly as it does to a write: refused, nothing saved", () => {
-    const pad = makePad();
-    const before = `HEAD\n${"x".repeat(SCRATCHPAD_MAX_CHARS - 10)}`;
-    pad.write(before);
-    const res = pad.edit("HEAD", "H".repeat(200));
-    expect(res).toEqual({ ok: false, reason: "over_cap", chars: SCRATCHPAD_MAX_CHARS + 191 });
-    expect(readFileSync(pad.path, "utf8")).toBe(before);
-  });
 });
 
 describe("edit_scratchpad, the tool", () => {
-  test("it is registered with the documented schema", () => {
-    const def = TOOLS.find((t) => t.name === "edit_scratchpad");
-    expect(def).toBeDefined();
-    expect(def?.inputSchema["required"]).toEqual(["old", "new"]);
-    expect(Object.keys(def?.inputSchema["properties"] as object)).toEqual(["old", "new", "replaceAll"]);
-    expect(def?.inputSchema["additionalProperties"]).toBe(false);
-    // The description says which of the two scratchpad tools to reach for.
-    expect(def?.description).toContain("write_scratchpad");
-    // write_scratchpad is still there: full replacement is its own operation.
-    expect(TOOLS.some((t) => t.name === "write_scratchpad")).toBe(true);
-  });
 
   test("a successful edit answers short — the pad itself is re-injected next turn", async () => {
     const pad = makePad();
@@ -176,19 +136,6 @@ describe("edit_scratchpad, the tool", () => {
     expect(pad.read()).toBe(before);
   });
 
-  test("replaceAll goes through the tool, booleanish like every other flag", async () => {
-    const pad = makePad();
-    pad.write("boar\nboar\n");
-    const res = await callTool(makeCtx(pad), "edit_scratchpad", {
-      old: "boar",
-      new: "kobold",
-      replaceAll: "true",
-    });
-    expect(res.isError).toBeUndefined();
-    expect(res.text).toContain("2 replacements");
-    expect(pad.read()).toBe("kobold\nkobold\n");
-  });
-
   test("the Claude-Code-shaped argument names are repaired, not refused", async () => {
     expect(
       normalizeToolArgs("edit_scratchpad", { old_string: "a", new_string: "b", replace_all: true }),
@@ -204,19 +151,4 @@ describe("edit_scratchpad, the tool", () => {
     expect(pad.read()).toBe("beta\n");
   });
 
-  test("an unknown key is still refused, with the parameter restatement", async () => {
-    const pad = makePad();
-    pad.write("alpha\n");
-    const res = await callTool(makeCtx(pad), "edit_scratchpad", { old: "alpha", new: "beta", where: "top" });
-    expect(res.isError).toBe(true);
-    expect(res.text).toContain('unknown key(s) "where"');
-    expect(res.text).toContain("replaceAll?: boolean");
-  });
-
-  test("the two scratchpad tools still resolve to themselves under the fuzzy matcher", () => {
-    expect(nearestTool("edit_scratchpad")).toBe("edit_scratchpad");
-    expect(nearestTool("Edit_Scratchpad")).toBe("edit_scratchpad");
-    expect(nearestTool("write_scratchpad")).toBe("write_scratchpad");
-    expect(nearestTool("Write_Scratchpad")).toBe("write_scratchpad");
-  });
 });

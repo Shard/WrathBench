@@ -33,14 +33,13 @@ import { SandboxHost, type HarnessNotice } from "../src/sandbox/host";
 import { characterSessionDir, RecordSignals, SESSION_DIR } from "../src/session-record";
 import { SESSIONS_DIR } from "../src/run-reader";
 import { toolsFor } from "../src/tools";
-import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
+import { readTrajectory, Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import type { CharacterRoster } from "@wrathbench/mcp/fanout";
 import { PORT_SECRET, startStub, type Stub } from "./fixtures/fanout-module";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
-const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 const FAKES = {
   "claude-code": { bin: "claude", fixture: join(import.meta.dir, "fixtures", "fake-claude.ts") },
   codex: { bin: "codex", fixture: join(import.meta.dir, "fixtures", "fake-codex.ts") },
@@ -75,12 +74,11 @@ const SINGLE = {
 };
 const hash = (v: unknown): string => createHash("sha256").update(JSON.stringify(v)).digest("hex").slice(0, 16);
 
-/** A directory holding an executable named for the CLI that runs its fake, with the fake's settings baked in. */
-function fakeBinDir(driver: CliDriver, fakeEnv: Record<string, string> = {}): string {
+/** A directory holding an executable named for the CLI that runs its fake. */
+function fakeBinDir(driver: CliDriver): string {
   const dir = tempDir("wrathbench-fanout-fakebin-");
   const path = join(dir, FAKES[driver].bin);
-  const assigns = Object.entries(fakeEnv).map(([k, v]) => `${k}='${v}' `).join("");
-  writeFileSync(path, `#!/bin/sh\n${assigns}exec ${process.execPath} ${FAKES[driver].fixture} "$@"\n`, "utf8");
+  writeFileSync(path, `#!/bin/sh\nexec ${process.execPath} ${FAKES[driver].fixture} "$@"\n`, "utf8");
   chmodSync(path, 0o755);
   return dir;
 }
@@ -116,8 +114,8 @@ function driverConfig(driver: CliDriver): Record<string, unknown> {
 }
 
 /** The environment a driver's CLI is launched from: its credential, and the fake on PATH. */
-function driverEnv(driver: CliDriver, fakeEnv: Record<string, string> = {}): Record<string, string> {
-  const base = { PATH: `${fakeBinDir(driver, fakeEnv)}:${process.env["PATH"] ?? ""}`, HOME: process.env["HOME"] ?? "/tmp" };
+function driverEnv(driver: CliDriver): Record<string, string> {
+  const base = { PATH: `${fakeBinDir(driver)}:${process.env["PATH"] ?? ""}`, HOME: process.env["HOME"] ?? "/tmp" };
   switch (driver) {
     case "claude-code":
       return { ...base, CLAUDE_CODE_OAUTH_TOKEN: "oauth-token-for-tests" };
@@ -389,6 +387,15 @@ describe.each(DRIVERS)("%s driver at fan-out", (driver) => {
     expect(recordOf(r.runDir, "Bravo").said.some((s) => s.includes("bravo is back"))).toBe(true);
     // The same characters, on the same tokens, still in.
     expect(readRoster(r.runDir)).toEqual(before);
+    // A resumed seat's token comes off the roster file, not a login: it is in
+    // nothing the CLI was handed or the trajectory wrote either.
+    const mcpConfig = { "claude-code": "claude-mcp.json", codex: null, pi: join("pi", "mcp.json") }[driver];
+    const handed = [
+      readFileSync(record, "utf8"),
+      readFileSync(join(r.runDir, "trajectory.jsonl"), "utf8"),
+      ...(mcpConfig !== null ? [readFileSync(join(r.runDir, mcpConfig), "utf8")] : []),
+    ].join("\n");
+    for (const e of before) expect(handed).not.toContain(e.token);
     r.trajectory.close();
   }, 60_000);
 
@@ -433,81 +440,5 @@ describe.each(DRIVERS)("%s driver at fan-out", (driver) => {
       expect(claudeArgs({ mcpConfigPath: "/x/claude-mcp.json", systemPrompt: "P", fanout: false })).toEqual(claudeArgs({ mcpConfigPath: "/x/claude-mcp.json", systemPrompt: "P" }));
     }
     trajectory.close();
-  }, 60_000);
-});
-
-describe("claude-code at fan-out, through run.ts", () => {
-  test("--resume of a paused fan-out run brings every character back and hands the CLI the fan-out grant", async () => {
-    const stub = startStub();
-    stops.push(() => stub.stop());
-    const runsDir = tempDir("wrathbench-fanout-resume-");
-    const runId = "fan-resume";
-    const runDir = join(runsDir, runId);
-    const config = loadRunConfig({
-      ...driverConfig("claude-code"),
-      runId,
-      token: "f".repeat(32),
-      runsDir,
-      moduleUrl: stub.url,
-      stepIntervalMs: 0,
-      stateIntervalMs: 1,
-      maxTurns: 1,
-      fanout: { characters: 2, accounts: ["POOL01", "POOL02"] },
-      // A probe's: claude-code runs the snippet loop, which only a probe may.
-      episode: "probing",
-    });
-    const traj = new Trajectory(runDir);
-    traj.writeMeta({ runId, harnessVersion: "t", startedAt: 1, config });
-    traj.setPause(runId, "operator-pause", "SIGTERM: supervisor stop", 60_000);
-    traj.writeMeta({ ...readMeta(runDir)!, pause: { reason: "operator-pause", detail: "SIGTERM: supervisor stop", at: Date.now(), episodeElapsedMs: 60_000 } });
-    traj.close();
-    // Where the two characters live, as the paused process left the file.
-    const tokens = ["a", "b"].map((c) => c.repeat(32));
-    writeFileSync(
-      join(runDir, ROSTER_FILE),
-      JSON.stringify([
-        { character: "Alfa", account: "POOL01", token: tokens[0], in: true },
-        { character: "Bravo", account: "POOL02", token: tokens[1], in: true },
-      ]),
-      { mode: 0o600 },
-    );
-    const record = join(runsDir, "fake-record.json");
-    const proc = Bun.spawn({
-      cmd: [process.execPath, RUN_TS, "--resume", runId, "--runs-dir", runsDir],
-      cwd: runsDir,
-      env: {
-        ...driverEnv("claude-code", { WB_FAKE_RECORD: record, WB_FAKE_CALLS: JSON.stringify([[say("Bravo", "bravo resumed")]]) }),
-        WRATHBENCH_MODULE_URL: stub.url,
-        WRATHBENCH_MODULE_SECRET: PORT_SECRET,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    let stderr = "";
-    let endedAt: number | undefined;
-    for await (const chunk of proc.stderr) {
-      stderr += new TextDecoder().decode(chunk);
-      if (endedAt === undefined && stderr.includes("[wrathbench] terminated:")) endedAt = Date.now();
-    }
-    expect(await proc.exited, stderr).toBe(0);
-    // The process ends with the run: its last line comes after the give-back,
-    // whose bound (10 s plus 2 s a character) is a ceiling on that wait, not a
-    // timer left to hold the process open (14 s here, before the fix).
-    expect(endedAt).toBeDefined();
-    expect(Date.now() - endedAt!).toBeLessThan(6_000);
-
-    const rec = readJson(record);
-    expect(rec["allowedTools"]).toEqual(mcpToolNames({ fanout: true }));
-    expect((rec["userMessages"] as string[])[0]).toContain("have been logged back in: Alfa, Bravo.");
-    expect(resultTexts(rec)[0]).toContain("true");
-    const records = readTrajectory(runDir);
-    expect(records.find((x) => x.t === "harness" && x["kind"] === "fanout")?.["back"]).toEqual(["Alfa", "Bravo"]);
-    expect(records.find((x) => x.t === "termination")?.["reason"]).toBe("turn-limit");
-    expect(recordOf(runDir, "Bravo").said.some((s) => s.includes("bravo resumed"))).toBe(true);
-    // A finished run gives every character back.
-    expect(stub.sessions.size).toBe(0);
-    expect(readRoster(runDir).map((e) => [e.character, e.in])).toEqual([["Alfa", false], ["Bravo", false]]);
-    const text = readFileSync(join(runDir, "trajectory.jsonl"), "utf8") + readFileSync(record, "utf8") + readFileSync(join(runDir, "claude-mcp.json"), "utf8");
-    for (const t of tokens) expect(text).not.toContain(t);
   }, 60_000);
 });

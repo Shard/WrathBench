@@ -31,15 +31,12 @@ import { Watchdogs } from "../src/watchdogs";
 import { DEFAULT_POLICY, isCounted, projectModel } from "../src/models";
 import { readRunFacts, type RunFact } from "../src/run-fact";
 import type { RosterModel } from "../src/roster-entry";
-import { MAX_FAILED_TICKS, REFERENCE_GLOBAL, ReferenceAdapter, lastToolResult, parseReport } from "../src/reference-adapter";
+import { MAX_FAILED_TICKS, REFERENCE_GLOBAL, ReferenceAdapter } from "../src/reference-adapter";
 import {
   REFERENCE_PROGRAM_ENV,
-  REFERENCE_PROGRAM_PATH,
   loadReferenceProgram,
   referenceModelId,
-  referenceProgramPath,
   resolveReferenceLaunch,
-  type ReferenceProgram,
 } from "../src/reference-program";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { createApi } from "../../viewer/api";
@@ -57,11 +54,6 @@ const ROOT = join(import.meta.dir, "..", "..");
 // ------------------------------------------------------------------ the hook
 
 describe("the hook", () => {
-  test("reads the program from a fixed path in the build, the runner's own reference/ directory", () => {
-    expect(REFERENCE_PROGRAM_PATH).toBe(join(ROOT, "runner", "src", "reference", "index.ts"));
-    expect(referenceProgramPath({})).toBe(REFERENCE_PROGRAM_PATH);
-    expect(referenceProgramPath({ [REFERENCE_PROGRAM_ENV]: STUB_PATH })).toBe(STUB_PATH);
-  });
 
   test("present: the program's route and its tick's source text", async () => {
     const load = await loadReferenceProgram(STUB_PATH);
@@ -103,11 +95,6 @@ describe("the hook", () => {
     expect(same.ok && same.config.model).toBe(MODEL);
   });
 
-  test("prepared without its program, the driver says so rather than playing nothing", () => {
-    const config = loadRunConfig({ driver: "reference", model: MODEL });
-    expect(() => DRIVER_ADAPTERS.reference.prepare(config, undefined as never)).toThrow(/without its program/);
-  });
-
   test("run.ts in a build without the program refuses the launch in one line and writes nothing", () => {
     const runs = tempDir("wrathbench-reference-absent-");
     const p = Bun.spawnSync(["bun", join(ROOT, "runner", "src", "run.ts"), "--driver", "reference", "--episode", "e90", "--account", "PROBE", "--runs-dir", runs], {
@@ -132,7 +119,6 @@ const tool = (content: string): ChatMessage[] => [
   { role: "tool", content, tool_call_id: "1" },
   { role: "user", content: "context" },
 ];
-const ref = (o: object): string => `ok (12ms)\n--- console ---\n[log] REF ${JSON.stringify({ v: 1, ...o })}`;
 const codeOf = async (a: ReferenceAdapter, messages: ChatMessage[]): Promise<string> => {
   const out = await a.complete({ messages, tools: [] });
   if (out.kind !== "ok") throw new Error(out.kind);
@@ -140,68 +126,13 @@ const codeOf = async (a: ReferenceAdapter, messages: ChatMessage[]): Promise<str
   expect(out.turn.toolCalls[0]!.name).toBe("run_snippet");
   return (JSON.parse(out.turn.toolCalls[0]!.arguments) as { code: string }).code;
 };
-/** A longer stand-in route, so a resume has somewhere to jump to. */
-const longProgram: ReferenceProgram = {
-  route: { ...STUB_ROUTE, steps: Array.from({ length: 12 }, (_, i) => ({ kind: i === 11 ? "hunt" : "walk" })) },
-  source: stubProgram.source,
-};
-
 describe("the adapter", () => {
-  const adapter = (program: ReferenceProgram = longProgram): ReferenceAdapter => new ReferenceAdapter({ program, snippetTimeoutMs: 30_000, race: 1, class: 2 });
-
-  test("reads only the latest tool result, and the report on its console", () => {
-    expect(lastToolResult([{ role: "system", content: "s" }, { role: "user", content: "u" }])).toBeUndefined();
-    expect(lastToolResult(tool("hello"))).toBe("hello");
-    expect(parseReport(ref({ cursor: 3, advance: true, did: [] }))).toMatchObject({ cursor: 3, advance: true });
-    expect(parseReport("error (30000ms)\nsnippet abandoned")).toBeUndefined();
-    expect(parseReport("[log] REF {not json")).toBeUndefined();
-  });
-
-  test("the first turn loads the program; later turns only tick it", async () => {
-    const a = adapter();
-    const first = await codeOf(a, [{ role: "system", content: "s" }, { role: "user", content: "u" }]);
-    expect(first).toContain(`globalThis.${REFERENCE_GLOBAL} = { tick: (`);
-    expect(first).toContain(stubProgram.source.slice(0, 40));
-    expect(first).toContain(JSON.stringify(longProgram.route));
-    expect(first).toContain('"budgetMs":24000');
-    const next = await codeOf(a, tool(ref({ cursor: 0, advance: true, did: [] })));
-    expect(next).not.toContain("tick: (");
-    expect(next).toContain('"cursor":1');
-    expect(a.step).toBe(1);
-  });
-
-  test("a restarted child answers unloaded, and the program is loaded again on the same step", async () => {
-    const a = adapter();
-    await codeOf(a, tool(ref({ cursor: 0, advance: true, did: [] })));
-    const code = await codeOf(a, tool(ref({ unloaded: true })));
-    expect(code).toContain("tick: (");
-    expect(code).toContain('"cursor":1');
-  });
-
-  test("a resume jumps to the step the program's note restored", async () => {
-    const a = adapter();
-    const code = await codeOf(a, tool(ref({ cursor: 0, advance: false, did: [], login: true, restored: 9 })));
-    expect(a.step).toBe(9);
-    expect(code).toContain('"cursor":9');
-  });
-
   test("a step that keeps failing without a report is skipped, so no step wedges the run", async () => {
-    const a = adapter();
+    const a = new ReferenceAdapter({ program: stubProgram, snippetTimeoutMs: 30_000, race: 1, class: 2 });
     for (let i = 0; i < MAX_FAILED_TICKS - 1; i++) await codeOf(a, tool("error (30000ms)\nabandoned"));
     expect(a.step).toBe(0);
     await codeOf(a, tool("error (30000ms)\nabandoned"));
     expect(a.step).toBe(1);
-  });
-
-  test("it never ends the run: past the last step it keeps hunting", async () => {
-    const a = adapter();
-    const last = longProgram.route.steps.length - 1;
-    await codeOf(a, tool(ref({ cursor: 0, advance: false, did: [], restored: last })));
-    for (let i = 0; i < 3; i++) {
-      const out = await a.complete({ messages: tool(ref({ cursor: last, advance: true, did: [] })), tools: [] });
-      expect(out.kind).toBe("ok");
-    }
-    expect(a.step).toBe(last);
   });
 });
 

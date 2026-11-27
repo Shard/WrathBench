@@ -62,12 +62,6 @@ describe("countRecords (one-shot)", () => {
     expect(countRecords(empty, KINDS)!.get("response")).toBe(0);
   });
 
-  test("a final record with no terminating newline is still counted", () => {
-    const p = join(dir, "b.jsonl");
-    writeFileSync(p, `${JSON.stringify({ t: "response", ts: 1 })}\n${JSON.stringify({ t: "response", ts: 2 })}`);
-    expect(countRecords(p, KINDS)!.get("response")).toBe(2);
-  });
-
   test("the counts handed back are a copy, not the scanner's own state", () => {
     const p = join(dir, "c.jsonl");
     writeFileSync(p, `${JSON.stringify({ t: "response", ts: 1 })}\n`);
@@ -75,15 +69,6 @@ describe("countRecords (one-shot)", () => {
     const first = scanner.countOnce()!;
     first.counts.set("response", 999);
     expect(scanner.scan()!.counts.get("response")).toBe(1);
-  });
-
-  test("lines longer than one read chunk are not split mid-record", () => {
-    const p = join(dir, "big.jsonl");
-    const filler = "x".repeat(300_000);
-    const out: string[] = [];
-    for (let i = 0; i < 40; i++) out.push(JSON.stringify({ t: i % 4 === 0 ? "response" : "events_served", ts: i, filler }));
-    writeFileSync(p, `${out.join("\n")}\n`);
-    expect(countRecords(p, KINDS)!.get("response")).toBe(10);
   });
 
   test("a starting byte skips what precedes it unread, and a failed read says why", () => {

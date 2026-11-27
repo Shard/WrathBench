@@ -138,7 +138,7 @@ function fakeSandbox(queue: PartySignal[][]): SandboxHost {
   return fake as unknown as SandboxHost;
 }
 
-function builder(queue: PartySignal[][], o: { drain?: boolean; watchdogs?: Watchdogs } = {}) {
+function builder(queue: PartySignal[][], o: { watchdogs?: Watchdogs } = {}) {
   const dir = tempDir("wrathbench-party-loop-");
   let clock = 1_000_000;
   const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }), runId: "run-test", token: "run-test" };
@@ -146,7 +146,7 @@ function builder(queue: PartySignal[][], o: { drain?: boolean; watchdogs?: Watch
   trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
   const ctx = new ContextBuilder({
     config,
-    sandbox: o.drain === false ? (({ partySignals: _p, ...rest }) => rest)(fakeSandbox(queue) as unknown as Record<string, unknown>) as unknown as SandboxHost : fakeSandbox(queue),
+    sandbox: fakeSandbox(queue),
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
     trajectory,
     watchdogs: o.watchdogs ?? new Watchdogs(config.watchdogs),
@@ -192,6 +192,10 @@ describe("the loop hands the kills it is drained to the watchdogs", () => {
     expect(ours.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer party member 12)" });
     // The record is the stack's: the loop writes none.
     expect(readTrajectory(b.dir).filter((r) => r.t === "milestone")).toEqual([]);
+    // A kill the stack wrote without a foreign killer's guid still meets it as a member's.
+    const foreign = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
+    await builder([[joinedSignal(4000), kill("", true, 4100)]], { watchdogs: foreign }).sample();
+    expect(foreign.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer a party member)" });
   });
 
   test("a kill latched mid-row is read by the end check at the next tick, not the next sample", async () => {
@@ -208,16 +212,6 @@ describe("the loop hands the kills it is drained to the watchdogs", () => {
     expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer party member 12)" });
     expect(readTrajectory(dir).filter((r) => r.t === "milestone" || r.t === "state")).toEqual([]);
   });
-
-  test("a kill the stack wrote without a foreign killer's guid still meets a kill end as a member's", async () => {
-    const config = loadRunConfig({ driver: "stub" });
-    const watchdogs = new Watchdogs(config.watchdogs, Date.now, 0, { end: [{ kill: { entry: 639 } }] });
-    const kill: PartySignal = { kind: "kill", killerGuid: "", victimGuid: "17379390972743385188", entry: 639, rank: 1, self: false, member: true, ts: 4100, seq: 41 };
-    const { sample } = builder([[joinedSignal(4000), kill]], { watchdogs });
-    await sample();
-    expect(watchdogs.check()).toEqual({ reason: "kill-target", detail: "entry 639 killed (killer a party member)" });
-  });
-
 });
 
 describe("a fan-out run's kill end", () => {

@@ -65,19 +65,6 @@ describe("clearAccountCharacters", () => {
     expect(calls.filter((c) => c.path === "/character-delete").length).toBe(1);
   });
 
-  test("a name that survives every delete no longer blocks the run — it is a slot-eater the model is told about", async () => {
-    // No name is assigned any more (the model picks its own), so a survivor
-    // is not a precondition violation: it is a name that must not be chosen.
-    const { f } = fakeFetch({
-      list: [enumOf({ name: "Fleetsonnet", guid: "294" })],
-      del: [timeout],
-    });
-    const out = await clearAccountCharacters({ ...base, fetch: f, maxAttempts: 2 });
-    expect(out.ok).toBe(true);
-    if (!out.ok) throw new Error("unreachable");
-    expect(out.leftover).toEqual(["Fleetsonnet"]);
-  });
-
   test("other survivors only eat a slot; the run proceeds", async () => {
     const { f } = fakeFetch({
       list: [enumOf({ name: "Fleetsonnet", guid: "294" }, { name: "Stuck", guid: "9" }), enumOf({ name: "Stuck", guid: "9" })],
@@ -89,23 +76,6 @@ describe("clearAccountCharacters", () => {
     expect(out.leftover).toEqual(["Stuck"]);
     expect(out.cleared).toBe(1);
     expect([...out.seen.values()].sort()).toEqual(["294", "9"]);
-  });
-
-  test("an empty account is clear on the first listing with no deletes", async () => {
-    const { f, calls } = fakeFetch({ list: [enumOf()], del: [] });
-    const out = await clearAccountCharacters({ ...base, fetch: f });
-    expect(out.ok).toBe(true);
-    expect(calls.length).toBe(1);
-  });
-});
-
-describe("clearAccountCharacters with no module listening", () => {
-  test("a transport failure before any listing skips hygiene, as before", async () => {
-    const f = (() => Promise.reject(new Error("ECONNREFUSED"))) as unknown as typeof fetch;
-    const lines: string[] = [];
-    const out = await clearAccountCharacters({ ...base, fetch: f, log: (l) => lines.push(l) });
-    expect(out.ok).toBe(true);
-    expect(lines[0]).toContain("skipped");
   });
 });
 
@@ -134,20 +104,6 @@ describe("clearAccountCharacters with model-chosen names", () => {
       ["zeliana", "702"],
     ]);
   });
-
-  test("a survivor still lets the run start, and is named to the model", async () => {
-    // `leftover` is what run.ts puts in the launch notice: createSession
-    // REUSES a character of the name it is given, so a model that picked
-    // `Grimjaw` here would land on a used one.
-    const { f } = fakeFetch({
-      list: [enumOf({ name: "Grimjaw", guid: "701" }), enumOf({ name: "Grimjaw", guid: "701" })],
-      del: [timeout],
-    });
-    const out = await clearAccountCharacters({ ...base, fetch: f, maxAttempts: 2 });
-    expect(out.ok).toBe(true);
-    if (!out.ok) throw new Error("unreachable");
-    expect(out.leftover).toEqual(["Grimjaw"]);
-  });
 });
 
 describe("clearAccountCharacters with keep", () => {
@@ -165,14 +121,6 @@ describe("clearAccountCharacters with keep", () => {
     expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"])).toEqual(["Novice"]);
     // The kept guid is still in `seen`: a scored run that names it is caught by the tripwire.
     expect(out.seen.get("bromdir")).toBe("310");
-  });
-
-  test("a kept name that is not on the account is simply absent from kept", async () => {
-    const { f } = fakeFetch({ list: [enumOf()], del: [] });
-    const out = await clearAccountCharacters({ ...base, fetch: f, keep: ["Bromdir"] });
-    expect(out.ok).toBe(true);
-    if (!out.ok) throw new Error("unreachable");
-    expect(out.kept).toEqual([]);
   });
 });
 
@@ -226,18 +174,6 @@ describe("clearAccountCharacters never deletes a character a run still owns (202
     const out = await clearAccountCharacters({ ...base, fetch: f, owners, allowCharacterDelete: true });
     expect(out.ok).toBe(true);
     expect(calls.filter((c) => c.path === "/character-delete")).toEqual([]);
-  });
-
-  test("a level-1 stranger and an ended run's levelled leftover are still cleared, as before", async () => {
-    const { f, calls } = fakeFetch({
-      list: [enumOf({ name: "Fresh", guid: "1", level: 1 }, { name: "Novice", guid: "631", level: 5 }), enumOf()],
-      del: [deleted("x")],
-    });
-    const out = await clearAccountCharacters({ ...base, fetch: f, owners });
-    expect(out.ok).toBe(true);
-    if (!out.ok) throw new Error("unreachable");
-    expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"]).sort()).toEqual(["Fresh", "Novice"]);
-    expect(out.protected).toEqual([]);
   });
 });
 

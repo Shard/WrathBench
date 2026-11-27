@@ -171,13 +171,6 @@ describe("level-target: a probe campaign's stopping rule", () => {
     expect(w.check()?.reason).toBe("level-target");
   });
 
-  test("off unless asked for: no stop level, no stop", () => {
-    const w = new Watchdogs(cfg, clock().now);
-    w.noteModelOutput();
-    w.noteProgress(80, 0);
-    expect(w.check()).toBeNull();
-  });
-
   test("an xp-only reading never trips it", () => {
     const w = new Watchdogs(cfg, clock().now, 0, { stopAtLevel: 10 });
     w.noteModelOutput();

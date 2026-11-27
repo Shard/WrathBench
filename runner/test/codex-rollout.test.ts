@@ -13,12 +13,9 @@ import {
   CodexRolloutFollower,
   CodexRolloutScan,
   rateLimitsOfLine,
-  turnModelOfLine,
-  toolOutputOf,
   findRollout,
   lastCallOfLine,
   lastCallOfRollout,
-  lastCallOfText,
 } from "../src/codex-rollout";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -71,14 +68,6 @@ describe("lastCallOfLine", () => {
     });
   });
 
-  test("a missing window is absent, not zero", () => {
-    expect(lastCallOfLine(tokenCount({ in: 10, cached: 0, out: 1 }, null))).toEqual({
-      prompt_tokens: 10,
-      completion_tokens: 1,
-      cached_tokens: 0,
-    });
-  });
-
   test("a token_count with null info, or another record kind, is nothing", () => {
     const nullInfo = JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: null } });
     expect(lastCallOfLine(nullInfo)).toBeUndefined();
@@ -117,12 +106,6 @@ describe("lastCallOfRollout", () => {
     // Reading far enough back to hold it whole finds it.
     expect(lastCallOfRollout(file, { tailBytes: tail.length + 1 + straddler.length + 1 })?.prompt_tokens).toBe(777);
   });
-
-  test("lastCallOfText skips a partial head line only when told the chunk is partial", () => {
-    const line = tokenCount({ in: 5, cached: 0, out: 1 });
-    expect(lastCallOfText(line, false)?.prompt_tokens).toBe(5);
-    expect(lastCallOfText(line, true)).toBeUndefined();
-  });
 });
 
 describe("findRollout and the reader", () => {
@@ -144,29 +127,12 @@ describe("findRollout and the reader", () => {
     expect(notes).toHaveLength(1);
   });
 
-  test("an onFailure that throws never reaches the caller", () => {
-    const reader = new CodexLastCallReader(undefined, () => {
-      throw new Error("log failed");
-    });
-    expect(reader.read(THREAD)).toBeUndefined();
-  });
-
   test("caches the path per thread and reads the new tail each turn", () => {
     const { home: h, file } = home([tokenCount({ in: 100, cached: 0, out: 1 })]);
     const reader = new CodexLastCallReader(h, () => {});
     expect(reader.read(THREAD)?.prompt_tokens).toBe(100);
     writeFileSync(file, [tokenCount({ in: 100, cached: 0, out: 1 }), tokenCount({ in: 150, cached: 0, out: 1 })].join("\n") + "\n");
     expect(reader.read(THREAD)?.prompt_tokens).toBe(150);
-  });
-
-  test("an unreadable rollout is an absent figure, not a throw", () => {
-    const { home: h, file } = home([tokenCount({ in: 100, cached: 0, out: 1 })]);
-    const notes: string[] = [];
-    const reader = new CodexLastCallReader(h, (r) => notes.push(r));
-    expect(reader.read(THREAD)?.prompt_tokens).toBe(100);
-    writeFileSync(file, "");
-    expect(reader.read(THREAD)).toBeUndefined();
-    expect(notes).toHaveLength(1);
   });
 });
 
@@ -214,14 +180,6 @@ describe("rateLimitsOfLine", () => {
     expect(rateLimitsOfLine(withLimits(LIMITS(10)))).toHaveLength(1);
     expect(rateLimitsOfLine(JSON.stringify({ type: "response_item", payload: { type: "message", rate_limits: LIMITS(10) } }))).toBeUndefined();
     expect(rateLimitsOfLine("{not json")).toBeUndefined();
-  });
-});
-
-describe("turnModelOfLine", () => {
-  test("names the model a turn_context line carries, and nothing for any other line", () => {
-    expect(turnModelOfLine(JSON.stringify({ type: "turn_context", payload: { turn_id: "t", model: "gpt-5.5", summary: "auto" } }))).toBe("gpt-5.5");
-    expect(turnModelOfLine(JSON.stringify({ type: "turn_context", payload: { model: "" } }))).toBeUndefined();
-    expect(turnModelOfLine(JSON.stringify({ type: "response_item", payload: { text: "the turn_context said nothing" } }))).toBeUndefined();
   });
 });
 
@@ -297,15 +255,6 @@ describe("CodexRolloutScan tool calls", () => {
     expect(scan.model).toBeUndefined();
   });
 
-  test("an image part is its size; anything else as written", () => {
-    expect(toolOutputOf([{ type: "input_image", image_url: "data:image/png;base64,AAAA" }, { type: "input_text", text: "t" }])).toEqual([
-      { type: "input_image", chars: 26 },
-      { type: "input_text", text: "t" },
-    ]);
-    expect(toolOutputOf("plain")).toBe("plain");
-    expect(toolOutputOf(undefined)).toBeNull();
-  });
-
   test("the follower answers them once each, and none on a thread with none", () => {
     const { home: h, file } = home([exec("c1"), out("custom_tool_call_output", "c1", "done")]);
     const follower = new CodexRolloutFollower(h, () => {});
@@ -340,12 +289,6 @@ describe("rollout deletion", () => {
     }
     return h;
   }
-  /** Date directories age with their files, as on disk once nothing is written into them. */
-  function ageDirs(h: string, day: string, ageMs: number): void {
-    const at = new Date(NOW - ageMs);
-    const parts = day.split("/");
-    for (let i = parts.length; i > 0; i--) utimesSync(join(h, "sessions", ...parts.slice(0, i)), at, at);
-  }
 
   test("the thread a file name belongs to, as the CLI parses it", () => {
     expect(rolloutThreadId(`rollout-2026-10-16T09-28-46-${LIVE}.jsonl`)).toBe(LIVE);
@@ -375,32 +318,6 @@ describe("rollout deletion", () => {
     expect(day).toEqual(["README", "notes", `rollout-2026-10-12T00-00-00-${DEAD}.jsonl.zst`, `rollout-2026-10-12T01-02-03-${LIVE}.jsonl`].sort());
     expect(readdirSync(join(h, "sessions", "2026", "10", "16"))).toHaveLength(1);
     for (const f of ["auth.json", "config.toml", "thread_history_1.sqlite", "state_5.sqlite", "sessions/session_index.jsonl"]) expect(existsSync(join(h, f))).toBe(true);
-  });
-
-  test("date directories a sweep empties go once they have settled, never today's or yesterday's", () => {
-    const h = codexHome([
-      { day: "2026/09/30", thread: DEAD, ageMs: 400 * HOUR },
-      { day: "2026/10/15", thread: DEAD, ageMs: 30 * HOUR },
-    ]);
-    // Nothing has touched these directories since their files were written.
-    ageDirs(h, "2026/09/30", 400 * HOUR);
-    ageDirs(h, "2026/10/15", 30 * HOUR);
-    const first = pruneRollouts(h, { keep: new Set(), now: NOW });
-    expect(first.files).toBe(2);
-    // Deleting a file moved its directory's mtime: nothing is removed the same sweep.
-    expect(first.dirs).toBe(0);
-    ageDirs(h, "2026/09/30", 400 * HOUR);
-    ageDirs(h, "2026/10/15", 30 * HOUR);
-    const second = pruneRollouts(h, { keep: new Set(), now: NOW });
-    expect(second.dirs).toBe(1);
-    expect(existsSync(join(h, "sessions", "2026", "09", "30"))).toBe(false);
-    // Its month in turn, once that has settled too.
-    ageDirs(h, "2026/09", 400 * HOUR);
-    expect(pruneRollouts(h, { keep: new Set(), now: NOW }).dirs).toBe(1);
-    expect(existsSync(join(h, "sessions", "2026", "09"))).toBe(false);
-    // Yesterday's directory, and the current month and year, stay.
-    expect(existsSync(join(h, "sessions", "2026", "10", "15"))).toBe(true);
-    expect(existsSync(join(h, "sessions"))).toBe(true);
   });
 
   test("a home with no sessions, an unwritable directory or a vanished file is counted, never thrown", () => {

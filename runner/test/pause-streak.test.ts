@@ -14,7 +14,7 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig, type PauseReason } from "../src/config";
-import { LADDER_EXEMPT_PAUSES, onPauseLadder, pauseCountsOnLadder, readRunFact, readRunFacts, tallyRecords, tallyRecordsCached, type CountCache } from "../src/run-fact";
+import { onPauseLadder, pauseCountsOnLadder, readRunFact, readRunFacts, tallyRecords, tallyRecordsCached, type CountCache } from "../src/run-fact";
 import { readMeta, Trajectory, type RunMeta } from "../src/trajectory";
 
 /** One segment: the turns it made, the pause that ended it, and a turn flushed after the pause. */
@@ -131,9 +131,10 @@ describe("the pause streak", () => {
   });
 
   test("every pause but the exempt ones is on the ladder", () => {
-    expect([...LADDER_EXEMPT_PAUSES].sort()).toEqual(["offline", "operator-pause", "party-paused", "subscription-budget"]);
     expect(onPauseLadder("operator-pause")).toBe(false);
     expect(onPauseLadder("offline")).toBe(false);
+    // A party's pause is the party's, never a rung.
+    expect(onPauseLadder("party-paused")).toBe(false);
     // A usage budget's own pause is the harness's: no rung, no streak.
     expect(onPauseLadder("subscription-budget")).toBe(false);
     expect(
@@ -172,11 +173,6 @@ describe("the pause streak", () => {
     // An older record with the reset only in its detail text is read as it always was.
     expect(pauseCountsOnLadder({ reason: "quota-exhausted", detail: `X-RateLimit-Reset: ${reset}` } as { reason: string })).toBe(true);
     expect(pauseCountsOnLadder({ reason: "operator-pause" })).toBe(false);
-  });
-
-  test("a pause with no stated reset leaves no notBefore on the fact", () => {
-    writeRun("no-reset", [{ turns: 4, pause: "quota-exhausted" }]);
-    expect(readRunFact(runs, "no-reset")!.pause!.notBefore).toBeUndefined();
   });
 
   test("a segment with no pause of its own (a runner killed outright) still resets on its turns", () => {
