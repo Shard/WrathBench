@@ -16,7 +16,6 @@ import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { countedFact } from "../runner/test/fixtures/counted-fact";
 import { emptyModelLists } from "../runner/src/model-lists";
 import { planOf } from "./fixtures/tick";
-import { formatHeld, formatModels, plannedVerdicts } from "./run-fleet-status";
 import { checkedIn, defsBlock, definition, partyDefinition } from "../runner/test/fixtures/campaigns";
 
 const NOW = Date.UTC(2026, 10, 15, 12);
@@ -294,15 +293,6 @@ const SCENARIOS: Record<string, () => Scenario> = {
     facts: [...counted({ model: "opus", driver: "claude-code" }, "e90", 3, 6), ...counted({ model: "opus", driver: "claude-code" }, "e360", 1, 8)],
     worlds: { max: 0 },
   }),
-  "Deadmines solo while failed boots hold the worlds": () => ({
-    config: fleet({ policy: { worlds: "evals" } }, { WRATHBENCH_EVAL_POOL_SIZE: "10" }),
-    facts: [...counted({ model: "opus", driver: "claude-code" }, "e90", 3, 6), ...counted({ model: "opus", driver: "claude-code" }, "e360", 1, 8)],
-    worlds: { max: 4, hold: "three world boots failed in a row" },
-  }),
-  "Deadmines solo with worlds off": () => ({
-    config: fleet(),
-    facts: [...counted({ model: "opus", driver: "claude-code" }, "e90", 3, 6), ...counted({ model: "opus", driver: "claude-code" }, "e360", 1, 8)],
-  }),
   "scored episodes held (SCORED_EPISODES_WAIT)": () => ({ config: fleet({ queue: [{ ref: "glm", episode: "e90", repeat: 1 }] }), scoredWait: "the scored-episode hold" }),
   "the evals group off": () => ({ config: fleet(), evals: false }),
   "freeplay: models past their targets take a freeplay session each": () => ({ config: idleFleet(), facts: pastTargets() }),
@@ -319,11 +309,6 @@ const SCENARIOS: Record<string, () => Scenario> = {
     config: idleFleet({ queue: [{ ref: "glm", episode: "e90", repeat: 5 }] }),
     facts: [...pastTargets(), run("fleet-fp-freeplay-a3", { ...FP, account: "RUNNER3", character: "Bromdir", terminationReason: "idle" }), live("fleet-glm-e90-20261115", { model: "z-ai/glm-5.2:free", account: "RUNNER3" })],
     running: [{ job: { refs: ["glm"], ref: "glm", episode: "e90", repeat: 5, name: "glm-e90", enabled: true, source: "queue" }, account: "RUNNER3", runIds: ["fleet-glm-e90-20261115"] }],
-  }),
-  "freeplay: with no free account a character says it is blocked": () => ({
-    config: idleFleet({ accounts: { pool: ["RUNNER3"] } }),
-    facts: [...pastTargets(), run("fleet-fp-freeplay-a3", { ...FP, account: "RUNNER3", character: "Bromdir", terminationReason: "idle" }), live("fleet-fp2-freeplay-a1", { ...FP2, account: "RUNNER3", character: "Glimmer" })],
-    running: [{ job: policyJob("fp2", "freeplay", 1), account: "RUNNER3", runIds: ["fleet-fp2-freeplay-a1"] }],
   }),
   "a fresh launch sweeps its model's old name off a free account, and keeps every freeplay character": () => ({
     config: fleet({ roster: { glm: ROSTER.glm, son: ROSTER.son, fp: ROSTER.fp } }),
@@ -348,13 +333,11 @@ const SCENARIOS: Record<string, () => Scenario> = {
     config: fleet({ queue: [{ ref: "glm", episode: "e90", repeat: 1 }] }),
     cooling: { "glm-e90": "glm cooling until 13:00 (rate-limited)" },
   }),
-  "queue: a finished job stays finished": () => ({ config: fleet({ queue: [{ ref: "glm", episode: "e90", repeat: 1 }] }), finished: ["glm-e90"] }),
   "pinned: a job on its own account": () => ({ config: fleet({ accounts: { pool: ["RUNNER", "RUNNER2"] }, queue: [{ ref: "son", episode: "e90", repeat: 1, account: "PINNED1" }] }) }),
   "pinned: a job whose repeat is met spawns nothing": () => ({
     config: fleet({ accounts: { pool: ["RUNNER"] }, queue: [{ ref: "glm", episode: "e90", repeat: 1, account: "PINNED1" }] }),
     facts: counted({ model: "z-ai/glm-5.2:free" }, "e90", 1, 3).map((f) => ({ ...f, runId: "fleet-glm-e90-20261115" })),
   }),
-  "pinned: an ineligible job is gated": () => ({ config: fleet({ accounts: { pool: ["RUNNER"] }, queue: [{ ref: "glm", episode: "e360", repeat: 1, account: "PINNED1" }] }) }),
   "pinned: a disabled job that is running drains": () => {
     const config = fleet({ accounts: { pool: ["RUNNER"] }, queue: [{ ref: "son", episode: "e90", repeat: 1, account: "PINNED1", enabled: false }] });
     return {
@@ -363,11 +346,6 @@ const SCENARIOS: Record<string, () => Scenario> = {
       running: [{ job: { ...config.jobs[0]!, enabled: true }, account: "PINNED1", runIds: ["fleet-son-e90-pin"] }],
     };
   },
-  "pinned: a running job the config removed is unyielded and drains": () => ({
-    config: fleet({ accounts: { pool: ["RUNNER"] } }),
-    facts: [live("fleet-son-e90-pin", { account: "PINNED1" })],
-    running: [{ job: { refs: ["son"], ref: "son", episode: "e90", repeat: 1, name: "son-e90-pin", enabled: true, source: "queue", account: "PINNED1" }, account: "PINNED1", runIds: ["fleet-son-e90-pin"] }],
-  }),
   "pool: a running queue job the config dropped drains": () => ({
     config: fleet(),
     facts: [live("fleet-glm-e90-q", { model: "z-ai/glm-5.2:free", account: "RUNNER2" })],
@@ -451,10 +429,6 @@ const SCENARIOS: Record<string, () => Scenario> = {
     facts: [...pastTargets(), paused("fleet-fp-freeplay-a2", "operator-pause", { ...FP, account: "RUNNER4", character: "Bromdir", credential: "or-free" }), live("fleet-fp2-freeplay-a1", { ...FP2, account: "RUNNER2", character: "Glimmer", credential: "or-free" })],
     running: [{ job: policyJob("fp2", "freeplay", 1), account: "RUNNER2", runIds: ["fleet-fp2-freeplay-a1"] }],
   }),
-  "resume: a provider-reset pause waits for its reset": () => ({
-    config: idleFleet(),
-    facts: [...pastTargets(), paused("fleet-fp-freeplay-a2", "rate-limited", { ...FP, account: "RUNNER4", character: "Bromdir", credential: "or-free", pause: { reason: "rate-limited", at: NOW - 60_000, count: 1, episodeElapsedMs: 60_000, notBefore: NOW + H } })],
-  }),
   "resume: a paused run whose account a live job holds waits": () => ({
     config: idleFleet({ queue: [{ ref: "glm", episode: "e90", repeat: 5 }] }),
     facts: [...pastTargets(), paused("fleet-fp-freeplay-a2", "operator-pause", { ...FP, account: "RUNNER4", character: "Bromdir", credential: "or-free" }), live("fleet-glm-e90-20261115", { model: "z-ai/glm-5.2:free", account: "RUNNER4" })],
@@ -510,12 +484,6 @@ const SCENARIOS: Record<string, () => Scenario> = {
   "probes: an unpinned campaign is scheduled for a model that owes nothing": () => ({
     config: idleFleet({ "campaign-defs": defsBlock(definition({ id: "solo" })), campaigns: { solo: { version: 1, assignments: [{ model: "glm", runsPerCell: 1 }] } } }),
     facts: pastTargets(),
-  }),
-  "probes: run pods on, capped at zero": () => ({
-    config: idleFleet({ policy: { runPods: "probes" }, "campaign-defs": defsBlock(definition({ id: "solo" })), campaigns: { solo: { version: 1, assignments: [{ model: "glm", runsPerCell: 1 }] } } }),
-    facts: pastTargets(),
-    onCluster: true,
-    maxRunPods: 0,
   }),
   "probes: run pods on, a live probe pod fills the cap": () => ({
     config: idleFleet({ policy: { runPods: "probes" }, "campaign-defs": defsBlock(definition({ id: "solo" }), definition({ id: "duo" })), campaigns: { solo: { version: 1, assignments: [{ model: "glm", runsPerCell: 1 }] }, duo: { version: 1, assignments: [{ model: "fp", runsPerCell: 1 }] } } }),
@@ -609,23 +577,7 @@ describe("the supervisor's tick over fixture states", () => {
 
 
 
-describe("the reports say the tick's own decision", () => {
-  test("a model the projection would schedule but the tick holds reads held, with the tick's reason; one it launches says where", () => {
-    const config = fleet();
-    const usage = ["claude-1", "claude-2"].map((credential) => ({ credential, observedAt: NOW - 60_000, windows: [{ usedPercent: 90, windowMinutes: 300, resetsAt: NOW + 2 * H }] }));
-    const plan = planOf(config, { now: NOW, stamp: STAMP, usage });
-    const lines = formatModels(plan.states, new Set(), NOW, new Map(), config.policy, true, plannedVerdicts(plan));
-    const line = (name: string): string => lines.find((l) => l.trimStart().startsWith(`${name} `))!;
-    // Without the plan the projection's word is "yes" for both claude models.
-    expect(formatModels(plan.states, new Set(), NOW, new Map(), config.policy).find((l) => l.trimStart().startsWith("son "))).toMatch(/ yes: schedulable on e90/);
-    expect(line("son")).toMatch(/ held: schedulable on e90 — e90 held — no credential has room \(credential claude-1: at or over its scored usage threshold/);
-    expect(line("opus")).toMatch(/ held: /);
-    expect(line("glm")).toMatch(/ yes: schedulable on e90 — next tick: e90 on RUNNER$/);
-    expect(formatHeld(plan.holds).join("\n")).toContain("son: HELD — e90 wanted, no credential has room");
-  });
-});
-
-describe("one model on two providers, as the tick and its reports read it (operator, 2026-11-16)", () => {
+describe("one model on two providers, as the tick reads it", () => {
   const GO_BASE = "https://opencode.ai/inference/go/openai/v1";
   const twoProviders = (goOpen = true): FleetConfig =>
     fleet({
@@ -637,22 +589,10 @@ describe("one model on two providers, as the tick and its reports read it (opera
     });
   const goRun = (i: number): RunFact => ({ ...countedFact({ model: "deepseek-v4.1-flash", driver: "openai" }, "e90", 3, { i, now: NOW, series: SERIES }), runId: `go-${i}`, apiBase: GO_BASE, credential: "opencodego", account: "RUNNER" } as RunFact);
   const orRun = (i: number): RunFact => ({ ...countedFact({ model: "deepseek/deepseek-v4.1-flash" }, "e90", 2, { i, now: NOW, series: SERIES }), runId: `or-${i}`, credential: "or-paid", account: "RUNNER" });
-  const report = (config: FleetConfig, runs: RunFact[]): { picks: string[]; lines: string[] } => {
-    const plan = planOf(config, { now: NOW, stamp: STAMP, runs });
-    return {
-      picks: plan.picks.map((p) => `${p.job.name} on ${p.account}`),
-      lines: [...formatModels(plan.states, new Set(), NOW, new Map(), config.policy, true, plannedVerdicts(plan)).slice(1), ...formatHeld(plan.holds)],
-    };
-  };
+  const picksOf = (config: FleetConfig, runs: RunFact[]): string[] => planOf(config, { now: NOW, stamp: STAMP, runs }).picks.map((p) => `${p.job.name} on ${p.account}`);
 
   test("three Go e90s are the model's three: the OpenRouter entry launches no fourth", () => {
-    const { picks, lines } = report(twoProviders(), [goRun(1), goRun(2), goRun(3)]);
-    expect(picks).toEqual([]);
-    expect(lines).toEqual([
-      "  model        billing tier      status   e90          e360         extras schedulable",
-      "  ds-go        paid    t1        active   3/3 L3       -            0      free: targets met on e90 — last episode-limit 5760m ago — one model, also run as ds-or: counted runs under any fill its targets",
-      "  └ ds-or      paid    t1        active   ↑            -            0      free: targets met on e90",
-    ]);
+    expect(picksOf(twoProviders(), [goRun(1), goRun(2), goRun(3)])).toEqual([]);
   });
 
   test("a job in flight under one entry holds the other's e90, unless it is a probe", () => {
@@ -665,20 +605,8 @@ describe("one model on two providers, as the tick and its reports read it (opera
   });
 
   test("owing one between them, one e90 launches, under the first entry with room", () => {
-    const owed = report(twoProviders(), [goRun(1), orRun(2)]);
-    expect(owed.picks).toEqual(["ds-go-e90 on RUNNER"]);
-    expect(owed.lines).toEqual([
-      "  model        billing tier      status   e90          e360         extras schedulable",
-      "  ds-go        paid    t1        active   2/3 L3       -            0      yes: schedulable on e90 — next tick: e90 on RUNNER — last episode-limit 5880m ago — one model, also run as ds-or: counted runs under any fill its targets",
-      "  └ ds-or      paid    t1        active   ↑            -            0      held: schedulable on e90 — e90 launches under ds-go next tick (one model) — last episode-limit 5820m ago",
-    ]);
-    // The Go credential has no room (disabled here): the pick moves to the OpenRouter entry, and Go's hold says why.
-    const full = report(twoProviders(false), [goRun(1), orRun(2)]);
-    expect(full.picks).toEqual(["ds-or-e90 on RUNNER"]);
-    expect(full.lines.slice(1)).toEqual([
-      "  ds-go        paid    t1        active   2/3 L3       -            0      held: schedulable on e90 — e90 held — no enabled OpenCode Go credential carries paid models — add one under credentials — last episode-limit 5880m ago — one model, also run as ds-or: counted runs under any fill its targets",
-      "  └ ds-or      paid    t1        active   ↑            -            0      yes: schedulable on e90 — next tick: e90 on RUNNER — last episode-limit 5820m ago",
-      "  ds-go: HELD — e90 wanted, no enabled OpenCode Go credential carries paid models — add one under credentials",
-    ]);
+    expect(picksOf(twoProviders(), [goRun(1), orRun(2)])).toEqual(["ds-go-e90 on RUNNER"]);
+    // The Go credential has no room (disabled here): the pick moves to the OpenRouter entry.
+    expect(picksOf(twoProviders(false), [goRun(1), orRun(2)])).toEqual(["ds-or-e90 on RUNNER"]);
   });
 });

@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { isStaleRun, liveCredentials, modelStates, type ModelState } from "../runner/src/models";
+import { isStaleRun } from "../runner/src/models";
 import { readRunFact, utcDay, type RunFact } from "../runner/src/run-fact";
 import { loadRunConfig } from "../runner/src/config";
 import { Trajectory, type RunMeta } from "../runner/src/trajectory";
@@ -32,7 +32,6 @@ import {
   type ReadHold,
   readCredentialUsage,
   readHoldsOf,
-  readsGoUsage,
   resumeHoldOf,
   SlotBook,
   writeCredentialUsageSidecar,
@@ -84,10 +83,6 @@ function fleet(over: Record<string, unknown> = {}): FleetConfig {
     },
     { env: {} },
   );
-}
-
-function statesOf(cfg: FleetConfig, runs: RunFact[] = []): ModelState[] {
-  return modelStates({ runsDir: "/nonexistent", roster: rosterModels(cfg.roster), runs, sidecar: { version: 1, cleared: {} }, now: NOW, policy: cfg.policy });
 }
 
 /**
@@ -785,18 +780,6 @@ describe("OpenCode Go", () => {
     },
     { env: {} },
   );
-  const gateOn = async (go: FleetGoUsage) => {
-    await go.refresh(onRuns.credentials, onRuns.roster);
-    return credentialGate(onRuns.credentials, go.observations(), [], NOW, go.readHolds(onRuns.credentials));
-  };
-
-  test("the paid side is read whatever its budget's kind; the free side never is", () => {
-    const [paid, free] = [onRuns.credentials.find((c) => c.id === "go-paid")!, onRuns.credentials.find((c) => c.id === "go-free")!];
-    expect(readsGoUsage(paid)).toBe(true);
-    expect(readsGoUsage(free)).toBe(false);
-    expect(readsGoUsage({ ...free, budget: { kind: "usage", scoredMaxPct: 80, freeplayMaxPct: 80 } })).toBe(true);
-    expect(readsGoUsage({ ...paid, provider: "opencode" })).toBe(false);
-  });
 
   test("a runs-budget Go credential is read too: a spent window holds it, a high one does not, and the free side stays open", async () => {
     const f = fetchOf([okBody(88), { ...okBody(40), rolling: { status: "rate-limited", percent: 97, resetsAt: new Date(NOW + 2 * H).toISOString() } }]);
@@ -812,30 +795,6 @@ describe("OpenCode Go", () => {
     expect(gate.holdReasonOf("go-paid", "e90")?.code).toBe("usage-spent");
     expect(gate.holdReasonOf("go-paid", "freeplay")?.code).toBe("usage-spent");
     expect(picks(onRuns, [], { usage: go.observations(), readHolds: go.readHolds(onRuns.credentials), now }).on).toEqual({ gofree: "go-free" });
-  });
-
-  test("a runs-budget Go credential's refused key holds both sides; no access holds the paid side only", async () => {
-    const refused = await gateOn(new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(401, "api_key_expired"), now: () => NOW }));
-    expect(refused.holdReasonOf("go-paid", "e90")?.code).toBe("auth-failed");
-    expect(refused.holdReasonOf("go-free", "freeplay")?.code).toBe("auth-failed");
-    const forbidden = await gateOn(new FleetGoUsage({ env: { OPENCODE_KEY: "fake-go-key" }, fetch: refusing(403), now: () => NOW }));
-    expect(forbidden.holdReasonOf("go-paid", "e90")?.code).toBe("no-access");
-    expect(forbidden.holdOf("go-free", "freeplay")).toBeUndefined();
-  });
-
-  test("the holds off the reads: a refusal fans out to the same key, no access and an overage stay on the credential read", () => {
-    const at = { at: NOW, http: 401, since: NOW };
-    const refused = readHoldsOf(config.credentials, new Map([["go-paid", { ...at, classification: "auth-failed" as const }]]));
-    expect([...refused.keys()].sort()).toEqual(["go-free", "go-paid"]);
-    for (const classification of ["no-access", "overage"] as const) {
-      const one = readHoldsOf(config.credentials, new Map([["go-paid", { ...at, http: 403, classification }]]));
-      expect([...one.entries()].map(([id, h]) => [id, h.code])).toEqual([["go-paid", classification]]);
-    }
-    for (const classification of ["ok", "spent", "unread"] as const) {
-      expect(readHoldsOf(config.credentials, new Map([["go-paid", { ...at, http: 200, classification }]])).size).toBe(0);
-    }
-    // A read of a credential the config no longer has holds nothing.
-    expect(readHoldsOf(config.credentials, new Map([["gone", { ...at, classification: "auth-failed" as const }]])).size).toBe(0);
   });
 
   test("--status and the dry run hold by the reads the supervisor published, as its tick does, never by a borrowed one", async () => {

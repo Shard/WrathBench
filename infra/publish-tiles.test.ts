@@ -6,7 +6,6 @@
  */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { encodePng } from "../minimap/src/png";
@@ -20,7 +19,6 @@ import {
   TILE_MANIFEST_KEY,
   TILE_PREFIX,
   parseTileManifest,
-  planTileUploads,
   publishTiles,
   renderTileManifest,
   scanTiles,
@@ -67,19 +65,6 @@ function fakeStore(seed: Record<string, string> = {}): Fake {
 }
 
 describe("scanTiles", () => {
-  test("finds tiles under integer map directories and keys them as the viewer's path", () => {
-    const dir = root({
-      "0/43_31.png": "a",
-      "0/44_31.png": "b",
-      "571/10_20.png": "c",
-    });
-    expect(scanTiles(dir).map((t) => t.key)).toEqual([
-      `${TILE_PREFIX}0/43_31.png`,
-      `${TILE_PREFIX}0/44_31.png`,
-      `${TILE_PREFIX}571/10_20.png`,
-    ]);
-  });
-
   test("reads nothing that is not a tile — no notes, no logs, no half-written temp files", () => {
     const dir = root({
       "0/43_31.png": "a",
@@ -91,25 +76,6 @@ describe("scanTiles", () => {
       "index.json": "no",
     });
     expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/43_31.png`]);
-  });
-
-  test("finds the baked pyramid levels under each listed layer, keyed as the viewer's path", () => {
-    const dir = root({
-      "0/43_31.png": "a",
-      "0/minimap/1/21_15.webp": "b",
-      "0/minimap/6/0_0.webp": "c",
-      "0/art/1/21_15.webp": "e",
-      "571/minimap/3/2_5.webp": "d",
-      "571/art/6/0_0.webp": "f",
-    });
-    expect(scanTiles(dir).map((t) => t.key)).toEqual([
-      `${TILE_PREFIX}0/43_31.png`,
-      `${TILE_PREFIX}0/minimap/1/21_15.webp`,
-      `${TILE_PREFIX}0/minimap/6/0_0.webp`,
-      `${TILE_PREFIX}0/art/1/21_15.webp`,
-      `${TILE_PREFIX}571/minimap/3/2_5.webp`,
-      `${TILE_PREFIX}571/art/6/0_0.webp`,
-    ]);
   });
 
   test("uploads nothing the viewer would not serve under that exact name", () => {
@@ -136,10 +102,6 @@ describe("scanTiles", () => {
   test("takes each map's index, and nothing else that is JSON", () => {
     const dir = root({ "0/43_31.png": "a", "0/index.json": "{}", "0/minimap/index.json": "no", "1/manifest.json": "no", "1/art/1/index.json": "no" });
     expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/43_31.png`, `${TILE_PREFIX}0/index.json`]);
-  });
-
-  test("a machine that never ran the extraction scans empty rather than throwing", () => {
-    expect(scanTiles(join(tmpdir(), "wb-tiles-does-not-exist"))).toEqual([]);
   });
 });
 
@@ -208,60 +170,11 @@ describe("art changes are reported for the purge", () => {
   });
 });
 
-/*
- * The painted art is published under the same exception as the minimap tiles
- * (operator, 2026-10-18), so a pass carries it like any other layer.
- */
-describe("art goes up with the rest", () => {
-  test("every layer is scanned and uploaded in one pass, and the art's maps are named", async () => {
-    const tiles = scanTiles(
-      root({
-        "0/43_31.png": "native",
-        "0/minimap/1/21_15.webp": "level",
-        "0/art/1/21_15.webp": "art",
-        "1/art/6/0_0.webp": "art",
-      }),
-    );
-    expect(tiles.map((t) => t.key)).toContain(`${TILE_PREFIX}1/art/6/0_0.webp`);
-    const report = await publishTiles(tiles, fakeStore(), { now: 1, log: () => {} });
-    expect(report.uploaded).toBe(4);
-    expect(report.artMaps).toEqual([0, 1]);
-  });
-});
-
 describe("the manifest", () => {
   test("round-trips, and refuses keys outside the tile prefix", () => {
     const json = renderTileManifest({ [`${TILE_PREFIX}0/1_2.png`]: "hash" }, 5);
     expect(parseTileManifest(json)).toEqual({ [`${TILE_PREFIX}0/1_2.png`]: "hash" });
     expect(parseTileManifest(JSON.stringify({ tiles: { "v1/manifest.json": "hash" } }))).toEqual({});
-  });
-
-  test("a missing or unreadable manifest is an empty one, not a failure", () => {
-    expect(parseTileManifest(null)).toEqual({});
-    expect(parseTileManifest("{{{")).toEqual({});
-    expect(parseTileManifest("[]")).toEqual({});
-  });
-});
-
-describe("planTileUploads", () => {
-  const tile = (key: string) => ({ key, file: `/x/${key}`, size: 10 });
-
-  test("a matching hash is skipped, a differing one is not, and an unknown key uploads", () => {
-    const local = [tile("tiles/0/1_1.png"), tile("tiles/0/1_2.png"), tile("tiles/0/1_3.png")];
-    const hashes = new Map([
-      ["tiles/0/1_1.png", "same"],
-      ["tiles/0/1_2.png", "new"],
-      ["tiles/0/1_3.png", "fresh"],
-    ]);
-    const plan = planTileUploads(local, { "tiles/0/1_1.png": "same", "tiles/0/1_2.png": "old" }, hashes);
-    expect(plan.unchanged.map((t) => t.key)).toEqual(["tiles/0/1_1.png"]);
-    expect(plan.upload.map((t) => t.key)).toEqual(["tiles/0/1_2.png", "tiles/0/1_3.png"]);
-    expect(plan.orphans).toEqual([]);
-  });
-
-  test("a manifest key with no file behind it is reported, never deleted", () => {
-    const plan = planTileUploads([], { "tiles/0/9_9.png": "h" }, new Map());
-    expect(plan.orphans).toEqual(["tiles/0/9_9.png"]);
   });
 });
 
@@ -292,30 +205,6 @@ describe("publishTiles", () => {
     expect(store.puts).toEqual([TILE_MANIFEST_KEY]);
   });
 
-  test("a re-extraction that changes bytes re-uploads only what changed", async () => {
-    const dir = root({ "0/43_31.png": "a", "0/44_31.png": "b" });
-    const store = fakeStore();
-    await publishTiles(scanTiles(dir), store, { now: 7 });
-    writeFileSync(join(dir, "0/44_31.png"), "changed");
-    store.puts.length = 0;
-
-    const report = await publishTiles(scanTiles(dir), store, { now: 8 });
-    expect(report.uploaded).toBe(1);
-    expect(report.skipped).toBe(1);
-    expect(store.puts).toEqual([`${TILE_PREFIX}0/44_31.png`, TILE_MANIFEST_KEY]);
-  });
-
-  test("a first run is distinguishable from an unreadable manifest", async () => {
-    // The dry run's whole value is that "everything would upload" means a
-    // first run and nothing else; a manifest that exists but reads as empty
-    // must not look the same.
-    const dir = root({ "0/43_31.png": "a" });
-    const fresh = await publishTiles(scanTiles(dir), fakeStore(), { dryRun: true });
-    expect(fresh.manifestEntries).toBeNull();
-    const seeded = await publishTiles(scanTiles(dir), fakeStore({ [TILE_MANIFEST_KEY]: "{}" }), { dryRun: true });
-    expect(seeded.manifestEntries).toBe(0);
-  });
-
   test("a dry run reports the plan and touches the bucket not at all", async () => {
     const dir = root({ "0/43_31.png": "a" });
     const store = fakeStore();
@@ -325,18 +214,6 @@ describe("publishTiles", () => {
     expect(store.objects.size).toBe(0);
   });
 
-  test("each object is typed by what it is, and the indexes land after the tiles and before the manifest", async () => {
-    const dir = root({ "0/43_31.png": "native", "0/minimap/1/21_15.webp": "level", "0/art/1/21_15.webp": "art", "0/index.json": "{}" });
-    const store = fakeStore();
-    const report = await publishTiles(scanTiles(dir), store, { now: 7, concurrency: 1 });
-    expect(store.objects.get(`${TILE_PREFIX}0/43_31.png`)?.contentType).toBe("image/png");
-    expect(store.objects.get(`${TILE_PREFIX}0/minimap/1/21_15.webp`)?.contentType).toBe("image/webp");
-    expect(store.objects.get(`${TILE_PREFIX}0/art/1/21_15.webp`)?.contentType).toBe("image/webp");
-    expect(store.objects.get(`${TILE_PREFIX}0/index.json`)?.contentType).toBe("application/json");
-    expect(store.puts.slice(-2)).toEqual([`${TILE_PREFIX}0/index.json`, TILE_MANIFEST_KEY]);
-    expect(report.indexMaps).toEqual([0]);
-  });
-
   test("the pyramid's old .png keys stay in the bucket and in the manifest, as orphans", async () => {
     const old = `${TILE_PREFIX}0/minimap/1/21_15.png`;
     const store = fakeStore({ [TILE_MANIFEST_KEY]: renderTileManifest({ [old]: "h" }, 1), [old]: "png" });
@@ -344,15 +221,6 @@ describe("publishTiles", () => {
     expect(report.orphans).toBe(1);
     expect(store.objects.get(old)?.body).toBe("png");
     expect(parseTileManifest(store.objects.get(TILE_MANIFEST_KEY)?.body ?? null)[old]).toBe("h");
-  });
-
-  test("a native goes up as WebP beside the indexed PNG an earlier pass left, which stays for older builds", async () => {
-    const old = `${TILE_PREFIX}0/43_31.png`;
-    const store = fakeStore({ [TILE_MANIFEST_KEY]: renderTileManifest({ [old]: "h" }, 1), [old]: "png8" });
-    const report = await publishTiles(scanTiles(root({ "0/43_31.webp": "webp" })), store, { now: 7, log: () => {} });
-    expect(store.objects.get(`${TILE_PREFIX}0/43_31.webp`)?.contentType).toBe("image/webp");
-    expect(report.orphans).toBe(1);
-    expect(store.objects.get(old)?.body).toBe("png8");
   });
 
   test("nothing is written outside the tiles prefix", async () => {

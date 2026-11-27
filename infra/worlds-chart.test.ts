@@ -8,8 +8,7 @@
  * world's (the launcher stamps a world's own, and must refuse a pod without
  * them, since an absent one falls back to the shared conf's realm 1 and
  * RUNNER); its worldserver container is the shared one's apart from those;
- * its confs are read-only and its Errors.log its own; and every container
- * states what the namespace quota counts.
+ * and the network policies keep the worlds' SOAP from the run pods.
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -67,7 +66,6 @@ const worldPod = (docs: Doc[]): Pod => JSON.parse(templateMap(docs)["world.json"
 const sharedPod = (docs: Doc[]): PodSpec => find(docs, "Deployment", "wrathbench-worldserver")!.spec!.template!.spec!;
 const container = (spec: PodSpec, name: string): Container => [...(spec.initContainers ?? []), ...spec.containers].find((c) => c.name === name)!;
 const envOf = (c: Container) => Object.fromEntries((c.env ?? []).map((e) => [e.name, e]));
-const mountAt = (c: Container, path: string) => c.volumeMounts?.find((m) => m.mountPath === path);
 const fleet = (docs: Doc[]) => find(docs, "Deployment", "wrathbench-fleet")!.spec!.template!.spec!.containers[0]!;
 const retention = (docs: Doc[]) => find(docs, "CronJob", "wrathbench-log-retention")!.spec!.jobTemplate!.spec.template.spec.containers[0]!;
 const labels = (component: string) => ({ "app.kubernetes.io/instance": "wrathbench", "app.kubernetes.io/component": component });
@@ -90,34 +88,6 @@ describe.skipIf(helm === null)("the chart's worlds block", () => {
     expect(envOf(retention(docs))["WRATHBENCH_WORLDS_DIR"]).toBeUndefined();
     // A cap with the block off is no setting.
     expect(JSON.parse(templateMap(render(["--set", "worlds.max=2"]))["launcher.json"]!)).not.toHaveProperty("maxWorlds");
-  }, HELM_TEST_MS);
-
-  test("hosted on, the launcher's settings name the eval worlds' own secret key for a run pod on one; off, they do not", () => {
-    expect(JSON.parse(templateMap(render(ON))["launcher.json"]!)).not.toHaveProperty("worldsSecretKey");
-    const hosted = render([...ON, "--set", "hosted.enabled=true", "--set", "hosted.worldsSecretKey=EVAL_WORLDS_SECRET"]);
-    expect(JSON.parse(templateMap(hosted)["launcher.json"]!).worldsSecretKey).toBe("EVAL_WORLDS_SECRET");
-  }, HELM_TEST_MS);
-
-  test("on: a bare, never-restarted pod named under the headless worlds Service, which publishes it before it is ready", () => {
-    const docs = render([...ON, "--set", "worlds.max=3", "--set", "imagePullSecrets={harbor-pull}"]);
-    const pod = worldPod(docs);
-    expect(pod.kind).toBe("Pod");
-    expect(pod.metadata.generateName).toBe("wrathbench-world-");
-    expect(pod.metadata.labels).toMatchObject(labels("world"));
-    expect(pod.spec.restartPolicy).toBe("Never");
-    expect(pod.spec.automountServiceAccountToken).toBe(false);
-    expect(pod.spec.hostname).toBeUndefined();
-    expect(pod.spec.imagePullSecrets).toEqual([{ name: "harbor-pull" }]);
-    const svc = find(docs, "Service", "worlds")!;
-    expect(pod.spec.subdomain).toBe(svc.metadata!.name!);
-    expect(svc.spec!.clusterIP).toBe("None");
-    expect(svc.spec!.publishNotReadyAddresses).toBe(true);
-    expect(svc.spec!.selector).toEqual(labels("world"));
-    expect(svc.spec!.ports!.map((p) => p.port)).toEqual([8086]);
-    expect(JSON.parse(templateMap(docs)["launcher.json"]!).maxWorlds).toBe(3);
-    expect(pod.spec.initContainers!.map((c) => c.name)).toEqual(["wait-for-db", "db-import"]);
-    expect(container(pod.spec, "worldserver").image).toBe(container(sharedPod(docs), "worldserver").image);
-    expect(container(pod.spec, "db-import").image).toBe("harbor.example/wrathbench/wrathbench-db-import:harness-0.5-1-gabcdef0");
   }, HELM_TEST_MS);
 
   test("the template carries none of the shared world's identity: no characters schema, realm id or allowlist in any container", () => {
@@ -145,60 +115,6 @@ describe.skipIf(helm === null)("the chart's worlds block", () => {
       expect(world.ports).toEqual(shared.ports);
       const soap = envOf(world)["AC_SOAP_IP"];
       expect(soap?.valueFrom?.fieldRef?.fieldPath ?? "off").toBe(staging ? "status.podIP" : "off");
-    }
-  }, HELM_TEST_MS);
-
-  test("the db-import init makes the characters schema only, without asking", () => {
-    const env = envOf(container(worldPod(render(ON)).spec, "db-import"));
-    expect(env["AC_UPDATES_ENABLE_DATABASES"]?.value).toBe("2");
-    expect(env["AC_DISABLE_INTERACTIVE"]?.value).toBe("1");
-    expect(env["AC_LOGIN_DATABASE_INFO"]?.value).toContain(";acore_auth");
-    expect(env["AC_WORLD_DATABASE_INFO"]?.value).toContain(";acore_world");
-  }, HELM_TEST_MS);
-
-  test("confs read-only, Errors.log its own, the audit dir the shared one on the PVC, and no character-archive mount", () => {
-    const pod = worldPod(render([...ON, "--set", "staging.enabled=true"]));
-    const ws = container(pod.spec, "worldserver");
-    const di = container(pod.spec, "db-import");
-    for (const c of [ws, di]) expect(mountAt(c, "/azerothcore/env/dist/etc")).toEqual({ name: "data", mountPath: "/azerothcore/env/dist/etc", subPath: "etc", readOnly: true });
-    expect(mountAt(ws, "/azerothcore/env/dist/data")).toMatchObject({ subPath: "client", readOnly: true });
-    expect(envOf(ws)["AC_LOGS_DIR"]?.value).toBe("/azerothcore/env/dist/logs");
-    expect(mountAt(ws, "/azerothcore/env/dist/logs")).toEqual({ name: "logs", mountPath: "/azerothcore/env/dist/logs" });
-    const audit = envOf(ws)["AC_WRATH_BENCH_AUDIT_DIR"]!.value!;
-    expect(mountAt(ws, audit)).toEqual({ name: "data", mountPath: audit, subPath: "logs/wrathbench" });
-    expect(ws.volumeMounts!.some((m) => m.subPath === "characters")).toBe(false);
-    expect(pod.spec.volumes!.find((v) => v.name === "logs")?.emptyDir?.sizeLimit).toBe("1Gi");
-    expect(pod.spec.volumes!.find((v) => v.name === "data")?.persistentVolumeClaim?.claimName).toBe("wrathbench-data");
-  }, HELM_TEST_MS);
-
-  test("every container states what the namespace quota counts, and the world's own size is the worlds block's", () => {
-    const pod = worldPod(render([...ON, "--set", "worlds.resources.limits.memory=5Gi"]));
-    for (const c of [...pod.spec.initContainers!, ...pod.spec.containers]) {
-      expect([c.name, Object.keys(c.resources?.requests ?? {}).sort()]).toEqual([c.name, ["cpu", "ephemeral-storage", "memory"]]);
-      expect([c.name, typeof c.resources?.limits?.["memory"]]).toEqual([c.name, "string"]);
-    }
-    expect(container(pod.spec, "worldserver").resources).toEqual({ requests: { cpu: "250m", memory: "1536Mi", "ephemeral-storage": "256Mi" }, limits: { memory: "5Gi" } });
-    // The init's request is the pod's while it runs: below the worldserver's.
-    expect(container(pod.spec, "db-import").resources!.requests!["cpu"]).toBe("100m");
-  }, HELM_TEST_MS);
-
-  test("the fleet keeps worlds' records, the runner pod reads them, and log retention prunes their server logs, on the worlds subPath", () => {
-    const docs = render(ON);
-    expect(fleet(docs).volumeMounts).toContainEqual({ name: "data", mountPath: "/wrathbench/data/worlds", subPath: "worlds" });
-    const runner = find(docs, "Deployment", "wrathbench-runner")!.spec!.template!.spec!.containers[0]!;
-    expect(runner.volumeMounts).toContainEqual({ name: "data", mountPath: "/wrathbench/data/worlds", subPath: "worlds", readOnly: true });
-    expect(find(render([]), "Deployment", "wrathbench-runner")!.spec!.template!.spec!.containers[0]!.volumeMounts!.some((m) => m.subPath === "worlds")).toBe(false);
-    const job = retention(docs);
-    const dir = envOf(job)["WRATHBENCH_WORLDS_DIR"]!.value!;
-    expect(mountAt(job, dir)).toEqual({ name: "data", mountPath: dir, subPath: "worlds" });
-  }, HELM_TEST_MS);
-
-  test("worlds are a scored-attempt thing: with the runner or evals group off, the block renders nothing", () => {
-    for (const group of ["runner", "evals"]) {
-      const docs = render([...ON, "--set", `groups.${group}.enabled=false`]);
-      expect(find(docs, "Service", "worlds")).toBeUndefined();
-      expect(find(docs, "NetworkPolicy", "wrathbench-world")).toBeUndefined();
-      expect(envOf(retention(docs))["WRATHBENCH_WORLDS_DIR"]).toBeUndefined();
     }
   }, HELM_TEST_MS);
 

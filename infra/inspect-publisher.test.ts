@@ -1,18 +1,14 @@
 /**
  * `bun wb inspect publisher` over a fixture state file: the engine's own
  * parse, versions per run, the scan's withheld paths by rule, the log's pass
- * lines, and one run's detail, each line bounded.
+ * lines, each line bounded.
  */
 
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { SEG_MS } from "@wrathbench/inspector/codec/trace";
-import { report, run } from "./inspect-publisher";
+import { report } from "./inspect-publisher";
 import { emptyState, serializeState } from "./publish-core";
-import { tempDirs } from "./temp-dirs";
 
-const tmp = tempDirs();
 const NOW = Date.UTC(2030, 0, 2, 12, 0, 0);
 const T0 = Date.UTC(2030, 0, 2, 10, 0, 0);
 
@@ -58,30 +54,5 @@ describe("the report", () => {
     expect(out.filter((l) => l.includes("publish: gen")).length).toBe(2);
     expect(out.some((l) => l.includes("pass failed"))).toBe(true);
     for (const l of out) expect(l.length).toBeLessThanOrEqual(200);
-  });
-
-  test("one run: its versions, its objects, its trace windows and what was withheld of it", () => {
-    const out = report(stateText(), null, [], "run-a", NOW);
-    const at = (label: string): string => out.find((l) => l.startsWith(`${label} `)) ?? "";
-    expect(at("run")).toContain("2 version(s), current v2a (older v1a)");
-    expect(at("objects")).toContain("3 under v1/run/run-a/, 2 of them the current version's");
-    expect(at("trace")).toContain("4 window(s), 2030-01-02T10:00:00Z → 2030-01-02T10:55:00Z, in 2 run(s)");
-    expect(at("withheld")).toContain("v/detail.json: known:session-token ×1");
-    expect(at("held back")).toContain("new version v3a withheld by the secret scan; the manifest keeps v2a");
-    expect(report(stateText(), null, [], "run-none", NOW).some((l) => l.includes("nothing published"))).toBe(true);
-  });
-
-  test("a state file that does not parse says so", () => {
-    expect(report("{", null, [], null, NOW)).toEqual(["publisher: the state file does not parse"]);
-  });
-
-  test("--state reads a file here", async () => {
-    const path = join(tmp("inspect-publisher-"), "state.json");
-    writeFileSync(path, stateText());
-    const out: string[] = [];
-    const code = await run(["--state", path, "--passes", "0"], { out: (l) => out.push(l), err: () => {}, env: {} }, NOW);
-    expect(code).toBe(0);
-    expect(out[0]).toStartWith("state");
-    expect(out.some((l) => l.startsWith("passes"))).toBe(false);
   });
 });

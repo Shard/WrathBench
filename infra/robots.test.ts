@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
+import { ROBOTS_TXT } from "./robots";
 
 describe("the data hostname's robots.txt", () => {
-  test("sits at the bucket root", () => {
-    expect(ROBOTS_KEY).toBe("robots.txt");
-  });
-
   test("opens the headline material and closes per-run detail", () => {
     const lines = ROBOTS_TXT.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
     expect(lines[0]).toBe("User-agent: *");

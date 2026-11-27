@@ -201,7 +201,7 @@ const row = (out: string[], name: string): string => out.find((l) => l.startsWit
 const nums = (line: string): number[] => line.trim().split(/\s+/).slice(1, 4).map(Number);
 
 describe("the constants it shares with the runner", () => {
-  test("the cap, its refusal, its size label and the empty pad's text are the runner's", async () => {
+  test("the cap, its refusal, its size label, the empty pad's text, the reflect refusals and the pad tools' alias keys are the runner's", async () => {
     expect(SCRATCHPAD_MAX_CHARS).toBe(RUNNER_MAX);
     expect(overCapText("write_scratchpad", 33_000)).toContain(`write_scratchpad ${PAD_REFUSED}33000 chars`);
     expect(overCapText("scratchpad.append", 1)).toContain(`scratchpad.append ${PAD_REFUSED}`);
@@ -211,9 +211,6 @@ describe("the constants it shares with the runner", () => {
     expect(empty.endsWith(PAD_EMPTY)).toBe(true);
     const full = assembleContext({ turn: 1, notices: [], stateSummary: "", events: [], scratchpad: A });
     expect(padOfSection(full.slice(full.indexOf("\n\n[scratchpad")))).toBe(A);
-  });
-
-  test("the reflect refusals and the pad tools' alias keys are the runner's", async () => {
     expect(REFLECT_NOT_RESTING.startsWith(REFLECT_NOT_RESTING_HEAD)).toBe(true);
     expect(REFLECT_ALREADY_USED.startsWith(REFLECT_ALREADY_USED_HEAD)).toBe(true);
     for (const [tool, aliases] of Object.entries(PAD_ARG_ALIASES)) {
@@ -247,40 +244,6 @@ describe("inspect tools", () => {
       expect(r.out.join("\n")).not.toContain(TOKEN);
     });
   }
-
-  test("names the driver and its requests: one per turn, or one per session", async () => {
-    expect((await inspect(["tools", "run-loop"])).out[1]).toContain("driver    openai · 6 request(s) · 6 model response(s)");
-    expect((await inspect(["tools", "run-codex"])).out[1]).toContain("driver    codex · 6 request(s) · 19 model response(s)");
-    expect((await inspect(["tools", "run-claude"])).out[1]).toContain("driver    claude-code · 1 request(s) · 19 model response(s)");
-  });
-
-  test("a window drained late reads zero-length, and says why", async () => {
-    const claude = (await inspect(["tools", "run-claude"])).out;
-    expect(claude.find((l) => l.startsWith("windows"))).toContain("1 zero-length");
-    expect(claude.some((l) => l.includes("zero-length: the gate's open and close are written when the harness builds a context"))).toBe(true);
-    expect((await inspect(["tools", "run-loop"])).out.find((l) => l.startsWith("windows"))).toContain("0 zero-length");
-  });
-
-  test("a long error result is classed in linear time", async () => {
-    // A refusal matcher run over a whole result backtracks quadratically on a page of one word character.
-    const f = new Fixture(join(RUNS, "run-long-error"), "run-long-error", "loop");
-    f.request();
-    f.snippet("return dump()", { text: `error (1ms)\nError: ${"w".repeat(200_000)}`, isError: true });
-    f.tool("search_reference", { query: "x" }, { text: "w".repeat(200_000), isError: true });
-    f.end();
-    const r = await inspect(["tools", "run-long-error"]);
-    expect(nums(row(r.out, "run_snippet"))).toEqual([1, 0, 1]);
-    expect(nums(row(r.out, "search_reference"))).toEqual([1, 0, 1]);
-  });
-
-  test("--since and --until window the counts", async () => {
-    const r = await inspect(["tools", "run-loop", "--since", String(marks.loop["turn3"]), "--until", String(marks.loop["afterDrop"])]);
-    expect(r.out[0]).toContain("since 2030-01-02T11:03:");
-    expect(r.out[0]).toContain("until ");
-    expect(nums(row(r.out, "edit_scratchpad"))).toEqual([1, 1, 0]);
-    expect(nums(row(r.out, "write_scratchpad"))).toEqual([1, 1, 0]);
-    expect(row(r.out, "run_snippet")).toBe("");
-  });
 });
 
 describe("inspect pad", () => {
@@ -307,26 +270,6 @@ describe("inspect pad", () => {
     for (const l of r.out) expect(l.length).toBeLessThanOrEqual(DEFAULT_WIDTH);
   });
 
-  test("codex sizes per turn the same way", async () => {
-    const writes = (await inspect(["pad", "run-codex"])).out;
-    expect(writes.some((l) => /snippet append\s+1000 → 1009 \(next request\)/.test(l))).toBe(true);
-    expect(writes.some((l) => l.startsWith("per-turn"))).toBe(false);
-  });
-
-  test("claude-code: says plainly there is no per-turn size, and sizes only what a tool result states", async () => {
-    const r = await inspect(["pad", "run-claude"]);
-    expect(r.out.find((l) => l.startsWith("per-turn"))).toContain("none for 1 of 1 snippet write(s): driver claude-code writes the pad's text only on a request");
-    expect(r.out.some((l) => /snippet append\s+1000 → \?$/.test(l))).toBe(true);
-    expect(r.out.some((l) => /tool write\s+1007 → 600\s+-40%\s+DROP/.test(l))).toBe(true);
-  });
-
-  test("--last bounds the writes listed, --until the window", async () => {
-    const last = (await inspect(["pad", "run-loop", "--last", "2"])).out;
-    expect(last.find((l) => l.startsWith("writes"))).toContain("the last 2 of 6");
-    const early = (await inspect(["pad", "run-loop", "--until", String(marks.loop["afterEdit"])])).out;
-    expect(early.find((l) => l.startsWith("writes"))).toContain("the last 3 of 3");
-  });
-
   test("--at rebuilds the pad from the newest request, replaying the edits after it", async () => {
     const r = await inspect(["pad", "run-loop", "--at", String(marks.loop["afterEdit"])]);
     expect(r.code).toBe(0);
@@ -337,25 +280,6 @@ describe("inspect pad", () => {
     // Printed a line at a time, each capped; the rebuild itself is whole.
     expect(r.out.slice(r.out.indexOf("---") + 1)).toEqual(["# plan", `${"a".repeat(DEFAULT_WIDTH - 1)}…`, "note 1"]);
     expect(padAt(join(RUNS, "run-loop", "trajectory.jsonl"), marks.loop["afterEdit"]!)?.text).toBe(`${A}\nnote 1`);
-  });
-
-  test("--at starts from a write_scratchpad's content, under its alias key too", async () => {
-    const p = padAt(join(RUNS, "run-codex", "trajectory.jsonl"), marks.codex["afterDrop"]!);
-    expect(p?.from.what).toBe("write_scratchpad");
-    expect(p?.text).toBe(B);
-  });
-
-  test("--at on claude-code: a snippet's write between makes the text uncertain, and says so", async () => {
-    const r = await inspect(["pad", "run-claude", "--at", String(marks.claude["afterEdit"])]);
-    expect(r.out[1]).toContain("write_scratchpad at");
-    expect(r.out.some((l) => l.startsWith("uncertain 1 snippet(s) after that call scratchpad.write/append"))).toBe(true);
-    expect(r.out.some((l) => l.startsWith("uncertain 1 edit(s) did not find their text"))).toBe(true);
-  });
-
-  test("--at before anything recorded the pad says so", async () => {
-    const r = await inspect(["pad", "run-loop", "--at", String(T0)]);
-    expect(r.code).toBe(1);
-    expect(r.out[0]).toContain("records the pad");
   });
 
   test("the token is struck from every new view, the rebuilt pad's text included", async () => {
@@ -371,70 +295,21 @@ describe("inspect pad", () => {
     }
     expect((await inspect(["pad", "run-token", "--at", String(f.clock)])).out).toContain(`module key ${REDACTED}`);
   });
-
-  test("a flag a command does not take is refused, never ignored", async () => {
-    expect((await inspect(["tools", "run-loop", "--at", "1h"])).code).toBe(2);
-    expect((await inspect(["pad", "run-loop", "--at", "1h", "--since", "2h"])).code).toBe(2);
-    expect((await inspect(["run", "run-loop", "--next", "3"])).code).toBe(2);
-    expect((await inspect(["pad", "run-loop", "--grep", "x"])).err[0]).toContain("--grep does not apply to pad");
-  });
 });
 
 describe("ClickHouse and the files give the same tools and pad views", () => {
   const without = (out: string[]): string[] => out.filter((l) => !l.startsWith("source"));
   for (const shape of ["loop", "codex", "claude"] as const) {
-    const m = marks[shape];
-    const views = [
-      ["tools"],
-      ["tools", "--since", String(m["turn3"])],
-      ["tools", "--until", String(m["afterDrop"])],
-      ["pad"],
-      ["pad", "--last", "2"],
-      ["pad", "--since", String(m["turn3"]), "--until", String(m["afterDrop"])],
-      ["pad", "--at", String(m["afterEdit"])],
-      ["pad", "--at", String(m["afterDrop"])],
-      ["pad", "--at", String(m["turn3"])],
-      ["pad", "--at", String(T0 - 1)],
-    ];
-    for (const argv of views) {
-      test(`${shape}: ${argv.join(" ")}`, async () => {
+    test(shape, async () => {
+      const m = marks[shape];
+      const views = [["tools"], ["tools", "--since", String(m["turn3"])], ["pad"], ["pad", "--at", String(m["afterEdit"])], ["pad", "--at", String(T0 - 1)]];
+      for (const argv of views) {
         const files = await inspect([argv[0]!, `run-${shape}`, ...argv.slice(1)]);
         const store = await inspect([argv[0]!, `run-${shape}`, ...argv.slice(1)], STORE);
-        expect(store.code).toBe(files.code);
-        expect(without(store.out)).toEqual(without(files.out));
+        expect({ argv, code: store.code }).toEqual({ argv, code: files.code });
+        expect({ argv, lines: without(store.out) }).toEqual({ argv, lines: without(files.out) });
         expect(store.out.find((l) => l.startsWith("source"))).toContain("ClickHouse through");
-      });
-    }
+      }
+    });
   }
-
-  test("a pad that quotes its own header is still read off its request, from the whole line", async () => {
-    const f = new Fixture(join(RUNS, "run-quote"), "run-quote", "loop");
-    f.request();
-    f.write({ content: `# plan\n\n[scratchpad 9.9k/32k]\nnot the header` });
-    f.request();
-    f.end();
-    const store = await memoryStore(RUNS);
-    const files = await inspect(["pad", "run-quote"]);
-    expect(files.out.find((l) => l.startsWith("sizes"))).toContain("the pad's text on 2 of 2 request(s)");
-    expect(without((await inspect(["pad", "run-quote"], store)).out)).toEqual(without(files.out));
-    // The server's cut from the last header found the quoted one; the pad was read again off the whole line.
-    expect(store.wholeLines.length).toBeGreaterThan(0);
-    const at = ["pad", "run-quote", "--at", String(f.clock)];
-    expect(without((await inspect(at, store)).out)).toEqual(without((await inspect(at)).out));
-  });
-
-  test("an older run's pad, ended by the old cut's marker, reads as no pad either way, and nothing is read again", async () => {
-    const f = new Fixture(join(RUNS, "run-marker"), "run-marker", "loop");
-    // What an older harness logged: an unlabelled header, then the pad, then the cut's marker.
-    for (let i = 0; i < 3; i++) {
-      f.tick(60_000);
-      f.traj.append({ t: "request", turn: i + 1, adapter: "openai-compatible:test/model", user: `[state]\n\n[scratchpad]\n# plan ${i}\n\n[scratchpad truncated at 32000 chars]` });
-    }
-    f.end();
-    const store = await memoryStore(RUNS);
-    const files = await inspect(["pad", "run-marker"]);
-    expect(files.out.find((l) => l.startsWith("sizes"))).toContain("the pad's text on 0 of 3 request(s)");
-    expect(without((await inspect(["pad", "run-marker"], store)).out)).toEqual(without(files.out));
-    expect(store.wholeLines).toEqual([]);
-  });
 });

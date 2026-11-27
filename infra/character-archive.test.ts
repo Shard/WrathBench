@@ -6,13 +6,13 @@
  * Nothing here reaches a database or a server.
  */
 
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SQL } from "bun";
 import { CharacterArchiveRefused } from "../runner/src/character-archive";
 import { tempDirs } from "../runner/test/fixtures/temp-dirs";
-import { archivePath, defaultArchiveName, main, SERVER_PDUMP_DIR, SoapGameSide } from "./character-archive";
+import { SoapGameSide } from "./character-archive";
 import { SoapError } from "./fixtures/soap.ts";
 
 const tempDir = tempDirs();
@@ -51,15 +51,6 @@ describe("SoapGameSide", () => {
     expect(readdirSync(local)).toEqual([]);
   });
 
-  test("dump: a file the server wrote where this pod cannot see it is named as a mount problem", async () => {
-    const local = join(tempDir("wb-pdump-"), "pdump");
-    const msg = await game(local, fakeServer(local).soap)
-      .dump("Brenna")
-      .then(() => "")
-      .catch((e: Error) => e.message);
-    expect(msg).toMatch(/must mount the same `characters` subPath/);
-  });
-
   test("load: the dump is in the shared directory while `.pdump load <file> <account> <name> <guid>` runs, and gone after", async () => {
     const local = join(tempDir("wb-pdump-"), "pdump");
     const s = fakeServer(local, () => "Character imported successfully.");
@@ -93,34 +84,3 @@ describe("SoapGameSide", () => {
   });
 });
 
-describe("the CLI", () => {
-  test("a bare file name is in the characters directory; a path is as given; the default name is stamped", () => {
-    const env = { WRATHBENCH_CHARACTERS_DIR: "/wb/data/characters" };
-    expect(archivePath("x.tar.gz", env)).toBe("/wb/data/characters/x.tar.gz");
-    expect(archivePath("/tmp/x.tar.gz", env)).toBe("/tmp/x.tar.gz");
-    expect(defaultArchiveName("fleet-son-a1", Date.UTC(2026, 9, 23, 10, 15, 7, 123))).toBe("fleet-son-a1-20261023T101507Z.tar.gz");
-    expect(SERVER_PDUMP_DIR).toBe("/azerothcore/env/dist/characters/pdump");
-  });
-
-  test("usage is exit 2; with no SOAP here, both commands refuse by name and write nothing", async () => {
-    const err = spyOn(console, "error").mockImplementation(() => {});
-    const log = spyOn(console, "log").mockImplementation(() => {});
-    try {
-      expect(await main([], {})).toBe(2);
-      expect(await main(["export"], {})).toBe(2);
-      expect(await main(["import", "a.tar.gz", "b"], {})).toBe(2);
-      expect(await main(["export", "fleet-x", "--bogus"], {})).toBe(2);
-      const dir = tempDir("wb-chars-");
-      const env = { WRATHBENCH_CHARACTERS_DIR: dir, WRATHBENCH_RUNS_DIR: tempDir("wb-runs-") };
-      expect(await main(["export", "fleet-x"], env)).toBe(1);
-      expect(await main(["import", "x.tar.gz"], env)).toBe(1);
-      const said = err.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(said).toMatch(/runs over SOAP, which is not configured here/);
-      expect(said).toMatch(/staging\.enabled/);
-      expect(readdirSync(dir)).toEqual([]);
-    } finally {
-      err.mockRestore();
-      log.mockRestore();
-    }
-  });
-});

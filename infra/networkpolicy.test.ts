@@ -39,7 +39,18 @@ const KUBE_API = ["--set", "networkPolicy.kubeApi[0].cidr=10.43.0.1/32", "--set"
 const HELM_TEST_MS = 30_000;
 const ON = ["--set", "networkPolicy.enabled=true", ...KUBE_API, "--set", "localModelHosts={192.0.2.20:1234}"];
 
+/** One `helm template` per distinct argv: most tests read the same `ON` render. */
+const renders = new Map<string, { code: number; stderr: string; docs: Doc[] }>();
 function render(extra: string[]): { code: number; stderr: string; docs: Doc[] } {
+  const key = extra.join("\0");
+  const hit = renders.get(key);
+  if (hit !== undefined) return hit;
+  const out = renderUncached(extra);
+  renders.set(key, out);
+  return out;
+}
+
+function renderUncached(extra: string[]): { code: number; stderr: string; docs: Doc[] } {
   const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, ...BASE, ...extra], { stdout: "pipe", stderr: "pipe" });
   const docs = r.exitCode === 0 ? r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as Doc) : [];
   return { code: r.exitCode ?? -1, stderr: r.stderr.toString(), docs };

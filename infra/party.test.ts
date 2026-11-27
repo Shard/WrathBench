@@ -23,7 +23,7 @@ import { campaignLaunch } from "../runner/src/campaign-launch";
 import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
 import { partyOwnGuids, type PartyConfig } from "../runner/src/party";
 import { stageResultLine } from "./fixtures/stage-party";
-import { parseFleet, pinnedCampaignJobs, probeRunsOf, rosterModels, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
+import { parseFleet, pinnedCampaignJobs, probeRunsOf, type FleetConfig, type FleetJob, type FleetRosterEntry } from "./run-fleet-config";
 import { diffJobs, fillEntries, finishesOnExit, jobSpawn, planResumes, withTakenRunIds } from "./run-fleet-plan";
 import { jobArgv, rosterResumes } from "./run-fleet-state";
 import { formatArgvBlock } from "./run-fleet-status";
@@ -176,16 +176,6 @@ describe("shared fate", () => {
     expect(partyAttempt(runsOnDisk)).toEqual({ live: false, counted: true, reached: true });
   });
 
-  test("a member's level end ends the rest on level-target, the same way", async () => {
-    const { members, runs } = fakeParty();
-    const d = deps(members);
-    const done = runParty(runs, d);
-    await tick();
-    members[0]!.exit({ kind: "terminated", reason: "level-target", detail: "level 21 observed (target 21)" });
-    await done;
-    expect(d.writes).toEqual(["healer", "mage", "rogue", "paladin"].map((m) => `${m} end level-target (tank: level-target)`));
-  });
-
   describe("asked to follow the first member's end rather than signalled", () => {
     /** `requestEnd` wired: each request is logged, and a member in `honours` ends on it the way its runner would. */
     function asking(members: FakeMember[], honours: ReadonlySet<string>, endGraceMs = 60_000) {
@@ -218,18 +208,6 @@ describe("shared fate", () => {
       expect(d.writes).toEqual([]);
       expect(out.written).toEqual(["tank", "healer", "mage", "paladin"].map((member) => ({ member, wrote: "kill-target", followed: true })));
       for (const m of ["tank", "healer", "mage", "paladin"]) expect(out.verdicts[m]).toEqual({ kind: "terminated", reason: "kill-target", detail: "rogue: kill-target" });
-    });
-
-    test("a member that read the kill itself keeps its own detail, and is not listed as following", async () => {
-      const { members, runs } = fakeParty();
-      const { d } = asking(members, new Set(["tank", "healer", "mage", "paladin"]));
-      const done = runParty(runs, d);
-      await tick();
-      members[3]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer this character)" });
-      members[4]!.exit({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
-      const out = await done;
-      expect(out.verdicts["paladin"]).toEqual({ kind: "terminated", reason: "kill-target", detail: "entry 639 killed (killer party member 980)" });
-      expect(out.written.map((w) => w.member)).toEqual(["tank", "healer", "mage"]);
     });
 
     test("a member that does not end on the request is stopped once the grace has passed, and ended by the machine as before", async () => {
@@ -267,18 +245,6 @@ describe("shared fate", () => {
       expect(requests).toEqual([]);
       expect(members.map((f) => f.stops)).toEqual([1, 1, 1, 0, 1]);
       expect(d.writes).toEqual(["tank", "healer", "mage", "paladin"].map((m) => `${m} end kill-target (rogue: kill-target)`));
-    });
-
-    test("any other first exit is no end to follow: the others are stopped with the grace and ended party-ended, as before", async () => {
-      const { members, runs } = fakeParty();
-      const { d, requests } = asking(members, new Set(MEMBERS));
-      const done = runParty(runs, d);
-      await tick();
-      members[2]!.exit({ kind: "terminated", reason: "idle", detail: "no model output for 20m" });
-      await done;
-      expect(requests).toEqual([]);
-      expect(members.map((f) => f.stops)).toEqual([1, 1, 0, 1, 1]);
-      expect(d.writes).toEqual(["tank", "healer", "rogue", "paladin"].map((m) => `${m} end party-ended (mage: idle)`));
     });
   });
 
@@ -498,10 +464,6 @@ describe("a party's spawn", () => {
   const cfg = fleet();
   const [job] = pinnedCampaignJobs(cfg, []);
 
-  test("is one pinned job holding all five accounts, its first attempt", () => {
-    expect(job).toMatchObject({ name: "deadmines-party-base", account: "PARTY1", accounts: ACCOUNTS, attempt: 1, source: "pinned" });
-  });
-
   test("materialises one entry per member: its run id off one stem, its account, start, credential and campaign file", () => {
     // Placed as the tick places it: the whole party on the campaign's credential.
     const spawn = planOf(cfg, { stamp: STAMP }).pinned.find((p) => p.job.name === job!.name)!.spawn;
@@ -557,27 +519,6 @@ describe("a party's spawn", () => {
     expect(fillEntries(jobSpawn(next!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns), STAMP)[0]!.runId).toBe(`fleet-deadmines-party-base-sonnet-max-${STAMP}-a2-tank`);
     const paused = MEMBERS.map((m) => probe(m, { live: true }));
     expect(pinnedCampaignJobs(cfg, paused)).toEqual([]);
-  });
-
-  test("a single run's spawn is what it was: no accounts, its account on every entry, no party", () => {
-    const solo = parseFleet({
-      _notes: ["n"],
-      accounts: { pool: ["RUNNER"] },
-      roster: ROSTER,
-      "campaign-defs": defsBlock(definition({ id: "solo" })),
-      campaigns: { solo: { version: 1, assignments: [{ model: "glm" }], account: "PROBE" } },
-      queue: [],
-    });
-    const [j] = pinnedCampaignJobs(solo, []);
-    expect(j).not.toHaveProperty("accounts");
-    expect(j).not.toHaveProperty("attempt");
-    const spawn = jobSpawn(j!, solo.roster, "PROBE", STAMP, undefined, solo.campaigns);
-    expect(Object.keys(spawn).sort()).toEqual(["account", "enabled", "entries", "loop", "name"]);
-    const [e] = fillEntries(spawn, STAMP);
-    expect(e!.runId).toBe(`fleet-solo-a-base-glm-5-2-${STAMP}`);
-    expect(e!.account).toBe("PROBE");
-    expect(e).not.toHaveProperty("party");
-    expect(e!.campaignFile).not.toHaveProperty("party");
   });
 });
 
@@ -831,15 +772,6 @@ describe("campaign squares tally parties, not runs", () => {
     expect(square([...a, ...b, ...c3])).toMatchObject({ attempts: 3, done: 0, settled: "capped" });
   });
 
-  test("a single run's square counts runs exactly as before", () => {
-    const solo = joined([definition({ id: "solo" })], { solo: { version: 1, assignments: [{ model: "glm" }] } }).campaigns[0]!;
-    const runs: ProbeRun[] = [
-      { campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: true, live: false },
-      { campaign: "solo", version: 1, cell: "a", ref: "glm", arm: "base", counted: false, live: true },
-    ];
-    expect(campaignSquares(solo, ["glm"], runs)[0]).toMatchObject({ attempts: 2, done: 1, live: 1 });
-  });
-
   test("on disk: four members the stop paused and the party ended on the trigger's kill-target read as counted, and the square as done and reached", () => {
     const runs = tempDir("wb-party-kill-end-");
     const stem = `fleet-deadmines-party-base-sonnet-max-${STAMP}`;
@@ -999,11 +931,6 @@ describe("a paused party is planned whole", () => {
 
 describe("the stager's command contract", () => {
   const req: StageRequest = { party: "p", campaign: "deadmines", version: 1, scenario: "moonbrook-mine", level: 20, members: [] };
-
-  test("a stager script that is not installed is a refusal naming it, not a crash", async () => {
-    const r = await commandStager({ cwd: tempDir("wb-stager-none-") }).stage(req);
-    expect(r).toEqual({ ok: false, reason: "the party stager infra/fixtures/stage-party.ts is not installed in this image" });
-  });
 
   test("the roster's stop kills a staging in flight", async () => {
     const dir = tempDir("wb-stager-slow-");

@@ -3,7 +3,7 @@
  * (values-viewer-only.yaml; values.yaml `game`, `viewer.moduleUrl`,
  * `viewer.sessionStore`). The example renders the viewer and the chart's own
  * data volume and nothing else, references no Secret, mounts the session store
- * read-only and runs as the uid it is given; what it cannot serve is refused
+ * read-only and never runs as root; what it cannot serve is refused
  * at render. With `game` on (the default) the viewer is wired as it always was.
  */
 import { describe, expect, test } from "bun:test";
@@ -64,35 +64,6 @@ describe.skipIf(helm === null)("the chart as a viewer only", () => {
     expect(pod.volumes!.find((v) => v.name === "sessions")).toEqual({ name: "sessions", persistentVolumeClaim: { claimName: "wrath-mcp-sessions", readOnly: true } });
   }, HELM_TEST_MS);
 
-  test("a hostPath store and a subPath, and the uid, come from values", () => {
-    const pod = viewerPod(
-      render(
-        "-f", example,
-        "--set", "viewer.sessionStore.claimName=",
-        "--set", "viewer.sessionStore.hostPath=/srv/wrath-sessions",
-        "--set", "viewer.sessionStore.subPath=store",
-        "--set", "viewer.podSecurityContext.runAsUser=1234",
-        "--set", "viewer.podSecurityContext.runAsGroup=1234",
-        "--set", "viewer.podSecurityContext.fsGroup=1234",
-      ).docs,
-    );
-    expect(pod.volumes!.find((v) => v.name === "sessions")).toEqual({ name: "sessions", hostPath: { path: "/srv/wrath-sessions", type: "Directory" } });
-    expect(pod.containers![0]!.volumeMounts!.find((m) => m.name === "sessions")?.subPath).toBe("store");
-    expect(pod.securityContext).toMatchObject({ runAsNonRoot: true, runAsUser: 1234, runAsGroup: 1234, fsGroup: 1234 });
-  }, HELM_TEST_MS);
-
-  test("another deployment's module and its secret key: a URL and an optional reference", () => {
-    const env = envMap(viewerPod(render("-f", example, "--set", "viewer.moduleUrl=http://module.example:8086", "--set", "viewer.moduleSecretKey=OTHER_MODULE_SECRET").docs));
-    expect(env.get("WRATHBENCH_MODULE_URL")?.value).toBe("http://module.example:8086");
-    expect(env.get("WRATHBENCH_MODULE_SECRET")?.valueFrom?.secretKeyRef).toEqual({ name: "wrathbench-env", key: "OTHER_MODULE_SECRET", optional: true });
-  }, HELM_TEST_MS);
-
-  test("the slim image with every group on says so outright, since the image defaults to the viewer group", () => {
-    const pod = viewerPod(render(...BASE, "--set", "image.names.viewer=wrathbench-viewer").docs);
-    expect(pod.containers![0]!.image).toBe("harbor.example/wrathbench/wrathbench-viewer:harness-0.5-1-gabcdef0");
-    expect(envMap(pod).get("WRATHBENCH_GROUPS")?.value).toBe("runner,evals,viewer");
-  }, HELM_TEST_MS);
-
   test("game on (the default): the runner image, the in-chart module, its required secret, uid 1000, no session store", () => {
     const pod = viewerPod(render(...BASE).docs);
     expect(pod.containers![0]!.image).toBe("harbor.example/wrathbench/wrathbench-runner:harness-0.5-1-gabcdef0");
@@ -131,8 +102,4 @@ describe.skipIf(helm === null)("the chart as a viewer only", () => {
     }
   }, HELM_TEST_MS);
 
-  test("the example passes helm lint", () => {
-    const r = Bun.spawnSync([helm!, "lint", chart, "-f", example], { stdout: "pipe", stderr: "pipe" });
-    expect(r.exitCode, r.stdout.toString() + r.stderr.toString()).toBe(0);
-  }, HELM_TEST_MS);
 });

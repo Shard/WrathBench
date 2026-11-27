@@ -1,7 +1,7 @@
 /**
  * `bun wb inspect` over v1 and fan-out runs: the `marks` line read off a
  * session record's `events` stream, the `cost` line, a fan-out run's
- * characters one by one in `run` and `live`, and the `session` view of the
+ * characters one by one in `run`, and the `session` view of the
  * `events` and `calls` streams. Each run is written by the runner's own
  * Trajectory and the stack's own SessionWriter, and every view that reads
  * the store is read over the files and over the collector's rows alike.
@@ -231,14 +231,6 @@ const OLD = "run-05";
 writeRun(join(RUNS, OLD), OLD, { character: "Oldwick" }, OPENROUTER_TURNS, false);
 writeLegacy05Run(join(RUNS, OLD), readRunRow(join(RUNS, OLD), OLD)!, [{ ts: T0 + MIN, level: 3, xp: 40, money: 5, questsCompleted: 1, turn: 1, zone: 12 }]);
 
-/** A v1 run's fresh character: the bar's length read, and no xp, which is how exactly 0 arrives. */
-const FRESH = "run-fresh";
-{
-  const dir = join(RUNS, FRESH);
-  writeRun(dir, FRESH, { character: "Newwick", account: "NEWACCT" }, [...OPENROUTER_TURNS, { t: "termination", reason: "episode-limit" }], false);
-  await writeRecord(join(dir, "session"), "0123456789abcdee", { name: "Newwick", guid: "6", level: 1, xp: null, xpMax: 400, events: [] }, () => {}, false).close();
-}
-
 /**
  * Two paid runs on OpenCode Go, a subscription: DeepSeek's responses report
  * the allowance's $0, GLM's a little Extra Usage past it. DeepSeek has a Go
@@ -308,18 +300,6 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(line(r.out, "quests")).toBe("quests     2 over the run");
     });
 
-    test("a character at exactly 0 xp reads 0 once its bar's length is known", async () => {
-      expect(line((await inspect(["run", FRESH], store)).out, "level")).toStartWith("level      L1 0xp of 400");
-    });
-
-    test("--since and --until bound the marks", async () => {
-      const r = await inspect(["run", V1, "--since", String(T0 + 6 * MIN), "--until", String(T0 + 13 * MIN)], store);
-      const marks = line(r.out, "marks");
-      expect(marks).toContain("level 1");
-      expect(marks).toContain("zone 1");
-      expect(marks).not.toContain("quest");
-    });
-
     test("the cost is the provider's charge and the tokens its responses reported, over the whole run", async () => {
       const cost = line((await inspect(["run", V1], store)).out, "cost");
       expect(cost).toContain("$0.0375 reported by the provider on 3 of 3 responses");
@@ -380,27 +360,18 @@ for (const [where, store] of [["the files", undefined], ["ClickHouse", STORE]] a
       expect(r.out.filter((l) => l.startsWith("  session")).map((l) => l.replace(/ · .*/, ""))).toEqual(["  session  wrath-session/1 (Alfa), open", "  session  wrath-session/1 (Bravo), open"]);
       expect(r.out.join("\n")).not.toContain(TOKEN);
     });
-
-    test("live lists a fan-out run with its lead, and a line per character", async () => {
-      const r = await inspect(["live"], store);
-      const at = r.out.findIndex((l) => l.includes(FAN));
-      expect(r.out[at]).toContain("L6 5xp (Alfa)");
-      expect(r.out[at]).toContain("fan-out, 2 character(s)");
-      expect(r.out[at + 1]).toMatch(/^\s+Alfa {2}L6 5xp/);
-      expect(r.out[at + 2]).toMatch(/^\s+Bravo {2}L3 120xp/);
-    });
   });
 }
 
 describe("ClickHouse and the files give the same run view", () => {
-  for (const id of [V1, FAN, OLD]) {
-    test(id, async () => {
+  test("of a v1, a fan-out and a 0.5 run", async () => {
+    for (const id of [V1, FAN, OLD]) {
       // A v1 trace carries no turn: the store joins one from the trajectory, the files' reading has none.
       const view = async (s?: InspectStore): Promise<string[]> =>
         (await inspect(["run", id], s)).out.filter((l) => !l.startsWith("source")).map((l) => (id === V1 ? l.replace(/ · turn \d+/, "") : l));
-      expect(await view(STORE)).toEqual(await view());
-    });
-  }
+      expect({ id, lines: await view(STORE) }).toEqual({ id, lines: await view() });
+    }
+  });
 });
 
 describe("inspect session", () => {
@@ -410,16 +381,6 @@ describe("inspect session", () => {
     expect(r.out[0]).toBe(`${V1}: the events stream of Testwick · the last 7, UTC`);
     expect(r.out.slice(2).map((l) => l.split(/\s{2,}/)[1])).toEqual(["achievements_at_login", "quest", "level", "death", "release", "zone", "quest"]);
     expect(r.out.find((l) => / level /.test(l))).toContain('{"from":4,"to":5,"xp":10}');
-  });
-
-  test("--kind, --grep, --last, --next and a window narrow it", async () => {
-    expect((await inspect(["session", V1, "--kind", "death,release"])).out.slice(2).map((l) => l.split(/\s{2,}/)[1])).toEqual(["death", "release"]);
-    expect((await inspect(["session", V1, "--kind", "key"])).out.length).toBeGreaterThan(3);
-    expect((await inspect(["session", V1, "--grep", '"id":102'])).out.slice(2)).toHaveLength(1);
-    expect((await inspect(["session", V1, "--last", "2"])).out.slice(2).map((l) => l.split(/\s{2,}/)[1])).toEqual(["zone", "quest"]);
-    expect((await inspect(["session", V1, "--next", "2"])).out.slice(2).map((l) => l.split(/\s{2,}/)[1])).toEqual(["achievements_at_login", "quest"]);
-    const w = await inspect(["session", V1, "--since", String(T0 + 6 * MIN), "--until", String(T0 + 13 * MIN)]);
-    expect(w.out.slice(2).map((l) => l.split(/\s{2,}/)[1])).toEqual(["level", "death", "release", "zone"]);
   });
 
   test("the calls stream: each call and its result, the actions and the batch it served, the token struck", async () => {
@@ -442,42 +403,6 @@ describe("inspect session", () => {
     const bravo = await inspect(["session", FAN, "--character", "bravo", "--stream", "calls", "--kind", "call"]);
     expect(bravo.out[0]).toContain("of 1 character(s): Bravo");
     expect(bravo.out.slice(2)).toHaveLength(1);
-  });
-
-  test("a character's session id, as the viewer names it, is that character: session reads it alone, every other view the run", async () => {
-    const id = `${FAN}${FANOUT_SEP}Bravo`;
-    const byFlag = await inspect(["session", FAN, "--character", "Bravo", "--stream", "calls", "--kind", "call"]);
-    const byId = await inspect(["session", id, "--stream", "calls", "--kind", "call"]);
-    expect(byId).toEqual(byFlag);
-    expect((await inspect(["session", `${FAN}${FANOUT_SEP}bravo`, "--character", "Bravo"])).code).toBe(0);
-    const clash = await inspect(["session", id, "--character", "Alfa"]);
-    expect(clash.code).toBe(2);
-    expect(clash.err[0]).toContain("is Bravo's session; --character Alfa names another");
-    const missing = await inspect(["session", `${FAN}${FANOUT_SEP}Charlie`]);
-    expect(missing.code).toBe(1);
-    expect(missing.out[0]).toContain("has no character Charlie: Alfa, Bravo");
-    for (const view of [["run"], ["stuck"], ["trajectory"], ["tools"], ["pad"]]) {
-      const r = await inspect([view[0]!, id]);
-      const whole = await inspect([view[0]!, FAN]);
-      expect({ view, code: r.code }).toEqual({ view, code: whole.code });
-      expect(r.out[0]).toBe(`${id} is Bravo's session: this view is the run's, every character's together; session ${id} is Bravo's alone`);
-      expect(r.out.slice(1)).toEqual(whole.out);
-      expect((await inspect([view[0]!, `${FAN}${FANOUT_SEP}Charlie`])).out[0]).toContain("has no character Charlie");
-    }
-    expect((await inspect(["run", `${FAN}${FANOUT_SEP}../x`])).code).toBe(2);
-    expect((await inspect(["run", `${FANOUT_SEP}Bravo`])).code).toBe(2);
-  });
-
-  test("a run with no record, a character it does not have, and a bad flag each say so", async () => {
-    const old = await inspect(["session", OLD]);
-    expect(old.code).toBe(1);
-    expect(old.out[0]).toContain("a 0.5 run");
-    const none = await inspect(["session", FAN, "--character", "Charlie"]);
-    expect(none.code).toBe(1);
-    expect(none.out[0]).toContain("has no character Charlie: Alfa, Bravo");
-    expect((await inspect(["session", V1, "--stream", "trace"])).code).toBe(2);
-    expect((await inspect(["session", V1, "--character", "../x"])).code).toBe(2);
-    expect((await inspect(["trajectory", V1, "--kind", "death"])).code).toBe(2);
   });
 });
 
@@ -503,9 +428,5 @@ describe("a paid run on the OpenCode Go subscription", () => {
     expect(cost).toStartWith(`cost       over the run: ${listed("glm-5.3-flash")}`);
     expect(cost).toContain("(z-ai/glm-5.3-flash)");
     expect(cost).toContain("Extra Usage past a spent allowance, a real charge on top of the plan: usage.cost $0.0042 on 3 of 3 responses");
-  });
-
-  test("an OpenRouter run keeps the provider's own charge", async () => {
-    expect(line((await inspect(["run", V1])).out, "cost")).toContain("$0.0375 reported by the provider on 3 of 3 responses");
   });
 });

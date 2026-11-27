@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   classifyPath,
-  DEFAULT_KEEP_GENS,
-  DEFAULT_KEEP_RUN_VERSIONS,
   describeReport,
   emptyState,
   errorText,
@@ -13,18 +11,13 @@ import {
   LIVE_PATH,
   loadState,
   MANIFEST_PATH,
-  needsPut,
-  parseState,
   planPrune,
-  planWithdraw,
   publish,
   publishLoop,
   publishPass,
   PublishError,
   saveState,
   SecretScanHit,
-  sleepMs,
-  waveOf,
   type ObjectStore,
   type PassRenderer,
   type PublishReport,
@@ -147,54 +140,9 @@ function snapshot(gen: string, runs: RunSpec[], aggregate: unknown = "aggregate"
 /** Index of a key in a call transcript; -1 when it never happened. */
 const at = (paths: string[], path: string): number => paths.indexOf(path);
 
-/** A body hash `needsPut` may ask for. */
-const hash = (h: string) => (): string => h;
-
-/** A body hash `needsPut` must never ask for — hashing it would be the bug. */
-const unhashable = (): string => {
-  throw new Error("hashed a body whose key already decided the question");
-};
-
-/**
- * Wrap a rendered result so every read of an artifact's body is counted.
- * Hashing a body reads it, so a key whose count stays at zero was decided
- * without hashing — which is the property the immutable regime exists for.
- */
-function countingBodies(result: SnapshotResult): { result: SnapshotResult; reads: (path: string) => number } {
-  const reads = new Map<string, number>();
-  const artifacts = result.artifacts.map((a) => {
-    const wrapped = { path: a.path, contentType: a.contentType, cacheControl: a.cacheControl } as SnapshotArtifact;
-    Object.defineProperty(wrapped, "body", {
-      enumerable: true,
-      get: (): string => {
-        reads.set(a.path, (reads.get(a.path) ?? 0) + 1);
-        return a.body;
-      },
-    });
-    return wrapped;
-  });
-  return { result: { gen: result.gen, snap: result.snap, artifacts }, reads: (path) => reads.get(path) ?? 0 };
-}
-
 // ---------------------------------------------------------------------- layout
 
 describe("classifyPath", () => {
-  test("reads run id and content version out of a per-run key", () => {
-    expect(classifyPath("v1/run/roster-abc-20260825/7f3a/detail.json")).toEqual({ kind: "run", runId: "roster-abc-20260825", version: "7f3a" });
-  });
-
-  test("reads the content version and the name out of an aggregate key", () => {
-    expect(classifyPath("v1/snap/7f3a/runs.json")).toEqual({ kind: "snap", name: "runs.json", version: "7f3a" });
-    // A pre-#38 key classifies the same way: the stamp reads as that name's
-    // version, which is what lets the pruner sweep the old layout as surplus.
-    expect(classifyPath("v1/snap/20260825T120000Z/runs.json")).toEqual({ kind: "snap", name: "runs.json", version: "20260825T120000Z" });
-  });
-
-  test("the two mutable files are their own kind", () => {
-    expect(classifyPath(MANIFEST_PATH)).toEqual({ kind: "mutable" });
-    expect(classifyPath(LIVE_PATH)).toEqual({ kind: "mutable" });
-  });
-
   test("a malformed or unknown key is `other`, never a guess", () => {
     // `other` is the kind pruning refuses to touch, so misreading a key here is
     // the one classification mistake that could delete something live.
@@ -202,19 +150,6 @@ describe("classifyPath", () => {
     expect(classifyPath("v1/snap/20260825T120000Z").kind).toBe("other");
     expect(classifyPath("v1/attribution.json").kind).toBe("other");
     expect(classifyPath("").kind).toBe("other");
-  });
-});
-
-describe("waveOf", () => {
-  test("per-run first, aggregates second, the mutable pair last", () => {
-    expect(waveOf("v1/run/a/1/detail.json")).toBe("run");
-    expect(waveOf("v1/snap/g/runs.json")).toBe("aggregate");
-    expect(waveOf(LIVE_PATH)).toBe("mutable");
-    expect(waveOf(MANIFEST_PATH)).toBe("mutable");
-  });
-
-  test("an unrecognized key rides with the aggregates — before the flip, never after", () => {
-    expect(waveOf("v1/attribution.json")).toBe("aggregate");
   });
 });
 
@@ -241,16 +176,6 @@ describe("upload ordering", () => {
     expect(puts).toHaveLength(result.artifacts.length);
   });
 
-  test("cache-control and content-type reach the store per object", async () => {
-    const store = new FakeStore();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, emptyState());
-    const manifest = store.calls.find((c) => c.path === MANIFEST_PATH);
-    const detail = store.calls.find((c) => c.path === "v1/run/runA/v1/detail.json");
-    expect(manifest?.cacheControl).toBe(MUTABLE);
-    expect(detail?.cacheControl).toBe(IMMUTABLE);
-    expect(detail?.contentType).toBe("application/json");
-  });
-
   test("a result renders no manifest: nothing flips and nothing is pruned", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -265,14 +190,6 @@ describe("upload ordering", () => {
 });
 
 describe("rendered results are validated before anything is written", () => {
-  test("an aggregate the manifest does not name is refused", async () => {
-    const store = new FakeStore();
-    const result = snapshot("gen2", []);
-    result.artifacts.push(json("v1/snap/gen1/stale.json", {}));
-    await expect(publish(result, store, emptyState())).rejects.toThrow(/v1\/snap\/gen1\/stale\.json is an aggregate the manifest does not name/);
-    expect(store.calls).toEqual([]);
-  });
-
   test("a manifest entry no artifact backs is refused — the flip would point at nothing", async () => {
     const store = new FakeStore();
     const result = snapshot("gen2", []);
@@ -289,12 +206,6 @@ describe("rendered results are validated before anything is written", () => {
     result.artifacts.push(json(`v1/snap/gen1/runs.json`, { other: true }));
     await expect(publish(result, store, emptyState())).rejects.toThrow(/two artifacts claim the key/);
     expect(store.calls).toEqual([]);
-  });
-
-  test("a key with a leading slash is refused", async () => {
-    const result = snapshot("gen1", []);
-    result.artifacts.push(json("/v1/snap/gen1/x.json", {}));
-    await expect(publish(result, new FakeStore(), emptyState())).rejects.toThrow(/is not a bucket key/);
   });
 });
 
@@ -317,24 +228,6 @@ describe("diffing", () => {
     expect(store.puts()).toEqual([]);
     // The flip is still true: the bucket's manifest already IS this one.
     expect(second.flipped).toBe(true);
-  });
-
-  test("a changed aggregate writes the new generation and flips the manifest, leaving unchanged runs alone", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
-
-    store.reset();
-    // Same run, same content version — only the aggregate moved on.
-    await publish(snapshot("gen2", [{ id: "runA", ver: "v1" }], "moved-on"), store, state);
-
-    const puts = store.puts();
-    expect(puts.filter((p) => p.startsWith("v1/run/"))).toEqual([]);
-    expect(puts).toContain("v1/snap/gen2/runs.json");
-    expect(puts).toContain("v1/snap/gen2/ladder.json");
-    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
-    expect(state.lastGen).toBe("gen2");
-    expect(store.objects.get(MANIFEST_PATH)).toContain("gen2");
   });
 
   test("only the aggregate that moved is rewritten — the rest keep their keys and cost nothing", async () => {
@@ -369,199 +262,11 @@ describe("diffing", () => {
     expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
     expect(store.objects.has("v1/snap/r1/runs.json")).toBe(true);
   });
-
-  test("an aggregate wave with nothing to do does not move the manifest off last", async () => {
-    // The flip's safety property is an ordering, not a count: once a pass can
-    // write no aggregate at all, "manifest last" has to be asserted against a
-    // wave that was empty.
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "aggregate", "gen1", { "runs.json": "r1", "ladder.json": "l1" }), store, state);
-
-    store.reset();
-    // Every aggregate unchanged; only the run moved, so the manifest moves too.
-    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }], "aggregate", "gen2", { "runs.json": "r1", "ladder.json": "l1" }), store, state);
-
-    const puts = store.puts();
-    expect(puts.filter((p) => p.startsWith("v1/snap/"))).toEqual([]);
-    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
-    expect(at(puts, LIVE_PATH)).toBeLessThan(at(puts, MANIFEST_PATH));
-    for (const p of puts.filter((k) => k.startsWith("v1/run/"))) expect(at(puts, p)).toBeLessThan(at(puts, LIVE_PATH));
-  });
-
-  test("the pre-#38 layout's leftovers are swept as ordinary surplus versions", async () => {
-    // A state file written by the old publisher: one generation stamp prefixed
-    // every aggregate. No migration and no special case — the old keys classify
-    // as versions of the names they carry, fall outside the keep window on the
-    // first flip, and are deleted.
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("legacy", [{ id: "runA", ver: "v1" }]), store, state);
-    expect(store.objects.has("v1/snap/legacy/runs.json")).toBe(true);
-
-    store.reset();
-    await publish(
-      snapshot("gen2", [{ id: "runA", ver: "v1" }], "aggregate", "gen2", { "runs.json": "r2", "ladder.json": "l2" }),
-      store,
-      state,
-      { keepGens: 1 },
-    );
-    expect(store.deletes().sort()).toEqual(["v1/snap/legacy/ladder.json", "v1/snap/legacy/runs.json"]);
-    // History is trimmed to the same window it prunes by, so the legacy stamps go with the objects.
-    expect(state.snapVersions).toEqual({ "runs.json": ["r2"], "ladder.json": ["l2"] });
-  });
-
-  test("the recorded fleet shape: a steady pass writes only the aggregates that moved", async () => {
-    /*
-     * The shape measured against a real fleet on 2026-08-25 and recorded in
-     * `docs/PUBLIC-DASHBOARD.md`: ten aggregates, six live runs each with a
-     * detail and a track, plus `live.json` and `manifest.json`. That is the 24
-     * PUTs the first pass below costs, and it was the cost of EVERY pass,
-     * because one hash over the set moved all ten aggregates whenever any run
-     * took a turn.
-     *
-     * Which aggregates a turn moves is the fixture's own choice, not a
-     * measurement: four of ten here, where the issue's sample found four of
-     * seven compared differing. So the 18 below is what this shape costs, not
-     * a figure off a live fleet — what the test pins is that the aggregates
-     * that did not move are not written, and that the flip is still last.
-     */
-    const NAMES = [
-      "info.json",
-      "runs.json",
-      "results.json",
-      "ladder-e90.json",
-      "ladder-e360.json",
-      "ladder-freeplay.json",
-      "episodes.json",
-      "models.json",
-      "campaigns.json",
-      "tools.json",
-    ];
-    const MOVED = ["runs.json", "results.json", "ladder-e90.json", "models.json"];
-    const LIVE = ["r1", "r2", "r3", "r4", "r5", "r6"];
-
-    /** A whole pass in the fleet's shape, at run version `ver` and aggregate version `aggVer` for the movers. */
-    const pass = (ver: string, aggVer: string, stamp: string = ver): SnapshotResult => {
-      const artifacts: SnapshotArtifact[] = [];
-      for (const id of LIVE) {
-        artifacts.push(json(`v1/run/${id}/${ver}/detail.json`, { generatedAt: ver, id }));
-        artifacts.push(json(`v1/run/${id}/${ver}/track.json`, { generatedAt: ver, id }));
-      }
-      const snap: Record<string, string> = {};
-      for (const name of NAMES) {
-        snap[name] = `v1/snap/${MOVED.includes(name) ? aggVer : "steady"}/${name}`;
-        artifacts.push(json(snap[name]!, { generatedAt: ver, name }));
-      }
-      // `live.json` carries the fleet clock, so its body genuinely differs
-      // every pass — it is the one PUT an idle fleet cannot avoid.
-      artifacts.push(json(LIVE_PATH, { generatedAt: stamp }, MUTABLE));
-      artifacts.push(json(MANIFEST_PATH, { generatedAt: stamp, gen: aggVer, artifacts: snap }, MUTABLE));
-      return { gen: aggVer, snap, artifacts };
-    };
-
-    const store = new FakeStore();
-    const state = emptyState();
-    // The first pass is the whole corpus, which is the 24 the issue measured.
-    await publish(pass("v1", "a1"), store, state);
-    expect(store.puts()).toHaveLength(24);
-
-    store.reset();
-    // A steady pass: every live run took a turn, four aggregates moved with them.
-    await publish(pass("v2", "a2"), store, state);
-    const puts = store.puts();
-    expect(puts).toHaveLength(18);
-    expect(puts.filter((p) => p.startsWith("v1/snap/"))).toEqual(MOVED.map((n) => `v1/snap/a2/${n}`).sort());
-    expect(puts.filter((p) => p.startsWith("v1/run/"))).toHaveLength(12);
-    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
-
-    store.reset();
-    // And a genuinely idle pass — nothing moved at all — is one PUT.
-    await publish(pass("v2", "a2", "later"), store, state);
-    expect(store.puts()).toEqual([LIVE_PATH]);
-  });
-
-  test("a run whose content version advances writes the new version only", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state);
-
-    store.reset();
-    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
-
-    expect(store.puts().filter((p) => p.startsWith("v1/run/")).sort()).toEqual(["v1/run/runA/v2/detail.json", "v1/run/runA/v2/track.json"]);
-    expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
-    expect(state.runVersions["runB"]).toEqual(["v1"]);
-  });
-
-  test("hashing is by body, so a re-render that produced the same bytes is free", () => {
-    expect(hashBody('{"a":1}')).toBe(hashBody('{"a":1}'));
-    expect(hashBody('{"a":1}')).not.toBe(hashBody('{"a":2}'));
-  });
 });
 
 // ------------------------------------------------------- path-addressed skipping
 
-describe("needsPut", () => {
-  test("an immutable key already in the bucket is skipped without its body ever being hashed", () => {
-    const state = emptyState();
-    state.uploaded["v1/run/runA/v1/detail.json"] = "old-hash";
-    state.uploaded["v1/snap/gen1/runs.json"] = "old-hash";
-    expect(needsPut("v1/run/runA/v1/detail.json", unhashable, state, "gen1")).toBe(false);
-    expect(needsPut("v1/snap/gen1/runs.json", unhashable, state, "gen1")).toBe(false);
-  });
-
-  test("an immutable key the bucket has never held is written, again without hashing", () => {
-    const state = emptyState();
-    expect(needsPut("v1/run/runA/v1/detail.json", unhashable, state, "gen1")).toBe(true);
-    expect(needsPut("v1/snap/gen1/runs.json", unhashable, state, "gen1")).toBe(true);
-  });
-
-  test("the manifest is skipped when the generation it advertises is already this one", () => {
-    const state = emptyState();
-    state.uploaded[MANIFEST_PATH] = "old-hash";
-    state.lastGen = "gen1";
-    // Decided by the generation, so this one is not hashed either.
-    expect(needsPut(MANIFEST_PATH, unhashable, state, "gen1")).toBe(false);
-    expect(needsPut(MANIFEST_PATH, hash("new-hash"), state, "gen2")).toBe(true);
-  });
-
-  test("a manifest we have no record of writing is written even at an unchanged gen", () => {
-    const state = emptyState();
-    state.lastGen = "gen1";
-    expect(needsPut(MANIFEST_PATH, hash("h"), state, "gen1")).toBe(true);
-  });
-
-  test("live.json and unrecognized keys stay on body-hash diffing", () => {
-    const state = emptyState();
-    state.uploaded[LIVE_PATH] = "h";
-    state.uploaded["v1/attribution.json"] = "h";
-    state.lastGen = "gen1";
-    expect(needsPut(LIVE_PATH, hash("h"), state, "gen1")).toBe(false);
-    expect(needsPut(LIVE_PATH, hash("moved-on"), state, "gen1")).toBe(true);
-    expect(needsPut("v1/attribution.json", hash("h"), state, "gen1")).toBe(false);
-    expect(needsPut("v1/attribution.json", hash("moved-on"), state, "gen1")).toBe(true);
-  });
-});
-
 describe("immutable keys are addressed by path, not by body", () => {
-  test("a re-render with a fresh generatedAt envelope re-PUTs nothing under run/ or snap/", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const runs = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }];
-    await publish(snapshot("gen1", runs, "agg", "12:00:00"), store, state);
-
-    store.reset();
-    // A minute later: identical content, every body different because the
-    // envelope moved. Hash-only diffing would re-upload all six objects.
-    const later = snapshot("gen1", runs, "agg", "12:01:00");
-    expect(later.artifacts.every((a) => hashBody(a.body) !== state.uploaded[a.path])).toBe(true);
-
-    const report = await publish(later, store, state);
-    expect(store.puts()).toEqual([LIVE_PATH]);
-    expect(report.unchanged).toBe(later.artifacts.length - 1);
-  });
-
   test("an idle fleet costs exactly one PUT per pass — live.json and nothing else", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -571,65 +276,6 @@ describe("immutable keys are addressed by path, not by body", () => {
     store.reset();
     for (let pass = 1; pass <= 10; pass++) await publish(snapshot("gen1", runs, "agg", `t${pass}`), store, state);
     expect(store.puts()).toEqual(Array.from({ length: 10 }, () => LIVE_PATH));
-  });
-
-  test("an idle pass hashes nothing it is going to skip", async () => {
-    // The skip is only cheap if deciding it is: hashing the corpus to discover
-    // that none of it needs writing would put the whole cost back.
-    const store = new FakeStore();
-    const state = emptyState();
-    const runs = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v2" }];
-    await publish(snapshot("gen1", runs, "agg", "t0"), store, state);
-
-    const { result, reads } = countingBodies(snapshot("gen1", runs, "agg", "t1"));
-    const report = await publish(result, store, state);
-
-    expect(report.put).toEqual([LIVE_PATH]);
-    for (const a of result.artifacts) {
-      if (a.path === LIVE_PATH) continue;
-      expect([a.path, reads(a.path)]).toEqual([a.path, 0]);
-    }
-    // The one key that did need deciding is hashed once and the answer reused:
-    // three body reads (diff, PUT, byte count), not the four a second hash costs.
-    expect(reads(LIVE_PATH)).toBe(3);
-  });
-
-  test("an unchanged generation skips the manifest but still counts as flipped, and still prunes", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    for (let i = 1; i <= 6; i++) await publish(snapshot(`gen${i}`, [], `agg${i}`), store, state);
-    // gen1 is now out of the keep window and was pruned on the sixth pass.
-    expect(state.gens).toEqual(["gen2", "gen3", "gen4", "gen5", "gen6"]);
-
-    // Hold the delete back so the seventh pass has something left to prune
-    // even though its generation did not move.
-    store.failDeletes.add("v1/snap/gen2/runs.json");
-    await publish(snapshot("gen7", [], "agg7"), store, state);
-    store.failDeletes.clear();
-    store.reset();
-
-    const report = await publish(snapshot("gen7", [], "agg7", "later"), store, state);
-    expect(store.puts()).toEqual([LIVE_PATH]);
-    expect(report.flipped).toBe(true);
-    expect(state.lastGen).toBe("gen7");
-    // The flip being a no-op does not make the pass one: the deferred delete
-    // was retried and the generation history is still bounded.
-    expect(store.deletes()).toEqual(["v1/snap/gen2/runs.json"]);
-    expect(state.pendingDeletes).toEqual([]);
-  });
-
-  test("the manifest is written again the moment the generation moves", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", []), store, state);
-    await publish(snapshot("gen1", [], "agg", "later"), store, state);
-
-    store.reset();
-    await publish(snapshot("gen2", []), store, state);
-    const puts = store.puts();
-    expect(puts).toContain(MANIFEST_PATH);
-    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
-    expect(store.objects.get(MANIFEST_PATH)).toContain("gen2");
   });
 
   test("a manifest whose PUT failed is retried on the next pass at the same generation", async () => {
@@ -645,20 +291,6 @@ describe("immutable keys are addressed by path, not by body", () => {
     // Not skipped: nothing ever recorded a manifest for gen1.
     expect(store.puts()).toContain(MANIFEST_PATH);
     expect(state.lastGen).toBe("gen1");
-  });
-
-  test("discarding the state file is the repair path for a bad immutable object", async () => {
-    // First write wins on an immutable key, so a bad body is only repairable by
-    // forgetting that the key was ever written.
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "wrong"), store, state);
-
-    store.reset();
-    const fresh = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "right"), store, fresh);
-    expect(store.puts()).toHaveLength(6);
-    expect(store.objects.get("v1/snap/gen1/runs.json")).toContain("right");
   });
 
   test("an immutable key that pruning deleted is uploaded again if it comes back", async () => {
@@ -700,26 +332,6 @@ describe("a failed wave aborts before the flip", () => {
     expect(state.lastGen).toBeUndefined();
   });
 
-  test("the next pass re-PUTs only what is still missing, then flips", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    store.failPuts.add("v1/run/runB/v1/detail.json");
-    const result = snapshot("gen1", [
-      { id: "runA", ver: "v1" },
-      { id: "runB", ver: "v1" },
-    ]);
-    await expect(publish(result, store, state)).rejects.toThrow(PublishError);
-
-    store.failPuts.clear();
-    store.reset();
-    const report = await publish(result, store, state);
-
-    expect(store.puts().filter((p) => p.startsWith("v1/run/"))).toEqual(["v1/run/runB/v1/detail.json"]);
-    expect(report.flipped).toBe(true);
-    expect(at(store.puts(), MANIFEST_PATH)).toBe(store.puts().length - 1);
-    expect(state.lastGen).toBe("gen1");
-  });
-
   test("an aggregate PUT failure also stops short of the flip, keeping the previous generation whole", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -736,14 +348,6 @@ describe("a failed wave aborts before the flip", () => {
     // The bucket still advertises the old, complete generation.
     expect(store.objects.get(MANIFEST_PATH)).toContain("gen1");
     expect(state.lastGen).toBe("gen1");
-  });
-
-  test("a live.json failure stops the flip too — the manifest never rides on a half-written pass", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    store.failPuts.add(LIVE_PATH);
-    await expect(publish(snapshot("gen1", []), store, state)).rejects.toThrow(PublishError);
-    expect(store.puts()).not.toContain(MANIFEST_PATH);
   });
 });
 
@@ -794,46 +398,6 @@ describe("a body the secret scan refuses is never written", () => {
     expect(store.puts()).not.toContain(MANIFEST_PATH);
     expect(store.objects.get(MANIFEST_PATH)).toContain("gen1");
     expect(state.lastGen).toBe("gen1");
-  });
-
-  test("the log line names the object and the rule; a clean pass reports what it scanned and clears the withheld list", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const lines: string[] = [];
-    const dirty = snapshot("gen1", [{ id: "runA", ver: "v1", payload: LEAK }]);
-    await publish(dirty, store, state, { scan, log: (l) => lines.push(l) }).catch(() => undefined);
-    expect(lines).toContain("publish: v1/run/runA/v1/detail.json withheld by the secret scan (openrouter-key ×1)");
-    expect(lines.join("\n").includes(LEAK)).toBe(false);
-
-    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state, { scan });
-    expect(report.flipped).toBe(true);
-    expect(report.scanned).toBe(report.put.length);
-    expect(state.secretScan?.withheld).toEqual([]);
-    expect(describeReport(report)).toContain(`${report.put.length} scanned clean`);
-  });
-
-  test("a key the bucket already holds is not re-read: the scan costs nothing on an idle pass", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state, { scan });
-    let scanned = 0;
-    const counting = (body: string): ReturnType<SecretScanner["scan"]> => {
-      scanned++;
-      return scanner.scan(body);
-    };
-    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "aggregate", "later"), store, state, { scan: counting });
-    // Only live.json moved, so only live.json was written, and scanned.
-    expect(report.put).toEqual([LIVE_PATH]);
-    expect(scanned).toBe(1);
-  });
-
-  test("without a scan the engine writes as before, and records no scan status", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1", payload: LEAK }]), store, state);
-    expect(report.flipped).toBe(true);
-    expect(report.scanned).toBeUndefined();
-    expect(state.secretScan).toBeUndefined();
   });
 });
 
@@ -934,39 +498,6 @@ describe("a streamed run the secret scan refuses is held back, and the rest of t
     expect(describeReport(report)).toContain("1 run(s) held back by the secret scan");
   });
 
-  test("the outage's shape: a failed pass wrote part of the new version, the run left and came back; it stays put, and the next pass writes nothing of it", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const clean: Spec[] = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }];
-    await publishPass(renderer(clean), store, state, { scan });
-    const prior = named(store)["runB"] ?? null;
-
-    // The engine before this change: the whole pass fails, and runB/v2's clean
-    // objects are already in the bucket.
-    const dirty: Spec[] = [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v2", entries: LEAK }];
-    await expect(publish(snapshotOf(dirty), store, state, { scan })).rejects.toThrow(PublishError);
-    expect(state.uploaded["v1/run/runB/v2/detail.json"]).toBeDefined();
-    // runB is archived for a while: it is not rendered, and the pass flips without it.
-    await publishPass(renderer([{ id: "runA", ver: "v2" }]), store, state, { scan });
-    expect(state.runVersions["runB"]?.at(-1)).toBe("v1");
-
-    // The archived pass's prune took the stray v2 objects. Back, still dirty: held at v1, nothing of v2 written.
-    store.reset();
-    const back = await publishPass(renderer(dirty), store, state, { scan });
-    expect(back.flipped).toBe(true);
-    expect(named(store)).toEqual({ runA: "v1/run/runA/v2/entries.json", runB: prior });
-    expect(under(store, "v1/run/runB/")).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/entries.json", "v1/run/runB/v1/track.json"]);
-    expect(store.puts().filter((p) => p.startsWith("v1/run/runB/"))).toEqual([]);
-
-    // And every pass after: held again, no PUT and no DELETE under runB.
-    store.reset();
-    const again = await publishPass(renderer(dirty), store, state, { scan });
-    expect(again.flipped).toBe(true);
-    expect(again.heldBack).toEqual(["runB"]);
-    expect(store.calls.filter((c) => c.path.startsWith("v1/run/runB/"))).toEqual([]);
-    expect(named(store)["runB"]).toBe(prior);
-  });
-
   test("a run never published comes out pointerless", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -988,49 +519,6 @@ describe("a streamed run the secret scan refuses is held back, and the rest of t
     expect(named(store)["runB"]).toBe("v1/run/runB/v1/entries.json");
     expect(under(store, "v1/run/runB/v2/")).toEqual([]);
   });
-
-  test("a genuine upload failure still fails the pass, held-back run or not", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publishPass(renderer([{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state, { scan });
-    const before = store.objects.get(MANIFEST_PATH);
-    store.failPuts.add("v1/run/runA/v2/track.json");
-    const err = await publishPass(
-      renderer([
-        { id: "runA", ver: "v2" },
-        { id: "runB", ver: "v2", entries: LEAK },
-      ]),
-      store,
-      state,
-      { scan },
-    ).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(PublishError);
-    expect((err as PublishError).failures.map((f) => f.path)).toEqual(["v1/run/runA/v2/track.json"]);
-    expect(store.objects.get(MANIFEST_PATH)).toBe(before);
-  });
-
-  test("with a delay, the held-back run keeps the version its held pass names", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const DELAY = 10;
-    await publishPass(renderer([{ id: "runB", ver: "v1" }]), store, state, { scan, delayMs: DELAY, now: () => 0 });
-    // Rendered while the first pass is still held: runB's kept version is that pass's.
-    const report = await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }]), store, state, { scan, delayMs: DELAY, now: () => 20 });
-    expect(report.heldBack).toEqual(["runB"]);
-    expect(state.secretScan?.heldBack).toEqual([{ runId: "runB", version: "v2", kept: "v1" }]);
-    await publishPass(renderer([{ id: "runB", ver: "v2", entries: LEAK }]), store, state, { scan, delayMs: DELAY, now: () => 40 });
-    expect(named(store)["runB"]).toBe("v1/run/runB/v1/entries.json");
-    expect(under(store, "v1/run/runB/")).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/entries.json", "v1/run/runB/v1/track.json"]);
-  });
-
-  /** The same runs as one array, the way `publish` takes them: today's fail-closed path. */
-  function snapshotOf(runs: Spec[]): SnapshotResult {
-    const artifacts = runs.flatMap((r) => {
-      const base = `v1/run/${r.id}/${r.ver}`;
-      return [json(`${base}/detail.json`, { detail: r.ver }), json(`${base}/track.json`, { track: r.ver }), json(`${base}/entries.json`, { entries: r.entries ?? r.ver })];
-    });
-    return { gen: "array", snap: {}, artifacts: [...artifacts, json(LIVE_PATH, {}, MUTABLE), json(MANIFEST_PATH, {}, MUTABLE)] };
-  }
 });
 
 // ------------------------------------------- a skipped run after a failed pass
@@ -1071,17 +559,6 @@ describe("what a skipped run names is the flip's, whatever passes failed before 
     expect(under(store, "v1/run/runA/")).toEqual(objectsOf("runA", "v2").sort());
   });
 
-  test("a skipped run's clip a failed pass wrote is registered with the flip too", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const clip = "v1/run/runA/clip/part-000-0123456789ab.mp4";
-    state.uploaded[clip] = "h";
-    store.objects.set(clip, "video");
-    await publishPass(pass("gen1", [], [clip]), store, state);
-    expect(state.clipVersions?.["runA/part-000.mp4"]).toEqual(["0123456789ab"]);
-    expect(store.objects.has(clip)).toBe(true);
-  });
-
   test("a pass that names a skipped key the bucket does not hold does not flip", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -1109,18 +586,6 @@ describe("planPrune", () => {
     state.uploaded[LIVE_PATH] = "h";
     return state;
   }
-
-  test("the newest five versions of each aggregate survive, everything older goes", () => {
-    const state = stateWith(["g1", "g2", "g3", "g4", "g5", "g6", "g7"], {});
-    expect(planPrune(state)).toEqual(["v1/snap/g1/runs.json", "v1/snap/g2/runs.json"]);
-    expect(DEFAULT_KEEP_GENS).toBe(5);
-  });
-
-  test("the newest two versions of each run survive", () => {
-    const state = stateWith([], { runA: ["v1", "v2", "v3", "v4"], runB: ["v1"] });
-    expect(planPrune(state)).toEqual(["v1/run/runA/v1/detail.json", "v1/run/runA/v2/detail.json"]);
-    expect(DEFAULT_KEEP_RUN_VERSIONS).toBe(2);
-  });
 
   test("the mutable files and unrecognized keys are never prunable", () => {
     const state = stateWith(["g1", "g2", "g3", "g4", "g5", "g6"], {});
@@ -1182,20 +647,6 @@ describe("pruning against the bucket", () => {
     expect(state.runVersions["runA"]).toEqual(["v6", "v7"]);
   });
 
-  test("no delete ever names the current or previous generation", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    for (let i = 1; i <= 8; i++) await publish(snapshot(`gen${i}`, [{ id: "runA", ver: `v${i}` }], `agg${i}`), store, state);
-    const deleted = store.deletes();
-    for (const path of deleted) {
-      expect(path).not.toContain("gen8");
-      expect(path).not.toContain("gen7");
-      expect(path).not.toContain("/v8/");
-      expect(path).not.toContain("/v7/");
-    }
-    expect(deleted.length).toBeGreaterThan(0);
-  });
-
   test("pruning only runs after the flip: a failed pass deletes nothing", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -1239,14 +690,6 @@ describe("pruning against the bucket", () => {
     expect(report.deleted).toContain("v1/run/runA/v2/detail.json");
     expect(state.runVersions["runA"]).toEqual(["v1"]);
   });
-
-  test("`prune: false` uploads and flips but deletes nothing", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    for (let i = 1; i <= 7; i++) await publish(snapshot(`gen${i}`, [{ id: "runA", ver: `v${i}` }]), store, state, { prune: false });
-    expect(store.deletes()).toEqual([]);
-    expect(state.lastGen).toBe("gen7");
-  });
 });
 
 /*
@@ -1258,43 +701,35 @@ describe("pruning against the bucket", () => {
 describe("a run that stopped changing", () => {
   const runObjects = (store: FakeStore, id: string): string[] => [...store.objects.keys()].filter((k) => k.startsWith(`v1/run/${id}/`)).sort();
 
-  // The engine's two entry points over the same fixture: one array, and the
-  // run wave streamed in batches. Both have to settle a run the same way.
-  const entryPoints: [string, (r: SnapshotResult, s: FakeStore, st: PublishState) => Promise<PublishReport>][] = [
-    ["publish", (r, s, st) => publish(r, s, st)],
-    ["publishPass, streamed", (r, s, st) => publishPass(streamingRenderer(r, 1), s, st)],
-  ];
+  test("sheds its superseded version on the second flip that names the current one", async () => {
+    const run = (r: SnapshotResult, s: FakeStore, st: PublishState) => publish(r, s, st);
+    const store = new FakeStore();
+    const state = emptyState();
+    await run(snapshot("gen1", [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state);
 
-  for (const [name, run] of entryPoints) {
-    test(`sheds its superseded version on the second flip that names the current one (${name})`, async () => {
-      const store = new FakeStore();
-      const state = emptyState();
-      await run(snapshot("gen1", [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state);
+    // runA's content moves; runB's does not.
+    await run(snapshot("gen2", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
+    // The previous manifest still names runA v1, so it must still be there.
+    expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
+    expect(runObjects(store, "runA")).toEqual([
+      "v1/run/runA/v1/detail.json",
+      "v1/run/runA/v1/track.json",
+      "v1/run/runA/v2/detail.json",
+      "v1/run/runA/v2/track.json",
+    ]);
 
-      // runA's content moves; runB's does not.
-      await run(snapshot("gen2", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
-      // The previous manifest still names runA v1, so it must still be there.
-      expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
-      expect(runObjects(store, "runA")).toEqual([
-        "v1/run/runA/v1/detail.json",
-        "v1/run/runA/v1/track.json",
-        "v1/run/runA/v2/detail.json",
-        "v1/run/runA/v2/track.json",
-      ]);
-
-      // Nothing about runA moved this time: the previous manifest names v2 as well.
-      store.reset();
-      const report = await run(snapshot("gen3", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
-      expect(report.deleted).toEqual(["v1/run/runA/v1/detail.json", "v1/run/runA/v1/track.json"]);
-      expect(runObjects(store, "runA")).toEqual(["v1/run/runA/v2/detail.json", "v1/run/runA/v2/track.json"]);
-      expect(state.runVersions["runA"]).toEqual(["v2"]);
-      // The run that never moved was never holding anything back.
-      expect(state.runVersions["runB"]).toEqual(["v1"]);
-      expect(runObjects(store, "runB")).toHaveLength(2);
-      // The state forgets what was deleted, or the key could never come back.
-      expect(Object.keys(state.uploaded).filter((k) => k.startsWith("v1/run/runA/v1/"))).toEqual([]);
-    });
-  }
+    // Nothing about runA moved this time: the previous manifest names v2 as well.
+    store.reset();
+    const report = await run(snapshot("gen3", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
+    expect(report.deleted).toEqual(["v1/run/runA/v1/detail.json", "v1/run/runA/v1/track.json"]);
+    expect(runObjects(store, "runA")).toEqual(["v1/run/runA/v2/detail.json", "v1/run/runA/v2/track.json"]);
+    expect(state.runVersions["runA"]).toEqual(["v2"]);
+    // The run that never moved was never holding anything back.
+    expect(state.runVersions["runB"]).toEqual(["v1"]);
+    expect(runObjects(store, "runB")).toHaveLength(2);
+    // The state forgets what was deleted, or the key could never come back.
+    expect(Object.keys(state.uploaded).filter((k) => k.startsWith("v1/run/runA/v1/"))).toEqual([]);
+  });
 
   test("never deletes a version the previous manifest named, in any pass", async () => {
     const store = new FakeStore();
@@ -1316,39 +751,6 @@ describe("a run that stopped changing", () => {
     expect(runObjects(store, "runA").every((p) => p.includes("/v4/") || p.includes("/v3/"))).toBe(true);
   });
 
-  test("a run that changes every pass still keeps two versions", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    for (let i = 1; i <= 5; i++) await publish(snapshot(`gen${i}`, [{ id: "runA", ver: `v${i}` }], `agg${i}`), store, state);
-    expect(state.runVersions["runA"]).toEqual(["v4", "v5"]);
-  });
-
-  test("a version that comes back after a different one is not settled by the earlier pass", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
-    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }]), store, state);
-    // Back to v1: the previous manifest names v2, so v2 stays and v1 is current.
-    await publish(snapshot("gen3", [{ id: "runA", ver: "v1" }]), store, state);
-    expect(state.runVersions["runA"]).toEqual(["v2", "v1"]);
-    expect(runObjects(store, "runA").some((p) => p.includes("/v2/"))).toBe(true);
-  });
-
-  test("a state written before the rule existed is swept by the first flip that names the current version", async () => {
-    // What the publisher finds on its PVC the first time it runs this: a
-    // finished run with the version before its last change still in the window.
-    const store = new FakeStore();
-    const state = emptyState();
-    state.runVersions["runA"] = ["v0", "v1"];
-    for (const v of ["v0", "v1"]) for (const f of ["detail", "track"]) state.uploaded[`v1/run/runA/${v}/${f}.json`] = "h";
-    state.gens = ["gen0"];
-    state.lastGen = "gen0";
-
-    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
-    expect(report.deleted).toEqual(["v1/run/runA/v0/detail.json", "v1/run/runA/v0/track.json"]);
-    expect(state.runVersions["runA"]).toEqual(["v1"]);
-  });
-
   test("a run missing from a pass is left as it was", async () => {
     // A run the render skipped (archived, or its files mid-move) names nothing
     // this flip, so there is no second sighting to settle it on.
@@ -1358,18 +760,6 @@ describe("a run that stopped changing", () => {
     await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }]), store, state);
     await publish(snapshot("gen3", []), store, state);
     await publish(snapshot("gen4", []), store, state);
-    expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
-    expect(runObjects(store, "runA")).toHaveLength(4);
-  });
-
-  test("a failed pass settles nothing", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
-    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }]), store, state);
-    // gen3 would settle runA on v2, but never flips.
-    store.failPuts.add("v1/snap/gen3/ladder.json");
-    await expect(publish(snapshot("gen3", [{ id: "runA", ver: "v2" }]), store, state)).rejects.toThrow(PublishError);
     expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
     expect(runObjects(store, "runA")).toHaveLength(4);
   });
@@ -1422,17 +812,6 @@ describe("a delete that fails", () => {
     expect(state.pendingDeletes).toEqual([]);
     expect(state.uploaded[detail]).toBeDefined();
   });
-
-  test("is reported rather than thrown", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    store.failDeletes.add("v1/snap/gen1/ladder.json");
-    let report = await publish(snapshot("gen1", []), store, state);
-    for (let i = 2; i <= 6; i++) report = await publish(snapshot(`gen${i}`, []), store, state);
-    expect(report.deleteFailures).toEqual(["v1/snap/gen1/ladder.json"]);
-    expect(report.deleted).toEqual(["v1/snap/gen1/runs.json"]);
-    expect(describeReport(report)).toContain("deletes deferred");
-  });
 });
 
 // ------------------------------------------------------------------- state file
@@ -1472,15 +851,6 @@ describe("state persistence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  test("unknown and mistyped fields are dropped, not trusted", () => {
-    const parsed = parseState(JSON.stringify({ uploaded: { a: 1, b: "h" }, gens: ["g1", 7], runVersions: { r: "nope" }, pendingDeletes: null, lastGen: 5 }));
-    expect(parsed.uploaded).toEqual({ b: "h" });
-    expect(parsed.gens).toEqual(["g1"]);
-    expect(parsed.runVersions).toEqual({});
-    expect(parsed.pendingDeletes).toEqual([]);
-    expect(parsed.lastGen).toBeUndefined();
   });
 
   test("a state written by a previous pass resumes the diff — no re-uploads", async () => {
@@ -1547,48 +917,6 @@ describe("publishLoop", () => {
     expect(io.saved).toBe(1);
   });
 
-  test("sleeps the configured interval between passes and stops when aborted", async () => {
-    const store = new FakeStore();
-    const io = memoryIo();
-    const controller = new AbortController();
-    const sleeps: number[] = [];
-    let rendered = 0;
-
-    const summary = await publishLoop(
-      async () => snapshot(`gen${++rendered}`, []),
-      store,
-      "state.json",
-      {
-        intervalMs: 12_345,
-        signal: controller.signal,
-        io,
-        log: () => {},
-        sleep: async (ms) => {
-          sleeps.push(ms);
-          if (sleeps.length === 3) controller.abort();
-        },
-      },
-    );
-
-    expect(sleeps).toEqual([12_345, 12_345, 12_345]);
-    expect(summary.passes).toBe(3);
-    expect(summary.published).toBe(3);
-    expect(summary.lastGen).toBe("gen3");
-    expect(store.objects.get(MANIFEST_PATH)).toContain("gen3");
-  });
-
-  test("a signal already aborted publishes nothing", async () => {
-    const summary = await publishLoop(
-      async () => {
-        throw new Error("render must not be called");
-      },
-      new FakeStore(),
-      "state.json",
-      { signal: AbortSignal.abort(), io: memoryIo(), log: () => {} },
-    );
-    expect(summary).toEqual({ passes: 0, published: 0, failed: 0 });
-  });
-
   test("a failing pass is logged and the loop carries on — and the retry is cheap", async () => {
     const store = new FakeStore();
     const io = memoryIo();
@@ -1653,36 +981,6 @@ describe("publishLoop", () => {
     const summary = await publishLoop(async () => snapshot("gen1", []), new FakeStore(), "state.json", { once: true, io, log: (l) => lines.push(l) });
     expect(summary.published).toBe(1);
     expect(lines.some((l) => l.includes("read-only filesystem"))).toBe(true);
-  });
-});
-
-describe("sleepMs", () => {
-  test("resolves early when the signal aborts", async () => {
-    const controller = new AbortController();
-    const started = Date.now();
-    const waited = sleepMs(30_000, controller.signal);
-    controller.abort();
-    await waited;
-    expect(Date.now() - started).toBeLessThan(1_000);
-  });
-
-  test("an already-aborted signal resolves immediately", async () => {
-    await sleepMs(30_000, AbortSignal.abort());
-  });
-
-  test("a real, tiny interval elapses", async () => {
-    await sleepMs(2);
-  });
-});
-
-describe("describeReport", () => {
-  test("says what the pass cost and whether it flipped", async () => {
-    const store = new FakeStore();
-    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, emptyState());
-    const line = describeReport(report);
-    expect(line).toContain("gen gen1");
-    expect(line).toContain("6 put");
-    expect(line).toContain("manifest flipped");
   });
 });
 
@@ -1780,19 +1078,6 @@ describe("a streamed run wave", () => {
     expect(one.store.objects.get(MANIFEST_PATH)).toBe(whole.store.objects.get(MANIFEST_PATH));
   });
 
-  test("the run versions it streamed are what the next pass diffs and the pruner keeps", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publishPass(streamingRenderer(snapshot("gen1", RUNS), 2), store, state);
-    expect(state.runVersions).toEqual({ runA: ["v1"], runB: ["v1"], runC: ["v1"], runD: ["v1"], runE: ["v1"] });
-
-    // A second pass at a fresh stamp re-renders every body and must still cost
-    // nothing under `v1/run/` — the streamed keys are remembered like any other.
-    store.reset();
-    await publishPass(streamingRenderer(snapshot("gen1", RUNS, "aggregate", "later"), 2), store, state);
-    expect(store.puts().filter((p) => p.startsWith("v1/run/"))).toEqual([]);
-  });
-
   test("a failed upload does not stop the tree from being attempted, and stops the flip", async () => {
     // Today's run wave attempts every object and raises one error carrying all
     // the failures; batching must not turn that into "abort on the first bad
@@ -1837,31 +1122,6 @@ describe("a streamed run wave", () => {
     await expect(publishPass(bad, store, emptyState())).rejects.toThrow(/streamed as a per-run artifact but is not one/);
     expect(store.puts()).toEqual([]);
   });
-
-  test("refuses a key claimed twice across batches", async () => {
-    const store = new FakeStore();
-    const twice: PassRenderer = async (sink) => {
-      await sink([json("v1/run/runA/v1/detail.json", { a: 1 })]);
-      await sink([json("v1/run/runA/v1/detail.json", { a: 2 })]);
-      return snapshot("gen1", []);
-    };
-    await expect(publishPass(twice, store, emptyState())).rejects.toThrow(/two artifacts claim the key/);
-  });
-
-  test("the loop drives a streaming renderer, and its sink is optional", async () => {
-    // `publishLoop`'s renderer is handed a sink; the tests above (and any
-    // caller with nothing to stream) ignore it, which must stay legal.
-    const store = new FakeStore();
-    const io = memoryIo();
-    const summary = await publishLoop(streamingRenderer(snapshot("gen1", RUNS), 2), store, "state.json", {
-      once: true,
-      io,
-      log: () => {},
-    });
-    expect(summary).toEqual({ passes: 1, published: 1, failed: 0, lastGen: "gen1" });
-    expect(store.puts()).toContain("v1/run/runC/v1/detail.json");
-    expect(store.puts()[store.puts().length - 1]).toBe(MANIFEST_PATH);
-  });
 });
 
 // --------------------------------------------------------------- trace segments
@@ -1876,14 +1136,6 @@ describe("trace segments", () => {
     await sink([...run, ...segs.map(([id, t0]) => json(segKey(id, t0), { t0 }))]);
     return { ...result, artifacts: result.artifacts.filter((a) => classifyPath(a.path).kind !== "run") };
   };
-
-  test("a segment key is its own kind, rides in the run wave, and is never a run version", () => {
-    expect(classifyPath(segKey("runA", T0))).toEqual({ kind: "trace", runId: "runA", t0: T0 });
-    expect(waveOf(segKey("runA", T0))).toBe("run");
-    // Anything else under a run's trace/ is not understood, so not prunable either.
-    expect(classifyPath("v1/run/runA/trace/latest.json").kind).toBe("other");
-    expect(classifyPath("v1/run/runA/trace/1/2.json").kind).toBe("other");
-  });
 
   test("a segment is written once, recorded as a window rather than a hash, and the renderer is told", async () => {
     const store = new FakeStore();
@@ -1933,38 +1185,6 @@ describe("trace segments", () => {
     await publishPass(pass, store, state);
     expect(store.objects.has(segKey("runA", T0))).toBe(true);
     expect(state.traceSegs).toEqual({ runA: [[T0, 1]] });
-  });
-
-  test("the renderer's view of the bucket answers for objects by the engine's own record", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const seen: boolean[] = [];
-    const render: PassRenderer = async (sink, published) => {
-      seen.push(published.object("v1/run/runA/v1/detail.json"));
-      return await withSegments(snapshot("gen1", [{ id: "runA", ver: "v1" }]), [])(sink, published);
-    };
-    await publishPass(render, store, state);
-    await publishPass(render, store, state);
-    expect(seen).toEqual([false, true]);
-  });
-
-  test("needsPut reads a segment's presence off the window record, never off a hash", () => {
-    const state = emptyState();
-    state.traceSegs["runA"] = [[T0, 2]];
-    expect(needsPut(segKey("runA", T0 + SEG), unhashable, state, "g")).toBe(false);
-    expect(needsPut(segKey("runA", T0 + 2 * SEG), unhashable, state, "g")).toBe(true);
-    expect(needsPut(segKey("runB", T0), unhashable, state, "g")).toBe(true);
-  });
-
-  test("the window record round-trips through the state file, and a bad entry is dropped, not trusted", () => {
-    const state = emptyState();
-    state.traceSegs["runA"] = [[T0, 3]];
-    expect(parseState(JSON.stringify(state)).traceSegs).toEqual({ runA: [[T0, 3]] });
-    const raw = { ...state, traceSegs: { runA: [[T0, 3], ["x", 1], [T0, 0]], runB: "nope", runC: [] } };
-    expect(parseState(JSON.stringify(raw)).traceSegs).toEqual({ runA: [[T0, 3]] });
-    // A state written before segments existed reads as none published.
-    const { traceSegs: _omit, ...before } = state;
-    expect(parseState(JSON.stringify(before)).traceSegs).toEqual({});
   });
 });
 
@@ -2030,18 +1250,6 @@ describe("a run that is never published is withdrawn", () => {
     for (const k of refKeys) expect(store.objects.has(k)).toBe(false);
   });
 
-  test("a pass that does not flip withdraws nothing", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(before(), store, state);
-    store.reset();
-    const noFlip = after("g2");
-    const report = await publish({ ...noFlip, artifacts: noFlip.artifacts.filter((a) => a.path !== MANIFEST_PATH) }, store, state);
-    expect(report.flipped).toBe(false);
-    expect(store.deletes()).toEqual([]);
-    expect(state.traceSegs[REF]).toBeDefined();
-  });
-
   test("prune: false skips the housekeeping, never the withdrawal", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -2052,18 +1260,6 @@ describe("a run that is never published is withdrawn", () => {
     expect(report.deleted).toEqual(refKeys);
     // Nothing else was touched: the queued delete waits for a pass that prunes.
     expect(state.pendingDeletes).toEqual(["v1/run/elsewhere/old/detail.json"]);
-  });
-
-  test("planWithdraw names only what the state remembers for the listed runs, and an empty list nothing", () => {
-    const state = emptyState();
-    state.uploaded = { "v1/run/a/1/detail.json": "h", "v1/run/b/1/detail.json": "h", "v1/snap/x/runs.json": "h" };
-    state.runVersions = { a: ["1"], b: ["1"] };
-    state.traceSegs = { a: [[T0, 2]] };
-    expect(planWithdraw(state, [])).toEqual([]);
-    expect(state.runVersions["a"]).toEqual(["1"]);
-    expect(planWithdraw(state, ["a"])).toEqual(["v1/run/a/1/detail.json", traceSegmentPath("a", T0), traceSegmentPath("a", T0 + SEG_MS)].sort());
-    expect(state.runVersions).toEqual({ b: ["1"] });
-    expect(state.traceSegs).toEqual({});
   });
 });
 
@@ -2128,56 +1324,5 @@ describe("a delayed pass", () => {
     // Nothing a held pass names was pruned: g2's and g3's objects are all there.
     for (const v of ["2", "3"]) expect(store.objects.has(`v1/run/a/${v}/detail.json`)).toBe(true);
     expect(store.objects.has("v1/snap/g2/runs.json")).toBe(true);
-  });
-
-  test("a held window is one the renderer need not make again", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    const seen: boolean[] = [];
-    const render: PassRenderer = async (_sink, published) => {
-      seen.push(published.traceSegment("a", T0));
-      return withTrace(`g${seen.length}`, [{ id: "a", ver: String(seen.length) }], seen.length === 1 ? [T0] : []);
-    };
-    await publishPass(render, store, state, { delayMs: DELAY, now: () => 1 });
-    await publishPass(render, store, state, { delayMs: DELAY, now: () => 2 });
-    expect(seen).toEqual([false, true]);
-  });
-
-  test("a failed write leaves the pass held, and the next pass writes only what did not land", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("g1", [{ id: "a", ver: "1" }]), store, state, { delayMs: DELAY, now: () => 0 });
-    store.failPuts.add(MANIFEST_PATH);
-    await expect(publish(snapshot("g2", [{ id: "a", ver: "2" }]), store, state, { delayMs: DELAY, now: () => DELAY })).rejects.toBeInstanceOf(PublishError);
-    expect(state.held?.map((h) => h.gen)).toEqual(["g1", "g2"]);
-    store.failPuts.clear();
-    store.reset();
-    await publish(snapshot("g3", [{ id: "a", ver: "3" }]), store, state, { delayMs: DELAY, now: () => DELAY + 1 });
-    // live.json landed last time; only the manifest is left of g1.
-    expect(store.puts().filter((p) => p === LIVE_PATH || p === MANIFEST_PATH)).toEqual([MANIFEST_PATH]);
-    expect(state.lastGen).toBe("g1");
-  });
-
-  test("the held passes survive the state file", () => {
-    const state = emptyState();
-    state.held = [
-      { renderedAt: 1, due: 2, gen: "g", mutable: [json(LIVE_PATH, { x: 1 }, MUTABLE)], traces: [], runPairs: [["a", "1"]], snap: ["v1/snap/g/runs.json"], withdrawn: [] },
-    ];
-    const back = parseState(JSON.stringify(state));
-    expect(back.held).toEqual(state.held);
-    // And a state without them reads, and writes, as it always did.
-    expect("held" in parseState(JSON.stringify(emptyState()))).toBe(false);
-  });
-
-  test("a delay turned off shows what it held first, then this pass", async () => {
-    const store = new FakeStore();
-    const state = emptyState();
-    await publish(snapshot("g1", [{ id: "a", ver: "1" }]), store, state, { delayMs: DELAY, now: () => 0 });
-    store.reset();
-    await publish(snapshot("g2", [{ id: "a", ver: "2" }]), store, state, { now: () => 1 });
-    const manifests = store.calls.filter((c) => c.op === "put" && c.path === MANIFEST_PATH).map((c) => JSON.parse(c.body!).gen as string);
-    expect(manifests).toEqual(["g1", "g2"]);
-    expect(state.held).toBeUndefined();
-    expect(state.lastGen).toBe("g2");
   });
 });

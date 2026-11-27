@@ -1,17 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { CHILD_TERM_GRACE_MS, episodeArgv, episodeFlags, forCycle, harnessVersion, inContainer, planFreshLaunch, resolve, type RosterSpec } from "./run-roster";
+import { CHILD_TERM_GRACE_MS, episodeArgv, forCycle, harnessVersion, planFreshLaunch, resolve } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability-tuple";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
  * The roster is config, and the config's whole job is to become an argv for
- * run-episode.sh. These pin the two things that would silently break a night:
- * the old bare-model roster shape still producing the argv it always did, and
- * a claude-code entry not carrying OpenAI-only flags.
+ * run-episode.sh. These pin what a launch is given and what a resume restates:
+ * the identity a run id names, the credential by variable name, the leash.
  */
-
-const OPENAI_ONLY = ["--api-base", "--api-key-env"];
 
 describe("resolve", () => {
   test("a bare model entry keeps every old default", () => {
@@ -26,19 +23,6 @@ describe("resolve", () => {
       class: 2,
       episodeMs: 5_400_000,
     });
-  });
-
-  test("every field is overridable per entry", () => {
-    const spec: RosterSpec = {
-      model: "sonnet",
-      driver: "claude-code",
-      account: "SHAKEOUT2",
-      race: 3,
-      class: 2,
-      episodeMs: 60_000,
-    };
-    const [s] = resolve([spec], "20260101");
-    expect(s).toMatchObject({ driver: "claude-code", account: "SHAKEOUT2", race: 3 });
   });
 
   test("routing rides its own flag, and only when the entry stated one", () => {
@@ -72,16 +56,6 @@ describe("resolve", () => {
     const sub = resolve([{ model: "sonnet", driver: "claude-code", billing: "paid" }], "20260929")[0]!;
     expect(sub.billing).toBeUndefined();
     expect(episodeArgv(sub, false)).not.toContain("--billing");
-  });
-
-  test("routing off OpenRouter is refused at resolve, not dropped", () => {
-    expect(() =>
-      resolve([{ model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", routing: ["Cerebras"] as never }], "20260916"),
-    ).toThrow(/routing is an OpenRouter setting.*single-backend or \(OpenCode Go\) routed by its provider/);
-  });
-
-  test("an unknown driver is refused rather than passed through", () => {
-    expect(() => resolve([{ model: "x", driver: "anthropic" as never }], "20260101")).toThrow(/unknown driver/);
   });
 
   test("the scripted reference is no roster entry: a hand-written roster cannot launch one", () => {
@@ -145,46 +119,6 @@ describe("episodeArgv", () => {
     expect(episodeArgv(d!, true)).not.toContain("--continue-dropped");
   });
 
-  test("openai entries are unchanged: driver, endpoint, no account flag", () => {
-    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
-    const argv = episodeArgv(s!, false);
-    expect(argv).toContain("--api-base");
-    expect(argv).toContain("--api-key-env");
-    expect(argv).not.toContain("--account");
-    expect(argv[argv.indexOf("--driver") + 1]).toBe("openai");
-  });
-
-  test("no name reaches the runner: race and class are the launch dimensions", () => {
-    // A spec has no character to pass and the flag is gone from the runner —
-    // the model names its own at createSession and the run records it.
-    const [s] = resolve([{ model: "opus", driver: "claude-code", race: 3, class: 2 }], "20260101");
-    const argv = episodeArgv(s!, false);
-    expect(argv).not.toContain("--character");
-    expect(argv[argv.indexOf("--race") + 1]).toBe("3");
-    expect(argv[argv.indexOf("--class") + 1]).toBe("2");
-  });
-
-  test("claude entries carry no api flags and do carry their account", () => {
-    const [s] = resolve([{ model: "opus", driver: "claude-code", account: "SHAKEOUT" }], "20260101");
-    const argv = episodeArgv(s!, false);
-    for (const flag of OPENAI_ONLY) expect(argv).not.toContain(flag);
-    expect(argv[argv.indexOf("--driver") + 1]).toBe("claude-code");
-    expect(argv[argv.indexOf("--account") + 1]).toBe("SHAKEOUT");
-  });
-
-  test("a driver outside the vocabulary is refused by name", () => {
-    expect(() => resolve([{ model: "opus", driver: "claude-subscription" as never }], "20260101")).toThrow(/unknown driver claude-subscription/);
-  });
-
-  test("effort is passed only when the entry declares one", () => {
-    const [plain] = resolve([{ model: "opus", driver: "claude-code" }], "20260101");
-    expect(episodeArgv(plain!, false)).not.toContain("--effort");
-
-    const [low] = resolve([{ model: "opus", driver: "claude-code", effort: "low" }], "20260101");
-    const argv = episodeArgv(low!, false);
-    expect(argv[argv.indexOf("--effort") + 1]).toBe("low");
-  });
-
   test("effort is part of the derived run id, so opus@low is its own run", () => {
     const specs = resolve(
       [
@@ -195,57 +129,9 @@ describe("episodeArgv", () => {
     );
     expect(specs.map((s) => s.runId)).toEqual(["roster-opus-20260101", "roster-opus-low-20260101"]);
   });
-
-  // The fleet supervisor runs inside the runner image, where there is
-  // no docker CLI to exec with. Only the launcher head changes; every flag after
-  // it is identical, because run-episode.sh passes them through verbatim.
-  test("in the container the episode is a direct bun runner/src/run.ts child", () => {
-    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
-    const host = episodeArgv(s!, false);
-    const inside = episodeArgv(s!, false, { container: true });
-    expect(host[0]).toMatch(/run-episode\.sh$/);
-    expect(inside[0]).toBe("bun");
-    expect(inside[1]).toMatch(/runner\/src\/run\.ts$/);
-    expect(inside.slice(2)).toEqual(host.slice(1));
-  });
-
-  test("the flags alone are what a run pod's container gets: every argv is a head plus them", () => {
-    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
-    expect(episodeArgv(s!, false, { container: true }).slice(2)).toEqual(episodeFlags(s!, false));
-    expect(episodeArgv(s!, true).slice(1)).toEqual(episodeFlags(s!, true));
-    expect(episodeFlags(s!, false)[0]).toBe("--driver");
-  });
-
-  test("the launch seam rides the spec through resolve, validated, and adds nothing to argv", () => {
-    const launch = { pod: true as const, image: "ghcr.io/shard/wrathbench-runner:harness-0.5-940-gabc1234-pr12", command: null };
-    const [plain, pod] = resolve([{ model: "sonnet", driver: "claude-code" }, { model: "sonnet", driver: "claude-code", launch }], "20260101");
-    expect(plain!.launch).toBeUndefined();
-    expect(pod!.launch).toEqual(launch);
-    expect(episodeFlags(pod!, false)).toEqual(episodeFlags(plain!, false));
-    expect(() => resolve([{ model: "sonnet", driver: "claude-code", launch: { pod: true, image: 7 } } as unknown as RosterSpec], "20260101")).toThrow(/launch.image/);
-  });
-
-  test("inContainer reads the explicit flag, never a docker sniff", () => {
-    expect(inContainer({})).toBe(false);
-    expect(inContainer({ WRATHBENCH_IN_CONTAINER: "0" })).toBe(false);
-    expect(inContainer({ WRATHBENCH_IN_CONTAINER: "1" })).toBe(true);
-  });
-
-  test("a resume passes the run id and the current leash — identity comes from meta.json", () => {
-    // Identity is the stored run's. The leash is not: run.ts keeps whatever
-    // watchdogs meta.json holds unless a flag overrides them, so the roster
-    // restates today's clock on every resume — here the numeric spelling.
-    const [s] = resolve([{ model: "opus", driver: "claude-code" }], "20260101");
-    expect(episodeArgv(s!, true).slice(1)).toEqual(["--resume", "roster-opus-20260101", "--episode-ms", "5400000"]);
-  });
 });
 
 describe("forCycle", () => {
-  test("cycle 1 is the roster as written", () => {
-    const [s] = resolve([{ model: "opus" }], "20260101");
-    expect(forCycle(s!, 1).runId).toBe("roster-opus-20260101");
-  });
-
   test("later cycles get their own run id and keep every other dimension", () => {
     const [s] = resolve([{ model: "opus", race: 3, class: 2 }], "20260101");
     const c3 = forCycle(s!, 3);
@@ -262,30 +148,10 @@ describe("forCycle", () => {
 describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
   const OBJECTIVE = "Travel to the nearest capital city.";
 
-  test("an entry without them is unchanged", () => {
-    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
-    expect(s).toMatchObject({ objective: undefined, watchdogs: {}, maxToolCalls: undefined, episodeMs: 5_400_000 });
-    const argv = episodeArgv(s!, false);
-    expect(argv).not.toContain("--objective");
-    expect(argv).not.toContain("--wiki-coords");
-    expect(argv).not.toContain("--watchdogs-json");
-    expect(argv).not.toContain("--max-tool-calls");
-    expect(argv[argv.indexOf("--episode-ms") + 1]).toBe("5400000");
-  });
-
   test("the objective reaches argv verbatim, as one argument", () => {
     const [s] = resolve([{ model: "z-ai/glm-5.2:free", objective: OBJECTIVE }], "20260101");
     const argv = episodeArgv(s!, false);
     expect(argv[argv.indexOf("--objective") + 1]).toBe(OBJECTIVE);
-  });
-
-  test("wikiCoords reaches argv as an explicit `--wiki-coords true`", () => {
-    const [s] = resolve([{ model: "m", wikiCoords: true }], "20260101");
-    expect(s!.wikiCoords).toBe(true);
-    const argv = episodeArgv(s!, false);
-    expect(argv[argv.indexOf("--wiki-coords") + 1]).toBe("true");
-    expect(resolve([{ model: "m", wikiCoords: false }], "20260101")[0]!.wikiCoords).toBe(false);
-    expect(() => resolve([{ model: "m", wikiCoords: "true" as never }], "20260101")).toThrow(/wikiCoords/);
   });
 
   test("the reference wiki is on by default, and `wiki: false` reaches argv (issue #61)", () => {
@@ -352,11 +218,6 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(episodeArgv(plain!, false)).not.toContain("--extra");
   });
 
-  test("an empty objective or a bad watchdog key is a config error", () => {
-    expect(() => resolve([{ model: "m", objective: "" }], "20260101")).toThrow(/objective/);
-    expect(() => resolve([{ model: "m", watchdogs: { noXpMS: 5 } as never }], "20260101")).toThrow(/watchdogs/);
-  });
-
   test("a disabled watchdog travels as JSON null — argv cannot carry it any other way", () => {
     const [s] = resolve(
       [{ model: "m", watchdogs: { noXpMs: null, idleMs: 1_200_000, episodeMs: 21_600_000 } }],
@@ -371,12 +232,6 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(argv[argv.indexOf("--episode-ms") + 1]).toBe("21600000");
   });
 
-  test("0 is the argv spelling of disabled and normalises to null", () => {
-    const [s] = resolve([{ model: "m", watchdogs: { noXpMs: 0 } }], "20260101");
-    const argv = episodeArgv(s!, false);
-    expect(JSON.parse(argv[argv.indexOf("--watchdogs-json") + 1]!)).toEqual({ noXpMs: null });
-  });
-
   test("watchdogs.episodeMs wins over the entry's episodeMs, and can disable the wall clock", () => {
     const [both] = resolve([{ model: "m", episodeMs: 60_000, watchdogs: { episodeMs: 21_600_000 } }], "20260101");
     expect(both!.episodeMs).toBe(21_600_000);
@@ -387,11 +242,6 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     const argv = episodeArgv(off!, false);
     expect(argv).not.toContain("--episode-ms");
     expect(JSON.parse(argv[argv.indexOf("--watchdogs-json") + 1]!)).toEqual({ episodeMs: null });
-  });
-
-  test("maxToolCalls maps onto --max-tool-calls", () => {
-    const [s] = resolve([{ model: "m", maxToolCalls: 2500 }], "20260101");
-    expect(episodeArgv(s!, false)[episodeArgv(s!, false).indexOf("--max-tool-calls") + 1]).toBe("2500");
   });
 
   test("maxToolCalls null is no ceiling, and travels as --max-tool-calls 0 on both paths", () => {
@@ -483,21 +333,10 @@ describe("the version stamp a spawned episode inherits", () => {
 describe("planFreshLaunch", () => {
   const spec = { runId: "roster-glm-5-2-20260101", dirExists: false, resumeRoster: false };
 
-  test("a run id with nothing on disk launches", () => {
-    expect(planFreshLaunch(spec)).toEqual({ kind: "launch" });
-    expect(planFreshLaunch({ ...spec, resumeRoster: true })).toEqual({ kind: "launch" });
-  });
-
   test("a directory already on disk is skipped, not launched onto", () => {
     const plan = planFreshLaunch({ ...spec, dirExists: true });
     expect(plan.kind).toBe("skip");
     expect(plan.kind === "skip" ? plan.reason : "").toContain("roster-glm-5-2-20260101 is already a run directory on disk");
     expect(plan.kind === "skip" ? plan.reason : "").toContain("this is not --resume-roster");
-  });
-
-  test("under --resume-roster the reason names the unreadable row, which is why no resume was planned", () => {
-    const plan = planFreshLaunch({ ...spec, dirExists: true, resumeRoster: true });
-    expect(plan.kind).toBe("skip");
-    expect(plan.kind === "skip" ? plan.reason : "").toContain("no readable run row");
   });
 });

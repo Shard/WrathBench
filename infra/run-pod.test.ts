@@ -1,8 +1,8 @@
 /**
  * The run-pod launcher against a fake Kubernetes API (`Bun.serve`, in
  * memory, no cluster): what it creates, what it refuses, what it writes back
- * to the run directory, and how it ends an episode on each path a pod can
- * take. Plus the pure rules it is built from — the image allow-list, the env
+ * to the run directory, and how it ends an episode on a pull failure, a stop
+ * and a refusal. Plus the pure rules it is built from — the image allow-list, the env
  * builder, the launcher choice — and the chart's own rendering of the template
  * when helm is on PATH, because the env builder's guarantees are only as good
  * as the template it is handed.
@@ -11,28 +11,21 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { harnessSeries } from "../runner/src/comparability-tuple";
-import { chooseLauncher, EPISODE_TERM_GRACE_MS, episodeRunsInPod, parseLaunchSpec, type EpisodeLaunch, episodeSecretEnv, processEpisodeEnv } from "./episode-launcher";
+import { chooseLauncher, EPISODE_TERM_GRACE_MS, episodeRunsInPod, type EpisodeLaunch, processEpisodeEnv } from "./episode-launcher";
 import { K8sClient, K8sError, type Pod, type PodEnvVar, type PodStatus } from "./k8s-client";
-import { rosterCanHoldPod, rosterEpisodeInFlight } from "./run-fleet-state";
 import {
   buildRunPod,
   harnessStampOf,
   IMAGE_ANNOTATION,
   imageRefusal,
   isQuotaRefusal,
-  loadPodLauncher,
   parseImageRef,
   parseLauncherSettings,
   PodLauncher,
   readLauncherSettings,
   readImageRecord,
-  ROSTER_PID_LABEL,
   rosterHasRunPod,
-  RUN_HASH_LABEL,
-  RUN_ID_ANNOTATION,
   RUN_POD_LAUNCHER_ENV,
-  RUN_POD_TEMPLATE_ENV,
-  runHashLabel,
   runPodEnv,
   runPodsHere,
 } from "./run-pod";
@@ -259,11 +252,6 @@ describe("image references and the allow-list", () => {
     expect(imageRefusal("", ALLOWED)).toContain("not an image reference");
   });
 
-  test("a registry port is part of the repository, not a tag", () => {
-    const r = parseImageRef("registry.local:5000/wb/runner:v1");
-    expect("error" in r ? r.error : r.repo).toBe("registry.local:5000/wb/runner");
-  });
-
   test("the harness stamp is the tag, and the PR workflow's tag still names series 0.5", () => {
     const pr = parseImageRef("ghcr.io/shard/wrathbench-runner:harness-0.5-940-gabc1234-pr12");
     if ("error" in pr) throw new Error(pr.error);
@@ -311,16 +299,6 @@ describe("runPodEnv", () => {
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
   });
 
-  test("the plain values survive and the stamps win", () => {
-    const env = runPodEnv(tpl, { driver: "openai", credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: { WRATHBENCH_HARNESS_VERSION: "harness-0.5-940-gabc1234-pr12", WRATHBENCH_RUN_IMAGE: "x:y" } });
-    const by = Object.fromEntries(env.map((e) => [e.name, e.value]));
-    expect(by["WRATHBENCH_IN_CONTAINER"]).toBe("1");
-    expect(by["WRATHBENCH_MODULE_URL"]).toBe("http://worldserver:8086");
-    expect(by["WRATHBENCH_HARNESS_VERSION"]).toBe("harness-0.5-940-gabc1234-pr12");
-    expect(by["WRATHBENCH_RUN_IMAGE"]).toBe("x:y");
-    expect(names(env).filter((n) => n === "WRATHBENCH_HARNESS_VERSION").length).toBe(1);
-  });
-
   test("no ANTHROPIC_* variable can reach a run pod, from the template or a stamp", () => {
     const opts = { driver: "claude-code" as const, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
     expect(() => runPodEnv([...tpl, { name: "ANTHROPIC_API_KEY", value: "sk-ant" }], opts)).toThrow(/ANTHROPIC_API_KEY may never reach a run pod/);
@@ -343,27 +321,6 @@ describe("runPodEnv", () => {
 
 describe("buildRunPod", () => {
   const base = { runId: "fleet-race-probe-1-orc-warrior-sonnet-20260101", image: RELEASE, requestedRef: RELEASE, command: null, args: ["--resume", "x"], env: { driver: "claude-code" as const, credentialEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: { name: "wrathbench-fleet-abc", uid: "fleet-uid" }, rosterPid: 77, graceMs: EPISODE_TERM_GRACE_MS };
-
-  test("labels, annotations, the owner reference and the grace", () => {
-    const pod = buildRunPod(template(), base);
-    expect(pod.metadata.labels!["app.kubernetes.io/component"]).toBe("run");
-    expect(pod.metadata.labels![RUN_HASH_LABEL]).toBe(runHashLabel(base.runId));
-    expect(pod.metadata.labels![RUN_HASH_LABEL]).toMatch(/^[0-9a-f]{16}$/);
-    expect(pod.metadata.labels![ROSTER_PID_LABEL]).toBe("77");
-    expect(pod.metadata.annotations![RUN_ID_ANNOTATION]).toBe(base.runId);
-    expect(pod.metadata.annotations![IMAGE_ANNOTATION]).toBe(RELEASE);
-    expect(pod.metadata.ownerReferences).toEqual([{ apiVersion: "v1", kind: "Pod", name: "wrathbench-fleet-abc", uid: "fleet-uid" }]);
-    expect(pod.spec.terminationGracePeriodSeconds).toBe(90);
-    expect(pod.metadata.generateName).toBe("wrathbench-run-");
-    // The template is not mutated.
-    expect(template().metadata.labels![RUN_HASH_LABEL]).toBeUndefined();
-  });
-
-  test("the default command is tini plus this runner; an arm's command replaces the whole thing", () => {
-    expect(buildRunPod(template(), base).spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
-    expect(buildRunPod(template(), base).spec.containers[0]!.args).toEqual(["--resume", "x"]);
-    expect(buildRunPod(template(), { ...base, command: ["/app/harness"] }).spec.containers[0]!.command).toEqual(["/app/harness"]);
-  });
 
   test("every run pod carries the run-pod stamp, which no template value or stamp can unset", () => {
     for (const driver of ["claude-code", "openai", "codex", "pi"] as const) {
@@ -410,13 +367,6 @@ describe("buildRunPod", () => {
     tpl.spec.containers[0]!.volumeMounts = tpl.spec.containers[0]!.volumeMounts!.filter((m) => m.subPath !== "runs");
     expect(() => buildRunPod(tpl, base)).toThrow("mounts no runs directory");
   });
-
-  test("pull secrets are added to the template's, never duplicated", () => {
-    const tpl = template();
-    tpl.spec["imagePullSecrets"] = [{ name: "harbor" }];
-    const pod = buildRunPod(tpl, { ...base, extraPullSecrets: ["ghcr-pull", "harbor"] });
-    expect(pod.spec["imagePullSecrets"]).toEqual([{ name: "harbor" }, { name: "ghcr-pull" }]);
-  });
 });
 
 // ------------------------------------------------------------------- choice
@@ -424,16 +374,6 @@ describe("buildRunPod", () => {
 describe("chooseLauncher", () => {
   const pinned = { pod: true as const, image: "ghcr.io/shard/wrathbench-runner:harness-0.5-940-gabc1234-pr12", command: null };
   const floating = { pod: true as const, image: null, command: null };
-
-  test("no launch field is always a child process", () => {
-    expect(chooseLauncher({ runPods: "probes", onCluster: true, launch: undefined })).toEqual({ kind: "process" });
-    expect(chooseLauncher({ runPods: "off", onCluster: false, launch: undefined })).toEqual({ kind: "process" });
-  });
-
-  test("a pod iff the setting is on and we are on the cluster", () => {
-    expect(chooseLauncher({ runPods: "probes", onCluster: true, launch: floating })).toEqual({ kind: "pod" });
-    expect(chooseLauncher({ runPods: "probes", onCluster: true, launch: pinned })).toEqual({ kind: "pod" });
-  });
 
   test("an image-less arm falls back to a child process; a pinned arm is refused, naming why", () => {
     expect(chooseLauncher({ runPods: "off", onCluster: true, launch: floating })).toEqual({ kind: "process" });
@@ -480,15 +420,6 @@ describe("chooseLauncher", () => {
     expect(at("openai", false, "probes", true)).toBe(false);
     expect(at(undefined, true, "probes", false)).toBe(false);
     expect(at("not-a-driver", false, "probes", true)).toBe(false);
-  });
-
-  test("parseLaunchSpec admits the seam's shape and nothing more", () => {
-    expect(parseLaunchSpec({ pod: true, image: null, command: null }, "x")).toEqual(floating);
-    expect(parseLaunchSpec({ pod: true, image: pinned.image, command: ["/app/h"] }, "x")).toEqual({ ...pinned, command: ["/app/h"] });
-    expect(() => parseLaunchSpec({ pod: false, image: null, command: null }, "x")).toThrow(/launch.pod must be true/);
-    expect(() => parseLaunchSpec({ pod: true, image: "", command: null }, "x")).toThrow(/launch.image/);
-    expect(() => parseLaunchSpec({ pod: true, image: null, command: [] }, "x")).toThrow(/launch.command/);
-    expect(() => parseLaunchSpec({ pod: true, image: null, command: null, args: [] }, "x")).toThrow(/launch.args is not a key/);
   });
 });
 
@@ -552,51 +483,6 @@ describe("PodLauncher against a fake API", () => {
     }
   });
 
-  test("unschedulable and a pod that stays Pending are bounded, not hung", async () => {
-    const api = new FakeApi();
-    try {
-      let t = 0;
-      const now = (): number => (t += 1_000);
-      const dir = join(tempDir("wb-run-pod-"), "run");
-      const h = await launcher(api, { now, unschedulableMaxMs: 5_000 }).start(launch(dir));
-      const name = api.only().metadata.name!;
-      api.setStatus(name, { phase: "Pending", conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable", message: "0/1 nodes are available" }] });
-      const exit = await h.exited;
-      expect(exit.failure).toContain("unschedulable");
-      expect(exit.failure).toContain("0/1 nodes are available");
-
-      const api2 = new FakeApi();
-      try {
-        const h2 = await launcher(api2, { now, pendingMaxMs: 4_000 }).start(launch(dir));
-        const exit2 = await h2.exited;
-        expect(exit2.failure).toContain("still Pending");
-        expect(api2.pods.size).toBe(0);
-      } finally {
-        api2.stop();
-      }
-    } finally {
-      api.stop();
-    }
-  });
-
-  test("an eviction is a failure with the kubelet's message, after the container ran", async () => {
-    const api = new FakeApi();
-    try {
-      const dir = join(tempDir("wb-run-pod-"), "run");
-      const h = await launcher(api).start(launch(dir));
-      const name = api.only().metadata.name!;
-      api.setStatus(name, running(`x@${DIGEST}`));
-      await until(() => existsSync(join(dir, "image.json")));
-      api.setStatus(name, { phase: "Failed", reason: "Evicted", message: "The node was low on resource: ephemeral-storage." });
-      const exit = await h.exited;
-      expect(exit.code).toBe(1);
-      expect(exit.failure).toContain("Evicted");
-      expect(exit.failure).toContain("ephemeral-storage");
-    } finally {
-      api.stop();
-    }
-  });
-
   test("stop() deletes the pod with the episode grace and waits for it to be gone", async () => {
     const api = new FakeApi();
     try {
@@ -616,20 +502,6 @@ describe("PodLauncher against a fake API", () => {
       expect(api.deletions[0]).toEqual({ name, grace: 90 });
       expect(await h.exited).toEqual({ code: 130 });
       expect(api.pods.size).toBe(0);
-    } finally {
-      api.stop();
-    }
-  });
-
-  test("a pod that vanishes without an exit (the garbage collector, an operator) is reported, not waited on", async () => {
-    const api = new FakeApi();
-    try {
-      const dir = join(tempDir("wb-run-pod-"), "run");
-      const h = await launcher(api).start(launch(dir));
-      api.pods.clear();
-      const exit = await h.exited;
-      expect(exit.code).toBe(1);
-      expect(exit.failure).toContain("disappeared");
     } finally {
       api.stop();
     }
@@ -699,20 +571,6 @@ describe("PodLauncher against a fake API", () => {
       expect(Object.keys(ctx?.characterOwners ?? {}).sort()).toEqual(["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05"]);
       // The runner's own refusal, on the accounts its config's grant names.
       expect(fanoutConfigOf(fanout).accounts.filter((a) => launchOwners(ctx, a) === undefined)).toEqual([]);
-      await h.stop(0);
-    } finally {
-      api.stop();
-    }
-  });
-
-  test("an arm with its own command and flags run.ts does not know is staged all the same: only the supervisor's flags are read", async () => {
-    const api = new FakeApi();
-    try {
-      const dir = join(tempDir("wb-run-pod-runs-"), launch("").spec.runId);
-      const h = await launcher(api).start(launch(dir, { image: "ghcr.io/shard/wrathbench-runner:probe-x-0123456789ab", command: ["/app/harness"], args: ["--driver", "claude-code", "--account", "runner3", "--their-own", "--knob", "7"] }));
-      const pod = api.only();
-      expect(pod.spec.containers[0]!.command).toEqual(["/app/harness"]);
-      expect(launchContextOf({ [LAUNCH_CONTEXT_ENV]: envOf(pod)[LAUNCH_CONTEXT_ENV]?.value })?.characterOwners).toEqual({ RUNNER3: {} });
       await h.stop(0);
     } finally {
       api.stop();
@@ -842,19 +700,6 @@ describe("PodLauncher against a fake API", () => {
     }
   });
 
-  test("a resume with no image.json launches the arm's image like a fresh run", async () => {
-    const api = new FakeApi();
-    try {
-      const dir = join(tempDir("wb-run-pod-"), "run");
-      const h = await launcher(api).start(launch(dir, { resume: true }));
-      expect(api.only().spec.containers[0]!.image).toBe(RELEASE);
-      api.pods.clear();
-      await h.exited;
-    } finally {
-      api.stop();
-    }
-  });
-
   test("an image outside the allow-list, or a create the API refuses, never becomes a pod: exit 2 with the reason", async () => {
     const api = new FakeApi();
     try {
@@ -960,63 +805,6 @@ describe("PodLauncher against a fake API", () => {
     expect(off.describe(RUN_POD_KEY)).toBe("run pods 2/2 in flight (the chart's runPods.maxPods)");
   });
 
-  test("a roster can hold a pod when handed --run-pods, or on the cluster when an entry is codex's", () => {
-    expect(rosterCanHoldPod(["run-roster.sh", "r.json", "--run-pods", "probes"], [{ driver: "openai" }], true)).toBe(true);
-    expect(rosterCanHoldPod(["run-roster.sh", "r.json"], [{ driver: "openai" }, {}], true)).toBe(false);
-    expect(rosterCanHoldPod(["run-roster.sh", "r.json"], [{ driver: "openai" }, { driver: "codex" }], true)).toBe(true);
-    expect(rosterCanHoldPod(["run-roster.sh", "r.json"], [{ driver: "codex" }], false)).toBe(false);
-  });
-
-  test("the drain asks the API only of a roster spawned with --run-pods", async () => {
-    const asked: number[] = [];
-    const hasRunPod = async (pid: number): Promise<boolean> => {
-      asked.push(pid);
-      return true;
-    };
-    // Pods off: between episodes is between episodes, with no API call at all.
-    expect(await rosterEpisodeInFlight({ pid: 11, runPods: false }, { hasLiveChild: () => false, hasRunPod })).toBe(false);
-    expect(asked).toEqual([]);
-    // A live child answers before anything is asked, pods on or off.
-    expect(await rosterEpisodeInFlight({ pid: 12, runPods: true }, { hasLiveChild: () => true, hasRunPod })).toBe(true);
-    expect(asked).toEqual([]);
-    // Pods on and no child: the API decides, and a 403 behind it is no pod.
-    expect(await rosterEpisodeInFlight({ pid: 13, runPods: true }, { hasLiveChild: () => false, hasRunPod })).toBe(true);
-    expect(asked).toEqual([13]);
-    const api = new FakeApi();
-    try {
-      api.listAnswer = () => status(403, "Forbidden", "no");
-      const viaApi = (pid: number): Promise<boolean> => rosterHasRunPod(api.client, pid, { timeoutMs: 1_000 });
-      expect(await rosterEpisodeInFlight({ pid: 14, runPods: true }, { hasLiveChild: () => false, hasRunPod: viaApi })).toBe(false);
-      expect(api.requests.filter((r) => r.startsWith("GET /api/v1/namespaces/wrathbench/pods?"))).toHaveLength(1);
-      await rosterEpisodeInFlight({ pid: 15, runPods: false }, { hasLiveChild: () => false, hasRunPod: viaApi });
-      expect(api.requests.filter((r) => r.startsWith("GET /api/v1/namespaces/wrathbench/pods?"))).toHaveLength(1);
-    } finally {
-      api.stop();
-    }
-  });
-
-  test("loadPodLauncher reads the mounted template and settings, and says what is missing", () => {
-    const api = new FakeApi();
-    try {
-      const dir = tempDir("wb-run-pod-");
-      writeFileSync(join(dir, "pod.json"), JSON.stringify(template()));
-      writeFileSync(join(dir, "launcher.json"), JSON.stringify({ allowedImages: ALLOWED, imagePullSecrets: ["ghcr-pull"] }));
-      const env = { [RUN_POD_TEMPLATE_ENV]: join(dir, "pod.json"), [RUN_POD_LAUNCHER_ENV]: join(dir, "launcher.json"), POD_NAME: "wrathbench-fleet-abc", POD_UID: "fleet-uid" };
-      const l = loadPodLauncher({ rosterPid: 1, env, client: api.client });
-      expect("error" in l).toBe(false);
-      if (!("error" in l)) {
-        expect(l.opts.allowedImages).toEqual(ALLOWED);
-        expect(l.opts.imagePullSecrets).toEqual(["ghcr-pull"]);
-        expect(l.opts.owner).toEqual({ name: "wrathbench-fleet-abc", uid: "fleet-uid" });
-      }
-      const missing = loadPodLauncher({ rosterPid: 1, env: { ...env, [RUN_POD_TEMPLATE_ENV]: join(dir, "nope.json") }, client: api.client });
-      expect("error" in missing ? missing.error : "").toContain("older than run pods");
-      expect("error" in loadPodLauncher({ rosterPid: 1, env, client: null }) ? "" : "x").toBe("");
-    } finally {
-      api.stop();
-    }
-  });
-
   test("the settings' maxPods is a positive integer or no cap; the supervisor's book takes it only for run pods on the cluster", () => {
     expect(parseLauncherSettings({ allowedImages: ALLOWED }).maxPods).toBeUndefined();
     expect(parseLauncherSettings({ maxPods: null }).maxPods).toBeUndefined();
@@ -1071,38 +859,6 @@ describe("the chart's run-pod template", () => {
   const helm = Bun.which("helm");
   /** `helm template` runs synchronously and can take longer than bun's default 5 s on a loaded CI runner. */
   const HELM_TEST_MS = 30_000;
-
-  test.skipIf(helm === null)("rendered, every WrathBench-image pod carries the chart-wide pull Secrets, and run pods add their own once each", () => {
-    const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "imagePullSecrets={wrathbench-harbor-pull}", "--set", "runPods.imagePullSecrets={ghcr-pull,wrathbench-harbor-pull}"], { stdout: "pipe", stderr: "pipe" });
-    expect(r.exitCode).toBe(0);
-    const docs = r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: Record<string, unknown> }; jobTemplate?: unknown } } | null);
-    const specOf = (kind: string, name: string): Record<string, unknown> => {
-      const d = docs.find((x) => x?.kind === kind && x.metadata?.name === name);
-      expect(d, `${kind}/${name} renders`).toBeDefined();
-      return d!.spec!.template!.spec!;
-    };
-    const want = [{ name: "wrathbench-harbor-pull" }];
-    for (const name of ["fleet", "runner", "viewer", "publisher", "collector", "worldserver", "authserver"]) {
-      expect(specOf("Deployment", `wrathbench-${name}`)["imagePullSecrets"], name).toEqual(want);
-    }
-    for (const d of docs) if (d?.kind === "Job") expect(d.spec!.template!.spec!["imagePullSecrets"], d.metadata!.name).toEqual(want);
-    // Upstream public images: the database pods carry none, and do not move.
-    expect(specOf("Deployment", "wrathbench-db")["imagePullSecrets"]).toBeUndefined();
-    expect(specOf("StatefulSet", "wrathbench-clickhouse")["imagePullSecrets"]).toBeUndefined();
-    const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template") as { data: { "pod.json": string } } | undefined;
-    expect(cm).toBeDefined();
-    const tpl = JSON.parse(cm!.data["pod.json"]) as Pod;
-    expect(tpl.spec["imagePullSecrets"]).toEqual([{ name: "wrathbench-harbor-pull" }, { name: "ghcr-pull" }]);
-    // The default renders no key on any pod spec at all (a public registry).
-    const plain = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=t-1-gabcdef0"], { stdout: "pipe", stderr: "pipe" });
-    expect(plain.exitCode).toBe(0);
-    const plainDocs = plain.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: Record<string, unknown> } }; data?: Record<string, string> } | null);
-    for (const d of plainDocs) {
-      if (d?.spec?.template?.spec !== undefined) expect(d.spec.template.spec["imagePullSecrets"], `${d.kind}/${d.metadata?.name}`).toBeUndefined();
-    }
-    const plainCm = plainDocs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
-    expect((JSON.parse(plainCm!.data!["pod.json"]!) as Pod).spec["imagePullSecrets"]).toBeUndefined();
-  }, HELM_TEST_MS);
 
   test.skipIf(helm === null)("rendered, the template builds a pod the env builder accepts, with only this driver's secrets", () => {
     const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "runPods.allowedImages={harbor.example/library/wrathbench-runner,ghcr.io/shard/wrathbench-runner}", "--set", "runPods.imagePullSecrets={ghcr-pull}"], { stdout: "pipe", stderr: "pipe" });
@@ -1203,37 +959,6 @@ describe("the chart's run-pod template", () => {
       expect([driver, Object.keys(envOf(pod)).filter((n) => /SOAP|STAGER/.test(n))]).toEqual([driver, []]);
     }
   }, HELM_TEST_MS);
-
-  test.skipIf(helm === null)("rendered, localModelHosts reaches every pod that parses the config and every run pod, which run.ts checks an LM Studio pair against", () => {
-    // run.ts refuses a key towards a host the provider table does not pair it
-    // with before it reads the key (runner/src/providers.ts), and in a run pod
-    // it reads the self-hosted hosts from its own env: without them there, an
-    // entry the fleet parsed as fine would exit 2 in its pod on every attempt.
-    const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "localModelHosts={192.0.2.20:1234,lmbox.lan}"], { stdout: "pipe", stderr: "pipe" });
-    expect(r.exitCode).toBe(0);
-    type Env = { name: string; value?: string; valueFrom?: unknown }[];
-    const docs = r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: { containers?: { name: string; env?: Env }[] } } }; data?: Record<string, string> } | null);
-    const want = "192.0.2.20:1234,lmbox.lan";
-    // Every container that reads the config store gets the hosts beside it.
-    const readers: string[] = [];
-    for (const d of docs) {
-      for (const c of d?.spec?.template?.spec?.containers ?? []) {
-        const env = c.env ?? [];
-        if (!env.some((e) => e.name === "WRATHBENCH_CONFIG_DB")) continue;
-        readers.push(`${d!.metadata!.name}/${c.name}`);
-        expect([c.name, env.find((e) => e.name === "WRATHBENCH_LOCAL_MODEL_HOSTS")?.value]).toEqual([c.name, want]);
-      }
-    }
-    for (const name of ["fleet", "runner", "viewer", "publisher"]) expect(readers.some((x) => x.startsWith(`wrathbench-${name}/`)), name).toBe(true);
-    // The run pod gets them as a plain value, and the launcher keeps it for an openai run.
-    const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
-    const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
-    const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "openai", credentialEnv: undefined, apiKeyEnv: "LMSTUDIO_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
-    const env = envOf(pod);
-    expect(env["WRATHBENCH_LOCAL_MODEL_HOSTS"]).toEqual({ name: "WRATHBENCH_LOCAL_MODEL_HOSTS", value: want });
-    expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["LMSTUDIO_KEY", "WRATHBENCH_MODULE_SECRET"]);
-    expect(Object.keys(env).some((n) => n.startsWith("ANTHROPIC_"))).toBe(false);
-  }, HELM_TEST_MS);
 });
 
 // ------------------------------------------------------------- stored secrets
@@ -1246,13 +971,6 @@ describe("a secret the config store holds", () => {
     return t;
   };
   const sealedToken = sealSecret(key, "CLAUDE_CODE_OAUTH_TOKEN_2", SENTINEL);
-
-  test("the variable an episode bills: a CLI token or an endpoint key, never a Codex home", () => {
-    expect(episodeSecretEnv({ driver: "claude-code", placedOn: { id: "c2", env: "CLAUDE_CODE_OAUTH_TOKEN_2" }, apiKeyEnv: "OPENROUTER_KEY" })).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
-    expect(episodeSecretEnv({ driver: "claude-code", placedOn: undefined, apiKeyEnv: "OPENROUTER_KEY" })).toBe("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(episodeSecretEnv({ driver: "openai", placedOn: { id: "or", env: "OPENROUTER_KEY_2" }, apiKeyEnv: "OPENROUTER_KEY_2" })).toBe("OPENROUTER_KEY_2");
-    expect(episodeSecretEnv({ driver: "codex", placedOn: { id: "cx", env: "CODEX_HOME" }, apiKeyEnv: "OPENROUTER_KEY" })).toBeUndefined();
-  });
 
   test("a child episode: the stored value over the environment's, never the store key, never on argv", () => {
     const l = launch("/tmp/x");

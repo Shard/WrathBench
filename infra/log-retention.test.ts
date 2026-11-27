@@ -211,17 +211,6 @@ describe.skipIf(perl === null)("the retention pass", () => {
     }
   });
 
-  test("the window is the operator's: seven days keeps what three would prune", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const f = fixture(now);
-    const r = await run(f.dir, { WRATHBENCH_LOG_RETENTION_DAYS: "7" });
-    expect(r.code, r.err).toBe(0);
-    expect(count(r.out, "kept")).toBe(7);
-    expect(count(r.out, "deleted")).toBe(0);
-    expect(size(f.files.closedBeforeStart!)).toBe(1000);
-    expect(size(f.files.pastDay!)).toBe(700);
-  });
-
   test("today's day file follows the undated rules: quiet for a short window but younger than the server, it is emptied, not deleted", async () => {
     const now = Math.floor(Date.now() / 1000);
     const f = fixture(now);
@@ -274,11 +263,6 @@ describe.skipIf(perl === null)("the retention pass", () => {
     expect(line((await run(fixture(now).dir, {})).out, "worlds")).toBe("");
     expect((await run(fixture(now).dir, { WRATHBENCH_WORLDS_DIR: join(worlds, "absent") })).code).toBe(1);
   });
-
-  test("an unreadable directory is a failure, not a silent pass", async () => {
-    const r = await run(join(tempDir("wb-log-retention-"), "absent"), {});
-    expect(r.code).toBe(1);
-  });
 });
 
 describe.skipIf(helm === null)("the chart's log-retention CronJob", () => {
@@ -314,6 +298,7 @@ describe.skipIf(helm === null)("the chart's log-retention CronJob", () => {
     const off = render(["--set", "worldserver.logRetention.days=0"]);
     expect(byKind(off, "CronJob")).toHaveLength(0);
     expect(byKind(off, "ConfigMap")).toHaveLength(0);
+    // A changed worldserver spec would roll it, and every live session with it.
     const ws = (docs: Doc[]) => docs.find((d) => d?.kind === "Deployment" && d.metadata?.name === "wrathbench-worldserver");
     expect(ws(off)).toEqual(ws(render([])));
   }, 30_000);

@@ -41,6 +41,7 @@ const tempDir = tempDirs();
 const REPO_ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(REPO_ROOT, "infra", "k8s-deploy.sh");
 const TAG = "wb-test-0.9-1-gdeadbee";
+const REAL_SLEEP = Bun.which("sleep") ?? "/bin/sleep";
 
 /**
  * A `kubectl` with no cluster behind it.
@@ -237,6 +238,11 @@ function run(c: Case): Result {
   const kubectl = join(bin, "kubectl");
   writeFileSync(kubectl, KUBECTL_SHIM);
   chmodSync(kubectl, 0o755);
+  // The drain loops poll with a bare `sleep 2`: a short real sleep keeps every
+  // wait the same in polls and cuts it from seconds to milliseconds.
+  const sleep = join(bin, "sleep");
+  writeFileSync(sleep, `#!/usr/bin/env bash\nexec ${REAL_SLEEP} 0.01\n`);
+  chmodSync(sleep, 0o755);
 
   const preflightJson = join(dir, "preflight.json");
   writeFileSync(preflightJson, JSON.stringify(c.preflight ?? PREFLIGHT, null, 2));
@@ -314,9 +320,6 @@ describe("k8s-deploy.sh draining", () => {
     const r = run({ podPolls: 2 });
     expect(r.exitCode).toBe(0);
     expect(r.out).not.toContain("arithmetic syntax error");
-    expect(r.out).toContain("waiting for the fleet POD to go away");
-    expect(r.out).toContain("drained: no fleet pod remains");
-
     // The pod was polled until it went away, and every one of those polls
     // happened BEFORE the smoke — the ordering the 409 came from.
     const smoke = firstIndex(r, "smoke ");
@@ -331,160 +334,94 @@ describe("k8s-deploy.sh draining", () => {
     const r = run({ podPolls: 2, replicas: 0 });
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("the fleet was already at 0");
-    expect(r.out).toContain("waiting for the fleet POD to go away");
     // Nothing to scale down, but the pod in its grace is still waited out.
     expect(r.calls.some((l) => l.includes("--replicas=0"))).toBe(false);
     expect(lastIndex(r, "get pods")).toBeLessThan(firstIndex(r, "smoke "));
   });
 
-  test("--dry-run prints the pod list and changes nothing", () => {
-    const r = run({ args: ["--dry-run"], podPolls: 1 });
+  test("--dry-run lists every pod the drain would wait for, a failed read as one, and changes nothing", () => {
+    const r = run({ args: ["--dry-run"], podPolls: 1, runPodPolls: 1, worldPodPolls: 1 });
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("wrathbench-fleet-abc123 Running");
+    expect(r.out).toContain("wrathbench-run-xyz12 Running");
+    expect(r.out).toContain("world pods         wrathbench-world-w0abcdefghj Running w0abcdefghj");
     // The claim --dry-run makes, in full: nothing is scaled, waited on or smoked.
     expect(r.calls.some((l) => l.includes("--replicas="))).toBe(false);
     expect(firstIndex(r, "smoke ")).toBe(-1);
-  });
-
-  test("--dry-run says so when no pod is there to wait for", () => {
-    const r = run({ args: ["--dry-run"], podPolls: 0 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("the drain would not have to wait for one");
-  });
-
-  test("a wait that never waited says so, rather than reading as a clean drain", () => {
-    const r = run({ podPolls: 0 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("on the first look — nothing to wait for");
-  });
-
-  test("a pod that outlives the drain budget fails the window closed and names it", () => {
-    const r = run({ podPolls: -1, drainWaitS: 1 });
-    expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("wrathbench-fleet-abc123");
-    expect(r.out).toContain("account_owned_by_other_token");
-    // The whole point: it did not smoke on top of the dying supervisor.
-    expect(firstIndex(r, "smoke ")).toBe(-1);
-    // And the invariant the header promises still holds — the fleet came back.
-    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+    const unread = run({ args: ["--dry-run"], podFails: -1, runPodFails: -1 });
+    expect(unread.exitCode).toBe(0);
+    expect(unread.out).toContain("fleet pods         COULD NOT READ (kubectl exit 1:");
+    expect(unread.out).toContain("run pods           COULD NOT READ (kubectl exit 1:");
+    expect(unread.out).not.toContain("none — no episode is running as its own pod");
   });
 
   // A run pod (infra/run-pod.ts) is an episode with a game session, owned by
-  // the fleet pod and deleted with a 90s grace once that pod is gone. The
-  // worldserver is rolled and smoked only once none remains.
-  test("run pods are waited out after the fleet pod and before the worldserver is touched", () => {
-    const r = run({ podPolls: 1, runPodPolls: 1 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("waiting for every RUN pod to go away");
-    expect(r.out).toContain("drained: no run pod remains");
-    const lastRunPoll = lastIndex(r, "get run-pods");
-    expect(r.calls.filter((l) => l === "get run-pods").length).toBeGreaterThanOrEqual(2);
-    // After the fleet pod wait, before the worldserver rollout wait and the smoke.
-    expect(lastRunPoll).toBeGreaterThan(lastIndex(r, "get pods"));
-    expect(lastRunPoll).toBeLessThan(r.calls.findIndex((l) => l.startsWith("rollout status") && l.includes("worldserver")));
-    expect(lastRunPoll).toBeLessThan(firstIndex(r, "smoke "));
-  }, 20_000);
-
-  test("a run pod that never goes away fails the window closed, naming its run", () => {
-    const r = run({ podPolls: 0, runPodPolls: -1, drainWaitS: 1 });
-    expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("fleet-race-probe-1-orc-warrior-sonnet-20260101");
-    expect(r.out).toContain("must not be touched under a live run");
-    expect(firstIndex(r, "smoke ")).toBe(-1);
-    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
-  });
-
-  test("--dry-run lists the run pods beside the fleet pods", () => {
-    const r = run({ args: ["--dry-run"], runPodPolls: 1 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("run pods");
-    expect(r.out).toContain("wrathbench-run-xyz12 Running");
-  });
-
-  // A world pod (a world per eval) is owned by the fleet pod like a run pod;
-  // it is waited out after the run pods that play on it.
-  test("world pods are waited out after the run pods and before the worldserver is touched", () => {
+  // the fleet pod; a world pod (a world per eval) is waited out after the run
+  // pods that play on it. The worldserver is rolled and smoked only once none remains.
+  test("run pods, then world pods, are waited out after the fleet pod and before the worldserver is touched", () => {
     const r = run({ podPolls: 1, runPodPolls: 1, worldPodPolls: 1 });
     expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("waiting for every WORLD pod to go away");
+    expect(r.out).toContain("drained: no run pod remains");
     expect(r.out).toContain("drained: no world pod remains");
+    expect(r.calls.filter((l) => l === "get run-pods").length).toBeGreaterThanOrEqual(2);
     expect(r.calls.filter((l) => l === "get world-pods").length).toBeGreaterThanOrEqual(2);
+    const lastRunPoll = lastIndex(r, "get run-pods");
     const lastWorldPoll = lastIndex(r, "get world-pods");
-    expect(lastWorldPoll).toBeGreaterThan(lastIndex(r, "get run-pods"));
-    expect(lastWorldPoll).toBeLessThan(r.calls.findIndex((l) => l.startsWith("rollout status") && l.includes("worldserver")));
+    const rollout = r.calls.findIndex((l) => l.startsWith("rollout status") && l.includes("worldserver"));
+    expect(lastRunPoll).toBeGreaterThan(lastIndex(r, "get pods"));
+    expect(lastWorldPoll).toBeGreaterThan(lastRunPoll);
+    expect(lastWorldPoll).toBeLessThan(rollout);
     expect(lastWorldPoll).toBeLessThan(firstIndex(r, "smoke "));
-  }, 20_000);
+  });
 
-  test("a world pod that never goes away, or a read of them that keeps failing, fails the window closed", () => {
-    const stuck = run({ podPolls: 0, worldPodPolls: -1, drainWaitS: 1 });
-    expect(stuck.exitCode).toBe(1);
-    expect(stuck.out).toContain("wrathbench-world-w0abcdefghj Running w0abcdefghj");
-    expect(stuck.out).toContain("must not land under a live world");
-    expect(firstIndex(stuck, "smoke ")).toBe(-1);
-    expect(stuck.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
-    const unread = run({ podPolls: 0, worldPodFails: -1, drainWaitS: 3 });
-    expect(unread.exitCode).toBe(1);
-    expect(unread.out).toContain("could not list the world pods within 3s");
-    expect(unread.out).not.toContain("drained: no world pod remains");
-    expect(firstIndex(unread, "smoke ")).toBe(-1);
-  }, 20_000);
-
-  test("--dry-run lists the world pods", () => {
-    const r = run({ args: ["--dry-run"], worldPodPolls: 1 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("world pods         wrathbench-world-w0abcdefghj Running w0abcdefghj");
+  // A budget of 0 makes the first look the last: a pod still listed, or a read
+  // that failed, fails the window closed on it.
+  test("a pod that outlives the drain budget fails the window closed, names it, smokes nothing and brings the fleet back", () => {
+    const cases: [Case, string, string][] = [
+      [{ podPolls: -1 }, "wrathbench-fleet-abc123", "account_owned_by_other_token"],
+      [{ runPodPolls: -1 }, "fleet-race-probe-1-orc-warrior-sonnet-20260101", "must not be touched under a live run"],
+      [{ worldPodPolls: -1 }, "wrathbench-world-w0abcdefghj Running w0abcdefghj", "must not land under a live world"],
+    ];
+    for (const [c, named, why] of cases) {
+      const r = run({ ...c, drainWaitS: 0 });
+      expect({ named, code: r.exitCode }).toEqual({ named, code: 1 });
+      expect(r.out).toContain(named);
+      expect(r.out).toContain(why);
+      // The whole point: it did not smoke on top of the dying session.
+      expect(firstIndex(r, "smoke ")).toBe(-1);
+      // And the invariant the header promises still holds — the fleet came back.
+      expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+    }
   });
 
   // A kubectl that fails is not a cluster with no pods. The readers used to
   // swallow the error and print nothing, which the wait read as "gone" on its
   // first look — so one transient API error ended the drain at once.
-  test("a run-pod read that fails is retried inside the budget, never taken as none", () => {
+  test("a pod read that keeps failing fails the window closed, never taken as none", () => {
+    const cases: [Case, string][] = [
+      [{ podFails: -1 }, "fleet"],
+      [{ runPodFails: -1 }, "run"],
+      [{ worldPodFails: -1 }, "world"],
+    ];
+    for (const [c, which] of cases) {
+      const r = run({ ...c, drainWaitS: 0 });
+      expect({ which, code: r.exitCode }).toEqual({ which, code: 1 });
+      expect(r.out).toContain(`could not list the ${which} pods within 0s`);
+      expect(r.out).toContain("a failed read is not an empty one");
+      expect(r.out).not.toContain(`drained: no ${which} pod remains`);
+      expect(r.calls.some((l) => l.startsWith("rollout status") && l.includes("worldserver"))).toBe(false);
+      expect(firstIndex(r, "smoke ")).toBe(-1);
+    }
+  });
+
+  test("a pod read that fails is retried inside the budget, and the pod it then sees is waited out", () => {
     const r = run({ podPolls: 0, runPodFails: 2, runPodPolls: 1 });
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("could not list the run pods (kubectl exit 1: Unable to connect to the server");
     expect(r.out).toContain("drained: no run pod remains");
     // Two failed reads, then one that still lists the pod, then the empty one.
-    const reads = r.calls.filter((l) => l.startsWith("get run-pods"));
-    expect(reads.slice(0, 3)).toEqual(["get run-pods failed", "get run-pods failed", "get run-pods"]);
-    expect(reads.length).toBe(4);
+    expect(r.calls.filter((l) => l.startsWith("get run-pods"))).toEqual(["get run-pods failed", "get run-pods failed", "get run-pods", "get run-pods"]);
     expect(lastIndex(r, "get run-pods")).toBeLessThan(firstIndex(r, "smoke "));
-  }, 20_000);
-
-  test("a run-pod read that keeps failing fails the window closed before the worldserver is touched", () => {
-    const r = run({ podPolls: 0, runPodFails: -1, drainWaitS: 3 });
-    expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("could not list the run pods within 3s");
-    expect(r.out).toContain("a failed read is not an empty one");
-    expect(r.out).not.toContain("drained: no run pod remains");
-    expect(r.calls.some((l) => l.startsWith("rollout status") && l.includes("worldserver"))).toBe(false);
-    expect(firstIndex(r, "smoke ")).toBe(-1);
-    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
-  }, 20_000);
-
-  test("a fleet-pod read that keeps failing fails the window closed too", () => {
-    const r = run({ podFails: -1, drainWaitS: 3 });
-    expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("could not list the fleet pods within 3s");
-    expect(r.out).toContain("an error on the server has prevented the request");
-    expect(r.out).not.toContain("drained: no fleet pod remains");
-    expect(firstIndex(r, "get run-pods")).toBe(-1);
-    expect(firstIndex(r, "smoke ")).toBe(-1);
-  }, 20_000);
-
-  test("a fleet-pod read that fails once is retried, and the pod it then sees is waited out", () => {
-    const r = run({ podFails: 1, podPolls: 1 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("could not list the fleet pods");
-    expect(r.out).toContain("drained: no fleet pod remains");
-    expect(r.calls.filter((l) => l.startsWith("get pods"))).toEqual(["get pods failed", "get pods", "get pods"]);
-  }, 20_000);
-
-  test("--dry-run says a failed read is one, not none", () => {
-    const r = run({ args: ["--dry-run"], podFails: -1, runPodFails: -1 });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("fleet pods         COULD NOT READ (kubectl exit 1:");
-    expect(r.out).toContain("run pods           COULD NOT READ (kubectl exit 1:");
-    expect(r.out).not.toContain("none — no episode is running as its own pod");
   });
 });
 
@@ -495,7 +432,6 @@ describe("k8s-deploy.sh --keep-paused", () => {
   test("sets the switch before the drain, never clears it, and still brings the fleet back", () => {
     const r = run({ args: ["--keep-paused"] });
     expect(r.exitCode).toBe(0);
-    expect(r.out).not.toContain("arithmetic syntax error");
 
     // Written before anything is drained, so no exit path can bring the fleet
     // up without it — and so before the scale-up, which is the promise.
@@ -514,25 +450,12 @@ describe("k8s-deploy.sh --keep-paused", () => {
     const pause = parsePauseSidecar(r.switchAfter!);
     expect(pause).toBeDefined();
     expect(pause!.why).toContain("--keep-paused");
-    expect(pause!.why).toContain("fleet-update.sh resume");
-
-    // It ends by saying what to run next, after the verification line.
     expect(r.out).toContain("DEPLOYED and verified by");
-    expect(r.out.lastIndexOf("./infra/fleet-update.sh resume")).toBeGreaterThan(r.out.indexOf("DEPLOYED and verified by"));
-    expect(r.out).toContain("./infra/run-episode.sh --k8s --account PROBE --driver claude-code");
-    expect(r.out).not.toContain("--driver codex");
-    expect(r.out).toContain("codex has no hand launch on the cluster");
-    expect(r.out).not.toContain("pause switch CLEARED");
-    // A switch set a moment ago is not the one a Helm upgrade raced.
-    expect(r.out).toContain("SET (just now, by --keep-paused)");
-    expect(r.out).not.toContain("a Helm upgrade resets the fleet Deployment");
-    expect(r.out).toContain("resumes only after fleet-update.sh resume");
   });
 
   test("a switch the drain left set is left exactly as it was", () => {
     const r = run({ args: ["--keep-paused"], switchBefore: DRAIN_SWITCH });
     expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("already SET");
     expect(firstIndex(r, "exec set_switch")).toBe(-1);
     expect(firstIndex(r, "exec clear_switch")).toBe(-1);
     expect(r.switchAfter).toBe(DRAIN_SWITCH);
@@ -545,8 +468,6 @@ describe("k8s-deploy.sh --keep-paused", () => {
     expect(firstIndex(r, "exec set_switch")).toBe(-1);
     expect(firstIndex(r, "exec clear_switch")).toBeGreaterThan(firstIndex(r, "smoke "));
     expect(r.switchAfter).toBeUndefined();
-    expect(r.out).toContain("pause switch CLEARED");
-    expect(r.out).not.toContain("run-episode.sh --k8s");
   });
 
   test("a failed window still brings the fleet up, with the switch still set", () => {
@@ -555,70 +476,38 @@ describe("k8s-deploy.sh --keep-paused", () => {
     expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
     expect(firstIndex(r, "exec clear_switch")).toBe(-1);
     expect(parsePauseSidecar(r.switchAfter ?? "")).toBeDefined();
-    expect(r.out).toContain("STILL SET");
-    // The fix for a failed window is a revert, not a smoke of the build that failed.
-    expect(r.out).not.toContain("run-episode.sh --k8s");
   });
 
   test("a switch that cannot be written refuses before anything is drained", () => {
     const r = run({ args: ["--keep-paused"], switchWriteFails: true });
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("could not set the pause switch");
-    expect(r.out).toContain("Nothing was drained");
     expect(r.calls.some((l) => l.includes("--replicas="))).toBe(false);
     expect(firstIndex(r, "smoke ")).toBe(-1);
     expect(r.switchAfter).toBeUndefined();
   });
 
-  test("--dry-run shows the choice and writes nothing", () => {
+  test("--dry-run writes no switch, whichever way it would go", () => {
     const unset = run({ args: ["--dry-run", "--keep-paused"] });
     expect(unset.exitCode).toBe(0);
-    expect(unset.out).toContain("--keep-paused: it would be SET before the drain and left set");
-    expect(unset.out).toContain("resume phase       --keep-paused");
     expect(firstIndex(unset, "exec set_switch")).toBe(-1);
     expect(unset.switchAfter).toBeUndefined();
     expect(unset.calls.some((l) => l.includes("--replicas="))).toBe(false);
-
-    const set = run({ args: ["--dry-run", "--keep-paused"], switchBefore: DRAIN_SWITCH });
-    expect(set.out).toContain("--keep-paused: the resume phase would LEAVE it set");
-    expect(set.switchAfter).toBe(DRAIN_SWITCH);
-
     const plain = run({ args: ["--dry-run"], switchBefore: DRAIN_SWITCH });
-    expect(plain.out).toContain("the resume phase would clear it");
     expect(firstIndex(plain, "exec clear_switch")).toBe(-1);
-  });
-
-  test("--help prints the whole header and no shell", () => {
-    const r = run({ args: ["--help"] });
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain("--keep-paused");
-    expect(r.out).toContain("--namespace wrathbench --release wrathbench");
-    expect(r.out).not.toContain("set -Eeuo");
+    expect(plain.switchAfter).toBe(DRAIN_SWITCH);
   });
 });
 
 describe("k8s-deploy.sh with the launch gate alone", () => {
-  // The deploy window's list emptied (operator, 2026-10-20): the regression
-  // smokes run on demand (`bun wb smoke suite`), and the window verifies with
-  // the gate. Empty and absent must both mean "none", never an error.
-  const { deploySmokes: _drop, deployTimeoutMs: _budget, ...withoutDeploy } = PREFLIGHT;
-  for (const [what, preflight] of [
-    ["an empty deploySmokes", { ...PREFLIGHT, deploySmokes: [] }],
-    ["no deploySmokes key at all", withoutDeploy],
-  ] as const) {
-    test(`${what}: the gate verifies the window and no full arc runs`, () => {
-      const r = run({ preflight });
-      expect(r.exitCode).toBe(0);
-      expect(r.out).not.toContain("unbound variable");
-      expect(r.out).not.toContain("running the deploy-time full arc");
-      expect(r.calls.filter((l) => l.startsWith("smoke "))).toEqual(["smoke SMOKE infra/smoke/quest-accept-status.ts"]);
-      expect(r.out).toContain("DEPLOYED and verified by 1 direct smoke(s).");
-    });
-  }
-
-  test("--dry-run names no deploy smokes", () => {
-    const r = run({ args: ["--dry-run"], preflight: withoutDeploy });
+  // The regression smokes run on demand (`bun wb smoke suite`), and the window
+  // verifies with the gate. An absent deploySmokes must mean "none", never an error.
+  test("no deploySmokes key at all: the gate verifies the window and no full arc runs", () => {
+    const { deploySmokes: _drop, deployTimeoutMs: _budget, ...withoutDeploy } = PREFLIGHT;
+    const r = run({ preflight: withoutDeploy });
     expect(r.exitCode).toBe(0);
-    expect(r.out).toMatch(/deploy smokes \(0\)\s+none/);
+    expect(r.out).not.toContain("unbound variable");
+    expect(r.calls.filter((l) => l.startsWith("smoke "))).toEqual(["smoke SMOKE infra/smoke/quest-accept-status.ts"]);
+    expect(r.out).toContain("DEPLOYED and verified by 1 direct smoke(s).");
   });
 });

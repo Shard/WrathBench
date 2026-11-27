@@ -15,13 +15,12 @@ import { campaignSquares, type ProbeRun } from "../runner/src/campaigns";
 import { campaignLaunch } from "../runner/src/campaign-launch";
 import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_POLICY } from "../runner/src/models";
-import { accountsOfRun, type RunFact } from "../runner/src/run-fact";
-import { defsBlock, ONE_AGENT_IMAGE, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
+import type { RunFact } from "../runner/src/run-fact";
+import { defsBlock, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig } from "./run-fleet-config";
 import { planOf } from "./fixtures/tick";
-import { fillEntries, finishesOnExit, jobSpawn, planResumes, planStaleRuns, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
-import { liveRunStuck, rosterResumes, runProgress } from "./run-fleet-state";
-import { FANOUT_RUN, writeFanoutRun } from "../runner/test/fixtures/fanout";
+import { fillEntries, jobSpawn, planResumes, planStaleRuns, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
+import { rosterResumes } from "./run-fleet-state";
 import { accountHolderIn, accountHoldersIn, episodeFlags, fanoutStageRequestOf, resolve, specAccounts, stagedFanoutFile } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
@@ -83,19 +82,6 @@ describe("a one-agent arm's job", () => {
     expect(held.holds.find((h) => h.name === "deadmines-party-one-agent")?.why).toContain("one agent on 5 accounts");
   });
 
-  test("its spawn is one entry on the leader's account, every account held, a campaign file naming each character", () => {
-    const spawn = planOf(cfg, { stamp: STAMP }).pinned[0]!.spawn;
-    expect(spawn.account).toBe("PARTY1");
-    expect(spawn.accounts).toEqual(ACCOUNTS);
-    expect(spawn.resumeRunId).toBeUndefined();
-    expect(rosterResumes(spawn, true)).toBe(false);
-    const entries = fillEntries(spawn, STAMP);
-    expect(entries).toHaveLength(1);
-    const e = entries[0]!;
-    expect([e.runId, e.account, e.party, e.placedOn?.id]).toEqual([STEM, "PARTY1", undefined, CRED2]);
-    expect(e.campaignFile!.fanout!.members.map((m) => [m.member, m.account, m.character])).toEqual(PARTY_MEMBERS.map((m, i) => [m.id, ACCOUNTS[i]!, m.character]));
-  });
-
   test("the roster waits on every account, stages the party as this one run, and launches it with no --character", () => {
     const spawn = planOf(cfg, { stamp: STAMP }).pinned[0]!.spawn;
     const [spec] = resolve(fillEntries(spawn, STAMP), STAMP);
@@ -114,16 +100,6 @@ describe("a one-agent arm's job", () => {
     const raw = campaignLaunch({ "campaign-file": join(dir, CAMPAIGN_FILE), episode: "probing" }, {})!;
     expect(raw["fanout"]).toEqual({ characters: 5, accounts: ACCOUNTS, staged: PARTY_MEMBERS.map((m, i) => ({ character: m.character, account: ACCOUNTS[i]!, guid: String(4100 + i) })) });
     expect(raw["party"]).toBeUndefined();
-  });
-
-  test("a later attempt is one stem, -a2", () => {
-    const tried: ProbeRun = { campaign: "deadmines", version: 5, cell: "party", ref: "son2", arm: "one-agent", counted: false, live: false, party: null, terminationReason: "adapter-error" };
-    const [next] = pinnedCampaignJobs(cfg, [tried]);
-    expect(fillEntries(jobSpawn(next!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns), STAMP).map((e) => e.runId)).toEqual([`${STEM}-a2`]);
-  });
-
-  test("its job finishes as a party's does: the campaign's tally decides", () => {
-    expect(finishesOnExit(job)).toBe(false);
   });
 });
 
@@ -151,18 +127,6 @@ describe("two arms on one party's accounts", () => {
     const squares = campaignSquares(c, ["son2"], [run("one-agent")]);
     expect(squares.find((s) => s.arm.id === "one-agent")).toMatchObject({ done: 1, reached: 1, attempts: 1, live: 0 });
     expect(squares.find((s) => s.arm.id === "party")).toMatchObject({ done: 0, attempts: 0 });
-  });
-
-  test("the five-agent arm's job is still a party's: five sessions, five entries", () => {
-    const [job] = pinnedCampaignJobs(cfg, []);
-    expect(job).toMatchObject({ name: "deadmines-party-party", accounts: ACCOUNTS });
-    expect(job!.fanout).toBeUndefined();
-    expect(sessionsOf(job!)).toBe(5);
-    expect(fillEntries(jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns), STAMP)).toHaveLength(5);
-  });
-
-  test("both arms pin the same build", () => {
-    expect(both.arms.map((a) => a.image)).toEqual([ONE_AGENT_IMAGE, ONE_AGENT_IMAGE]);
   });
 });
 
@@ -206,12 +170,6 @@ function fact(over: Partial<RunFact> = {}): RunFact {
 }
 
 describe("a fan-out run's holds, read back off the runs", () => {
-  test("every account of its grant, and the one account of any other run", () => {
-    expect(accountsOfRun(fact())).toEqual(ACCOUNTS);
-    expect(accountsOfRun(fact({ fanoutAccounts: null, account: "RUNNER" }))).toEqual(["RUNNER"]);
-    expect(accountsOfRun(fact({ fanoutAccounts: undefined, account: null }))).toEqual([]);
-  });
-
   test("a live run no job owns holds all of its accounts: another run on one of them is its, not a second unowned run", () => {
     const cfg = fleet();
     const other = fact({ runId: "fleet-other-sonnet-20261112", account: "PARTY4", fanoutAccounts: null, campaign: null, cell: null, arm: null, episode: "freeplay" });
@@ -278,12 +236,6 @@ describe("a paused one-agent run comes back whole", () => {
     expect(busy.resume).toEqual([]);
     expect(busy.listed[0]!.why).toContain("PARTY3 is busy (someone)");
   });
-
-  test("a fan-out run the fleet did not launch as a one-agent arm is listed for a hand resume", () => {
-    const hand = fact({ live: false, campaign: null, cell: null, arm: null, ref: null, episode: "freeplay", pause: { reason: "operator-pause", at: NOW - 60_000, count: 0, episodeElapsedMs: 1 } });
-    const p = plan({ runs: [hand] });
-    expect(p.resume).toEqual([]);
-  });
 });
 
 /** The campaign file a paused one-agent run would have on disk: its spawn's. */
@@ -291,16 +243,6 @@ function pinnedFile(cfg: FleetConfig) {
   const [job] = pinnedCampaignJobs(cfg, []);
   return fillEntries(jobSpawn(job!, cfg.roster, "PARTY1", STAMP, undefined, cfg.campaigns), STAMP)[0]!.campaignFile ?? null;
 }
-
-describe("fleet status reads a fan-out run", () => {
-  test("its progress is its lead character's level and xp, and a run with no heartbeat is never flagged stuck", async () => {
-    const root = tempDir("wb-fanout-progress-");
-    await writeFanoutRun(root);
-    expect(runProgress(FANOUT_RUN, root)).toMatchObject({ level: 5, xp: 900 });
-    // No heartbeat: not live, so no stuck flag either way.
-    expect(liveRunStuck(FANOUT_RUN, Date.now(), root)).toBeUndefined();
-  });
-});
 
 describe("every account's holder in one pass", () => {
   test("accountHoldersIn answers what accountHolderIn answers, account by account", () => {

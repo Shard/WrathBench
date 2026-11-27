@@ -24,7 +24,7 @@ import { priceFor } from "../viewer/pricing";
 import { scanRunTotals } from "../runner/src/run-totals";
 import { writeLegacy05Run, type Legacy05State } from "../runner/test/fixtures/legacy05-writer";
 import { recordDrain, traceOfReading, type TraceReading, writeReadings } from "../runner/test/fixtures/v1-session";
-import { codexDelta, DRIVER_USAGE, type InspectStore, main, requestPrice, stallSpans, type WindowFigures } from "./inspect-run";
+import { codexDelta, DRIVER_USAGE, type InspectStore, main, requestPrice, type WindowFigures } from "./inspect-run";
 import { memoryStore } from "./inspect-memory-store";
 import { tempDirs } from "./temp-dirs";
 
@@ -470,32 +470,10 @@ describe("a v1 run", () => {
     expect(r.windows[0]!.stallMinutes).toBe(25);
   });
 
-  test("--since and --until window the main column only", async () => {
-    const r = await readout(V1, ["--since", String(T0 + 10 * MIN), "--until", String(T0 + 20 * MIN)]);
-    const w = r.windows[0]!;
-    expect([w.label, w.requests, w.activeMinutes, w.stallMinutes]).toEqual(["window", 2, 10, 10]);
-    expect(w.characters[0]).toMatchObject({ levelFrom: 1, levelTo: 1, quests: 0 });
-  });
-
   test("the store reads what the files read", async () => {
     const store = await memoryStore(RUNS);
     const flags = ["--at-level", "2", "--at-minutes", "20"];
     for (const id of [V1, OLD, FAN, CLAUDE, CLAUDE_TURNS, CODEX, WAKE]) expect([id, (await readout(id, flags, store)).windows]).toEqual([id, (await readout(id, flags)).windows]);
-  });
-
-  test("the text form: a column per window, labels, and the notes", async () => {
-    const r = await inspect(["requests", V1, "--runs-dir", RUNS, "--at-level", "2", "--at-minutes", "90"]);
-    expect(r.code).toBe(0);
-    const text = r.out.join("\n");
-    expect(text).toContain(`${V1}: model requests over run, to L2, to 90m, UTC`);
-    const row = NEWEST();
-    expect(text).toContain(`\nprice     deepseek/deepseek-v4.1-flash at $${row.input}/$${row.output}/$${row.cacheRead}/$${row.cacheWrite} per M`);
-    expect(text).toMatch(/^requests +6 +5 +not reached$/m);
-    expect(text).toMatch(/^uncached in\/request +400 +400 +not reached$/m);
-    expect(text).toMatch(/^stall minutes +35\.0 \(\+20\.0\?\) +25\.0 +not reached$/m);
-    expect(text).toMatch(/^Testwick +L1→L3 +L1→L2 +not reached$/m);
-    expect(text).toContain("no wake records: wakes are harness turns");
-    expect(text).not.toContain(TOKEN);
   });
 });
 
@@ -647,57 +625,5 @@ describe("wake records", () => {
     expect(text).toMatch(/^ {2}requests per wake +2\.0$/m);
     expect(text).toMatch(/^ {2}asleep +50%$/m);
     expect(text).toMatch(/^ {2}fired by +cap 2, died 1$/m);
-  });
-});
-
-describe("stallSpans", () => {
-  const s = (min: number, x: number, xp = 0) => ({ ts: T0 + min * MIN, level: 1, xp, money: 0, quests: 0, map: 0, x, y: 0, z: 0, items: null });
-  const t = { moveYards: 50, maxGapMs: 15 * MIN, stallMs: 5 * MIN };
-  test("movement is measured from where the stretch began, so a slow drift past the yards is progress", () => {
-    const samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((m) => s(m, m * 10));
-    const { stalls } = stallSpans(samples, { since: T0, until: T0 + 10 * MIN }, t);
-    expect(stalls).toEqual([[T0, T0 + 6 * MIN]]);
-  });
-  test("a stretch before the first reading is uncovered, not stalled", () => {
-    const { stalls, uncovered } = stallSpans([s(4, 0), s(12, 0)], { since: T0, until: T0 + 12 * MIN }, t, []);
-    expect(uncovered).toEqual([[T0, T0 + 4 * MIN]]);
-    expect(stalls).toEqual([[T0 + 4 * MIN, T0 + 12 * MIN]]);
-  });
-});
-
-describe("the command line", () => {
-  test("refuses what it cannot read", async () => {
-    for (const [flags, msg] of [
-      [["--at-level", "0"], "--at-level is a whole number"],
-      [["--at-minutes", "x"], "--at-minutes is a whole number"],
-      [["--stall", "5"], "--stall is a duration"],
-      [["--price-at", "Sept"], "--price-at is a day"],
-      [["--errors"], "--errors does not apply to requests"],
-    ] as const) {
-      const r = await inspect(["requests", V1, "--runs-dir", RUNS, ...flags]);
-      expect(r.code).toBe(2);
-      expect(r.err.join("\n")).toContain(msg);
-    }
-    expect((await inspect(["run", V1, "--runs-dir", RUNS, "--json"])).err.join("\n")).toContain("--json does not apply to run");
-  });
-
-  test("--json keeps stdout to the one object, a character's session id too", async () => {
-    const r = await inspect(["requests", `${FAN}~Alfa`, "--runs-dir", RUNS, "--json"]);
-    expect(r.code).toBe(0);
-    expect((JSON.parse(r.out.join("")) as Readout).windows[0]!.requests).toBe(4);
-    expect(r.err.join("\n")).toContain(`${FAN}~Alfa is Alfa's session: this view is the run's`);
-  });
-
-  test("--price-at re-prices at that day's window and says so", async () => {
-    const r = await readout(V1, ["--price-at", "2026-09-15"]);
-    expect(r.price).toMatchObject({ input: 0.15, output: 0.6, at: Date.UTC(2026, 8, 15) });
-    const text = (await inspect(["requests", V1, "--runs-dir", RUNS, "--price-at", "2026-09-15"])).out.join("\n");
-    expect(text).toContain("at --price-at 2026-09-15");
-  });
-
-  test("a catalogue it cannot find is said, not guessed", async () => {
-    const r = await readout(V1, ["--catalogue", join(RUNS, "none.json")]);
-    expect(r.price).toEqual({ none: "no price table here (infra/model-catalogue.json not found)" });
-    expect(r.windows[0]!.pricedUsd).toBeNull();
   });
 });

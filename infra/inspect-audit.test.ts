@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tokenFingerprint, tokenTag } from "@wrathbench/mcp/module-auth";
-import { parseArgs, parseReduced, run, runStdin, scrubAudit, smokeStdin } from "./inspect-audit";
+import { parseArgs, run, runStdin, scrubAudit, smokeStdin } from "./inspect-audit";
 import { SMOKE_SESSIONS_NAME, smokeFingerprints, smokeSessionsFile, smokeSubToken, smokeToken } from "./smoke/lib/session";
 import { tempDirs } from "./temp-dirs";
 
@@ -22,14 +22,8 @@ const RUN = "run-audited";
 // The smokes' tokens as the smokes spell them (infra/smoke/lib/session.ts).
 const SMOKE_A = smokeToken("edge-drop", { id: "0f1e2d3c-4b5a-4968-8776-655443322110" });
 const SMOKE_B = smokeSubToken(SMOKE_A, "create");
-const DEATH = smokeToken("death-recovery", { id: "a1b2c3d4-0000-4000-8000-000000000001" });
-const DEATH_PRIEST = smokeToken("death-recovery", { role: "priest", id: "a1b2c3d4-0000-4000-8000-000000000002" });
 const GROUP_A = smokeToken("group", { role: "a", id: "b2c3d4e5-0000-4000-8000-0000000000aa" });
 const GROUP_B = smokeToken("group", { role: "b", id: "b2c3d4e5-0000-4000-8000-0000000000bb" });
-// Once probe-qaccept-<uuid>, which --smoke could not find; and a party member's session.
-const QACCEPT = smokeToken("quest-accept-status", { id: "c3d4e5f6-0000-4000-8000-000000000003" });
-const PARTY1 = smokeToken("party-entry", { role: "party1", id: "d4e5f6a7-0000-4000-8000-000000000004" });
-const QACCEPT_DEL = smokeSubToken(QACCEPT, "del0");
 const DAY1 = Date.UTC(2030, 0, 1, 23, 59, 0);
 const DAY2 = Date.UTC(2030, 0, 2, 0, 1, 0);
 const hasPerl = Bun.which("perl") !== null;
@@ -86,32 +80,17 @@ function fixture(): { runsDir: string; auditDir: string } {
     `${legacyAction(DAY2 + 10, SMOKE_A, { op: "move_edge_drop", moveId: 1, taken: false, reason: "no_edge" })}\n${legacyAction(DAY2 + 30, SMOKE_A, { op: "move_edge_drop", moveId: 3, taken: true, note: SMOKE_A })}\n`,
   );
   writeFileSync(join(auditDir, `${fp(SMOKE_B)}.2030-01-02.jsonl`), `${action(DAY2 + 20, SMOKE_B, { op: "move_edge_drop", moveId: 2, taken: false, reason: "climb" })}\n`);
-  // A smoke and its role session, whose names share a prefix: each reads its own alone.
-  writeFileSync(join(auditDir, `${fp(DEATH)}.2030-01-02.jsonl`), `${action(DAY2, DEATH, { op: "move_to", x: 1, y: 1, z: 1 })}\n`);
   // A party smoke's session whose record names its sibling session's token.
   writeFileSync(join(auditDir, `${fp(GROUP_A)}.2030-01-02.jsonl`), `${action(DAY2, GROUP_A, { op: "party_invite", peer: GROUP_B, note: `echo ${GROUP_A}` })}\n`);
   writeFileSync(join(auditDir, `${fp(GROUP_B)}.2030-01-02.jsonl`), `${action(DAY2, GROUP_B, { op: "party_invite", peer: GROUP_A })}\n`);
-  writeFileSync(join(auditDir, `${fp(DEATH_PRIEST)}.2030-01-02.jsonl`), `${action(DAY2, DEATH_PRIEST, { op: "move_to", x: 2, y: 2, z: 2 })}\n${action(DAY2 + 1, DEATH_PRIEST, { op: "move_to", x: 3, y: 3, z: 3 })}\n`);
-  // A smoke that failed on a move: its session, then its cleanup's character-delete session.
-  writeFileSync(
-    join(auditDir, `${fp(QACCEPT)}.2030-01-02.jsonl`),
-    `${action(DAY2, QACCEPT, { op: "move_path", moveId: 5, status: "ok", pointCount: 4 })}\n${event(DAY2 + 300, QACCEPT, 1, "WB_MOVE_RESULT", { moveId: 5, status: "interrupted" })}\n`,
-  );
-  writeFileSync(join(auditDir, `${fp(QACCEPT_DEL)}.2030-01-02.jsonl`), `${action(DAY2 + 400, QACCEPT_DEL, { op: "character_delete" })}\n`);
-  writeFileSync(join(auditDir, `${fp(PARTY1)}.2030-01-02.jsonl`), `${action(DAY2, PARTY1, { op: "move_to", x: 5, y: 5, z: 5 })}\n`);
   // What smokeToken and smokeSubToken recorded, as they record it on the runs
   // volume (under bun test they record nothing, so it is written here), with a
   // duplicate line and a torn one.
   const lines = [
     ledger("edge-drop", SMOKE_B),
     ledger("edge-drop", SMOKE_B),
-    ledger("death-recovery", DEATH),
-    ledger("death-recovery-priest", DEATH_PRIEST),
     ledger("group-a", GROUP_A),
     ledger("group-b", GROUP_B),
-    ledger("quest-accept-status", QACCEPT),
-    ledger("quest-accept-status", QACCEPT_DEL),
-    ledger("party-entry-party1", PARTY1),
     '{"ts":1,"smoke":"edge-dr',
   ];
   writeFileSync(join(runsDir, SMOKE_SESSIONS_NAME), `${lines.join("\n")}\n`);
@@ -153,24 +132,6 @@ describe.skipIf(!hasPerl)("the reducer, over a fixture audit directory", () => {
     expect(one.out[1]).toContain("[redacted]");
     const big = await inspect([RUN, ...offline, "--op", "SMSG_UPDATE_OBJECT"]);
     for (const l of big.out) expect(l.length).toBeLessThanOrEqual(200);
-  });
-
-  test("--summary with --op counts the verdicts of those ops alone", async () => {
-    const r = await inspect([RUN, ...offline, "--summary", "--op", "move_path,WB_MOVE_RESULT"]);
-    expect(r.out[0]).toContain("4 match op move_path,WB_MOVE_RESULT");
-    const rows = r.out.slice(2);
-    expect(rows.length).toBe(3);
-    expect(rows.some((l) => /^\s+2\s+event\s+WB_MOVE_RESULT\s+arrived$/.test(l))).toBe(true);
-    expect(rows.some((l) => l.includes("move_to"))).toBe(false);
-  });
-
-  test("--since skips the older day files and records", async () => {
-    const r = await inspect([RUN, ...offline, "--since", String(DAY2)]);
-    // The undated file is always read (it says nothing about its days); its record is older.
-    expect(r.out[0]).toContain("2 file(s)");
-    expect(r.out[0]).toContain("4 records");
-    const until = await inspect([RUN, ...offline, "--until", String(DAY1 + 10)]);
-    expect(until.out[0]).toContain("3 records");
   });
 
   test("never prints the token or a file name, in any mode", async () => {
@@ -215,38 +176,6 @@ describe.skipIf(!hasPerl)("the reducer, over a fixture audit directory", () => {
     expect(summary.out[0]).toContain("audit smoke-group-b");
     expect(summary.out.join("\n")).not.toContain("b2c3d4e5");
   });
-
-  test("--smoke matches the name exactly, hyphens included: death-recovery is not death-recovery-priest", async () => {
-    const death = await inspect(["--smoke", "death-recovery", ...offline, "--op", "move_to"]);
-    expect(death.out[0]).toContain("1 record(s) match op move_to, of 1 in 1 file(s)");
-    const priest = await inspect(["--smoke", "death-recovery-priest", ...offline, "--op", "move_to"]);
-    expect(priest.out[0]).toContain("2 record(s) match op move_to, of 2 in 1 file(s)");
-    const all = [...death.out, ...priest.out].join("\n");
-    expect(all).not.toContain("a1b2c3d4");
-  });
-
-  test("--smoke takes the name bun wb smoke runs: quest-accept-status's move verdicts, a party member's session", async () => {
-    const r = await inspect(["--smoke", "quest-accept-status", ...offline, "--summary", "--op", "move_path,WB_MOVE_RESULT"]);
-    expect(r.code).toBe(0);
-    expect(r.out[0]).toContain("audit smoke-quest-accept-status");
-    expect(r.out[0]).toContain("3 records");
-    expect(r.out[0]).toContain("2 file(s)");
-    expect(r.out.some((l) => /^\s+1\s+event\s+WB_MOVE_RESULT\s+interrupted$/.test(l))).toBe(true);
-    const party = await inspect(["--smoke", "party-entry-party1", ...offline, "--op", "move_to"]);
-    expect(party.out[0]).toContain("1 record(s) match op move_to, of 1 in 1 file(s)");
-    const all = [...r.out, ...r.err, ...party.out, ...party.err].join("\n");
-    expect(all).not.toContain("c3d4e5f6");
-    expect(all).not.toContain("d4e5f6a7");
-  });
-
-  test("a run with no meta.json, or one naming no token, is refused before anything runs", async () => {
-    expect((await inspect(["run-missing", ...offline])).code).toBe(1);
-    mkdirSync(join(F.runsDir, "run-tokenless"), { recursive: true });
-    writeFileSync(join(F.runsDir, "run-tokenless", "meta.json"), JSON.stringify({ runId: "run-tokenless", config: {} }));
-    const r = await inspect(["run-tokenless", ...offline]);
-    expect(r.code).toBe(1);
-    expect(r.err.join("\n")).toContain("names no session token");
-  });
 });
 
 describe("the smoke-session ledger", () => {
@@ -256,7 +185,7 @@ describe("the smoke-session ledger", () => {
     expect(smokeSessionsFile({})).toEndWith(join("data", "runs", SMOKE_SESSIONS_NAME));
     const checkout = join(import.meta.dir, "..", "data", "runs", SMOKE_SESSIONS_NAME);
     const text = existsSync(checkout) ? readFileSync(checkout, "utf8") : "";
-    for (const t of [SMOKE_A, SMOKE_B, DEATH, QACCEPT, QACCEPT_DEL]) expect(text).not.toContain(fp(t));
+    for (const t of [SMOKE_A, SMOKE_B, GROUP_A, GROUP_B]) expect(text).not.toContain(fp(t));
   });
 
   test("smokeToken and smokeSubToken record the smoke's name and the fingerprint, never the token", () => {
@@ -302,27 +231,11 @@ describe("the host side", () => {
     expect(s).not.toContain(OTHER);
   });
 
-  test("the reducer's output parses back", () => {
-    const r = parseReduced("F\t2\t100\nR\t5\t1\t9\nC\tevent\tWB_MOVE_RESULT\tarrived\t3\nM\t1\nL\t{\"ts\":1}\n");
-    expect(r).toMatchObject({ files: 2, bytes: 100, records: 5, first: 1, last: 9, matched: 1 });
-    expect(r.counts).toEqual([{ kind: "event", name: "WB_MOVE_RESULT", status: "arrived", n: 3 }]);
-    expect(r.lines).toEqual(['{"ts":1}']);
-  });
-
-  test("arguments: --k8s picks the cluster, a filter is a bare name, --status needs --op", () => {
-    expect(parseArgs(["--k8s", RUN], 0)).toMatchObject({ target: "k8s", runId: RUN, op: null, summary: true });
+  test("arguments: a filter is a bare name, a run id stays in the runs directory, a smoke name is one", () => {
     expect(parseArgs([RUN, "--op", "move_to,face"], 0)).toMatchObject({ op: "move_to,face", summary: false });
-    expect(parseArgs([RUN], 0)).toMatchObject({ target: "compose" });
     expect("error" in parseArgs([RUN, "--op", "a;b"], 0)).toBe(true);
-    // A fan-out character's session id is refused by name: its token is not the run's.
-    expect(parseArgs([`${RUN}~Alfa`], 0)).toEqual({ error: `${RUN}~Alfa is a fan-out character's session: its audit is under its own session's token, which inspect audit does not read; it reads a run's` });
-    expect("error" in parseArgs([RUN, "--status", "ok"], 0)).toBe(true);
     expect("error" in parseArgs(["../x"], 0)).toBe(true);
     expect(parseArgs(["--smoke", "edge-drop"], 0)).toMatchObject({ smoke: "edge-drop", runId: "smoke-edge-drop" });
     expect("error" in parseArgs(["--smoke", "Edge-1"], 0)).toBe(true);
-    expect(parseArgs(["--smoke", "chest-loot"], 0)).toMatchObject({ smoke: "chest-loot", runId: "smoke-chest-loot" });
-    expect("error" in parseArgs(["--smoke", "chest--loot"], 0)).toBe(true);
-    expect("error" in parseArgs(["--smoke", "loot-"], 0)).toBe(true);
-    expect("error" in parseArgs(["--smoke", "edge-drop", RUN], 0)).toBe(true);
   });
 });

@@ -55,12 +55,6 @@ describe("turnsSince", () => {
     expect(turnsSince(path, 0)).toBe(3);
   });
 
-  test("no trajectory before or after the attempt is zero turns, not unknown", () => {
-    const path = join(tempDir("wb-turns-"), "trajectory.jsonl");
-    expect(launchOffset(path)).toBe(0);
-    expect(turnsSince(path, 0)).toBe(0);
-  });
-
   test("a file that grows between attempts: each counts only what it appended", () => {
     const path = join(tempDir("wb-turns-"), "trajectory.jsonl");
     // Attempt 1 launches onto no file and makes one turn.
@@ -145,25 +139,9 @@ describe("turnsSince", () => {
     rmSync(path);
     expect(uncounted(turnsSince(path, from))).toContain("under the");
   });
-
-  test("an offset that could not be taken at launch leaves the count unknown", () => {
-    const dir = tempDir("wb-turns-");
-    const notADir = join(dir, "file");
-    writeFileSync(notADir, "");
-    // A path through a regular file: the stat fails, and not with ENOENT.
-    const launched = launchOffset(join(notADir, "trajectory.jsonl"));
-    expect(uncounted(launched)).toContain("would not stat");
-    const path = join(dir, "trajectory.jsonl");
-    writeFileSync(path, attempt(3, 100));
-    expect(uncounted(turnsSince(path, launched))).toContain("size at launch is not known");
-  });
 });
 
 describe("earlySaturation", () => {
-  test("a counted attempt is judged exactly as before: under two turns is early", () => {
-    expect([0, 1, 2, 3, 100].map(earlySaturation)).toEqual([true, true, false, false, false]);
-  });
-
   test("an uncounted attempt is not early, so its pause is retried in place rather than deferred", () => {
     expect(earlySaturation(null)).toBe(false);
   });

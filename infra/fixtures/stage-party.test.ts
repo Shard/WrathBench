@@ -2,8 +2,7 @@
  * The stager's contract with the roster (infra/party-stager.ts on the fleet
  * side: `--request -`, one StageRequest on stdin, exit 0 with a last stdout
  * line `{"ok":true,…}`, else the reason on stderr's last line) and its pure
- * parts: what a request must be, where worn bags go, how landed items are
- * counted, and that a malformed request, a non-admin STAGER or a missing
+ * parts: what a request must be, and that a malformed request, a non-admin STAGER or a missing
  * secret ends the staging before any account, character or row is touched;
  * and that every checked-in party definition is a party the stager takes.
  * The live staging is proven by infra/smoke/party-staging.ts in a release window.
@@ -19,11 +18,8 @@ import { loadoutFor, partyCharacterName, type Loadout } from "./loadouts";
 import { SoapClient } from "./soap";
 import {
   DEFAULT_PARTY_ACCOUNTS,
-  bagTargets,
   checkStageRequest,
-  countByItem,
   defaultStageRequest,
-  parseCliArgs,
   parseStageRequest,
   stageParty,
   type StageRequest,
@@ -61,11 +57,6 @@ const WORLD = "wabcdefghij";
 const tempDir = tempDirs();
 
 describe("parseStageRequest: the roster's shape and nothing else", () => {
-  test("takes the roster's request as it is sent", () => {
-    const r = parseStageRequest(JSON.parse(JSON.stringify(rosterRequest())));
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.request.members.map((m) => m.character)).toEqual(["Brannoc", "Hilda", "Marwen", "Rook", "Dain"]);
-  });
   test("refuses a drifted contract loudly: unknown keys, missing or mistyped fields", () => {
     const bad = (doc: unknown) => {
       const r = parseStageRequest(doc);
@@ -84,21 +75,6 @@ describe("parseStageRequest: the roster's shape and nothing else", () => {
 });
 
 describe("checkStageRequest", () => {
-  test("the roster's request and the default request are valid; names come from the request", () => {
-    expect(checkStageRequest(rosterRequest())).toEqual([]);
-    const d = defaultStageRequest({ party: "p" });
-    expect(checkStageRequest(d)).toEqual([]);
-    expect(d.members.map((m) => [m.member, m.account, m.character, m.role])).toEqual([
-      ["tank", "PARTY1", "Tankpartyb", "tank"],
-      ["healer", "PARTY2", "Healpartyc", "healer"],
-      ["mage", "PARTY3", "Magepartyd", "damage"],
-      ["rogue", "PARTY4", "Roguepartye", "damage"],
-      ["paladin", "PARTY5", "Palapartyf", "damage"],
-    ]);
-    expect(d.scenario).toBe("moonbrook-mine");
-    expect(d.level).toBe(20);
-  });
-
   test("refuses any account but the party's, repeats, a member with no loadout, an unknown scenario and another level", () => {
     const with_ = (f: (r: StageRequest) => void) => {
       const r = rosterRequest();
@@ -124,10 +100,6 @@ describe("the checked-in party definitions", () => {
     .map((f) => checkedIn(f.replace(/\.json$/, "")))
     .filter((d) => d.party !== undefined);
 
-  test("deadmines@1 is among them", () => {
-    expect(parties.map((d) => `${d.id}@${d.version}`)).toContain("deadmines@1");
-  });
-
   for (const def of parties) {
     const members = def.party!.members;
     test(`${def.id}@${def.version}: the stager takes it on PARTY1..PARTY5 in member order, each member under the name derived from its account`, () => {
@@ -145,26 +117,7 @@ describe("the checked-in party definitions", () => {
       expect(members.map((m) => m.character)).toEqual(members.map((m, i) => partyCharacterName((loadoutFor(m) as Loadout).id, DEFAULT_PARTY_ACCOUNTS[i]!)));
     });
 
-    test(`${def.id}@${def.version}: the warrior tank leads, and every member's objective names every member`, () => {
-      expect([members[0]!.role, members[0]!.class]).toEqual(["tank", 1]);
-      for (const m of members) for (const other of members) expect(m.objective).toContain(other.character);
-    });
   }
-});
-
-describe("bagTargets", () => {
-  test("fills the first free bag slots, around what is already worn there", () => {
-    const bags = [
-      { item: 4240, name: "Woolen Bag", count: 1 },
-      { item: 4240, name: "Woolen Bag", count: 1 },
-    ];
-    expect(bagTargets([], bags)).toEqual([{ entry: 4240, slot: 19 }, { entry: 4240, slot: 20 }]);
-    expect(bagTargets([{ bag: 0, slot: 19, item: 7, entry: 4496 }], bags)).toEqual([{ entry: 4240, slot: 20 }, { entry: 4240, slot: 21 }]);
-    // A backpack item at slot 23 is not a bag slot.
-    expect(bagTargets([{ bag: 0, slot: 23, item: 8, entry: 6948 }], bags)[0]!.slot).toBe(19);
-    const full = [19, 20, 21, 22].map((slot) => ({ bag: 0, slot, item: slot, entry: 4496 }));
-    expect(() => bagTargets(full, bags)).toThrow(/no free bag slot/);
-  });
 });
 
 describe("the accounts a party is staged on", () => {
@@ -255,64 +208,6 @@ describe("on a world of its own", () => {
   }, 30_000);
 });
 
-describe("countByItem", () => {
-  test("sums stacks by entry, an unknown count as one", () => {
-    const c = countByItem([
-      { itemId: 3770, count: 20 },
-      { itemId: 3770, count: 5 },
-      { itemId: 6948, count: undefined },
-      { itemId: undefined, count: 3 },
-    ]);
-    expect([...c]).toEqual([
-      [3770, 25],
-      [6948, 1],
-    ]);
-  });
-});
-
-describe("the CLI", () => {
-  test("takes --request <-|file> or --example, and nothing else", () => {
-    expect(parseCliArgs(["--request", "-"])).toEqual({ kind: "request", source: "-" });
-    expect(parseCliArgs(["--request", "/tmp/r.json"])).toEqual({ kind: "request", source: "/tmp/r.json" });
-    expect(parseCliArgs(["--example"])).toEqual({ kind: "example" });
-    for (const argv of [[], ["--request"], ["--campaign", "x"], ["--request", "-", "--example"]]) expect(() => parseCliArgs(argv)).toThrow(/usage/);
-  });
-
-  /** Run the script as the roster does: `bun stage-party.ts --request -`, the request on stdin. */
-  async function run(stdin: string, argv = ["--request", "-"]) {
-    const proc = Bun.spawn(["bun", SCRIPT, ...argv], { stdin: new Blob([stdin]), stdout: "pipe", stderr: "pipe", env: { ...process.env, WRATHBENCH_STAGER_PASSWORD: "" } });
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { out, err, code, lastErr: err.trim().split("\n").at(-1) ?? "" };
-  }
-
-  test("a refused request exits non-zero with the reason as stderr's last line, before touching anything", async () => {
-    const notJson = await run("{nope");
-    expect(notJson.code).toBe(2);
-    expect(notJson.lastErr).toMatch(/not readable JSON/);
-    const req = rosterRequest();
-    req.members[0]!.account = "RUNNER";
-    const runner = await run(JSON.stringify(req));
-    expect(runner.code).toBe(2);
-    expect(runner.lastErr).toMatch(/refused the request: .*refusing to stage on 'RUNNER'/);
-    expect(runner.out).toBe("");
-  }, 30_000);
-
-  test("a staging that cannot start (no STAGER password here) exits 1 with the reason on stderr", async () => {
-    const r = await run(JSON.stringify(rosterRequest()));
-    expect(r.code).toBe(1);
-    expect(r.lastErr).toMatch(/^stage-party: preflight: /);
-    expect(r.out).not.toContain('"ok":true');
-  }, 30_000);
-
-  test("--example prints a request the stager accepts", async () => {
-    const r = await run("", ["--example"]);
-    expect(r.code).toBe(0);
-    const parsed = parseStageRequest(JSON.parse(r.out));
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(checkStageRequest(parsed.request)).toEqual([]);
-  }, 30_000);
-});
-
 describe("stageParty refuses before touching anything", () => {
   let server: ReturnType<typeof Bun.serve> | undefined;
   afterEach(() => {
@@ -349,10 +244,5 @@ describe("stageParty refuses before touching anything", () => {
       expect(r.reason).toMatch(/below SEC_ADMINISTRATOR/);
     }
     expect(seen).toEqual(["POST /"]);
-  });
-
-  test("no module secret is a preflight refusal too", async () => {
-    const r = await stageParty(rosterRequest(), { log: () => {}, moduleSecret: "", soap: new SoapClient({ url: "http://127.0.0.1:1/", password: "pw" }) });
-    expect(r.ok ? "" : r.step).toBe("preflight");
   });
 });

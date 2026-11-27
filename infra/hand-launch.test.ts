@@ -17,7 +17,6 @@ import { parseFleet, rosterModels, type FleetConfig } from "./run-fleet";
 import { planOf } from "./fixtures/tick";
 import { credentialGate, credentialKey, driverKey, SlotBook } from "./run-fleet-credentials";
 import { countOutsideRuns, freePoolAccounts, outsideRuns } from "./run-fleet-plan";
-import { localCredentialStatuses } from "./run-fleet-status";
 import { accountHolderIn } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
@@ -137,7 +136,6 @@ describe("a hand launch with no episode", () => {
     expect(states[0]!.perEpisode.e90).toMatchObject({ attempts: 1, counted: 1 });
     expect(states[0]!.ladder).toBe(0);
     expect(states[0]!.paused).toBeUndefined();
-    expect(states[0]!.ladder).toBe(0);
     // The same projection as a tree that never held the hand runs.
     const bare = tempDir("wrathbench-hand-launch-bare-");
     writeRun(bare, NOW, { runId: "fleet-glm-e90-glm-20300314-a1", account: "RUNNER", episode: "e90", startedAt: NOW - 2 * H, ended: true, cost: 0 });
@@ -190,15 +188,6 @@ describe("a hand launch with no episode", () => {
     const held = plan(unstamped);
     expect(held.picks).toEqual([]);
     expect(held.holds.map((h) => h.why).join(" ")).toContain(`credential ${CRED} 2/2 in flight`);
-  });
-
-  test("the status's own reading counts it once, on its credential", () => {
-    const root = handRuns(NOW);
-    const cfg = fleet();
-    const { facts, unstamped } = readFleetRuns(root, NOW, { includeArchived: true });
-    const gate = credentialGate(cfg.credentials, [], [...facts, ...unstamped], NOW);
-    expect(localCredentialStatuses(cfg, gate, facts, unstamped).find((c) => c.id === CRED)?.inUse).toBe(2);
-    expect(localCredentialStatuses(cfg, gate, facts).find((c) => c.id === CRED)?.inUse).toBe(0);
   });
 
   test("is kept in the fact cache once ended, and served to the fleet's read alone", () => {

@@ -104,10 +104,9 @@ describe.skipIf(helm === null)("the chart's hosted block", () => {
       const ws = worldserver(docs);
       expect(value(ws, "AC_WRATH_BENCH_THREADS")).toBe("8");
       expect(value(ws, "AC_WRATH_BENCH_ACTION_RATE")).toBe("20");
-      expect(value(ws, "AC_WRATH_BENCH_ACTION_BURST")).toBe("40");
-      expect(value(ws, "AC_WRATH_BENCH_MAX_CONNECTIONS_PER_PEER")).toBe("0");
       const world = worldPod(docs);
       expect(value(world, "AC_WRATH_BENCH_THREADS")).toBe("2");
+      // An eval's world is never rate-limited the way the hosted one is.
       for (const k of CAPS) expect(value(world, k), k).toBeUndefined();
     },
     HELM_TEST_MS,

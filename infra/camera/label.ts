@@ -43,14 +43,3 @@ export function writeCameraLabel(runDir: string): boolean {
   renameSync(tmp, path);
   return true;
 }
-
-/** Label the run and confirm it held, a few times over. */
-export async function labelRun(runDir: string, o: { attempts?: number; settleMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<boolean> {
-  const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
-  for (let i = 0; i < (o.attempts ?? 5); i++) {
-    writeCameraLabel(runDir);
-    await sleep(o.settleMs ?? 3_000);
-    if (hasCameraLabel(runDir)) return true;
-  }
-  return false;
-}

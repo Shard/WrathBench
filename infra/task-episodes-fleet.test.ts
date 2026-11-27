@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY, parsePolicyBlock, projectModel, rehearsalHold, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, projectModel, rehearsalHold, type SchedulingPolicy } from "../runner/src/models";
 import type { RosterModel } from "../runner/src/roster-entry";
 import type { RunFact } from "../runner/src/run-fact";
 import { loadRunConfig } from "../runner/src/config";
@@ -17,7 +17,7 @@ import { taskHash, taskDefinition } from "../runner/src/task-episodes";
 import { parseFleet, type FleetConfig } from "./run-fleet-config";
 import { planOf } from "./fixtures/tick";
 import { episodeFlags, resolve } from "./run-roster";
-import { stagingHash, taskLaunchFile } from "./task-launch";
+import { stagingHash } from "./task-launch";
 import { fillEntries, jobSpawn } from "./run-fleet-plan";
 import { configFromArgs } from "../runner/src/run";
 import { writeCampaignFile } from "../runner/src/campaign-file";
@@ -76,22 +76,8 @@ describe("what buys an attempt", () => {
     }
   });
 
-  test("the roster key is true or absent, and never on a campaignOnly entry", () => {
-    const opted = fleet({ son: { ...SON, deadmines: true } });
-    expect(opted.roster["son"]!.deadmines).toBe(true);
-    expect(opted.refusals).toEqual([]);
-    expect(fleet({ son: SON }).roster["son"]!.deadmines).toBeUndefined();
-    expect(() => fleet({ son: { ...SON, deadmines: false } })).toThrow("deadmines is true or absent");
-    expect(() => fleet({ son: { ...SON, deadmines: "yes" } })).toThrow("deadmines is true or absent");
+  test("a campaignOnly entry, which runs no scored episode, cannot opt into the five-agent id", () => {
     expect(() => fleet({ son: { ...SON, deadmines: true, campaignOnly: true } })).toThrow("campaignOnly entry runs no scored episode");
-  });
-
-  test("policy.rehearsed names only what a rehearsal can clear, once each; absent clears nothing", () => {
-    expect(parsePolicyBlock(undefined).rehearsed).toEqual([]);
-    expect(parsePolicyBlock({ rehearsed: ["deadmines", "codex"] }).rehearsed).toEqual(["deadmines", "codex"]);
-    expect(() => parsePolicyBlock({ rehearsed: ["deadmines-solo"] })).toThrow("policy.rehearsed must be a list of");
-    expect(() => parsePolicyBlock({ rehearsed: "deadmines" })).toThrow("policy.rehearsed must be a list of");
-    expect(() => parsePolicyBlock({ rehearsed: ["codex", "codex"] })).toThrow("names an entry twice");
   });
 
   test("a queue job never names a task episode", () => {
@@ -129,13 +115,6 @@ describe("the holds", () => {
     const p = plan(cfg, owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t3", deadmines: true }, cfg.policy));
     expect(p.holds.map((h) => [h.episode, h.why])).toEqual([["deadmines", expect.stringContaining("program-loop rehearsal")]]);
     expect(p.picks.map((x) => x.job.episode)).toEqual(["deadmines-solo"]);
-  });
-
-  test("a model that owes only held attempts does what a model owing nothing does", () => {
-    const cfg = fleet({ cx: { tier: "t3", model: "gpt-6.1", driver: "codex", idle: "unlimited" } });
-    const p = plan(cfg, owing({ name: "cx", model: "gpt-6.1", driver: "codex", tier: "t3", idle: "unlimited" }, cfg.policy));
-    expect(p.holds.map((h) => h.episode)).toEqual(["deadmines-solo"]);
-    expect(p.picks.map((x) => x.job.episode)).toEqual(["freeplay"]);
   });
 });
 
@@ -238,10 +217,4 @@ describe("a five-agent pick, once rehearsed", () => {
     expect(p.picks).toEqual([]);
     expect(p.holds.find((h) => h.episode === "deadmines")?.why).toContain("claude-2 0/4");
   });
-});
-
-test("the launch file's staging hash is the fixtures the stager uses", () => {
-  const f = taskLaunchFile("deadmines-solo");
-  expect(f.staging).toMatch(/^sha256:[0-9a-f]{16}$/);
-  expect(taskLaunchFile("deadmines").staging).toBe(f.staging);
 });

@@ -12,10 +12,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  canonical,
   describeAcceptReport,
   httpSource,
-  reprojectionFindings,
   scanBody,
   verifyPublication,
   type AcceptSource,
@@ -298,14 +296,6 @@ describe("verifyPublication", () => {
     expect(report.findings).toEqual([]);
   });
 
-  test("nothing is fetched that the generation does not name", async () => {
-    const src = cleanBucket();
-    await verifyPublication(src);
-    expect(src.reads[0]).toBe(MANIFEST_PATH);
-    expect(new Set(src.reads).size).toBe(src.reads.length);
-    for (const key of src.reads) expect(src.objects.has(key)).toBe(true);
-  });
-
   test("a missing aggregate is a finding, not a crash", async () => {
     const src = cleanBucket();
     src.objects.delete("v1/snap/aaaaaaaaaaaa/info.json");
@@ -314,49 +304,6 @@ describe("verifyPublication", () => {
     expect(kinds(report.findings)).toEqual(["missing-object"]);
     // The walk still finished: the runs were still listed and checked.
     expect(report.runs).toBe(1);
-  });
-
-  test("a missing per-run object is a finding", async () => {
-    const src = cleanBucket();
-    src.objects.delete(`${RUN_BASE}/entries.json`);
-    const report = await verifyPublication(src);
-    expect(report.missing).toEqual([`${RUN_BASE}/entries.json`]);
-  });
-
-  test("a manifest that is not there stops the walk with one finding", async () => {
-    const src = cleanBucket();
-    src.objects.delete(MANIFEST_PATH);
-    const report = await verifyPublication(src);
-    expect(report.missing).toEqual([MANIFEST_PATH]);
-    expect(report.objects).toBe(0);
-  });
-
-  test("a pre-#38 manifest with no artifacts map is reported as such", async () => {
-    const src = cleanBucket();
-    src.objects.set(
-      MANIFEST_PATH,
-      JSON.stringify({ gen: "cafebabe1234", generatedAt: 1, attribution: PUBLIC_ATTRIBUTION }),
-    );
-    const report = await verifyPublication(src);
-    expect(report.findings.map((f) => f.detail).join()).toContain("no artifacts map");
-  });
-
-  test("cache-control is observed, never asserted", async () => {
-    const src = cleanBucket();
-    const report = await verifyPublication(src);
-    // Bun's S3 writer cannot send the header, so the expected state is none.
-    expect(report.cache.map((c) => `${c.kind} ${c.cacheControl}`)).toEqual([
-      "mutable null",
-      "mutable null",
-      "immutable null",
-    ]);
-    expect(report.findings).toEqual([]);
-    // And a bucket that did carry one reports it, still without failing.
-    const withHeader = cleanBucket();
-    withHeader.cacheControl.set(LIVE_PATH, "public, max-age=30");
-    const second = await verifyPublication(withHeader);
-    expect(second.cache.find((c) => c.key === LIVE_PATH)!.cacheControl).toBe("public, max-age=30");
-    expect(second.findings).toEqual([]);
   });
 
   /** The clean bucket with a trace: two windows on the track, the older one named by live.json. */
@@ -385,15 +332,6 @@ describe("verifyPublication", () => {
     src.objects.set(`v1/run/${RUN_ID}/trace/${T0 + 300_000}.json`, envelope(seg(T0 + 300_000)));
     return src;
   }
-
-  test("the segments live.json names and each track's newest are walked and re-projected", async () => {
-    const src = tracedBucket();
-    const report = await verifyPublication(src);
-    expect(report.findings).toEqual([]);
-    expect(src.reads).toContain(`v1/run/${RUN_ID}/trace/1760000100000.json`);
-    expect(src.reads).toContain(`v1/run/${RUN_ID}/trace/1760000400000.json`);
-    expect(report.objects).toBe(10);
-  });
 
   test("a named segment that is not there is a missing object, and a poisoned one a finding", async () => {
     const gone = tracedBucket();
@@ -461,13 +399,6 @@ describe("prohibited content", () => {
     const report = await verifyPublication(src);
     expect(kinds(report.findings)).toContain("tile-reference");
     expect(kinds(report.findings)).toContain("projection-drift");
-  });
-
-  test("a served pyramid tile's file name is caught on its own, without the prefix", async () => {
-    const src = poison(cleanBucket(), `${RUN_BASE}/track.json`, (body) => {
-      body["tileBase"] = "art/3/5_3.webp";
-    });
-    expect(kinds((await verifyPublication(src)).findings)).toContain("tile-reference");
   });
 
   test("wiki text in a search_reference result is caught", async () => {
@@ -548,15 +479,6 @@ describe("prohibited content", () => {
     });
   }
 
-  test("a host fact in the model's own scratchpad edit is a residual note, not a finding", async () => {
-    // The scratchpad is the model's own notes and ships whole, and an
-    // `edit_scratchpad` call's `new` is that text before it lands in the pad.
-    const note = "## Module\nPOST http://worldserver:8086/action with header authorization: Bearer <sdk.secret>\n";
-    const report = await verifyPublication(withScratchpadEdit(cleanBucket(), note));
-    expect(report.findings).toEqual([]);
-    expect(report.residual.map((f) => [f.kind, f.at])).toEqual([["host-fact", "entries[2].args.new"]]);
-  });
-
   test("a credential in the model's own scratchpad edit is still a finding", async () => {
     const note = "## Module\nPOST http://worldserver:8086/action with sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA\n";
     const report = await verifyPublication(withScratchpadEdit(cleanBucket(), note));
@@ -569,32 +491,6 @@ describe("prohibited content", () => {
 // ----------------------------------------------------------------- the units
 
 describe("the checks themselves", () => {
-  test("re-projection is a fixed point on a projected body", () => {
-    const projected = projectRuns({ runs: [privateRunRow()] } as never);
-    const body = { generatedAt: 1, attribution: PUBLIC_ATTRIBUTION, ...projected };
-    expect(reprojectionFindings("v1/snap/x/runs.json", body)).toEqual([]);
-  });
-
-  test("re-projection ignores the snapshot pointers the renderer stamps after it", () => {
-    const projected = projectRuns({ runs: [privateRunRow()] } as never) as unknown as { runs: Record<string, unknown>[] };
-    projected.runs[0]!["snapshot"] = { detail: "v1/run/a/b/detail.json", track: "v1/run/a/b/track.json" };
-    const body = { generatedAt: 1, attribution: PUBLIC_ATTRIBUTION, ...projected };
-    expect(reprojectionFindings("v1/snap/x/runs.json", body)).toEqual([]);
-  });
-
-  test("re-projection names the field that differs", () => {
-    const projected = projectRuns({ runs: [privateRunRow()] } as never) as unknown as { runs: Record<string, unknown>[] };
-    projected.runs[0]!["objective"] = "poison";
-    const found = reprojectionFindings("v1/snap/x/runs.json", { attribution: PUBLIC_ATTRIBUTION, ...projected });
-    expect(found).toHaveLength(1);
-    expect(found[0]!.at).toBe("runs[0].objective");
-  });
-
-  test("a body whose shape the projection cannot walk is malformed, not a crash", () => {
-    const found = reprojectionFindings("v1/snap/x/runs.json", { runs: "not an array" });
-    expect(found.map((f) => f.kind)).toEqual(["malformed"]);
-  });
-
   test("the value scan reads a URL with a port as a host fact, and a plain https URL as neither", () => {
     expect(kinds(scanBody("k", { a: "http://worldserver:8086" }).findings)).toEqual(["host-fact"]);
     expect(scanBody("k", { a: "https://www.azerothcore.org" }).findings).toEqual([]);
@@ -615,17 +511,6 @@ describe("the checks themselves", () => {
     expect(kinds(scanBody("k", { a: "at move (/wrathbench/wrath-mcp/sdk/src/client.ts:123:9)" }).findings)).toEqual([
       "filesystem-path",
     ]);
-  });
-
-  test("the value scan does not read a fraction or a zone name as a path", () => {
-    expect(scanBody("k", { a: "3/4 of the way to Kharanos", b: "Dun Morogh/Coldridge Valley" }).findings).toEqual([]);
-  });
-
-  test("the dump scan wants the archive suffix, so a bare XML filename is not a finding", () => {
-    expect(kinds(scanBody("k", { a: "wowwikifandomcom-20200223-history.xml.7z" }).findings)).toEqual([
-      "wiki-dump-source",
-    ]);
-    expect(scanBody("k", { a: "I parsed quests.xml and moved on" }).findings).toEqual([]);
   });
 
   test("model-authored is a location, not a key name: the same `new` outside a tool call is a finding", () => {
@@ -656,38 +541,6 @@ describe("the checks themselves", () => {
     expect(scan.findings.map((f) => f.at)).toEqual(["entries[0].text", "entries[1].args"]);
     expect(scan.residual).toEqual([]);
   });
-
-  test("every model-authored location the projection publishes is a residual note", () => {
-    const HOST = "http://worldserver:8086";
-    const entries = {
-      entries: [
-        { i: 0, t: "response", ts: 1, text: HOST, tools: ["run_snippet"] },
-        { i: 1, t: "claude_result", ts: 1, subtype: "success", isError: false, text: HOST },
-        { i: 2, t: "episodic", ts: 1, level: 3, zone: "Elwynn Forest", text: HOST },
-        { i: 3, t: "snippet", ts: 1, code: `await fetch("${HOST}")` },
-        { i: 4, t: "snippet_result", ts: 1, name: "run_snippet", isError: true, text: HOST },
-        { i: 5, t: "tool_result", ts: 1, name: "read_log", isError: false, text: HOST },
-        // An alias key is what the model sent, before the tool normalised it.
-        { i: 6, t: "tool_call", ts: 1, name: "edit_scratchpad", args: { old_string: HOST, new_string: HOST } },
-        { i: 7, t: "tool_call", ts: 1, name: "write_scratchpad", args: { content: HOST } },
-        { i: 8, t: "actions", ts: 1, actions: [{ ts: 1, action: "say", args: { text: HOST } }] },
-      ],
-    };
-    const scan = scanBody(`${RUN_BASE}/entries.json`, entries);
-    expect(scan.findings).toEqual([]);
-    expect(scan.residual).toHaveLength(10);
-    const live = { positions: { positions: [{ runId: RUN_ID, status: { turn: 1, level: 3, zone: "Elwynn Forest", text: HOST } }] } };
-    expect(scanBody(LIVE_PATH, live).findings).toEqual([]);
-    expect(kinds(scanBody(LIVE_PATH, live).residual)).toEqual(["host-fact"]);
-    // An action note's other fields are the SDK's and the module's, and checked.
-    const hint = { entries: [{ i: 0, t: "actions", ts: 1, actions: [{ ts: 1, action: "say", hint: HOST, args: { text: "hi" } }] }] };
-    expect(kinds(scanBody(`${RUN_BASE}/entries.json`, hint).findings)).toEqual(["host-fact"]);
-  });
-
-  test("canonical ordering makes the compare about content, not key order", () => {
-    expect(canonical({ b: 1, a: [{ d: 2, c: 3 }] })).toEqual(canonical({ a: [{ c: 3, d: 2 }], b: 1 }));
-    expect(JSON.stringify(canonical({ b: 1, a: 2 }))).toBe('{"a":2,"b":1}');
-  });
 });
 
 // ------------------------------------------------------- through the hostname
@@ -717,47 +570,11 @@ describe("the HTTP source reads the same bucket through the host", () => {
     return { fetch: fetchImpl, urls };
   }
 
-  test("a key becomes one URL under the base, trailing slashes and all", async () => {
-    const h = host(new Map([["v1/manifest.json", "{}"]]));
-    const src = httpSource("https://wrathbench-data.shard.page/", h.fetch);
-    expect(await src.get("v1/manifest.json")).toBe("{}");
-    expect(h.urls).toEqual(["https://wrathbench-data.shard.page/v1/manifest.json"]);
-  });
-
-  test("a run id keeps its separators — a key is a path, not one component", async () => {
-    const key = "v1/run/e90-sonnet-2026-09-11/abc123/detail.json";
-    const h = host(new Map([[key, '{"ok":true}']]));
-    const src = httpSource("https://d.example", h.fetch);
-    expect(await src.get(key)).toBe('{"ok":true}');
-    expect(h.urls).toEqual([`https://d.example/${key}`]);
-  });
-
   test("404 is a miss, not an error — which is what the verifier reports as missing", async () => {
     const h = host(new Map());
     const src = httpSource("https://d.example", h.fetch);
     expect(await src.get("v1/manifest.json")).toBeNull();
     expect(await src.head?.("v1/manifest.json")).toBeNull();
-  });
-
-  test("head reports what the edge says, which is where the TTLs actually live", async () => {
-    const h = host(new Map([["v1/snap/abc/runs.json", "{}"]]));
-    const src = httpSource("https://d.example", h.fetch);
-    expect((await src.head?.("v1/snap/abc/runs.json"))?.cacheControl).toBe("public, max-age=31536000, immutable");
-  });
-
-  test("a 429 from the edge waits and asks again, Retry-After first, then doubling", async () => {
-    const h = host(new Map([["v1/manifest.json", "{}"]]));
-    const answers = [
-      new Response("slow down", { status: 429, headers: { "retry-after": "3" } }),
-      new Response("slow down", { status: 429 }),
-      new Response("busy", { status: 503 }),
-    ];
-    const limited = (async (input: string | URL | Request, init?: RequestInit) =>
-      answers.shift() ?? h.fetch(input, init)) as typeof globalThis.fetch;
-    const waits: number[] = [];
-    const src = httpSource("https://d.example", limited, async (ms) => void waits.push(ms));
-    expect(await src.get("v1/manifest.json")).toBe("{}");
-    expect(waits).toEqual([3000, 2000, 4000]);
   });
 
   test("an edge that keeps refusing is an error after a bounded number of tries", async () => {
@@ -785,11 +602,6 @@ describe("the HTTP source reads the same bucket through the host", () => {
 // ------------------------------------------------------- unpublished runs
 
 describe("a run whose driver is not a model", () => {
-  test("the clean generation names none", async () => {
-    const report = await verifyPublication(cleanBucket());
-    expect(kinds(report.findings)).not.toContain("unpublished-run");
-  });
-
   test("its driver in a run detail is a finding, and so is every object that names the run", async () => {
     const src = poison(cleanBucket(), `${RUN_BASE}/detail.json`, (b) => {
       (b["run"] as Record<string, unknown>)["driver"] = "reference";

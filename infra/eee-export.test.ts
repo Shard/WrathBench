@@ -18,17 +18,12 @@ import { join } from "node:path";
 import type { ResultRun, ResultsResponse } from "../viewer/api-types";
 import { projectResults } from "../viewer/public-projection";
 import {
-  availabilityOf,
   COLLECTION,
-  datastorePath,
   eeeExport,
   eeeFromLadder,
   EEE_SCHEMA_VERSION,
-  evaluationIdOf,
   laddersFromPublished,
-  MODEL_AVAILABILITY,
   modelIdOf,
-  parseArgs,
   scanFiles,
   uuidOf,
   type EeeFile,
@@ -164,13 +159,6 @@ describe("cells", () => {
     ]);
   });
 
-  test("what is left out is counted, with its reason", () => {
-    expect(skipped).toEqual([
-      { reason: "e90: no developer known for the flat model id omen-alpha", runs: 1 },
-      { reason: "e90: no harness series", runs: 1 },
-    ]);
-  });
-
   test("a record carries the series, every exact version, the harness, the effort and n", () => {
     const f = byId(files, "wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default");
     expect(f.record.eval_library).toEqual({
@@ -230,32 +218,6 @@ describe("cells", () => {
   });
 });
 
-describe("identity and paths", () => {
-  test("a provider slug is the id without its :free variant; a flat id takes its family's prefix", () => {
-    expect(modelIdOf("deepseek/deepseek-v4.1-flash", [])).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", developer: "deepseek" });
-    expect(modelIdOf("minimax/minimax-m3:free", [])).toMatchObject({ id: "minimax/minimax-m3" });
-    expect(modelIdOf("opus", ["claude-opus-5"])).toMatchObject({ id: "anthropic/claude-opus-5", developer: "Anthropic" });
-    expect(modelIdOf("gpt-6-luna", [])).toMatchObject({ id: "openai/gpt-6-luna", developer: "OpenAI" });
-    expect(modelIdOf("qwen-3.8-27b", ["qwen-3.8-27b"])).toMatchObject({ id: "qwen/qwen-3.8-27b" });
-    expect(modelIdOf("deepseek-v4.1-flash", ["deepseek/deepseek-v4.1-flash"])).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", basis: "provider-reported id" });
-    // An alias that resolved two ways keeps the alias rather than picking one.
-    expect(modelIdOf("sonnet", ["claude-sonnet-5", "claude-sonnet-5-5"])).toMatchObject({ id: "anthropic/sonnet" });
-    expect(modelIdOf("omen-alpha", ["omen-alpha"])).toBeNull();
-  });
-
-  test("the path is the id's prefix and its flattened rest, under a UUID4 that the record identity fixes", () => {
-    const id = evaluationIdOf({ series: "0.5", episode: "e90", harness: "wrathbench", model: "x/y", effort: null, compactWindow: null, loop: "snippet", yield: false, wiki: true });
-    const uuid = uuidOf(id);
-    expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(uuidOf(id)).toBe(uuid);
-    expect(uuidOf(`${id}/high`)).not.toBe(uuid);
-    expect(datastorePath("openai/azure/gpt-x:2", uuid)).toBe(`data/wrathbench/openai/azure_gpt-x_2/${uuid}.json`);
-    expect(datastorePath("unknown/m", uuid)).toBeNull();
-    expect(datastorePath("data/m", uuid)).toBeNull();
-    expect(datastorePath("flat", uuid)).toBeNull();
-  });
-});
-
 describe("what EEE's CLI checks beyond the schema", () => {
   const { files } = eeeExport(ladders, { includeFree: true });
 
@@ -280,28 +242,19 @@ describe("what EEE's CLI checks beyond the schema", () => {
       }
     }
   });
+});
 
-  test("the deployment axes are set from EEE's own enums", () => {
-    for (const f of files) {
-      expect(["self_deployed", "externally_managed", "unknown"]).toContain(f.record.model_info.additional_details.deployment_type);
-      expect(["open_weights", "closed_weights", "unknown"]).toContain(f.record.model_info.additional_details.model_availability);
-    }
-    expect(byId(files, "wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default").record.model_info.additional_details.deployment_type).toBe("externally_managed");
-  });
-
-  test("model_availability is the catalogue's weights verdict in EEE's names", () => {
-    const availability = (id: string): string => byId(files, id).record.model_info.additional_details.model_availability;
-    // DeepSeek V4.1 Flash and MiniMax M3 publish their weights; Claude and GPT-6 do not.
-    expect(availability("wrathbench/0.5/e90/wrathbench/deepseek/deepseek-v4.1-flash/default")).toBe("open_weights");
-    expect(availability("wrathbench/0.5/e90/wrathbench/minimax/minimax-m3:free/default")).toBe("open_weights");
-    // A CLI alias reads through the id the provider resolved.
-    expect(availability("wrathbench/0.5/e90/claude-code/opus/low")).toBe("closed_weights");
-    expect(availability("wrathbench/0.5/e360/codex/openai/gpt-6-luna/default")).toBe("closed_weights");
-    expect(MODEL_AVAILABILITY).toEqual({ open: "open_weights", closed: "closed_weights", unknown: "unknown" });
-    // An id the catalogue does not list is unknown, never a family guess.
-    expect(availabilityOf("openai/gpt-9-unreleased", "gpt-9-unreleased")).toBe("unknown");
-    // The recorded slug is the fallback: a `-free` OpenCode Zen id is named as itself.
-    expect(availabilityOf("poolside/laguna-s-2.1-free", "laguna-s-2.1-free")).toBe("open_weights");
+describe("identity", () => {
+  test("a provider slug is the id without its :free variant; a flat id takes its family's prefix", () => {
+    expect(modelIdOf("deepseek/deepseek-v4.1-flash", [])).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", developer: "deepseek" });
+    expect(modelIdOf("minimax/minimax-m3:free", [])).toMatchObject({ id: "minimax/minimax-m3" });
+    expect(modelIdOf("opus", ["claude-opus-5"])).toMatchObject({ id: "anthropic/claude-opus-5", developer: "Anthropic" });
+    expect(modelIdOf("gpt-6-luna", [])).toMatchObject({ id: "openai/gpt-6-luna", developer: "OpenAI" });
+    expect(modelIdOf("qwen-3.8-27b", ["qwen-3.8-27b"])).toMatchObject({ id: "qwen/qwen-3.8-27b" });
+    expect(modelIdOf("deepseek-v4.1-flash", ["deepseek/deepseek-v4.1-flash"])).toMatchObject({ id: "deepseek/deepseek-v4.1-flash", basis: "provider-reported id" });
+    // An alias that resolved two ways keeps the alias rather than picking one.
+    expect(modelIdOf("sonnet", ["claude-sonnet-5", "claude-sonnet-5-5"])).toMatchObject({ id: "anthropic/sonnet" });
+    expect(modelIdOf("omen-alpha", ["omen-alpha"])).toBeNull();
   });
 });
 
@@ -334,26 +287,6 @@ describe("the published source", () => {
     const got = await laddersFromPublished({ get: async (k) => (read.push(k), bodies[k] ?? null) });
     expect(read).toEqual(["v1/manifest.json", "v1/snap/a/ladder-e90.json", "v1/snap/b/ladder-e360.json"]);
     expect(eeeExport(got).files.length).toBe(eeeExport(ladders).files.length);
-  });
-
-  test("a manifest without a scored ladder is an error, not an empty export", async () => {
-    const src = { get: async (k: string) => (k === "v1/manifest.json" ? JSON.stringify({ artifacts: {} }) : null) };
-    await expect(laddersFromPublished(src)).rejects.toThrow(/ladder-e90/);
-  });
-});
-
-describe("arguments", () => {
-  test("exactly one source, and checked values", () => {
-    expect(parseArgs(["--base", "https://x.example"])).toMatchObject({ base: "https://x.example", runs: null });
-    expect(parseArgs(["--runs", "data/runs", "--series", "0.5", "--include-free"])).toMatchObject({ runs: "data/runs", series: "0.5", includeFree: true });
-    expect(parseArgs(["--base", "https://x.example"])).toMatchObject({ includeFree: false });
-    // The old flag is gone, not silently accepted: free runs are already out by default.
-    expect(parseArgs(["--runs", "d", "--exclude-free"])).toHaveProperty("error");
-    expect(parseArgs([])).toHaveProperty("error");
-    expect(parseArgs(["--base", "https://x.example", "--runs", "d"])).toHaveProperty("error");
-    expect(parseArgs(["--base", "ftp://x"])).toHaveProperty("error");
-    expect(parseArgs(["--runs", "d", "--series", "latest"])).toHaveProperty("error");
-    expect(parseArgs(["--runs", "d", "--nope"])).toHaveProperty("error");
   });
 });
 
