@@ -53,9 +53,11 @@
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction, moduleSession } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { SCENARIOS } from "../fixtures/scenarios";
+import { openEventStream, waitForEvent, until } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -95,24 +97,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 // ---------------------------------------------------------------- event feed
 const events: any[] = [];
@@ -165,40 +152,16 @@ function trackEvent(e: any) {
 }
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        trackEvent(e);
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    trackEvent(e);
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(50);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from, pollMs: 50 });
 }
 
-/** Poll a condition on the tracked state for up to `ms`; true when it held in time. */
-async function until(ms: number, cond: () => boolean): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > deadline) return false;
-    await Bun.sleep(50);
-  }
-  return true;
-}
-
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 const slotOf = (questId: number) => [...questLog].find(([, id]) => id === questId)?.[0];
 const killCounter = (slot: number) => (questCountsLo.get(slot) ?? 0) & 0xffff;
 const slotComplete = (slot: number) => ((questState.get(slot) ?? 0) & 1) === 1;
@@ -212,16 +175,7 @@ async function waitForUnit(entry: number, timeoutMs: number, what: string): Prom
   }
 }
 
-async function createSession(): Promise<any> {
-  const session = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 2 });
-  if (session.status !== 200 || !session.json?.inWorld) fail(`session failed: ${JSON.stringify(session.json)}`);
-  return session.json;
-}
-
-async function endSession(): Promise<void> {
-  const del = await req("DELETE", "/session", { token: TOKEN });
-  if (del.status !== 200) fail(`session delete failed: ${JSON.stringify(del.json)}`);
-}
+const { create: createSession, end: endSession } = moduleSession(req, { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 2 }, fail);
 
 /**
  * The fixture boot, shared with kill-credit.ts and travel.ts. Nothing else

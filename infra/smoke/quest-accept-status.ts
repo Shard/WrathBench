@@ -44,9 +44,12 @@
 import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
-import { smokeSubToken, smokeToken } from "./lib/session";
-import { deleteThroughLinger, moveRetryReason, RETRY_MARK } from "./lib/transient";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
+import { smokeToken } from "./lib/session";
+import { moveRetryReason, RETRY_MARK } from "./lib/transient";
+import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { deletePreviousThroughLinger } from "./lib/character";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -82,9 +85,7 @@ const VENDOR_POS = { x: -8909.5, y: -104.2, z: 82.0 };
 const WALK_TIMEOUT_MS = 15000;
 const REPLY_TIMEOUT_MS = 3000;
 
-function log(msg: string) {
-  console.log(`[qaccept] ${msg}`);
-}
+const log = taggedLog("qaccept");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -96,24 +97,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 // ---------------------------------------------------------------- event feed
 const events: any[] = [];
@@ -165,27 +151,14 @@ function trackEvent(e: any) {
 }
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        trackEvent(e);
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    trackEvent(e);
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
 
 async function waitForQuestInLog(questId: number, what: string): Promise<number> {
@@ -237,16 +210,8 @@ async function moveTo(target: Vec, what: string): Promise<void> {
 // within about a minute of the last run finds that character still in the
 // core's post-logout linger, which the module answers with 504 timeout; that,
 // and only that, is waited out (lib/transient.ts, `deleteThroughLinger`).
-async function deletePreviousCharacter(): Promise<void> {
-  const r = await deleteThroughLinger({
-    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
-    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
-    character: CHARACTER,
-    log,
-  });
-  if (!r.ok) fail(`could not delete last run's ${CHARACTER}: ${r.why}`);
-  const waited = r.retries > 0 ? ` after ${r.retries} retr${r.retries === 1 ? "y" : "ies"} over ${Math.round(r.waitedMs / 1000)}s` : "";
-  log(r.deleted ? `deleted last run's ${CHARACTER}${waited}` : `no previous ${CHARACTER} to delete (first run on this realm)`);
+function deletePreviousCharacter(): Promise<void> {
+  return deletePreviousThroughLinger({ request: req, token: TOKEN, account: ACCOUNT, character: CHARACTER, log, fail });
 }
 
 async function main() {

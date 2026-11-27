@@ -31,10 +31,12 @@
  *   bun wb --local smoke module-reclaim   # the quickstart
  */
 
-import { authHeaders } from "./lib/auth";
-import { moduleWsBase } from "./lib/module";
-import { createWithReclaim as createReclaiming, deleteCharacterRetrying, moduleRequest } from "./lib/reclaim";
+import { moduleRequest, moduleWsBase } from "./lib/module";
+import { createWithReclaim as createReclaiming, deleteCharacterRetrying } from "./lib/reclaim";
 import { smokeToken } from "./lib/session";
+import { failAndExit as fail, taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { randomName } from "./lib/name";
 
 const WS = moduleWsBase();
 const req = moduleRequest();
@@ -49,46 +51,19 @@ const TOKEN_A = smokeToken("module-reclaim", { role: "a" });
 const TOKEN_B = smokeToken("module-reclaim", { role: "b" });
 const TOKEN_C = smokeToken("module-reclaim", { role: "c" });
 
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHAR_A = randomName();
 const CHAR_B = randomName();
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
 function openEvents(token: string, buf: any[]): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(token)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        buf.push(JSON.parse(String(ev.data)));
-      } catch {
-        /* ignore */
-      }
-    });
+  return openEventStream(WS, token, (e) => {
+    buf.push(e);
   });
 }
 
-async function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = buf.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  return waitForEvent(buf, pred, timeoutMs, what, fail);
 }
 
 // Create a session, retrying through the core's account-release window

@@ -101,9 +101,13 @@ import { DEADMINES_ENTRANCE_TRIGGER, NAV_KHARANOS_JARVEN, SCENARIOS } from "../f
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
 import { applyScenario, type FixtureContext } from "./lib/fixture";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
-import { deleteThroughLinger, moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
+import { moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
+import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { deletePreviousThroughLinger } from "./lib/character";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -117,9 +121,7 @@ const TOKEN = smokeToken("module-navigation");
 const CHARACTER = "Smokenav";
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
-function log(msg: string) {
-  console.log(`[nav] ${msg}`);
-}
+const log = taggedLog("nav");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit). The
 // session logged in now: the main legs', or an optional leg's own.
@@ -133,20 +135,7 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 const events: any[] = [];
 
@@ -160,42 +149,22 @@ type Leg = { token: string; events: any[]; at?: Vec };
 const MAIN: Leg = { token: TOKEN, events };
 
 function openEvents(leg: Leg = MAIN): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(leg.token)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        leg.events.push(JSON.parse(String(ev.data)));
-      } catch {
-        log(`event <- (unparseable) ${String(ev.data)}`);
-      }
-    });
-  });
+  return openEventStream(
+    WS,
+    leg.token,
+    (e) => {
+      leg.events.push(e);
+    },
+    (raw) => log(`event <- (unparseable) ${raw}`),
+  );
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, leg: Leg = MAIN): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = leg.events.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, leg: Leg = MAIN): Promise<any> {
+  return waitForEvent(leg.events, pred, timeoutMs, what, fail);
 }
 
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-
-async function deletePreviousCharacter(): Promise<void> {
-  const r = await deleteThroughLinger({
-    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
-    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
-    character: CHARACTER,
-    log,
-  });
-  if (!r.ok) fail(`could not delete last run's ${CHARACTER}: ${r.why}`);
-  const waited = r.retries > 0 ? ` after ${r.retries} retr${r.retries === 1 ? "y" : "ies"} over ${Math.round(r.waitedMs / 1000)}s` : "";
-  log(r.deleted ? `deleted last run's ${CHARACTER}${waited}` : `no previous ${CHARACTER} to delete (first run on this realm)`);
+function deletePreviousCharacter(): Promise<void> {
+  return deletePreviousThroughLinger({ request: req, token: TOKEN, account: ACCOUNT, character: CHARACTER, log, fail });
 }
 
 /** Issue move_to and return the terminal WB_MOVE_RESULT data for it. */

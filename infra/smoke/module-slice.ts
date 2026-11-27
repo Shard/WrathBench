@@ -13,9 +13,11 @@
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */
 
-import { authHeaders } from "./lib/auth";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { failAndExit as fail, taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { randomName } from "./lib/name";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -25,66 +27,30 @@ const WS = moduleWsBase();
 const TOKEN = smokeToken("module-slice");
 // WoW character names are letters only (digits => CHAR_NAME_MIXED_LANGUAGES) and
 // must be unique. A random letter suffix keeps re-runs from colliding.
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHARACTER = randomName();
 const SAY_TEXT = "hello world";
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 // Collect events off the WebSocket into a shared buffer.
 const events: any[] = [];
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const obj = JSON.parse(String(ev.data));
-        events.push(obj);
-        log(`event <- ${obj.opcode} ${JSON.stringify(obj.data)}`);
-      } catch {
-        log(`event <- (unparseable) ${String(ev.data)}`);
-      }
-    });
-  });
+  return openEventStream(
+    WS,
+    TOKEN,
+    (obj) => {
+      events.push(obj);
+      log(`event <- ${obj.opcode} ${JSON.stringify(obj.data)}`);
+    },
+    (raw) => log(`event <- (unparseable) ${raw}`),
+  );
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = events.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail);
 }
 
 async function main() {

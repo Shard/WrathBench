@@ -65,9 +65,12 @@ import { connect, type MovePoint, type MoveResultData, type WrathClient } from "
 import { tokenFingerprint } from "@wrathbench/mcp/module-auth";
 import { SCENARIOS, type ScenarioName } from "../fixtures/scenarios";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { stampedLog } from "./lib/report";
+import { createSessionWithBackoff, selfPosition } from "./lib/sdk";
+import { fmt } from "./lib/geo";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -84,7 +87,7 @@ const DROP_MIN_DZ = 2.0;
 const DROP_SLOPE = 1.2;
 
 const started = Date.now();
-const log = (m: string): void => console.log(`[steep +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("steep", started, 6);
 
 class StartFailed extends Error {}
 function fail(m: string): never {
@@ -92,7 +95,6 @@ function fail(m: string): never {
 }
 
 type Vec = { x: number; y: number; z: number };
-const fmt = (p: Vec): string => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
 const signed = (v: number): string => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 
 interface Repro {
@@ -193,25 +195,6 @@ function describe(a: Answer): string {
   }
 }
 
-async function createSessionWithBackoff(client: WrathClient): Promise<void> {
-  // Another probe may hold the single PROBE session; wait it out (up to 20min).
-  const deadline = Date.now() + 20 * 60_000;
-  for (;;) {
-    try {
-      await client.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
-      return;
-    } catch (e) {
-      const msg = String(e instanceof Error ? e.message : e);
-      if (/char_create_failed_code_53/.test(msg)) {
-        fail(`${ACCOUNT} is at the realm's ten-character cap, so ${CHARACTER} cannot be created; delete a spare character or set SMOKE_CHARACTER to one that exists`);
-      }
-      if (!/account_in_use|token_in_use|in use/i.test(msg) || Date.now() > deadline) throw e;
-      log(`  account busy (${msg.slice(0, 80)}); retrying in 60s`);
-      await Bun.sleep(60_000);
-    }
-  }
-}
-
 const fixtureCtx: FixtureContext = {
   base: BASE,
   account: ACCOUNT,
@@ -222,23 +205,13 @@ const fixtureCtx: FixtureContext = {
   createAndLogout: async () => {
     const client = await connect({ baseUrl: BASE, token: smokeToken("steep-replan", { id: RUN, suffix: "create" }), secret: MODULE_SECRET });
     try {
-      await createSessionWithBackoff(client);
+      await createSessionWithBackoff(client, { account: ACCOUNT, character: CHARACTER, log, fail });
       await client.logout();
     } finally {
       client.close();
     }
   },
 };
-
-async function selfPosition(client: WrathClient): Promise<{ map: number } & Vec> {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    const p = client.state.self.position?.value;
-    if (p !== undefined) return p;
-    if (Date.now() > deadline) fail("no self position observed after login");
-    await Bun.sleep(100);
-  }
-}
 
 /** A raw `move_to` and its verdict: no fall estimate, `force` only when asked. */
 async function probe(client: WrathClient, target: MovePoint, force: boolean): Promise<Answer> {
@@ -258,8 +231,8 @@ async function runStart(start: Start, n: number, outcomes: Outcome[]): Promise<v
   const token = smokeToken("steep-replan", { id: RUN, suffix: String(n) });
   const client = await connect({ baseUrl: BASE, token, secret: MODULE_SECRET });
   try {
-    await createSessionWithBackoff(client);
-    const at = await selfPosition(client);
+    await createSessionWithBackoff(client, { account: ACCOUNT, character: CHARACTER, log, fail });
+    const at = await selfPosition(client, fail);
     const off = Math.hypot(at.x - want.x, at.y - want.y, at.z - want.z);
     if (at.map !== want.map || off > 3) {
       fail(`fixture did not land: map ${at.map} ${fmt(at)}, ${off.toFixed(1)}y from the scenario's ${fmt(want)} on map ${want.map}`);
@@ -324,7 +297,7 @@ interface ReplanRow {
   replanPointCount?: number;
 }
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<{ ok?: boolean; build?: string }>);
+const health = await moduleHealth(BASE);
 if (health.ok !== true) {
   console.log(`FAIL: module health not ok: ${JSON.stringify(health)}`);
   process.exit(1);

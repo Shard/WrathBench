@@ -18,6 +18,7 @@ import { connect, pointOf, type NearbyObject } from "@wrathbench/sdk";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { fail } from "./lib/report";
 
 const BASE = moduleBase();
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -39,11 +40,6 @@ const ABBEY = { x: -8902.6, y: -162.6, z: 82.0 };
 const VINEYARDS = { x: -8790, y: -160, z: 82.5 };
 
 const log = (m: string) => console.log(`[smoke ${new Date().toISOString().slice(11, 19)}] ${m}`);
-function fail(m: string): never {
-  // A function declaration, not an arrow: TypeScript only narrows past a
-  // `never`-returning call when it can see the signature this way.
-  throw new Error(m);
-}
 
 const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 const alive = (entry: number) => (o: NearbyObject) =>

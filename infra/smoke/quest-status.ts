@@ -42,8 +42,10 @@ const TOKEN = smokeToken("quest-status");
 import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const CHARACTER = probeName("Bs");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -56,9 +58,7 @@ const ENTRY_WILLEM = 823;
 const ENTRY_VERMIN = 6;
 const STATUS_AVAILABLE = new Set([8, 2, 7, 4]); // available / low-level / rep variants
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
+const log = taggedLog("probe");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -70,24 +70,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 const events: any[] = [];
 const units = new Map<string, { entry?: number; dead?: boolean }>();
@@ -116,27 +101,14 @@ function trackEvent(e: any) {
 }
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        trackEvent(e);
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    trackEvent(e);
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
 
 async function waitForUnit(entry: number, timeoutMs: number, what: string): Promise<string> {

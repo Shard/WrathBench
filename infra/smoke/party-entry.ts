@@ -19,7 +19,9 @@ import { DEADMINES_ENTRANCE_TRIGGER } from "../fixtures/scenarios";
 import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
+import { fmt } from "./lib/geo";
+import { deleteMembers, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const argv = Bun.argv.slice(2);
@@ -32,7 +34,7 @@ const DEADMINES_MAP = 36;
 const EXIT_TRIGGER = { x: -14.4, y: -393.4, z: 64.6 };
 
 const started = Date.now();
-const log = (m: string) => console.log(`[party-entry +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
+const log = stampedLog("party-entry", started, 6);
 
 const clients: WrathClient[] = [];
 try {

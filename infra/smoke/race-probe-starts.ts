@@ -33,9 +33,10 @@
 
 import { connect, type WrathClient } from "@wrathbench/sdk";
 import { deleteFixtureCharacters } from "./lib/fixture";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -56,7 +57,7 @@ const QUESTGIVER_TIMEOUT_MS = 20_000;
 const MOVE_TIMEOUT_MS = 30_000;
 
 const started = Date.now();
-const log = (m: string): void => console.log(`[starts +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
+const log = stampedLog("starts", started);
 
 class StartFailed extends Error {}
 function fail(m: string): never {
@@ -120,7 +121,7 @@ async function runStart(s: Start): Promise<void> {
   }
 }
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<{ ok?: boolean; build?: string }>);
+const health = await moduleHealth(BASE);
 if (health.ok !== true) {
   console.log(`FAIL: module health not ok: ${JSON.stringify(health)}`);
   process.exit(1);

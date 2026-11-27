@@ -21,9 +21,11 @@
 import { connect, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
+import { sdkCreateAndLogout } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -36,12 +38,9 @@ const POSTAGE = 30;
 const SUBJECT = `smoke ${RUN.slice(0, 8)}`;
 
 const started = Date.now();
-const log = (m: string) => console.log(`[mail +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("mail", started);
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
+const health = await moduleHealth(BASE);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}; ${SENDER} -> ${RECEIVER} on ${ACCOUNT}`);
 
@@ -55,15 +54,7 @@ function ctxFor(character: string, token: string): FixtureContext {
     fail,
     contendedDeadlineMs: 10_000,
     contendedRetryMs: 5_000,
-    createAndLogout: async () => {
-      const c = await connect({ baseUrl: BASE, token: `${token}-create`, secret: MODULE_SECRET });
-      try {
-        await c.createSession({ account: ACCOUNT, character, race: 1, class: 1 });
-        await c.logout();
-      } finally {
-        c.close();
-      }
-    },
+    createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: `${token}-create`, account: ACCOUNT, character, race: 1, class: 1 }),
   };
 }
 

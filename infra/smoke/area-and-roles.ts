@@ -40,9 +40,11 @@
  */
 
 import { connect } from "@wrathbench/sdk";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
-import { smokeSubToken, smokeToken } from "./lib/session";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
+import { smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
+import { deletePreviousCharacter } from "./lib/character";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -65,33 +67,12 @@ const EXPECT = {
 };
 
 const started = Date.now();
-const log = (m: string) =>
-  console.log(`[area +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("area", started);
 
-async function deletePreviousCharacter(): Promise<void> {
-  for (let attempt = 0; attempt < 4; ++attempt) {
-    const res = await fetch(`${BASE}/character-delete`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
-    });
-    const json: any = await res.json().catch(() => undefined);
-    if (json?.deleted === true) return log(`deleted last run's ${CHARACTER}`);
-    if (json?.error === "character_not_found") return log(`no previous ${CHARACTER}`);
-    log(`character-delete attempt ${attempt}: ${res.status} ${JSON.stringify(json)}`);
-    if (res.status !== 504) break;
-    await Bun.sleep(2000);
-  }
-  fail(`could not delete last run's ${CHARACTER}`);
-}
-
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
+const health = await moduleHealth(BASE);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER}`);
-await deletePreviousCharacter();
+await deletePreviousCharacter({ base: BASE, token: TOKEN, account: ACCOUNT, character: CHARACTER, log, fail });
 
 const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 const areas: {

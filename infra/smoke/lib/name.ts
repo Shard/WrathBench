@@ -22,3 +22,17 @@ export function probeName(prefix: string): string {
     if (isValidCharacterName(name)) return name;
   }
 }
+
+/**
+ * The module probes' throwaway name: `Bench` and five random letters, as
+ * module-accounts, module-reclaim, module-session-state and module-slice
+ * have always spelled it. Unlike `probeName` it does not re-roll, so a draw
+ * with three identical letters in a row is refused by the core; the probes
+ * keep it as it was rather than change their names here.
+ */
+export function randomName(): string {
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  let s = "Bench";
+  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
+  return s;
+}

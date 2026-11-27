@@ -73,8 +73,11 @@
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleAction, moduleSession } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -126,9 +129,7 @@ const WALK_TIMEOUT_MS = 30000;
 const FIGHT_TIMEOUT_MS = 40000;
 const REPLY_TIMEOUT_MS = 3000;
 
-function log(msg: string) {
-  console.log(`[killcredit] ${msg}`);
-}
+const log = taggedLog("killcredit");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -140,24 +141,9 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function action(name: string, fields: Record<string, unknown> = {}): Promise<any> {
-  const r = await req("POST", "/action", { token: TOKEN, action: name, ...fields });
-  if (r.status !== 200 || !r.json?.ok) fail(`action ${name} failed: ${r.status} ${JSON.stringify(r.json)}`);
-  return r.json;
-}
+const action = moduleAction(req, TOKEN, fail);
 
 // ---------------------------------------------------------------- event feed
 const events: any[] = [];
@@ -240,30 +226,15 @@ function trackEvent(e: any) {
 }
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        trackEvent(e);
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    trackEvent(e);
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
-
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 async function waitForQuestInLog(questId: number, what: string): Promise<number> {
   const deadline = Date.now() + REPLY_TIMEOUT_MS;
@@ -333,16 +304,7 @@ async function tryFace(x: number, y: number): Promise<void> {
  * path when the character does not exist yet. Human Paladin, the class the
  * fight's timings were measured against.
  */
-async function createSession(): Promise<any> {
-  const session = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 2 });
-  if (session.status !== 200 || !session.json?.inWorld) fail(`session failed: ${JSON.stringify(session.json)}`);
-  return session.json;
-}
-
-async function endSession(): Promise<void> {
-  const del = await req("DELETE", "/session", { token: TOKEN });
-  if (del.status !== 200) fail(`session delete failed: ${JSON.stringify(del.json)}`);
-}
+const { create: createSession, end: endSession } = moduleSession(req, { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 2 }, fail);
 
 /**
  * The fixture boot, shared with travel.ts. Budgets are a suite member's, not

@@ -35,9 +35,11 @@
 
 import { connect } from "@wrathbench/sdk";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
-import { moduleBase } from "./lib/module";
+import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { fail, stampedLog } from "./lib/report";
+import { sdkCreateAndLogout } from "./lib/sdk";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -52,12 +54,9 @@ const ZONE_IRONFORGE = 1537;
 const ZONE_LOCH_MODAN = 38;
 
 const started = Date.now();
-const log = (m: string) => console.log(`[taxi +${((Date.now() - started) / 1000).toFixed(1).padStart(5)}s] ${m}`);
-function fail(m: string): never {
-  throw new Error(m);
-}
+const log = stampedLog("taxi", started);
 
-const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
+const health = await moduleHealth(BASE);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER} on ${ACCOUNT}`);
 
@@ -70,16 +69,8 @@ const fixtureCtx: FixtureContext = {
   fail,
   contendedDeadlineMs: 10_000,
   contendedRetryMs: 5_000,
-  createAndLogout: async () => {
-    // Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
-    const c = await connect({ baseUrl: BASE, token: smokeSubToken(TOKEN, "create"), secret: MODULE_SECRET });
-    try {
-      await c.createSession({ account: ACCOUNT, character: CHARACTER, race: 3, class: 1 });
-      await c.logout();
-    } finally {
-      c.close();
-    }
-  },
+  // Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
+  createAndLogout: () => sdkCreateAndLogout({ base: BASE, token: smokeSubToken(TOKEN, "create"), account: ACCOUNT, character: CHARACTER, race: 3, class: 1 }),
 };
 await ensureFixtureCharacter(fixtureCtx);
 await applyScenario(fixtureCtx, SCENARIO);

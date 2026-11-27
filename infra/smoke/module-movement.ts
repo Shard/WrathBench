@@ -15,9 +15,11 @@
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */
 
-import { authHeaders } from "./lib/auth";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { failAndExit as fail, taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -29,59 +31,27 @@ const TOKEN = smokeToken("module-movement");
 // runs do not eat into the realm's 10-characters-per-account cap.
 const CHARACTER = "Benchmove";
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 const events: any[] = [];
 const startedAt = Date.now();
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        events.push(JSON.parse(String(ev.data)));
-      } catch {
-        log(`event <- (unparseable) ${String(ev.data)}`);
-      }
-    });
-  });
+  return openEventStream(
+    WS,
+    TOKEN,
+    (e) => {
+      events.push(e);
+    },
+    (raw) => log(`event <- (unparseable) ${raw}`),
+  );
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = events.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail);
 }
-
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-  Math.hypot(a.x - b.x, a.y - b.y);
 
 async function main() {
   const health = await req("GET", "/health");

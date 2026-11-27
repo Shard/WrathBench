@@ -15,9 +15,11 @@
  *   bun wb --local smoke module-session-state   # the quickstart
  */
 
-import { authHeaders } from "./lib/auth";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
+import { failAndExit as fail, taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
+import { randomName } from "./lib/name";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -29,60 +31,20 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = smokeToken("module-session-state");
 
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHARACTER = randomName();
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
-function fail(msg: string): never {
-  console.error(`[probe] FAIL: ${msg}`);
-  process.exit(1);
-}
+const log = taggedLog("probe");
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {
-    /* ignore non-JSON */
-  }
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
 function openEvents(buf: any[]): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        buf.push(JSON.parse(String(ev.data)));
-      } catch {
-        /* ignore */
-      }
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    buf.push(e);
   });
 }
 
-async function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = buf.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  return waitForEvent(buf, pred, timeoutMs, what, fail);
 }
 
 async function cleanup() {

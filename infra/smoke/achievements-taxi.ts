@@ -44,8 +44,10 @@
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { failOnce } from "./lib/fail";
-import { moduleBase, moduleWsBase } from "./lib/module";
+import { moduleBase, moduleWsBase, moduleRequest, moduleSession } from "./lib/module";
 import { smokeToken } from "./lib/session";
+import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -60,9 +62,7 @@ const TAXI_IRONFORGE = 6;
 const TAXI_THELSAMAR = 8;
 const ACHIEVEMENT_LEVEL_10 = 6; // Achievement.dbc: "Level 10", 10 points, planted by the fixture
 
-function log(msg: string) {
-  console.log(`[probe] ${msg}`);
-}
+const log = taggedLog("probe");
 // Best-effort session cleanup so a failed run does not leave the account
 // blocked for the next one (lib/fail.ts: once, awaited, then the exit).
 const { fail: failNow, failed } = failOnce({
@@ -74,60 +74,28 @@ function fail(msg: string): never {
   return failNow(msg);
 }
 
-async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let json: any = undefined;
-  try {
-    json = await res.json();
-  } catch {}
-  return { status: res.status, json };
-}
+const req = moduleRequest(BASE);
 
-async function createSession(): Promise<any> {
-  // Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
-  const r = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 3, class: 1 });
-  if (r.status !== 200 || !r.json?.inWorld) fail(`session failed: ${JSON.stringify(r.json)}`);
-  return r.json;
-}
-async function endSession(): Promise<void> {
-  const r = await req("DELETE", "/session", { token: TOKEN });
-  if (r.status !== 200) fail(`session delete failed: ${JSON.stringify(r.json)}`);
-}
+// Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
+const { create: createSession, end: endSession } = moduleSession(req, { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 3, class: 1 }, fail);
 
 const events: any[] = [];
 let selfGuid = "";
 const creatureGuidByEntry = new Map<number, string>();
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        if (e.opcode === "SMSG_UPDATE_OBJECT")
-          for (const o of e.data?.objects ?? []) {
-            if (o.self) selfGuid = o.guid;
-            if (o.fields?.entry !== undefined && o.guid) creatureGuidByEntry.set(o.fields.entry, o.guid);
-          }
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    if (e.opcode === "SMSG_UPDATE_OBJECT")
+      for (const o of e.data?.objects ?? []) {
+        if (o.self) selfGuid = o.guid;
+        if (o.fields?.entry !== undefined && o.guid) creatureGuidByEntry.set(o.fields.entry, o.guid);
+      }
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
 
 /**
