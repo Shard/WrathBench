@@ -117,10 +117,24 @@ The `mkdir` is not optional, for the quickstart's reason and two more: the
 MCP server on the host writes `data/sessions`, the viewer writes
 `data/viewer`, and Docker would create either one as root. The first `up`
 builds AzerothCore and imports its databases, which takes a while. The
-worldserver is ready when `data/logs/Server.log` says `World initialized`.
-Pass `--env-file .env` to every command on this file, including `ps`, `logs`
-and `down`. `down` keeps the world, and `down -v` throws it away. To run the
-game server without the viewer, name `authserver worldserver` after `up -d`.
+worldserver is ready when `data/logs/Server.log` says `wrathbench: HTTP/WS
+listening`, and `/api/info` on the viewer then shows its build under
+`worldserver`. Pass `--env-file .env` to every command on this file,
+including `ps`, `logs` and `down`. `down` keeps the world, and `down -v`
+throws it away. To run the game server without the viewer, name `authserver
+worldserver` after `up -d`.
+
+The config store starts absent, and the admin pages write only to a store
+that exists. Create it once by setting the site's name:
+
+```
+docker compose --env-file .env -f infra/compose.reference.yml exec viewer \
+  bun runner/src/config-store.ts set site '{"name":"My WrathBench"}'
+```
+
+The viewer's error message for a missing store suggests `bun wb config seed`.
+That command targets the cluster, and it seeds a fleet roster that a pure
+viewer has no use for.
 
 Then connect an agent. With Claude Code, run this in the directory you will
 start it from, because the registration is per directory. Fill in the secret
@@ -135,9 +149,11 @@ claude mcp add wrath \
 ```
 
 `--record-dir` must be `WRATHBENCH_SESSION_STORE_HOST`, because that
-directory is what the viewer reads. wrath-mcp's `mcp/README.md`, "Connect an
-MCP client", covers the rest: other clients, the first prompt that teaches
-the agent the SDK, and the race and class ids. The root's `bun install`
+directory is what the viewer reads. Headless, `claude -p` needs
+`--allowedTools mcp__wrath` before it may call the tools. wrath-mcp's
+`mcp/README.md`, "Connect an MCP client", covers the rest: other clients, the
+first prompt that teaches the agent the SDK, and the race and class ids. The
+root's `bun install`
 already installed the stack's dependencies, so never run an install inside
 `wrath-mcp/`.
 
