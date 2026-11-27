@@ -108,6 +108,8 @@ docker compose -f infra/compose.yml exec runner bun infra/smoke/module-slice.ts
 
 A run's records land under `data/runs/<run-id>/`: the session record in `session/`, the trajectory beside it. `infra/README.md` has the service graph and why each step is there.
 
+To drive a character from your own MCP client and watch it in the dashboard, with no runner, `infra/compose.reference.yml` brings up only the game server and the viewer (`infra/README.md`, "Play and watch").
+
 ## Running it for real
 
 The compose stack is a quickstart, not a deployment, and has no tooling for updating or operating it over time. The project's own fleet runs on Kubernetes from the Helm chart at `infra/chart/wrathbench`, which is also the reference for a more serious deployment. `infra/README.md` ("Releasing on Kubernetes") and `docs/RUNBOOK.md` cover building, releasing and operating it. The operator commands are `bun wb <group> <command>` from the repository root; `bun wb` lists them.

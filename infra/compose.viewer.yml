@@ -6,7 +6,8 @@
 # then open http://127.0.0.1:8090. The store is the directory a standalone
 # wrath-mcp records into (`--record-dir <dir>`): each of its sessions lists on
 # the runs page as a run and opens as one. infra/README.md, "Viewer only", says
-# the rest.
+# the rest. With the game server on the same machine, compose.reference.yml
+# runs both and extends this service, so a change here reaches it too.
 #
 # One service. No game server, runner, fleet or ClickHouse: the viewer builds
 # its rows in memory from the store with the collector's own code, which is
