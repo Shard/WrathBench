@@ -57,6 +57,7 @@ import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/mod
 import { smokeToken } from "./lib/session";
 import { SCENARIOS } from "../fixtures/scenarios";
 import { openEventStream, waitForEvent, until } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -161,7 +162,6 @@ function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, fro
   return waitForEvent(events, pred, timeoutMs, what, fail, { from, pollMs: 50 });
 }
 
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 const slotOf = (questId: number) => [...questLog].find(([, id]) => id === questId)?.[0];
 const killCounter = (slot: number) => (questCountsLo.get(slot) ?? 0) & 0xffff;
 const slotComplete = (slot: number) => ((questState.get(slot) ?? 0) & 1) === 1;

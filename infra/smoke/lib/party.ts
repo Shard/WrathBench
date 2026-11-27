@@ -12,6 +12,7 @@ import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from 
 import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
 import { DEADMINES_STAGING_SPOTS } from "../../fixtures/scenarios";
 import { smokeToken } from "./session";
+import { dist2d, fmt } from "./geo";
 
 export type PartyMember = { member: string; account: string; character: string; loadout: Loadout };
 
@@ -35,9 +36,6 @@ export function membersOf(req: StageRequest): PartyMember[] {
     return { member: m.member, account: m.account, character: m.character, loadout: l };
   });
 }
-
-export const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-export const fmt = (p: { x: number; y: number; z?: number }) => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}${p.z === undefined ? "" : `, ${p.z.toFixed(1)}`})`;
 
 /** A member's part of a session name: its account, as `inspect audit --smoke <smoke>-<account>` takes it. */
 const accountRole = (m: PartyMember): string => m.account.toLowerCase().replace(/[^a-z0-9]+/g, "");

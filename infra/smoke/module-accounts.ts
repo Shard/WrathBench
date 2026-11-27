@@ -27,6 +27,7 @@
 import { moduleBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
+import { randomName } from "./lib/name";
 
 const BASE = moduleBase();
 
@@ -40,12 +41,6 @@ const BAD_ACCOUNT = process.env.MODULE_BAD_ACCOUNT ?? "WBNOTALLOWED";
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = smokeToken("module-accounts");
 
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHARACTER = randomName();
 
 const log = taggedLog("probe");

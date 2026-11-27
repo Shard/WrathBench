@@ -19,6 +19,7 @@ import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { randomName } from "./lib/name";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -30,12 +31,6 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = smokeToken("module-session-state");
 
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHARACTER = randomName();
 
 const log = taggedLog("probe");

@@ -45,10 +45,11 @@ import { authHeaders } from "./lib/auth";
 import { accountFixtureName } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
-import { smokeSubToken, smokeToken } from "./lib/session";
-import { deleteThroughLinger, moveRetryReason, RETRY_MARK } from "./lib/transient";
+import { smokeToken } from "./lib/session";
+import { moveRetryReason, RETRY_MARK } from "./lib/transient";
 import { taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { deletePreviousThroughLinger } from "./lib/character";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -209,16 +210,8 @@ async function moveTo(target: Vec, what: string): Promise<void> {
 // within about a minute of the last run finds that character still in the
 // core's post-logout linger, which the module answers with 504 timeout; that,
 // and only that, is waited out (lib/transient.ts, `deleteThroughLinger`).
-async function deletePreviousCharacter(): Promise<void> {
-  const r = await deleteThroughLinger({
-    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
-    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
-    character: CHARACTER,
-    log,
-  });
-  if (!r.ok) fail(`could not delete last run's ${CHARACTER}: ${r.why}`);
-  const waited = r.retries > 0 ? ` after ${r.retries} retr${r.retries === 1 ? "y" : "ies"} over ${Math.round(r.waitedMs / 1000)}s` : "";
-  log(r.deleted ? `deleted last run's ${CHARACTER}${waited}` : `no previous ${CHARACTER} to delete (first run on this realm)`);
+function deletePreviousCharacter(): Promise<void> {
+  return deletePreviousThroughLinger({ request: req, token: TOKEN, account: ACCOUNT, character: CHARACTER, log, fail });
 }
 
 async function main() {

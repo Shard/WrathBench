@@ -39,7 +39,7 @@ import type { StreamEvent } from "@wrathbench/sdk";
 import { probeName } from "./lib/name";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
-import { dist2d, fmt } from "./lib/party";
+import { dist2d, fmt } from "./lib/geo";
 import { smokeToken } from "./lib/session";
 import { fail, stampedLog } from "./lib/report";
 

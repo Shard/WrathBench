@@ -19,7 +19,8 @@ import { DEADMINES_ENTRANCE_TRIGGER } from "../fixtures/scenarios";
 import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
+import { fmt } from "./lib/geo";
+import { deleteMembers, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
 import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();

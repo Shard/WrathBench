@@ -98,6 +98,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { stampedLog } from "./lib/report";
+import { dist2d, fmt } from "./lib/geo";
 
 const BASE = moduleBase();
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -148,10 +149,6 @@ const CHARACTER = FROM
 const started = Date.now();
 const log = stampedLog("travel", started, 6);
 
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-  Math.hypot(a.x - b.x, a.y - b.y);
-const fmt = (p: { x: number; y: number; z: number }) =>
-  `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
 interface Waypoint extends MovePoint {

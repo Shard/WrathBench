@@ -28,7 +28,8 @@ import { DEADMINES_ENTRANCE_TRIGGER, DEADMINES_STAGING } from "../fixtures/scena
 import { MODULE_SECRET } from "./lib/auth";
 import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { moduleBase, moduleHealth } from "./lib/module";
-import { dist2d, fmt, walkTo } from "./lib/party";
+import { dist2d, fmt } from "./lib/geo";
+import { walkTo } from "./lib/party";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { fail, stampedLog } from "./lib/report";
 

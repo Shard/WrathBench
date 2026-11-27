@@ -70,6 +70,7 @@ import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { stampedLog } from "./lib/report";
 import { createSessionWithBackoff, selfPosition } from "./lib/sdk";
+import { fmt } from "./lib/geo";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -94,7 +95,6 @@ function fail(m: string): never {
 }
 
 type Vec = { x: number; y: number; z: number };
-const fmt = (p: Vec): string => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
 const signed = (v: number): string => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 
 interface Repro {

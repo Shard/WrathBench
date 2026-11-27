@@ -17,6 +17,7 @@ import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { randomName } from "./lib/name";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -26,12 +27,6 @@ const WS = moduleWsBase();
 const TOKEN = smokeToken("module-slice");
 // WoW character names are letters only (digits => CHAR_NAME_MIXED_LANGUAGES) and
 // must be unique. A random letter suffix keeps re-runs from colliding.
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHARACTER = randomName();
 const SAY_TEXT = "hello world";
 

@@ -36,6 +36,7 @@ import { createWithReclaim as createReclaiming, deleteCharacterRetrying } from "
 import { smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { randomName } from "./lib/name";
 
 const WS = moduleWsBase();
 const req = moduleRequest();
@@ -50,12 +51,6 @@ const TOKEN_A = smokeToken("module-reclaim", { role: "a" });
 const TOKEN_B = smokeToken("module-reclaim", { role: "b" });
 const TOKEN_C = smokeToken("module-reclaim", { role: "c" });
 
-function randomName(): string {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let s = "Bench";
-  for (let i = 0; i < 5; i++) s += letters[Math.floor(Math.random() * letters.length)];
-  return s;
-}
 const CHAR_A = randomName();
 const CHAR_B = randomName();
 

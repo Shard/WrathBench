@@ -67,6 +67,7 @@ import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/mod
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const CHARACTER = probeName("Bd");
 // The resurrection leg's priest: a throwaway on an account no gate or deploy
@@ -188,8 +189,6 @@ function openEvents(): Promise<WebSocket> {
 function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
   return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
-
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // Server-truth position without moving: a fresh subscriber to an in-world
 // session receives a synthetic WB_SESSION_STATE with the session's live

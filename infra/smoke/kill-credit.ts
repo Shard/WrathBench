@@ -77,6 +77,7 @@ import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/mod
 import { smokeToken } from "./lib/session";
 import { taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -234,8 +235,6 @@ function openEvents(): Promise<WebSocket> {
 function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
   return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
-
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 async function waitForQuestInLog(questId: number, what: string): Promise<number> {
   const deadline = Date.now() + REPLY_TIMEOUT_MS;

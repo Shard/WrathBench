@@ -103,9 +103,11 @@ import { failOnce } from "./lib/fail";
 import { applyScenario, type FixtureContext } from "./lib/fixture";
 import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
-import { deleteThroughLinger, moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
+import { moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
 import { taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { deletePreviousThroughLinger } from "./lib/character";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -161,18 +163,8 @@ function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, leg
   return waitForEvent(leg.events, pred, timeoutMs, what, fail);
 }
 
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-
-async function deletePreviousCharacter(): Promise<void> {
-  const r = await deleteThroughLinger({
-    // Every attempt under its own recorded sub-token, so `inspect audit --smoke` finds it.
-    post: (attempt) => req("POST", "/character-delete", { token: smokeSubToken(TOKEN, `del${attempt}`), account: ACCOUNT, character: CHARACTER }),
-    character: CHARACTER,
-    log,
-  });
-  if (!r.ok) fail(`could not delete last run's ${CHARACTER}: ${r.why}`);
-  const waited = r.retries > 0 ? ` after ${r.retries} retr${r.retries === 1 ? "y" : "ies"} over ${Math.round(r.waitedMs / 1000)}s` : "";
-  log(r.deleted ? `deleted last run's ${CHARACTER}${waited}` : `no previous ${CHARACTER} to delete (first run on this realm)`);
+function deletePreviousCharacter(): Promise<void> {
+  return deletePreviousThroughLinger({ request: req, token: TOKEN, account: ACCOUNT, character: CHARACTER, log, fail });
 }
 
 /** Issue move_to and return the terminal WB_MOVE_RESULT data for it. */

@@ -19,6 +19,7 @@ import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
 import { openEventStream, waitForEvent } from "./lib/events";
+import { dist2d } from "./lib/geo";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -51,9 +52,6 @@ function openEvents(): Promise<WebSocket> {
 function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
   return waitForEvent(events, pred, timeoutMs, what, fail);
 }
-
-const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-  Math.hypot(a.x - b.x, a.y - b.y);
 
 async function main() {
   const health = await req("GET", "/health");
