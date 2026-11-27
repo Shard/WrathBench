@@ -1,14 +1,17 @@
 /**
- * A roster entry's identity as every reader of the roster shares it: the tier
- * and idle names an entry may carry (`TIER_TABLE` in `models.ts` says what
- * each buys), why a roster name is outside the policy, and which runs an
- * entry's compaction window owns. Split out of `models.ts` (which re-exports
+ * A roster entry's identity as every reader of the roster shares it: the
+ * entry's shape (`RosterModel`), the tier and idle names an entry may carry
+ * (`TIER_TABLE` in `models.ts` says what each buys), why a roster name is
+ * outside the policy, and which runs an entry's compaction window owns. Split out of `models.ts` (which re-exports
  * all of it unchanged) so a reader that only names a run's roster row — the
  * viewer's run page — does not load the scheduler.
  */
 
 import { AUTO_COMPACT_WINDOW } from "./config";
 import { defaultCompactWindowOf } from "./drivers";
+import type { Billing } from "./model-cost";
+import type { ProviderOption } from "./provider-options";
+import type { RoutingSpec } from "./routing";
 import type { ServingSpec } from "./serving";
 
 export const TIERS = ["t0", "t1", "t2", "t3"] as const;
@@ -153,4 +156,44 @@ export function ownedWindows(entry: Pick<RosterIdentity, "compactWindow" | "driv
 export function rosterWindowKey(run: Pick<RosterIdentity, "compactWindow" | "driver" | "harness">): string {
   const stamped = run.compactWindow ?? null;
   return stamped === null || stamped === defaultCompactWindowOf(run) ? "" : stamped;
+}
+
+/** A roster entry as the projection needs it: identity plus the two optional overrides. */
+export interface RosterModel {
+  /** The roster name; the key everything else hangs off. */
+  name: string;
+  model: string;
+  effort?: string;
+  /**
+   * The CLI harness's compaction window as the entry declares it
+   * (`parseEntryCompactWindow`): a canonical window, `"auto"` where the
+   * driver defaults another, or absent for the driver's default — the CLI's
+   * `auto`, or claude-code's 300k. Part of the entry's identity, like effort
+   * (`entryOwnsWindow`).
+   */
+  compactWindow?: string;
+  driver?: string;
+  /** A local build's serving block (`serving.ts`); absent on a hosted entry. Identity, like effort. */
+  serving?: ServingSpec;
+  /** Its providers in preference order (`provider-options.ts`); absent on a single-provider entry. A run of any is the entry's. */
+  providers?: readonly ProviderOption[];
+  apiBase?: string;
+  /** The routing block the entry declares, the fleet's default folded in (`routing.ts`). A target counts a run whatever its routing (operator, 2026-11-16). */
+  routing?: RoutingSpec;
+  /** False when the entry runs without the reference wiki; a target counts only runs with its wiki. */
+  wiki?: boolean;
+  /**
+   * How much evidence this model gets (`TIER_TABLE`). Required: with a default,
+   * adding a model and forgetting the field quietly buys a full budget, and for
+   * a paid model that is money nobody approved.
+   */
+  tier: Tier;
+  /** What it does with an account once its tier is spent. Absent: nothing. */
+  idle?: IdleMode;
+  /** Operator override of the billing verdict (`model-cost.ts`). */
+  billing?: Billing;
+  /** Held from the scored lane (`FleetRosterEntry.campaignOnly`): projected like a probe-only driver's entry, except that its `idle` stands. */
+  campaignOnly?: true;
+  /** Opts into the five-agent Deadmines episode (`FleetRosterEntry.deadmines`), which its tier then buys like the one-agent one. */
+  deadmines?: true;
 }
