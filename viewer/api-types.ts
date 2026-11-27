@@ -1310,7 +1310,7 @@ export interface ResultRun {
    */
   continuedFrom: string | null;
   /**
-   * A launch that produced nothing — `stillbornOf` in `runner/src/models.ts`,
+   * A launch that produced nothing — `stillbornOf` in `runner/src/run-fact.ts`,
    * the same notion the scheduler's defer ladder counts. `null` is undecided:
    * the run is live or paused, or its response count could not be read. Kept
    * apart from `unscored`, which for a steered run answers "the episode" and

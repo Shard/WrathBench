@@ -639,7 +639,7 @@ launch (`shared` without one) — and a directory
 holding only those is not a run: a fresh launch onto it proceeds and
 overwrites them, where anything else there refuses the launch.
 
-**What it reads back** (`readRunFact`, `runner/src/models.ts`, is the
+**What it reads back** (`readRunFact`, `runner/src/run-fact.ts`, is the
 reference reader). `meta.json`: `harnessVersion`, `startedAt`,
 `config.{model, effort, compactWindow, account, character, token, campaign,
 campaignVersion, cell, arm, ref, credential, extra, watchdogs, world}`,

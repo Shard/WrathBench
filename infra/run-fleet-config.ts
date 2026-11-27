@@ -1416,7 +1416,7 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
   );
 }
 
-/** The roster names the policy may schedule (`policyRefsOf`, models.ts). */
+/** The roster names the policy may schedule (`policyRefsOf`, roster-entry.ts). */
 export function policyRefs(config: Pick<FleetConfig, "jobs" | "roster">): Set<string> {
   return policyRefsOf(config.jobs, config.roster);
 }

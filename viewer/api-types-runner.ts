@@ -316,7 +316,7 @@ export interface FleetResponse extends SnapshotEnvelope {
  */
 export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
 
-/** A rung of the evidence ladder; mirrors `TIERS` in `runner/src/models.ts`. */
+/** A rung of the evidence ladder; mirrors `TIERS` in `runner/src/roster-entry.ts`. */
 export type TierView = "t0" | "t1" | "t2" | "t3";
 
 /** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
@@ -414,7 +414,7 @@ export interface ModelRowView {
   compactWindow?: string | null;
   /**
    * The windows of the runs this entry owns, `"auto"` naming the CLI's own
-   * (`ownedWindows`, runner/src/models.ts): one, except for an entry with no
+   * (`ownedWindows`, runner/src/roster-entry.ts): one, except for an entry with no
    * window on a driver that defaults one, whose runs are its `auto` runs and
    * the default's. What a link to the entry's runs filters by. Absent on a
    * snapshot from before the field, which reads as the declared window alone.
