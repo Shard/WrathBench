@@ -52,6 +52,7 @@ import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleHealth } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { fail, stampedLog } from "./lib/report";
+import { until } from "./lib/events";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -88,15 +89,6 @@ async function check(name: string, fn: () => Promise<[Verdict, string]> | [Verdi
 }
 
 const show = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x));
-
-async function until(ms: number, done: () => boolean): Promise<boolean> {
-  const by = Date.now() + ms;
-  while (!done()) {
-    if (Date.now() > by) return false;
-    await Bun.sleep(50);
-  }
-  return true;
-}
 
 const lastSeq = (client: WrathClient): number => client.events.recent(1)[0]?.seq ?? -1;
 

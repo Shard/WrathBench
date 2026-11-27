@@ -15,10 +15,10 @@
  *   bun wb --local smoke module-session-state   # the quickstart
  */
 
-import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -43,28 +43,13 @@ const log = taggedLog("probe");
 const req = moduleRequest(BASE);
 
 function openEvents(buf: any[]): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        buf.push(JSON.parse(String(ev.data)));
-      } catch {
-        /* ignore */
-      }
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    buf.push(e);
   });
 }
 
-async function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = buf.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(buf: any[], pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  return waitForEvent(buf, pred, timeoutMs, what, fail);
 }
 
 async function cleanup() {

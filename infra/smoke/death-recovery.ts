@@ -62,10 +62,11 @@ import { connect, type WrathClient } from "@wrathbench/sdk";
 import { applyScenario, characterNames, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { failOnce } from "./lib/fail";
 import { probeName } from "./lib/name";
-import { authHeaders, MODULE_SECRET } from "./lib/auth";
+import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const CHARACTER = probeName("Bd");
 // The resurrection leg's priest: a throwaway on an account no gate or deploy
@@ -178,27 +179,14 @@ function trackEvent(e: any) {
 }
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        trackEvent(e);
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    trackEvent(e);
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);

@@ -15,10 +15,10 @@
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */
 
-import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { failAndExit as fail, taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -38,28 +38,18 @@ const events: any[] = [];
 const startedAt = Date.now();
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        events.push(JSON.parse(String(ev.data)));
-      } catch {
-        log(`event <- (unparseable) ${String(ev.data)}`);
-      }
-    });
-  });
+  return openEventStream(
+    WS,
+    TOKEN,
+    (e) => {
+      events.push(e);
+    },
+    (raw) => log(`event <- (unparseable) ${raw}`),
+  );
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = events.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail);
 }
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) =>

@@ -105,6 +105,7 @@ import { moduleBase, moduleWsBase, moduleRequest } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { deleteThroughLinger, moveRetryReason, RETRY_MARK, selfHealth } from "./lib/transient";
 import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -146,28 +147,18 @@ type Leg = { token: string; events: any[]; at?: Vec };
 const MAIN: Leg = { token: TOKEN, events };
 
 function openEvents(leg: Leg = MAIN): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(leg.token)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        leg.events.push(JSON.parse(String(ev.data)));
-      } catch {
-        log(`event <- (unparseable) ${String(ev.data)}`);
-      }
-    });
-  });
+  return openEventStream(
+    WS,
+    leg.token,
+    (e) => {
+      leg.events.push(e);
+    },
+    (raw) => log(`event <- (unparseable) ${raw}`),
+  );
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, leg: Leg = MAIN): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const hit = leg.events.find(pred);
-    if (hit) return hit;
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, leg: Leg = MAIN): Promise<any> {
+  return waitForEvent(leg.events, pred, timeoutMs, what, fail);
 }
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);

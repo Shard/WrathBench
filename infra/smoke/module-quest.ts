@@ -56,6 +56,7 @@ import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeToken } from "./lib/session";
 import { SCENARIOS } from "../fixtures/scenarios";
+import { openEventStream, waitForEvent, until } from "./lib/events";
 
 const BASE = moduleBase();
 const WS = moduleWsBase();
@@ -150,37 +151,14 @@ function trackEvent(e: any) {
 }
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        trackEvent(e);
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    trackEvent(e);
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(50);
-  }
-}
-
-/** Poll a condition on the tracked state for up to `ms`; true when it held in time. */
-async function until(ms: number, cond: () => boolean): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > deadline) return false;
-    await Bun.sleep(50);
-  }
-  return true;
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from, pollMs: 50 });
 }
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);

@@ -42,6 +42,7 @@ import { failOnce } from "./lib/fail";
 import { moduleBase, moduleWsBase, moduleRequest, moduleAction } from "./lib/module";
 import { smokeSubToken, smokeToken } from "./lib/session";
 import { taggedLog } from "./lib/report";
+import { openEventStream, waitForEvent } from "./lib/events";
 
 const CHARACTER = probeName("Bp");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -70,27 +71,14 @@ const events: any[] = [];
 let selfGuid = "";
 
 function openEvents(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
-    ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
-    ws.addEventListener("message", (ev) => {
-      try {
-        const e = JSON.parse(String(ev.data));
-        events.push(e);
-        if (e.opcode === "SMSG_UPDATE_OBJECT") for (const o of e.data?.objects ?? []) if (o.self) selfGuid = o.guid;
-      } catch {}
-    });
+  return openEventStream(WS, TOKEN, (e) => {
+    events.push(e);
+    if (e.opcode === "SMSG_UPDATE_OBJECT") for (const o of e.data?.objects ?? []) if (o.self) selfGuid = o.guid;
   });
 }
 
-async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    for (let i = from; i < events.length; ++i) if (pred(events[i])) return events[i];
-    if (Date.now() > deadline) fail(`timed out waiting for ${what}`);
-    await Bun.sleep(100);
-  }
+function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: string, from = 0): Promise<any> {
+  return waitForEvent(events, pred, timeoutMs, what, fail, { from });
 }
 
 async function main() {
