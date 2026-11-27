@@ -40,16 +40,8 @@ import { isBareSessionDir } from "../src/session-store";
 import { feedRecordOf, pairStoreCalls, readHeldCall, readRecordRow, RecordFollower, storeCallRecordsOf, type RecordLine, type RecordLoc, type StoreCalls } from "./record-feed";
 import { CodexUsageCorrector } from "../src/codex-usage";
 import { EVENT_WINDOW_EXCLUDE } from "../src/ambient-events";
-import {
-  HistoryRebuilder,
-  isSlimRequest,
-  messageChars,
-  rebuildSlimRequest,
-  requestStatsOf,
-  slimRequest,
-  systemTextMatches,
-  windowEntryIndices,
-} from "../src/request-record";
+import { HistoryRebuilder, rebuildSlimRequest, slimRequest, systemTextMatches, windowEntryIndices } from "../src/request-record";
+import { isSlimRequest, messageChars, requestStatsOf } from "../src/request-stats";
 import { MODEL_RESPONSE_RECORD } from "../src/archive-dir";
 import { SEGMENT_MARKS } from "../src/sessions";
 import {

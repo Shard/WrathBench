@@ -39,7 +39,7 @@ import { SessionReader, type EventRow, type StreamCursor } from "@wrathbench/mcp
 import { isV1RunDir, milestoneOfEvent, sessionDirOfRun, TurnIndex } from "./run-reader";
 import { CodexUsageCorrector } from "./codex-usage";
 import { driverEntry } from "./drivers";
-import { messageChars, requestStatsOf } from "./request-record";
+import { messageChars, requestStatsOf } from "./request-stats";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
 import { SEGMENT_MARKS, segmentsFrom, type SegmentMark } from "./sessions";
 
