@@ -3,11 +3,16 @@
  * print what the smokes printed before they shared them: the log prefixes,
  * the failure messages and the verdict totals are read by the suite and by
  * whoever tails a smoke, so their spelling is pinned here. The event stream
- * and the request helpers run against a local stand-in for the module.
+ * and the request helpers run against a local stand-in for the module. The
+ * party smokes' members (party.ts) are what a `--scenario` stages and checks.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { checkedIn, checkedInFiles } from "../runner/test/fixtures/campaigns";
+import { LOADOUTS, loadoutAt, partySpot } from "./fixtures/loadouts";
+import { SCENARIOS, type Scenario } from "./fixtures/scenarios";
 import { openEventStream, waitForEvent } from "./smoke/lib/events";
 import { moduleAction, moduleRequest, moduleSession } from "./smoke/lib/module";
+import { PARTY_DUNGEONS, membersOf, partyDungeon, smokeRequest } from "./smoke/lib/party";
 import { checks, stampedLog, taggedLog } from "./smoke/lib/report";
 
 let printed: string[] = [];
@@ -130,5 +135,37 @@ describe("against a stand-in module", () => {
 
   test("an event stream that cannot open rejects with the smokes' words", async () => {
     await expect(openEventStream("ws://127.0.0.1:9", "tok", () => {})).rejects.toThrow(/^ws error: /);
+  });
+});
+
+describe("the party smokes' members", () => {
+  test("by default the Deadmines' party at 20, each loadout the shipped level-20 object itself", () => {
+    const party = membersOf(smokeRequest("party-staging", {}));
+    expect(party).toHaveLength(5);
+    for (const [i, m] of party.entries()) {
+      expect([m.character, m.level]).toEqual([m.character, 20]);
+      expect(m.loadout).toBe(LOADOUTS[m.loadout.id]);
+      expect(m.spot).toEqual(partySpot(SCENARIOS["moonbrook-mine"] as Scenario, i));
+    }
+  });
+
+  for (const d of Object.values(PARTY_DUNGEONS)) {
+    test(`--scenario ${d.scenario}: every member at ${d.level}, on its own spot, with the loadout at that level`, () => {
+      const party = membersOf(smokeRequest("party-staging", {}, partyDungeon(d.scenario)));
+      expect(party).toHaveLength(5);
+      for (const [i, m] of party.entries()) {
+        expect(m.level).toBe(d.level);
+        expect(m.loadout).toEqual(loadoutAt(LOADOUTS[m.loadout.id], d.level));
+        expect(m.spot).toEqual(partySpot(SCENARIOS[d.scenario] as Scenario, i));
+      }
+    });
+  }
+
+  test("each smoke dungeon's level is the start.level of every checked-in party definition staged on its scenario", () => {
+    const staged = checkedInFiles()
+      .map((f) => checkedIn(f.replace(/\.json$/, "")))
+      .flatMap((def) => (def.party !== undefined && typeof def.start === "object" && def.start.staged in PARTY_DUNGEONS ? [{ ref: `${def.id}@${def.version}`, ...def.start }] : []));
+    expect(new Set(staged.map((s) => s.staged))).toEqual(new Set(Object.keys(PARTY_DUNGEONS)));
+    for (const s of staged) expect([s.ref, s.level]).toEqual([s.ref, PARTY_DUNGEONS[s.staged]!.level]);
   });
 });
