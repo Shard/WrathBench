@@ -164,6 +164,15 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
   if (wrongTalents.length) throw new Error(`${who} talents differ from the preset: ${wrongTalents.join(", ")}`);
   if (talents.unspentPoints !== 0) throw new Error(`${who} has ${talents.unspentPoints} unspent talent points; the preset spends all ${l.talents.reduce((n, t) => n + t.rank, 0)}`);
 
+  // Every pick's spell is in the login spellbook: a passive one from the
+  // talent map, a spellbook ability only from its `character_spell` row. The
+  // talent ranks above come from the talent rows alone, so they pass when an
+  // ability was never learned. A ranked ability the trainer teaches higher
+  // ranks of is shown by its highest, so its own name at a higher rank counts.
+  const book = c.state.spells();
+  const unlearned = l.talents.filter((t) => !known.has(t.spell) && !book.some((s) => s.name === t.name && (s.rank ?? 0) > 1));
+  if (unlearned.length) throw new Error(`${who} holds the talent but not the spell of ${unlearned.map((t) => `${t.name} (${t.spell})`).join(", ")}`);
+
   const money = await until(`${who} money`, 15_000, () => c.state.money?.value);
   if (money !== PARTY_MONEY) throw new Error(`${who} has ${money} copper, expected ${PARTY_MONEY}`);
 

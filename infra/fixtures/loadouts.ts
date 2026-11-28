@@ -108,6 +108,19 @@ export type TalentPick = {
   /** The rank's spell: the one `character_talent` row for this talent. */
   spell: number;
   name: string;
+  /**
+   * The rank's spell is an ability the spellbook holds, not an aura: Talent.dbc
+   * marks the talent `addToSpellBook` and Spell.dbc has the spell neither
+   * passive nor a learn effect (read offline). A client learning such a talent
+   * (`Player::LearnTalent`) also `learnSpell`s it, a `character_spell` row at
+   * the active spec's mask, and that row is the only thing that puts it in
+   * `m_spells`: the `character_talent` row alone loads the talent's points but
+   * leaves the ability out of `SMSG_INITIAL_SPELLS` and uncastable. So the
+   * stager writes that row too (`Scenario.talentSpells`). Set on the raid
+   * loadouts; the level-20 objects do not carry it, so their staging and its
+   * hash are what they were.
+   */
+  spellbook?: true;
   /** A prerequisite talent and the points it must hold (1-based). */
   dependsOn?: { talentId: number; rank: number };
 };
@@ -489,6 +502,8 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
   const exclude = new Set(loadout.trainerExclude ?? []);
   const taught = trainerSpells.filter((s) => !exclude.has(s)).flatMap((s) => loadout.trainerLearns?.[s] ?? [s]);
   const spells = [...new Set([...taught, ...loadout.questSpells.map((s) => s.spell)])].sort((a, b) => a - b);
+  // Only when a pick carries it, so a scenario without one is the object it always was.
+  const talentSpells = loadout.talents.filter((t) => t.spellbook).map((t) => t.spell);
   return {
     description: `party ${loadout.id}: level ${level} ${loadout.label} at the scenario's spot (${base.description}), ${loadout.talents.length} talents, ${spells.length} spells`,
     level,
@@ -500,6 +515,7 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
     clearQuests: true,
     spells,
     talents: loadout.talents.map((t) => t.spell),
+    ...(talentSpells.length ? { talentSpells } : {}),
     maxSkills: true,
   };
 }
