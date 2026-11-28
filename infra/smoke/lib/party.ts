@@ -132,8 +132,8 @@ async function until<T>(what: string, ms: number, read: () => T | undefined): Pr
  * The staging smoke's assertions for one logged-in member, each read off the
  * state cache the way a run's own client sees it at login: level, position,
  * the loadout's items in their equipment slots, the role's key spells, the
- * preset talents in SMSG_TALENTS_INFO, a raid set's glyphs, enchants and
- * gems, the money, the supplies in the bags, and the group listing the other
+ * preset talents in SMSG_TALENTS_INFO, a raid set's glyphs, staged weapon
+ * skills, enchants and gems, the money, the supplies in the bags, and the group listing the other
  * members with the first one leading.
  */
 export async function assertStagedMember(c: WrathClient, m: PartyMember, party: readonly PartyMember[], log: (s: string) => void): Promise<void> {
@@ -180,6 +180,12 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
     const have = new Map(talents.glyphs.map((g) => [g.slot, g.glyphId]));
     const wrongGlyphs = l.glyphs.flatMap((g, i) => (have.get(i) === g.glyph ? [] : [`${g.name} (${g.glyph}) in slot ${i}: found ${have.get(i) ?? "nothing"}`]));
     if (wrongGlyphs.length) throw new Error(`${who}'s glyphs differ from the preset: ${wrongGlyphs.join("; ")}`);
+  }
+
+  // A weapon master's skill the loadout stages (the rogue's swords): at the level's cap, not reset to 1 by its spell loading after it.
+  for (const w of l.weaponSkills ?? []) {
+    const s = c.state.skill(w.skill);
+    if (s?.value !== m.level * 5) throw new Error(`${who}'s ${w.name} (skill ${w.skill}) is at ${s ? `${s.value}/${s.max}` : "nothing"}, expected ${m.level * 5}`);
   }
 
   // A raid set's enchants and gems: each worn piece shows a green line for every enchantment slot the stager wrote.

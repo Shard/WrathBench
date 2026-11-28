@@ -775,8 +775,9 @@ export const RAID_LOADOUTS: Readonly<Record<RaidLoadoutId, RaidLoadout>> = {
   protpaladin: raid({
     id: "protpaladin", spec: "protection", partyRole: "tank", race: 3, class: 2, label: "Dwarf Paladin (Protection)", namePrefix: "Tank", trainerId: 3,
     questSpells: PALADIN_QUEST, trainerLearns: PALADIN_LEARNS, trainerExclude: PALADIN_EXCLUDE,
-    // Righteous Fury, Avenger's Shield 5, Holy Shield 6, Consecration 8, Hammer of the Righteous, Redemption 7.
-    keySpells: [25780, 48827, 48952, 48819, 53595, 48950],
+    // Righteous Fury, Avenger's Shield 5, Holy Shield 6, Consecration 8, Hammer of the Righteous, Redemption 7,
+    // and Divine Plea, which this tank's mana leans on (its gear carries no intellect).
+    keySpells: [25780, 48827, 48952, 48819, 53595, 48950, 54428],
     talents: PROTPALADIN_TALENTS, gear: PROTPALADIN_GEAR, supplies: PALADIN_TANK_SUPPLIES, glyphs: PROTPALADIN_GLYPHS,
   }),
   holypriest: raid({
