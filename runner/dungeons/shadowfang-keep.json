@@ -1,0 +1,29 @@
+{
+  "id": "shadowfang-keep",
+  "name": "Shadowfang Keep",
+  "kind": "dungeon",
+  "size": 5,
+  "map": 33,
+  "entrance": {
+    "trigger": 145,
+    "map": 0,
+    "x": -229.49,
+    "y": 1576.35,
+    "z": 78.89,
+    "radius": 7
+  },
+  "level": 20,
+  "staged": "silverpine-keep",
+  "bosses": [
+    { "entry": 3914, "name": "Rethilgore" },
+    { "entry": 3886, "name": "Razorclaw the Butcher" },
+    { "entry": 3887, "name": "Baron Silverlaine" },
+    { "entry": 4278, "name": "Commander Springvale" },
+    { "entry": 4279, "name": "Odo the Blindwatcher" },
+    { "entry": 4274, "name": "Fenrus the Devourer" },
+    { "entry": 3927, "name": "Wolf Master Nandos" },
+    { "entry": 4275, "name": "Archmage Arugal" }
+  ],
+  "end": 4275,
+  "note": "Read from the pinned core: the entrance is areatrigger 145 on map 0, radius 7, which areatrigger_teleport 145 sends to map 33; the bosses are DungeonEncounter.dbc's eight encounters on map 33 in its order, each resolved to its creature_template entry and checked against a creature spawn on map 33, and instance_encounters names Arugal (4275) the instance's last encounter. Encounters only, so a boss fought as more than one creature names only its credited one, and nothing is marked optional because no source says a boss is off the route. The scenario silverpine-keep is not staged yet."
+}

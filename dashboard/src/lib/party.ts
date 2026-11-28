@@ -21,11 +21,18 @@ import type { PartyDetailView, PartyInstanceMark, PartyMemberRefView, PartyWhere
 import { statusOf, type RunStatus } from "./runs";
 
 /**
- * The Deadmines bosses by creature entry (GROUP-PLAY.md §6). Every creature
- * in the instance is rank 1, so the entry, not the rank, says which is a boss.
- * Ids only: the name a page shows is the one the member's client was told.
+ * The bosses the members' run details say were killed (`RunDetailResponse.bosses`),
+ * by creature entry: the viewer's boss rule, rank 3 or a dungeon's boss in
+ * the registry (`runner/dungeons/`), so a party in any registered instance
+ * has its own. Every creature in a five-man instance is rank 1, so the
+ * entry, not the rank, says which is a boss. Ids only: the name a page shows
+ * is the one the member's client was told.
  */
-export const BOSS_ENTRIES: ReadonlySet<number> = new Set([644, 643, 642, 1763, 646, 647, 639, 645]);
+export function bossEntriesOf(details: Iterable<RunDetailResponse | null>): Set<number> {
+  const out = new Set<number>();
+  for (const d of details) for (const b of d?.bosses ?? []) if (b.entry !== null) out.add(b.entry);
+  return out;
+}
 
 /**
  * The terminations that say a run reached its definition's end —
@@ -159,7 +166,7 @@ export interface PartyView {
   endedBy: { member: string | null; reason: string; detail: string | null } | null;
   /** The attempt ended on its definition's end (`END_REASONS`): the measurement it was launched for was taken. */
   reached: boolean;
-  /** The bosses killed, by entry, in kill order (`BOSS_ENTRIES`). */
+  /** The bosses killed, by entry, in kill order (`bossEntriesOf`). */
   bosses: { entry: number; name: string | null; ts: number }[];
   events: PartyEvent[];
 }
@@ -176,7 +183,7 @@ function refsOf(rows: readonly ResultRun[], details: readonly (RunDetailResponse
  * unit cache knew them; the killer is the member who landed the blow when one
  * of the five says it did.
  */
-function mergedKills(parts: readonly { member: string; party: PartyDetailView }[]): Extract<PartyEvent, { kind: "kill" }>[] {
+function mergedKills(parts: readonly { member: string; party: PartyDetailView }[], bosses: ReadonlySet<number>): Extract<PartyEvent, { kind: "kill" }>[] {
   const byVictim = new Map<string, Extract<PartyEvent, { kind: "kill" }>>();
   for (const { member, party } of parts) {
     for (const k of party.kills) {
@@ -188,7 +195,7 @@ function mergedKills(parts: readonly { member: string; party: PartyDetailView }[
           member: k.self ? member : null,
           entry: k.entry,
           name: k.name,
-          boss: k.entry !== null && BOSS_ENTRIES.has(k.entry),
+          boss: k.entry !== null && bosses.has(k.entry),
           seenBy: [member],
         });
         continue;
@@ -197,7 +204,7 @@ function mergedKills(parts: readonly { member: string; party: PartyDetailView }[
       if (k.self) have.member = member;
       have.entry ??= k.entry;
       have.name ??= k.name;
-      have.boss = have.entry !== null && BOSS_ENTRIES.has(have.entry);
+      have.boss = have.entry !== null && bosses.has(have.entry);
       if (!have.seenBy.includes(member)) have.seenBy.push(member);
     }
   }
@@ -293,7 +300,7 @@ export function partyViewOf(id: string, rows: readonly ResultRun[], details: Rea
       events.push({ kind: "end", ts: m.row.endedAt, member: m.member, reason: m.terminationReason });
     }
   }
-  const kills = mergedKills(parts);
+  const kills = mergedKills(parts, bossEntriesOf(details.values()));
   events.push(...kills);
   // Oldest first; a tie keeps member order, so one instant reads leader first.
   const order = new Map(members.map((m) => [m.member, m.index]));

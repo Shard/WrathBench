@@ -828,7 +828,10 @@ pass leaves out, and who reads what is left:
   single run's page. A model's run list carries `actual` and the same listed
   estimate, which its column prints where there is no actual. A dungeon board
   row's best attempt carries one number, `costUsd`: its runs' costs as the ladder reads each
-  (`viewer/run-cost.ts`), summed, and null when any run has none.
+  (`viewer/run-cost.ts`), summed, and null when any run has none. A board
+  carries its dungeon's bosses, each an entry the dungeon registry knows
+  (`runner/dungeons/`) with the registry's short name, never a name from the
+  body, so the page names the route without a list of its own.
 - **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
   `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
   reads the first six off the run's own row and tuple. It carries
@@ -988,7 +991,7 @@ front are unchanged. The axes chips are cost, tokens and tool calls, each
 against xp; turns × xp is withdrawn (operator, 2026-11-16), because a turn is
 not one unit across drivers (a claude-code turn is one CLI session), and a
 `?view=turns-xp` link opens cost × xp. The Deadmines tab has the same row of
-axes chips on the same `?view=`, in the board's own terms (`DUNGEON_VIEWS` in
+axes chips on the same `?view=`, in the board's own terms (`dungeonViews` in
 `dashboard/src/lib/dungeons.ts`): time × bosses, the default; cost × bosses;
 and cost × time, which plots only the cleared attempts. An attempt is cleared
 when it killed all seven bosses on the route to VanCleef and ended on his

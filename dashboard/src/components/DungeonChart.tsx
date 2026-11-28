@@ -1,6 +1,6 @@
 /**
  * A dungeon tab's scatter: one point per board row, at its best attempt,
- * placed by the view's two axes (`DUNGEON_VIEWS` in `lib/dungeons.ts`, where
+ * placed by the view's two axes (`dungeonViews` in `lib/dungeons.ts`, where
  * the readings and their tests are): time from launch against bosses killed
  * by default, or the attempt's cost against either.
  *
@@ -97,10 +97,10 @@ export function DungeonChart(props: {
                 onPointerEnter={() => props.onHover(d.point.key)}
                 onPointerLeave={() => props.onHover(null)}
               >
-                <title>{pointTitle(d.point)}</title>
+                <title>{pointTitle(d.point, props.view.route)}</title>
                 <a
                   href={attemptHref(d.point.row)}
-                  aria-label={pointTitle(d.point)}
+                  aria-label={pointTitle(d.point, props.view.route)}
                   onClick={(e) => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                     e.preventDefault();

@@ -14,7 +14,7 @@ import type { ResultRun } from "./api-types";
 import type { CampaignsResponse, DungeonsResponse, EpisodesResponse } from "./api-types-evals";
 import { campaignsView } from "./campaigns";
 import { fullRosterOf } from "./models";
-import { boardsOf, DUNGEON_BOARD_VERSION } from "./dungeons";
+import { boardDungeon, boardsOf, DUNGEON_BOARD_VERSION } from "./dungeons";
 import { dungeonMarksOf } from "./dungeon-marks";
 import { projectCampaigns, projectDungeons, projectEpisodes } from "./public-projection";
 import type { ApiContext } from "./api-context";
@@ -130,9 +130,10 @@ export function createEvalsApi(ctx: ApiContext) {
    * withholds is in no row.
    */
   async function dungeonsResponse(): Promise<Response> {
-    const all = (await resultRuns()).filter((r) => hasBoard(r.episode) && r.episodeSource === "stamped");
+    // Each with its id's dungeon's map, the instance whose first entry counts.
+    const all = (await resultRuns()).flatMap((run) => (hasBoard(run.episode) && run.episodeSource === "stamped" ? [{ run, map: boardDungeon(run.episode).map }] : []));
     const runs = await Promise.all(
-      all.map(async (run) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character }) })),
+      all.map(async ({ run, map }) => ({ run, characters: await dungeonMarksOf(runsDir, run.runId, { ended: run.terminationReason !== null, character: run.character, map }) })),
     );
     // The same table on either handle: the one-agent id's runs are the only
     // fan-out runs a public handle lists (`resultRuns`).

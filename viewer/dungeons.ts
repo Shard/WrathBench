@@ -3,7 +3,10 @@
  * "The Deadmines evals, and rung 6"): a Deadmines episode read as attempts,
  * one table per id, a row per model condition. Only `deadmines-solo` has a
  * table (`BOARD_EPISODE_IDS`); the five-agent id derives the same way and
- * waits, dormant, until it is an eval.
+ * waits, dormant, until it is an eval. The bosses, the route and the end are
+ * the id's dungeon's (`boardDungeon`: its definition's staged scenario in the
+ * registry, `runner/src/dungeons.ts`), so nothing below names a Deadmines
+ * entry.
  *
  * Versioned (`DUNGEON_BOARD_VERSION`) and recomputable over every recorded
  * run, like every number here: nothing below is recorded, it is read off the
@@ -14,7 +17,7 @@
  *   scheduler counts it (`partyAttempt`, the campaigns' own rule), so the
  *   board's n is the scheduler's.
  * - **Cleared** is a counted attempt that killed all seven bosses on the
- *   route (`DEADMINES_REQUIRED`) and ended on the kill of Edwin VanCleef
+ *   route (`routeOf`) and ended on the kill of Edwin VanCleef
  *   (`kill-target`), operator 2026-11-20. One that killed VanCleef having
  *   skipped a route boss is counted and not cleared, and ranks with the rest
  *   by bosses and the time to its last; so is one that ended on the clock, or
@@ -22,11 +25,12 @@
  * - **Time to clear** runs from launch (the earliest member's start) to the
  *   VanCleef kill as the server reported it, so a run's teardown is not in it.
  * - **Bosses** are the seven on the route to Edwin VanCleef, counted alike
- *   (`DEADMINES_REQUIRED`), as the union over the party's characters by
+ *   (`routeOf`), as the union over the party's characters by
  *   victim (operator, 2026-11-20). Cookie, the eighth Deadmines boss, is off
  *   the route and the objective names only VanCleef, so an attempt at seven
  *   never chose to skip anything: Cookie is an optional extra, shown on the
- *   attempt (`cookie`) and never counted among its bosses or in the order.
+ *   attempt (`cookie`, which reads any boss the registry marks optional) and
+ *   never counted among its bosses or in the order.
  * - **Cost** is what the attempt's member runs cost, each read as the
  *   ladder reads a run's cost (`runCostReading`: the provider's charge, else
  *   the price table over the run's own tokens), summed. An attempt with any
@@ -47,12 +51,30 @@ import { conditionKey } from "./condition";
 import { canonicalModelId } from "../infra/model-catalogue";
 import { type CostedRun, runCostReading } from "./run-cost";
 import { BOARD_EPISODE_IDS, type TaskEpisodeId } from "../runner/src/episodes";
+import { taskDefinition } from "../runner/src/task-episodes";
+import { dungeonByStaged, optionalOf, routeOf, type Dungeon } from "../runner/src/dungeons";
 import type { ResultRun } from "./api-types";
-import type { DungeonAttemptView, DungeonBoardView, DungeonRowView } from "./api-types-evals";
-import { DEADMINES_END_ENTRY, DEADMINES_EXTRA_ENTRY, DEADMINES_REQUIRED } from "./deadmines";
+import type { DungeonAttemptView, DungeonBoardView, DungeonBossView, DungeonRowView } from "./api-types-evals";
 
 /** The derivation's version: bumped when what a row says or how rows order changes. */
 export const DUNGEON_BOARD_VERSION = 4;
+
+/**
+ * A task episode's dungeon: the registry's entry for the scenario its pinned
+ * definition is staged on. Both ids are staged on `moonbrook-mine`, the
+ * Deadmines' (the registry's test pins it).
+ */
+export function boardDungeon(episode: TaskEpisodeId): Dungeon {
+  const start = taskDefinition(episode).start;
+  const d = start === undefined || start === "fresh" ? null : dungeonByStaged(start.staged);
+  if (d === null) throw new Error(`${episode}: its staged start is no dungeon in runner/dungeons/`);
+  return d;
+}
+
+/** The board's bosses as served: the dungeon's, in route order, the optional ones flagged. */
+export function bossesOf(d: Dungeon): DungeonBossView[] {
+  return d.bosses.map((b) => ({ entry: b.entry, name: b.name, ...(b.optional === true ? { optional: true as const } : {}) }));
+}
 
 /** One character's milestones, as its session record's `events` stream holds them. */
 export interface CharacterMarks {
@@ -64,7 +86,7 @@ export interface CharacterMarks {
   entered: number | null;
 }
 
-/** A Deadmines run, with its characters' milestones (one on `deadmines`, five on `deadmines-solo`). */
+/** A task episode's run, with its characters' milestones (one on `deadmines`, five on `deadmines-solo`). */
 export interface DungeonRun {
   run: ResultRun;
   characters: CharacterMarks[];
@@ -136,8 +158,10 @@ export function costOf(runs: readonly CostedRun[]): number | null {
   return runs.length === 0 ? null : usd;
 }
 
-/** One attempt, derived. */
-export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
+/** One attempt in `dungeon`, derived. */
+export function attemptOf(dungeon: Dungeon, members: readonly DungeonRun[]): DungeonAttemptView {
+  const route = routeOf(dungeon);
+  const optional = optionalOf(dungeon);
   const runs = members.map((m) => m.run);
   const verdict = partyAttempt(
     runs.map((r) => ({
@@ -157,16 +181,16 @@ export function attemptOf(members: readonly DungeonRun[]): DungeonAttemptView {
   const kills = characters.flatMap((c) => c.kills);
   const bossKills = new Map<string, { entry: number; ts: number }>();
   for (const k of kills) {
-    if (k.entry === null || !DEADMINES_REQUIRED.includes(k.entry)) continue;
+    if (k.entry === null || !route.includes(k.entry)) continue;
     const prev = bossKills.get(k.victimGuid);
     if (prev === undefined || k.ts < prev.ts) bossKills.set(k.victimGuid, { entry: k.entry, ts: k.ts });
   }
-  const bosses = [...new Set([...bossKills.values()].map((b) => b.entry))].sort((a, b) => DEADMINES_REQUIRED.indexOf(a) - DEADMINES_REQUIRED.indexOf(b));
-  const cookie = kills.some((k) => k.entry === DEADMINES_EXTRA_ENTRY);
+  const bosses = [...new Set([...bossKills.values()].map((b) => b.entry))].sort((a, b) => route.indexOf(a) - route.indexOf(b));
+  const cookie = kills.some((k) => k.entry !== null && optional.includes(k.entry));
   const at = (ts: number | null): number | null => (ts === null || !Number.isFinite(launchedAt) ? null : Math.max(0, ts - launchedAt));
-  const endKill = [...bossKills.values()].filter((b) => b.entry === DEADMINES_END_ENTRY).sort((a, b) => a.ts - b.ts)[0];
+  const endKill = [...bossKills.values()].filter((b) => b.entry === dungeon.end).sort((a, b) => a.ts - b.ts)[0];
   const ended = runs.some((r) => r.terminationReason === "kill-target");
-  const cleared = verdict.counted && ended && bosses.length === DEADMINES_REQUIRED.length;
+  const cleared = verdict.counted && ended && bosses.length === route.length;
   // The kill as the server reported it; the member's end when no mark says so.
   const clearTs = endKill?.ts ?? (ended ? (runs.find((r) => r.terminationReason === "kill-target")?.endedAt ?? null) : null);
   const lastBoss = bossKills.size === 0 ? null : Math.max(...[...bossKills.values()].map((b) => b.ts));
@@ -206,6 +230,7 @@ export function compareAttempts(a: DungeonAttemptView, b: DungeonAttemptView): n
 
 /** One id's table: a row per condition, ordered. Only counted attempts are a row's evidence. */
 export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): DungeonBoardView {
+  const dungeon = boardDungeon(episode);
   const mine = runs.filter((r) => r.run.episode === episode && r.run.episodeSource === "stamped");
   const byCondition = new Map<string, DungeonRun[]>();
   for (const r of mine) {
@@ -216,7 +241,7 @@ export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): Du
   }
   const rows: DungeonRowView[] = [];
   for (const list of byCondition.values()) {
-    const attempts = attemptsOf(list).map(attemptOf).filter((a) => a.counted);
+    const attempts = attemptsOf(list).map((members) => attemptOf(dungeon, members)).filter((a) => a.counted);
     if (attempts.length === 0) continue;
     const ranked = [...attempts].sort((a, b) => compareAttempts(a, b) || (a.launchedAt ?? 0) - (b.launchedAt ?? 0));
     const r = list[0]!.run;
@@ -239,7 +264,7 @@ export function boardOf(episode: TaskEpisodeId, runs: readonly DungeonRun[]): Du
     });
   }
   rows.sort((a, b) => compareAttempts(a.best, b.best) || b.cleared - a.cleared || (a.model ?? "").localeCompare(b.model ?? "") || (a.effort ?? "").localeCompare(b.effort ?? ""));
-  return { episode, rows };
+  return { episode, bosses: bossesOf(dungeon), rows };
 }
 
 /** Every table, one per id with one. */

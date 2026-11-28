@@ -1,0 +1,26 @@
+{
+  "id": "stockade",
+  "name": "The Stockade",
+  "kind": "dungeon",
+  "size": 5,
+  "map": 34,
+  "entrance": {
+    "trigger": 101,
+    "map": 0,
+    "x": -8761.85,
+    "y": 848.56,
+    "z": 87.81,
+    "box": { "length": 4.972, "width": 9.694, "height": 7.444, "orientation": 0.6632 }
+  },
+  "level": 24,
+  "staged": "stormwind-stockade",
+  "bosses": [
+    { "entry": 1696, "name": "Targorr the Dread" },
+    { "entry": 1666, "name": "Kam Deepfury" },
+    { "entry": 1717, "name": "Hamhock" },
+    { "entry": 1663, "name": "Dextren Ward" },
+    { "entry": 1716, "name": "Bazil Thredd" }
+  ],
+  "end": 1716,
+  "note": "Read from the pinned core: the entrance is areatrigger 101 on map 0, a box rather than a radius, which areatrigger_teleport 101 sends to map 34; the bosses are DungeonEncounter.dbc's five encounters on map 34 in its order, each resolved to its creature_template entry and checked against a creature spawn on map 34, and instance_encounters names Bazil Thredd (1716) the instance's last encounter. Encounters only, so a boss fought as more than one creature names only its credited one, and nothing is marked optional because no source says a boss is off the route. The scenario stormwind-stockade is not staged yet."
+}

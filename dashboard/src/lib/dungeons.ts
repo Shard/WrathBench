@@ -4,7 +4,7 @@
  * Pure, so what the page claims is testable without a browser.
  */
 
-import type { DungeonAttemptView, DungeonRowView, EpisodeIdView } from "../api/client";
+import type { DungeonAttemptView, DungeonBoardView, DungeonRowView, EpisodeIdView } from "../api/client";
 import { COST } from "./axes";
 import { fmtDuration, fmtPlaytimeTick, fmtUsd } from "./format";
 import { characterSeriesLabel, timeTicks } from "./ladder";
@@ -12,19 +12,23 @@ import { paretoSteps } from "./pareto";
 import { partyHref } from "./party";
 
 /**
- * The seven bosses on the route to Edwin VanCleef by entry, in the board's
- * order (docs/proposals/GROUP-PLAY.md §6; `DEADMINES_REQUIRED` in the
- * viewer): what an attempt's bosses are counted of (operator, 2026-11-20).
+ * The board's route: its dungeon's bosses on the route by entry, in route
+ * order, named by the registry (`DungeonBoardView.bosses`, from
+ * `runner/dungeons/`): what an attempt's bosses are counted of (operator,
+ * 2026-11-20; the Deadmines' seven). `size` is null for a body published
+ * before the board carried its bosses, which then reads as counts with no
+ * denominator and entries for names.
  */
-export const BOSS_NAMES: ReadonlyMap<number, string> = new Map([
-  [644, "Rhahk'Zor"],
-  [643, "Sneed"],
-  [642, "Sneed's Shredder"],
-  [1763, "Gilnid"],
-  [646, "Mr. Smite"],
-  [647, "Captain Greenskin"],
-  [639, "Edwin VanCleef"],
-]);
+export interface BoardRoute {
+  names: ReadonlyMap<number, string>;
+  size: number | null;
+}
+
+export function boardRoute(board: Pick<DungeonBoardView, "bosses">): BoardRoute {
+  if (board.bosses === undefined) return { names: new Map(), size: null };
+  const route = board.bosses.filter((b) => b.optional !== true);
+  return { names: new Map(route.map((b) => [b.entry, b.name])), size: route.length };
+}
 
 /** Cookie's column tooltip: an optional boss off the route, counted toward nothing. */
 export const COOKIE_TITLE =
@@ -52,16 +56,16 @@ export function clearTimeText(a: DungeonAttemptView): string {
   return a.cleared && a.timeToClearMs !== null ? fmtDuration(a.timeToClearMs) : "—";
 }
 
-/** The route's bosses killed, as a count of the seven. */
-export function bossesText(a: DungeonAttemptView): string {
-  return `${a.bosses.length}/${BOSS_NAMES.size}`;
+/** The route's bosses killed, as a count of the route's. */
+export function bossesText(a: DungeonAttemptView, route: BoardRoute): string {
+  return route.size === null ? String(a.bosses.length) : `${a.bosses.length}/${route.size}`;
 }
 
 /** The bosses killed by name, for the count's tooltip. */
-export function bossesTitle(a: DungeonAttemptView): string {
+export function bossesTitle(a: DungeonAttemptView, route: BoardRoute): string {
   if (a.bosses.length === 0) return "no boss killed";
   const last = a.lastBossMs === null ? "" : `; the last ${fmtDuration(a.lastBossMs)} from launch`;
-  return `${a.bosses.map((e) => BOSS_NAMES.get(e) ?? String(e)).join(", ")}${last}`;
+  return `${a.bosses.map((e) => route.names.get(e) ?? String(e)).join(", ")}${last}`;
 }
 
 /** The time column's tooltip: when the party entered, and what the attempt ended on. */
@@ -123,17 +127,19 @@ export const COST_AXIS: DungeonAxis = {
   missing: () => "no cost recorded",
 };
 
-/** Distinct bosses killed, of the route's seven; Cookie is not among them. */
-export const BOSSES_AXIS: DungeonAxis = {
-  label: "bosses",
-  caption: `bosses killed, of ${BOSS_NAMES.size} on the route`,
-  scale: "linear",
-  ticks: () => bossTicks(),
-  better: "higher",
-  format: String,
-  read: (a) => a.bosses.length,
-  missing: () => "no bosses recorded",
-};
+/** Distinct bosses killed, of the route's (the Deadmines' seven); an optional boss, Cookie, is not among them. */
+export function bossesAxis(route: BoardRoute): DungeonAxis {
+  return {
+    label: "bosses",
+    caption: route.size === null ? "bosses killed on the route" : `bosses killed, of ${route.size} on the route`,
+    scale: "linear",
+    ticks: (max) => bossTicks(route.size ?? max),
+    better: "higher",
+    format: String,
+    read: (a) => a.bosses.length,
+    missing: () => "no bosses recorded",
+  };
+}
 
 export interface DungeonView {
   /** The `?view=` value, distinct from every ladder view's. */
@@ -146,10 +152,15 @@ export interface DungeonView {
   y: DungeonAxis;
   /** Plot only the cleared attempts, when the view asks only about a clear. */
   clearedOnly?: true;
+  /** The board's route the view counts bosses of. */
+  route: BoardRoute;
 }
 
+/** The default view's id, the one the short address means. */
+export const DEFAULT_DUNGEON_VIEW_ID = "time-bosses";
+
 /**
- * The views offered, default first. Each reads the row's best attempt as the
+ * The views offered over a board's route, default first. Each reads the row's best attempt as the
  * board chose it (`compareAttempts`, in the viewer), whatever the axes: a
  * view swaps what a point is placed by, never which attempt it is.
  *
@@ -163,25 +174,28 @@ export interface DungeonView {
  * Cost is on x wherever it is drawn, as on the ladder: the layout's log axis
  * is x's alone (`ladderChartLayout`).
  */
-export const DUNGEON_VIEWS: readonly DungeonView[] = [
-  { id: "time-bosses", title: "time × bosses", hint: `${TIME_AXIS.caption} against ${BOSSES_AXIS.caption}`, x: TIME_AXIS, y: BOSSES_AXIS },
-  { id: "cost-bosses", title: "cost × bosses", hint: `${COST_AXIS.caption} against ${BOSSES_AXIS.caption}`, x: COST_AXIS, y: BOSSES_AXIS },
-  {
-    id: "cost-time",
-    title: "cost × time",
-    hint: `${COST_AXIS.caption} against the time from launch to the clear, for the cleared attempts: all ${BOSS_NAMES.size} bosses on the route`,
-    x: COST_AXIS,
-    y: TIME_AXIS,
-    clearedOnly: true,
-  },
-];
-
-export const DEFAULT_DUNGEON_VIEW: DungeonView = DUNGEON_VIEWS[0]!;
+export function dungeonViews(route: BoardRoute): readonly DungeonView[] {
+  const bosses = bossesAxis(route);
+  return [
+    { id: DEFAULT_DUNGEON_VIEW_ID, title: "time × bosses", hint: `${TIME_AXIS.caption} against ${bosses.caption}`, x: TIME_AXIS, y: bosses, route },
+    { id: "cost-bosses", title: "cost × bosses", hint: `${COST_AXIS.caption} against ${bosses.caption}`, x: COST_AXIS, y: bosses, route },
+    {
+      id: "cost-time",
+      title: "cost × time",
+      hint: `${COST_AXIS.caption} against the time from launch to the clear, for the cleared attempts: all ${route.size === null ? "the" : route.size} bosses on the route`,
+      x: COST_AXIS,
+      y: TIME_AXIS,
+      clearedOnly: true,
+      route,
+    },
+  ];
+}
 
 /** The `?view=` param on a dungeon tab: anything else, a ladder view's id included, is the default. */
-export function dungeonViewParam(raw: string | string[] | undefined): DungeonView {
+export function dungeonViewParam(raw: string | string[] | undefined, route: BoardRoute): DungeonView {
   const v = Array.isArray(raw) ? raw[0] : raw;
-  return DUNGEON_VIEWS.find((w) => w.id === v) ?? DEFAULT_DUNGEON_VIEW;
+  const views = dungeonViews(route);
+  return views.find((w) => w.id === v) ?? views[0]!;
 }
 
 /* ------------------------------------------------------------------ points */
@@ -215,7 +229,7 @@ export interface DungeonPointsModel {
  * A row whose best attempt has no reading on either axis, or did not clear on
  * a view of clears, is left off and named in the chart's note.
  */
-export function dungeonPoints(rows: readonly DungeonRowView[], view: DungeonView = DEFAULT_DUNGEON_VIEW): DungeonPointsModel {
+export function dungeonPoints(rows: readonly DungeonRowView[], view: DungeonView): DungeonPointsModel {
   const points: DungeonPoint[] = [];
   const omitted: DungeonPointsModel["omitted"] = [];
   for (const row of rows) {
@@ -223,7 +237,7 @@ export function dungeonPoints(rows: readonly DungeonRowView[], view: DungeonView
     const label = characterSeriesLabel(model, row.effort);
     const a = row.best;
     if (view.clearedOnly === true && !a.cleared) {
-      omitted.push({ label, why: `not cleared, ${a.bosses.length} of ${BOSS_NAMES.size} bosses` });
+      omitted.push({ label, why: view.route.size === null ? `not cleared, ${a.bosses.length} bosses` : `not cleared, ${a.bosses.length} of ${view.route.size} bosses` });
       continue;
     }
     const x = view.x.read(a);
@@ -249,8 +263,8 @@ function clearTimeTicks(maxMs: number): number[] {
   return ticks;
 }
 
-/** The bosses axis: every count from none to all seven, so a step is a boss. */
-const bossTicks = (): number[] => Array.from({ length: BOSS_NAMES.size + 1 }, (_, i) => i);
+/** The bosses axis: every count from none to the route's all, so a step is a boss. */
+const bossTicks = (n: number): number[] => Array.from({ length: Math.max(1, n) + 1 }, (_, i) => i);
 
 /**
  * The points whose labels stand: the front of the cleared points and the
@@ -259,17 +273,17 @@ const bossTicks = (): number[] => Array.from({ length: BOSS_NAMES.size + 1 }, (_
  * that got further faster hide the label of a cleared one the table ranks
  * above it.
  */
-export function standingKeys(points: readonly DungeonPoint[], view: DungeonView = DEFAULT_DUNGEON_VIEW): Set<string> {
+export function standingKeys(points: readonly DungeonPoint[], view: DungeonView): Set<string> {
   const better = { x: view.x.better, y: view.y.better };
   const front = (cleared: boolean): string[] => paretoSteps(points.filter((p) => p.row.best.cleared === cleared), better).front.map((p) => p.key);
   return new Set([...front(true), ...front(false)]);
 }
 
 /** A point's hover: the row's name, its best attempt, its cost when it has one, and its k of n. */
-export function pointTitle(p: DungeonPoint): string {
+export function pointTitle(p: DungeonPoint, route: BoardRoute): string {
   const a = p.row.best;
   const reading = a.cleared && a.timeToClearMs !== null ? `cleared in ${fmtDuration(a.timeToClearMs)}` : `last boss ${fmtDuration(a.lastBossMs)} from launch`;
   const cost = a.costUsd === null || a.costUsd === undefined ? "" : `, ${fmtUsd(a.costUsd)}`;
   const cookie = a.cookie === true ? " and Cookie" : "";
-  return `${p.label}: ${reading}, ${bossesText(a)} bosses${cookie}${cost}; ${clearedText(p.row)} counted attempts cleared`;
+  return `${p.label}: ${reading}, ${bossesText(a, route)} bosses${cookie}${cost}; ${clearedText(p.row)} counted attempts cleared`;
 }

@@ -38,7 +38,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle } from "@wrathbench/inspector";
-import { DEADMINES_BOSSES } from "../../viewer/deadmines";
+import { BOSS_ENTRIES } from "../../runner/src/dungeons";
 import { assembleRun } from "./assemble";
 import { CameraClient, INVISIBLE_LUA, luaString, subjectDistanceLua, WORLD_ONLY_LUA, type ClientStatus } from "./client";
 import { forwardLoopback } from "./forward";
@@ -124,7 +124,8 @@ export class Director {
   private readonly o: DirectorOptions;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly bosses = new Set(DEADMINES_BOSSES);
+  /** Every registry dungeon's bosses (`runner/dungeons/`): an entry is one instance's, so the set needs no map. */
+  private readonly bosses: ReadonlySet<number> = BOSS_ENTRIES;
   private refused = false;
   /** The client left the world under the director (a disconnect, a world restart). */
   private lost = false;

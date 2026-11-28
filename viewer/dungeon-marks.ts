@@ -1,7 +1,7 @@
 /**
- * A Deadmines run's characters' milestones, for the dungeon board
+ * A dungeon run's characters' milestones, for the dungeon board
  * (`dungeons.ts`): each character's kills, deaths, resurrections and first
- * entry into the instance, off its own session record's `events` stream. A
+ * entry into the dungeon's instance map, off its own session record's `events` stream. A
  * single-character run has one record (`session/`); a fan-out run one per
  * character (`sessions/<Character>/`), which the run tail does not read, so
  * this goes through the runs source's handles for both.
@@ -13,13 +13,12 @@
 import { join } from "node:path";
 import type { SessionHandle } from "@wrathbench/inspector";
 import type { CharacterMarks } from "./dungeons";
-import { DEADMINES_MAP } from "./deadmines";
 import { fanoutSession, fanoutSessions, isFanoutRun, runSession } from "./runs-source";
 
 const KINDS = ["kill", "death", "resurrect", "instance"] as const;
 
-/** One session's marks. */
-async function marksOf(handle: SessionHandle, character: string): Promise<CharacterMarks> {
+/** One session's marks; `map` is the instance whose first entry counts. */
+async function marksOf(handle: SessionHandle, character: string, map: number): Promise<CharacterMarks> {
   const out: CharacterMarks = { character, kills: [], deaths: [], resurrects: [], entered: null };
   let segments;
   try {
@@ -33,7 +32,7 @@ async function marksOf(handle: SessionHandle, character: string): Promise<Charac
       if (row.kind === "kill" && typeof row.victimGuid === "string") out.kills.push({ ts: row.ts, victimGuid: row.victimGuid, entry: typeof row.entry === "number" ? row.entry : null });
       else if (row.kind === "death") out.deaths.push(row.ts);
       else if (row.kind === "resurrect") out.resurrects.push(row.ts);
-      else if (row.kind === "instance" && row.event === "entered" && row.map === DEADMINES_MAP && (out.entered === null || row.ts < out.entered)) out.entered = row.ts;
+      else if (row.kind === "instance" && row.event === "entered" && row.map === map && (out.entered === null || row.ts < out.entered)) out.entered = row.ts;
     }
   }
   return out;
@@ -41,8 +40,8 @@ async function marksOf(handle: SessionHandle, character: string): Promise<Charac
 
 const ended = new Map<string, CharacterMarks[]>();
 
-/** A run's characters' marks: one for a single-character run, one per character for a fan-out run. */
-export async function dungeonMarksOf(runsDir: string, runId: string, o: { ended: boolean; character: string | null }): Promise<CharacterMarks[]> {
+/** A run's characters' marks in the instance on `map`: one for a single-character run, one per character for a fan-out run. */
+export async function dungeonMarksOf(runsDir: string, runId: string, o: { ended: boolean; character: string | null; map: number }): Promise<CharacterMarks[]> {
   const key = join(runsDir, runId);
   const kept = ended.get(key);
   if (kept !== undefined) return kept;
@@ -51,10 +50,10 @@ export async function dungeonMarksOf(runsDir: string, runId: string, o: { ended:
     marks = [];
     for (const s of fanoutSessions(runsDir, runId)) {
       const h = fanoutSession(runsDir, s.id);
-      if (h !== null) marks.push(await marksOf(h, s.character));
+      if (h !== null) marks.push(await marksOf(h, s.character, o.map));
     }
   } else {
-    marks = [await marksOf(runSession(runsDir, runId), o.character ?? runId)];
+    marks = [await marksOf(runSession(runsDir, runId), o.character ?? runId, o.map)];
   }
   if (o.ended) ended.set(key, marks);
   return marks;

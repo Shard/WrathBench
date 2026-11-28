@@ -140,7 +140,7 @@ other.
   counter for the one agent, one per member for five.
 - **Ends.** `kill-target` on Edwin VanCleef (entry 639), credited to any of
   the party's characters: counted, and cleared when the attempt also killed
-  all seven bosses on the route (`DEADMINES_REQUIRED`,
+  all seven bosses on the route (the registry's Deadmines entry,
   `viewer/dungeons.ts`; docs/METHODOLOGY.md, "The Deadmines evals, and
   rung 6"). `episode-limit`: counted, not cleared. A member's `idle` or `tool-call-limit`: counted, not cleared, and
   on `deadmines` the other four end `party-ended`, naming it. Staging that fails,
@@ -168,6 +168,34 @@ other.
   `agents` and `characters` (1 and 5, or 5 and 1) as keys, and `task`: the
   pinned definition's content hash and the hash of the staging fixtures, the
   scenario and the five loadouts, so an edit to either splits the group.
+
+## Defining a dungeon
+
+An instance a campaign can target is data, `runner/dungeons/<id>.json`, read
+through `runner/src/dungeons.ts`: its map, the area trigger at its door and
+the outdoor volume that trigger fires in, its size and kind, the level a
+reference party is staged at, the bosses in route order with the optional
+ones marked, the kill that clears it, and the fixture scenario that stages a
+party outside it (`staged`). The Deadmines entry is the template and carries
+exactly the facts the two Deadmines ids have always been read by; the board,
+the run timeline's boss marks, the camera's boss cuts and the party page all
+read it from there, so a run in another registered instance gets its own
+bosses everywhere without a reader learning its name.
+
+No campaign definition or episode file names a dungeon. A run finds its own
+from the scenario its definition's `start.staged` names, or from the instance
+map its characters entered, so adding an instance moves no schema, no hash and
+no scored group. Boss entries are creature entries, one creature each, so no
+entry is two instances' and a kill's entry alone says it was a boss.
+
+A new instance is a probe target and nothing more. The scored machinery (the
+episode ids, the ladder's board, the tiers) stays the Deadmines', and an
+instance becomes an eval only by the operator's decision and a new id. An
+entry may name a scenario the stager does not have yet: it is defined before
+it is staged, and the registry's test says which ones wait
+(`infra/dungeons-registry.test.ts`). Ids, coordinates and short names only,
+read from the pinned core's world tables and the client's DBC files, with
+where each came from in the entry's `note`; never game text.
 
 ## `probing` — the probe-campaign episode
 

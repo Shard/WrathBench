@@ -75,6 +75,7 @@ export type {
   DungeonRowView,
   DungeonAttemptView,
   DungeonBoardView,
+  DungeonBossView,
   CampaignView,
   Square,
 } from "@viewer/api-types-evals";

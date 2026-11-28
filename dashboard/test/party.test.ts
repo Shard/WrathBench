@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ResultRun, RunDetailResponse } from "../../viewer/api-types";
 import { END_REASONS as RUNNER_END_REASONS } from "../../runner/src/end-conditions";
-import { BOSS_ENTRIES, END_REASONS, groupParties, partyViewOf } from "../src/lib/party";
+import { END_REASONS, groupParties, partyViewOf } from "../src/lib/party";
 
 const STEM = "fixture-party-a1";
 const ROLES = ["tank", "healer", "mage", "rogue", "paladin"] as const;
@@ -115,14 +115,15 @@ describe("the runs table's grouping", () => {
 });
 
 describe("the party view", () => {
-  const boss = [...BOSS_ENTRIES][0]!;
+  const boss = 4275;
 
   test("kills are one per victim, named by whichever member knew it, the killer a member only when one says so", () => {
     const rows = partyRows(STEM);
     const d = new Map(rows.map((r) => [r.runId, detail(r)]));
     const kill = (victimGuid: string, ts: number, entry: number | null, name: string | null, self: boolean) => ({ ts, victimGuid, entry, name, self });
     d.set(rows[0]!.runId, detail(rows[0]!, { kills: [kill("v1", 120, null, null, false), kill("v2", 300, 1729, "An Evoker", false)] }));
-    d.set(rows[3]!.runId, detail(rows[3]!, { kills: [kill("v1", 100, boss, "The Boss", true)] }));
+    // The rogue's own detail says the victim was a boss (its timeline's rule, served as `bosses`).
+    d.set(rows[3]!.runId, { ...detail(rows[3]!, { kills: [kill("v1", 100, boss, "The Boss", true)] }), bosses: [{ ts: 100, entry: boss, name: null }] });
     d.set(rows[1]!.runId, detail(rows[1]!, { kills: [kill("v2", 310, 1729, "An Evoker", false)] }));
     const v = partyViewOf(STEM, rows, d)!;
     const kills = v.events.filter((e) => e.kind === "kill");

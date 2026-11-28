@@ -162,12 +162,14 @@ board (`/api/dungeons`, derived in `viewer/dungeons.ts`), and
 ordered it, under the shell's series, and above it the scatter's idiom for an
 attempt: one point per row at its best attempt, sharing the table's hover,
 with the tier's row of axis views in its own vocabulary on the same `?view=`
-(`DUNGEON_VIEWS` in `src/lib/dungeons.ts`). Time from launch (to the clear,
+(`dungeonViews` in `src/lib/dungeons.ts`). Time from launch (to the clear,
 or to the last boss) against bosses killed is the default; `cost-bosses` is
 the best attempt's cost against bosses killed, and `cost-time` its cost
 against its time to clear for the cleared attempts. The cost is the
 ladder's reading of a run's cost (`viewer/run-cost.ts`), summed over
 an attempt's runs. Bosses are counted of the seven on the route to VanCleef,
+named as the board serves them (`DungeonBoardView.bosses`, from the dungeon
+registry, `runner/dungeons/`) so the page keeps no list of its own,
 and an attempt is cleared when it killed all seven and ended on VanCleef's
 kill; Cookie, off the route, is an optional extra with a column of its own
 that orders nothing (operator, 2026-11-20). None of the tier's other controls is shown: a board
