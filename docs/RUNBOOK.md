@@ -3092,7 +3092,10 @@ suite touches them.
      same entry for Shadowfang Keep (level 20) or the Stockade (level 24),
      on demand only: neither is in the suite or the gate.
    - `bun wb smoke party-staging` stages the party, checks every member at
-     login, and deletes the characters.
+     login, and deletes the characters. It takes the same `--scenario`, and
+     checks each member at that scenario's level: at 24 the talents and key
+     spells of `LEVEL_EXTENSIONS`, no point unspent. A `--keep` and its
+     `--recheck` take the same `--scenario`.
 5. While a party campaign is enabled, run `deadmines-entry` after any release
    that touches the module, on PROBE with the fleet live.
 
