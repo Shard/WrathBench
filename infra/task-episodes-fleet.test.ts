@@ -246,6 +246,7 @@ describe("the scored Deadmines groups' pins", () => {
         const argv = episodeFlags(specs[i]!, false).map((a) => (a.endsWith("campaign.json") ? path : a));
         const tuple = comparabilityOf(configFromArgs(argv, {}), "harness-1.0-1");
         expect(tuple).toMatchObject({ episode: id, agents: pin.agents, characters: pin.characters, task: { definition: pin.definition, staging: pin.staging } });
+        expect(tuple.task).toEqual({ definition: pin.definition, staging: pin.staging });
       }
     }
   });
