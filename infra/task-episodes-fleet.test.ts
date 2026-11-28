@@ -17,7 +17,8 @@ import { taskHash, taskDefinition } from "../runner/src/task-episodes";
 import { parseFleet, type FleetConfig } from "./run-fleet-config";
 import { planOf } from "./fixtures/tick";
 import { episodeFlags, resolve } from "./run-roster";
-import { stagingHash } from "./task-launch";
+import { stagingHash, taskLaunchFile } from "./task-launch";
+import { comparabilityOf } from "../runner/src/comparability";
 import { fillEntries, jobSpawn } from "./run-fleet-plan";
 import { configFromArgs } from "../runner/src/run";
 import { writeCampaignFile } from "../runner/src/campaign-file";
@@ -216,5 +217,36 @@ describe("a five-agent pick, once rehearsed", () => {
     const p = plan(small, owing({ name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t3", deadmines: true }, small.policy, true));
     expect(p.picks).toEqual([]);
     expect(p.holds.find((h) => h.episode === "deadmines")?.why).toContain("claude-2 0/4");
+  });
+});
+
+describe("the scored Deadmines groups' pins", () => {
+  // Golden values: the definition and staging hashes are comparability keys, so
+  // a change to either splits the scored group and must be deliberate, never a side effect.
+  const PINS = {
+    deadmines: { definition: "sha256:372bc06840e0ba5d", staging: "sha256:d1f6a505e68618b8", agents: 5, characters: 1, runs: 5 },
+    "deadmines-solo": { definition: "sha256:875505ed52060e76", staging: "sha256:d1f6a505e68618b8", agents: 1, characters: 5, runs: 1 },
+  } as const;
+
+  test("hold for both ids, from the definition through the fleet's launch file to the stamped tuple", () => {
+    const cfg = fleet({ son: { ...SON, deadmines: true } }, { worlds: "evals", rehearsed: ["deadmines"] });
+    const entry: RosterModel = { name: "son", model: "sonnet", driver: "claude-code", effort: "max", tier: "t3", deadmines: true };
+    for (const id of ["deadmines", "deadmines-solo"] as const) {
+      const pin = PINS[id];
+      expect(taskHash(id)).toBe(pin.definition);
+      expect(stagingHash(taskDefinition(id))).toBe(pin.staging);
+      expect(taskLaunchFile(id)).toMatchObject({ episode: id, hash: pin.definition, staging: pin.staging });
+      const pick = plan(cfg, owing(entry, cfg.policy, id === "deadmines")).picks.find((x) => x.job.episode === id)!;
+      const spawn = jobSpawn(pick.job, cfg.roster, pick.account, STAMP);
+      expect(spawn.entries).toHaveLength(pin.runs);
+      const specs = resolve(spawn.entries, STAMP);
+      for (const [i, e] of spawn.entries.entries()) {
+        expect(e.campaignFile).toMatchObject({ episode: id, hash: pin.definition, staging: pin.staging });
+        const path = writeCampaignFile(tempDir("wb-task-pins-"), e.campaignFile!);
+        const argv = episodeFlags(specs[i]!, false).map((a) => (a.endsWith("campaign.json") ? path : a));
+        const tuple = comparabilityOf(configFromArgs(argv, {}), "harness-1.0-1");
+        expect(tuple).toMatchObject({ episode: id, agents: pin.agents, characters: pin.characters, task: { definition: pin.definition, staging: pin.staging } });
+      }
+    }
   });
 });
