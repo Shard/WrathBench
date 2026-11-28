@@ -28,8 +28,8 @@
  *     Warrior is raised to 10 by the `talents-stormwind` scenario before it
  *     logs in. Grouping has no range check, so where it stands is moot.
  *
- * Run from inside the network:
- *   MODULE_RAID_ACCOUNTS=SMOKE,SMOKE2,SMOKE3,SMOKE4,PARTY1,PARTY2 bun wb smoke raid-group
+ * Run through wb, which hands the pod the variable it is named:
+ *   bun wb --env MODULE_RAID_ACCOUNTS=SMOKE,SMOKE2,SMOKE3,SMOKE4,PARTY1,PARTY2 smoke raid-group
  */
 
 import { connect, type GroupState, type WrathClient } from "@wrathbench/sdk";
