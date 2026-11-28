@@ -16,16 +16,24 @@ import { tempDirs } from "../temp-dirs";
 import { stagingEnvOf } from "../world";
 import { PARTY_DUNGEONS, partyDungeon } from "../smoke/lib/party";
 import { loadoutFor, partyCharacterName, type Loadout } from "./loadouts";
-import { SCENARIOS, type Scenario } from "./scenarios";
+import { RAID_LOADOUTS } from "./raid-loadouts";
+import { ONYXIA_ENTRANCE_TRIGGER, SCENARIOS, type Scenario } from "./scenarios";
 import { SoapClient } from "./soap";
 import {
+  BACKPACK_ROOM,
   DEFAULT_PARTY_ACCOUNTS,
+  RAID_CONVERT_OPCODE,
+  bagsFirst,
   checkStageRequest,
+  convertToRaid,
   defaultStageRequest,
+  maxMembers,
   parseStageRequest,
   stageParty,
+  type RaidLeader,
   type StageRequest,
 } from "./stage-party";
+import { LOADOUTS, LOADOUT_IDS } from "./loadouts";
 
 const SCRIPT = join(import.meta.dir, "stage-party.ts");
 
@@ -54,6 +62,28 @@ function evalRequest(): StageRequest {
   return r;
 }
 
+/** The Onyxia raid's request, as the roster builds it from onyxia@1 on ten eval-pool accounts: every member with its spec. */
+function raidRequest(): StageRequest {
+  const def = checkedIn("onyxia@1");
+  return {
+    party: "onyxia-1-party-one-agent-20261128-1",
+    campaign: "onyxia",
+    version: 1,
+    scenario: "dustwallow-lair",
+    level: 80,
+    members: def.party!.members.map((m, i) => ({
+      member: m.id,
+      role: m.role,
+      ...(m.spec !== undefined ? { spec: m.spec } : {}),
+      race: m.race,
+      class: m.class,
+      character: m.character,
+      account: `EVAL${String(i + 1).padStart(2, "0")}`,
+      runId: "onyxia-1-party-one-agent-20261128-1",
+    })),
+  };
+}
+
 /** A world id (infra/world.ts `WORLD_ID_RE`). */
 const WORLD = "wabcdefghij";
 const tempDir = tempDirs();
@@ -73,6 +103,15 @@ describe("parseStageRequest: the roster's shape and nothing else", () => {
     expect(bad({ ...req, members: [{ ...req.members[0]!, roles: "tank" }] })).toMatch(/members\[0\]: unknown key 'roles'/);
     expect(bad({ ...req, members: [{ ...req.members[0]!, race: "1" }] })).toMatch(/members\[0\]\.race must be an integer/);
     expect(bad({ ...req, members: "x" })).toMatch(/members must be an array/);
+    expect(bad({ ...req, members: [{ ...req.members[0]!, spec: 3 }] })).toMatch(/members\[0\]\.spec must be a non-empty string/);
+  });
+
+  test("takes a member's spec, and a request without one parses to the object it always did", () => {
+    const raid = parseStageRequest(JSON.parse(JSON.stringify(raidRequest())));
+    expect(raid.ok && raid.request.members[2]!.spec).toBe("holy");
+    const plain = parseStageRequest(JSON.parse(JSON.stringify(rosterRequest())));
+    expect(plain.ok && plain.request).toEqual(rosterRequest());
+    expect(plain.ok && plain.request.members.some((m) => "spec" in m)).toBe(false);
   });
 });
 
@@ -106,6 +145,38 @@ describe("checkStageRequest", () => {
   test("refuses a party larger than its scenario's spots, naming the scenario and both counts", () => {
     expect(checkStageRequest({ ...rosterRequest(), scenario: "northshire-fresh" }).join("; ")).toMatch(/scenario 'northshire-fresh' has 0 party spots for 5 members/);
     expect(checkStageRequest({ ...rosterRequest(), scenario: "moonbrook-mine" })).toEqual([]);
+  });
+
+  test("a party is five unless its scenario stages a larger raid: ten outside Onyxia's Lair, and nowhere else", () => {
+    expect(maxMembers("moonbrook-mine")).toBe(5);
+    expect(maxMembers("stormwind-stockade")).toBe(5);
+    expect(maxMembers("northshire-fresh")).toBe(5);
+    expect(maxMembers("dustwallow-lair")).toBe(10);
+    expect(checkStageRequest(raidRequest())).toEqual([]);
+    // Ten on a group's scenario is refused by the count, not only by the spots.
+    expect(checkStageRequest({ ...raidRequest(), scenario: "moonbrook-mine" }).join("; ")).toMatch(/a party is 1\.\.5 members, got 10/);
+    const eleven = raidRequest();
+    eleven.members.push({ ...eleven.members[9]!, member: "extra", character: "Extraraidl", account: "EVAL11" });
+    expect(checkStageRequest(eleven).join("; ")).toMatch(/a party is 1\.\.10 members outside Onyxia's Lair, got 11/);
+  });
+
+  test("a raid member is keyed by class, spec and level: two priests are two loadouts, a spec is level 80's and level 80 needs one", () => {
+    const r = raidRequest();
+    const heal = r.members.filter((m) => m.class === 5 && m.role === "healer").map((m) => (loadoutFor(m, 80) as Loadout).id);
+    expect(heal).toEqual(["holypriest", "discpriest"]);
+    const with_ = (f: (q: StageRequest) => void) => {
+      const q = raidRequest();
+      f(q);
+      return checkStageRequest(q).join("; ");
+    };
+    expect(with_((q) => delete q.members[3]!.spec)).toMatch(/discpriest: a member staged at 80 names its spec/);
+    expect(with_((q) => (q.members[3]!.spec = "fury"))).toMatch(/no loadout for class 5 with spec fury/);
+    expect(with_((q) => (q.members[3]!.role = "damage"))).toMatch(/Dwarf Priest \(Discipline\) loadout plays "healer"/);
+    expect(with_((q) => (q.level = 24))).toMatch(/Human Warrior \(Protection\) loadout is built for level 80; the party is staged at 24/);
+    // A level-20 member that names a spec is refused too: the spec is the raid's.
+    const pinned = rosterRequest();
+    pinned.members[0]!.spec = "protection";
+    expect(checkStageRequest(pinned).join("; ")).toMatch(/built for level 80; the party is staged at 20/);
   });
 
   test("the default request is the Deadmines' at 20 unless told otherwise", () => {
@@ -144,6 +215,21 @@ describe("the party scenarios' spots", () => {
     });
   }
 
+  test("dustwallow-lair: ten spots outside Onyxia's Lair's sphere in three dimensions, 17-23.5y from its centre, 2.8y or more apart, each facing it", () => {
+    const t = ONYXIA_ENTRANCE_TRIGGER;
+    const spots = (SCENARIOS["dustwallow-lair"] as Scenario).partySpots!;
+    expect(spots).toHaveLength(10);
+    for (const p of spots) {
+      const d3 = Math.hypot(p.x - t.x, p.y - t.y, p.z - t.z);
+      expect([p, d3 > t.radius + 1 && d3 <= 23.5]).toEqual([p, true]);
+      expect([p.map, p.zone]).toEqual([1, 15]);
+      const o = Math.atan2(t.y - p.y, t.x - p.x);
+      expect(p.o).toBeCloseTo(o < 0 ? o + 2 * Math.PI : o, 6);
+    }
+    for (let i = 0; i < spots.length; i++) for (let j = i + 1; j < spots.length; j++) expect(Math.hypot(spots[i]!.x - spots[j]!.x, spots[i]!.y - spots[j]!.y)).toBeGreaterThanOrEqual(2.8);
+    expect(SCENARIOS["dustwallow-lair"].homebind).toMatchObject({ map: 1, zone: 513 });
+  });
+
   test("every party smoke dungeon stages at a level the stager takes", () => {
     for (const d of Object.values(PARTY_DUNGEONS)) expect([d.scenario, checkStageRequest(defaultStageRequest({ party: "p", scenario: d.scenario, level: d.level }))]).toEqual([d.scenario, []]);
     expect(partyDungeon().scenario).toBe("moonbrook-mine");
@@ -156,7 +242,23 @@ describe("the checked-in party definitions", () => {
     .map((f) => checkedIn(f.replace(/\.json$/, "")))
     .filter((d) => d.party !== undefined);
 
-  for (const def of parties) {
+  for (const def of parties.filter((d) => d.party!.size > 5)) {
+    test(`${def.id}@${def.version}: the stager takes the raid on the eval pool's accounts, every member keyed by its spec`, () => {
+      const start = def.start as { staged: string; level: number };
+      const req: StageRequest = {
+        party: "p",
+        campaign: def.id,
+        version: def.version,
+        scenario: start.staged,
+        level: start.level,
+        members: def.party!.members.map((m, i) => ({ member: m.id, role: m.role, ...(m.spec !== undefined ? { spec: m.spec } : {}), race: m.race, class: m.class, character: m.character, account: `EVAL${String(i + 1).padStart(2, "0")}`, runId: "p" })),
+      };
+      expect(checkStageRequest(req)).toEqual([]);
+      expect(new Set(def.party!.members.map((m) => (loadoutFor(m, start.level) as Loadout).id)).size).toBe(def.party!.size);
+    });
+  }
+
+  for (const def of parties.filter((d) => d.party!.size <= 5)) {
     const members = def.party!.members;
     test(`${def.id}@${def.version}: the stager takes it on PARTY1..PARTY5 in member order, each member under the name derived from its account`, () => {
       const start = def.start as { staged: string; level: number };
@@ -170,7 +272,7 @@ describe("the checked-in party definitions", () => {
       };
       expect(checkStageRequest(req)).toEqual([]);
       // The names the staging smokes leave on those accounts: no create on one account races a delete on another.
-      expect(members.map((m) => m.character)).toEqual(members.map((m, i) => partyCharacterName((loadoutFor(m) as Loadout).id, DEFAULT_PARTY_ACCOUNTS[i]!)));
+      expect(members.map((m) => m.character)).toEqual(members.map((m, i) => partyCharacterName((loadoutFor(m) as Loadout).id as (typeof LOADOUT_IDS)[number], DEFAULT_PARTY_ACCOUNTS[i]!)));
     });
 
   }
@@ -300,5 +402,48 @@ describe("stageParty refuses before touching anything", () => {
       expect(r.reason).toMatch(/below SEC_ADMINISTRATOR/);
     }
     expect(seen).toEqual(["POST /"]);
+  });
+});
+
+describe("raid staging's own steps", () => {
+  test("a raid set's bags go on first, in a round of their own; no level-20 set ever does", () => {
+    for (const id of LOADOUT_IDS) expect([id, bagsFirst(LOADOUTS[id])]).toEqual([id, false]);
+    for (const l of Object.values(RAID_LOADOUTS)) expect([l.id, bagsFirst(l), l.gear.length + l.bags.length > BACKPACK_ROOM]).toEqual([l.id, true, true]);
+  });
+
+  /** A leader whose raw path answers as `reply` says, and whose group turns raid when the server would convert it. */
+  function fakeLeader(reply: "converts" | "refused" | "ignored", method = false): RaidLeader & { sent: string[] } {
+    let raid = false;
+    const sent: string[] = [];
+    const send = async (opcode: string) => {
+      sent.push(opcode);
+      if (reply === "refused") throw new Error(`POST /action -> 400 opcode_not_allowed: sdk.raw() sends only the CMSG_* opcodes on the module's raw allowlist`);
+      if (reply === "converts") raid = true;
+      return { ok: true, action: "raw", opcode, payload: "" };
+    };
+    return {
+      sent,
+      raw: ((opcode: string) => send(opcode)) as unknown as RaidLeader["raw"],
+      state: { group: () => ({ raid }) } as unknown as RaidLeader["state"],
+      ...(method ? { convertToRaid: () => send("method") } : {}),
+    };
+  }
+
+  test("converts through the raw action with the opcode's name, and waits for the server's raid flag", async () => {
+    const lead = fakeLeader("converts");
+    await convertToRaid(lead, { timeoutMs: 500, pollMs: 5 });
+    expect(lead.sent).toEqual([RAID_CONVERT_OPCODE]);
+    expect(RAID_CONVERT_OPCODE).toBe("CMSG_GROUP_RAID_CONVERT");
+  });
+
+  test("prefers a dedicated SDK method when the SDK has one", async () => {
+    const lead = fakeLeader("converts", true);
+    await convertToRaid(lead, { timeoutMs: 500, pollMs: 5 });
+    expect(lead.sent).toEqual(["method"]);
+  });
+
+  test("a module without the opcode on its allowlist ends the step with the reason; a convert the server ignores times out naming why", async () => {
+    await expect(convertToRaid(fakeLeader("refused"), { timeoutMs: 100, pollMs: 5 })).rejects.toThrow(/the module refused CMSG_GROUP_RAID_CONVERT \(not on its raw allowlist\)/);
+    await expect(convertToRaid(fakeLeader("ignored"), { timeoutMs: 50, pollMs: 5 })).rejects.toThrow(/still not a raid/);
   });
 });
