@@ -200,7 +200,8 @@ describe("the party scenarios' spots", () => {
     return Math.abs(dx * c - dy * s) <= b.length / 2 && Math.abs(dx * s + dy * c) <= b.width / 2 && Math.abs(p.z - t.z) <= b.height / 2;
   };
 
-  for (const d of Object.values(PARTY_DUNGEONS)) {
+  // A raid's spots are its own test's (below): ten, outside a larger sphere.
+  for (const d of Object.values(PARTY_DUNGEONS).filter((x) => !x.raid)) {
     test(`${d.scenario}: five spots outside the entrance trigger, 10-14.4y from its centre (the Deadmines band), 2.8y or more apart, each facing it`, () => {
       const spots = (SCENARIOS[d.scenario] as Scenario).partySpots!;
       expect(spots).toHaveLength(5);

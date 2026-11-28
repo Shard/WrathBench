@@ -3096,6 +3096,12 @@ suite touches them.
      checks each member at that scenario's level: at 24 the talents and key
      spells of `LEVEL_EXTENSIONS`, no point unspent. A `--keep` and its
      `--recheck` take the same `--scenario`.
+   - Both take `--scenario dustwallow-lair`: Onyxia's Lair's raid of ten at
+     80, converted to a raid at staging, checked inside a raid map and out
+     again on map 1. It needs ten accounts the module admits: EVAL01..EVAL10
+     by default (a world's allowlist carries them, the shared world's does
+     not), or ten named in `MODULE_PARTY_ACCOUNTS`; and a stack release that
+     allows `CMSG_GROUP_RAID_CONVERT`. On demand only.
 5. While a party campaign is enabled, run `deadmines-entry` after any release
    that touches the module, on PROBE with the fleet live.
 

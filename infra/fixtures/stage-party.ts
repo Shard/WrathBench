@@ -87,7 +87,7 @@ import { isValidCharacterName } from "../../runner/src/character-name";
 import { dungeonByStaged } from "../../runner/src/dungeons";
 import { PARTY_MAX } from "../../runner/src/party";
 import { MODULE_SECRET } from "../smoke/lib/auth";
-import { characterNames, type FixtureContext } from "../smoke/lib/fixture";
+import { accountFixtureName, characterNames, type FixtureContext } from "../smoke/lib/fixture";
 import { moduleBase } from "../smoke/lib/module";
 import {
   OFFHAND_SLOT,
@@ -120,7 +120,7 @@ import {
   type Loadout,
   type StockLine,
 } from "./loadouts";
-import { RAID_LEVEL, isRaidLoadout, raidTrainerSpells, type TrainerRow } from "./raid-loadouts";
+import { RAID_LEVEL, RAID_LOADOUTS, RAID_LOADOUT_IDS, isRaidLoadout, raidTrainerSpells, type TrainerRow } from "./raid-loadouts";
 import { SCENARIOS, isScenarioName, type Scenario } from "./scenarios";
 import { soapFromEnv, type SoapClient } from "./soap";
 
@@ -139,6 +139,8 @@ export function isStageableAccount(account: string): boolean {
   return PARTY_ACCOUNT_PATTERN.test(account) || isEvalPoolAccountName(account);
 }
 export const DEFAULT_PARTY_ACCOUNTS = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"] as const;
+/** A raid's default accounts: the PARTY accounts stop at five, so ten from the eval pool. */
+export const DEFAULT_RAID_ACCOUNTS = ["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05", "EVAL06", "EVAL07", "EVAL08", "EVAL09", "EVAL10"] as const;
 /** The scenario a Deadmines party stands in. */
 export const DEFAULT_PARTY_SCENARIO = "moonbrook-mine";
 
@@ -284,10 +286,30 @@ export function checkStageRequest(req: StageRequest): string[] {
   return errors;
 }
 
-/** The default party's request: PARTY1..PARTY5, one of each loadout, in loadout order (the tank first, so it leads), on the Deadmines' scenario at 20 unless told otherwise. */
+/**
+ * The default party's request: PARTY1..PARTY5, one of each loadout, in
+ * loadout order (the tank first, so it leads), on the Deadmines' scenario at
+ * 20 unless told otherwise. At the raid level it is the ten raid loadouts in
+ * theirs, each naming its spec, on EVAL01..EVAL10 unless told otherwise.
+ */
 export function defaultStageRequest(
   over: Partial<Pick<StageRequest, "party" | "campaign" | "scenario" | "level">> & { accounts?: readonly string[] } = {},
 ): StageRequest {
+  if (over.level === RAID_LEVEL) {
+    const accounts = over.accounts ?? DEFAULT_RAID_ACCOUNTS;
+    return {
+      party: over.party ?? `manual-${Date.now()}`,
+      campaign: over.campaign ?? "manual",
+      version: 0,
+      scenario: over.scenario ?? DEFAULT_PARTY_SCENARIO,
+      level: RAID_LEVEL,
+      members: RAID_LOADOUT_IDS.map((id, i) => {
+        const l = RAID_LOADOUTS[id];
+        const account = accounts[i]!;
+        return { member: id, role: l.partyRole, spec: l.spec, race: l.race, class: l.class, character: accountFixtureName(l.namePrefix, account), account, runId: over.party ?? "manual" };
+      }),
+    };
+  }
   const accounts = over.accounts ?? DEFAULT_PARTY_ACCOUNTS;
   return {
     party: over.party ?? `manual-${Date.now()}`,

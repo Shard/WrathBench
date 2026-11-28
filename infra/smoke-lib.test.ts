@@ -7,7 +7,8 @@
  * party smokes' members (party.ts) are what a `--scenario` stages and checks.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { LOADOUTS, loadoutAt, partySpot } from "./fixtures/loadouts";
+import { LOADOUTS, loadoutAt, partySpot, type LOADOUT_IDS } from "./fixtures/loadouts";
+import { RAID_LOADOUTS, type RaidLoadoutId } from "./fixtures/raid-loadouts";
 import { SCENARIOS, type Scenario } from "./fixtures/scenarios";
 import { openEventStream, waitForEvent } from "./smoke/lib/events";
 import { moduleAction, moduleRequest, moduleSession } from "./smoke/lib/module";
@@ -143,7 +144,7 @@ describe("the party smokes' members", () => {
     expect(party).toHaveLength(5);
     for (const [i, m] of party.entries()) {
       expect([m.character, m.level]).toEqual([m.character, 20]);
-      expect(m.loadout).toBe(LOADOUTS[m.loadout.id]);
+      expect(m.loadout).toBe(LOADOUTS[m.loadout.id as (typeof LOADOUT_IDS)[number]]);
       expect(m.spot).toEqual(partySpot(SCENARIOS["moonbrook-mine"] as Scenario, i));
     }
   });
@@ -151,10 +152,10 @@ describe("the party smokes' members", () => {
   for (const d of Object.values(PARTY_DUNGEONS)) {
     test(`--scenario ${d.scenario}: every member at ${d.level}, on its own spot, with the loadout at that level`, () => {
       const party = membersOf(smokeRequest("party-staging", {}, partyDungeon(d.scenario)));
-      expect(party).toHaveLength(5);
+      expect(party).toHaveLength(d.raid ? 10 : 5);
       for (const [i, m] of party.entries()) {
         expect(m.level).toBe(d.level);
-        expect(m.loadout).toEqual(loadoutAt(LOADOUTS[m.loadout.id], d.level));
+        expect(m.loadout).toEqual(d.raid ? RAID_LOADOUTS[m.loadout.id as RaidLoadoutId] : loadoutAt(LOADOUTS[m.loadout.id as (typeof LOADOUT_IDS)[number]], d.level));
         expect(m.spot).toEqual(partySpot(SCENARIOS[d.scenario] as Scenario, i));
       }
     });
@@ -171,5 +172,14 @@ describe("the party smokes' members", () => {
     expect(() => partySmokeArgs("party-staging", ["--scenario"], ["--keep"])).toThrow(/^--scenario needs a name; usage: party-staging/);
     expect(() => partySmokeArgs("party-staging", ["--scenario", "--keep"], ["--keep"])).toThrow(/^--scenario needs a name/);
     expect(() => partySmokeArgs("party-staging", ["--scenario", "nowhere"], ["--keep"])).toThrow(/no party dungeon for scenario 'nowhere'/);
+  });
+
+  test("a raid's smoke party is its ten on EVAL01..EVAL10, or ten named accounts, and never five", () => {
+    const raid = partyDungeon("dustwallow-lair");
+    const req = smokeRequest("party-staging", {}, raid);
+    expect(req.members.map((m) => m.account)).toEqual(Array.from({ length: 10 }, (_, i) => `EVAL${String(i + 1).padStart(2, "0")}`));
+    expect(req.members.every((m) => m.spec !== undefined)).toBe(true);
+    expect(() => smokeRequest("party-staging", { MODULE_PARTY_ACCOUNTS: "PARTY1,PARTY2,PARTY3,PARTY4,PARTY5" }, raid)).toThrow(/names 5 accounts; a raid is 10/);
+    expect([raid.instanceMap, raid.entrance.map, raid.raid]).toEqual([249, 1, true]);
   });
 });
