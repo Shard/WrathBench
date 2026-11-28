@@ -95,9 +95,11 @@ const FORBIDDEN: readonly RegExp[] = [
 /**
  * How many `runner/src` files a viewer-only process reaches, at most. A
  * ceiling, not a target: lower it when a cut lands, and a change that raises
- * it is a change that pulls more of the runner into the viewer.
+ * it is a change that pulls more of the runner into the viewer. 41 with the
+ * dungeon registry (`dungeons.ts`, zod and its data alone), which the
+ * timeline's boss marks and the publisher's board read.
  */
-const RUNNER_SRC_CEILING = 40;
+const RUNNER_SRC_CEILING = 41;
 
 interface Edge {
   path: string;

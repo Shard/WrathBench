@@ -7,10 +7,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { StoredSessionHandle } from "@wrathbench/inspector";
-import { DEADMINES_BOSSES } from "../viewer/deadmines";
+import { BOSS_ENTRIES } from "../runner/src/dungeons";
 import { cameraEventOf, Shutter, type Kept, type SessionEventRow, type TimedEvent } from "./camera/shutter";
 
-const BOSSES = new Set(DEADMINES_BOSSES);
+const BOSSES = BOSS_ENTRIES;
 const SOLO = join(import.meta.dir, "..", "runner", "test", "fixtures", "v1p1", "v1p1-solo", "session");
 const DUNGEON = join(import.meta.dir, "fixtures", "camera", "events-dungeon.jsonl");
 

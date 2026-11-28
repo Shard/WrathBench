@@ -16,7 +16,7 @@ import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
 import { creatureNamesOf, partyDetailOf } from "./party-marks";
 import { bossKillsOf, isBossKill } from "./timeline-marks";
-import { DEADMINES_BOSSES } from "./deadmines";
+import { BOSS_ENTRIES } from "../runner/src/dungeons";
 import {
   projectEntries,
   projectRunDetail,
@@ -50,8 +50,8 @@ import type { TrackCore } from "./api-tails";
 export const POLL_MS = 1000;
 const WINDOW_MAX = ENTRIES_WINDOW;
 
-/** The five-man bosses known by entry: elites by rank, so the rank alone does not say (`isBossKill`). */
-const NAMED_BOSSES: ReadonlySet<number> = new Set(DEADMINES_BOSSES);
+/** The registry's dungeon bosses by entry (`runner/dungeons/`): elites by rank, so the rank alone does not say (`isBossKill`). */
+const NAMED_BOSSES: ReadonlySet<number> = BOSS_ENTRIES;
 
 /**
  * Where the `/entries` window that shows the moment `at` begins: the window
@@ -313,7 +313,7 @@ export function createRunApi(ctx: ApiContext): (req: Request, url: URL, path: st
       const party = run.party === undefined ? null : await partyDetailOf(runsDir, runId, dir, tail);
       /*
        * The run's boss kills, for the timeline's chapters (`timeline-marks.ts`):
-       * rank-3 victims and the Deadmines' named bosses off the same kill
+       * rank-3 victims and the registry's dungeon bosses off the same kill
        * marks, each named as the run's own client cache answered its entry.
        */
       const bossMarks = tail.kills.filter((k) => isBossKill(k, NAMED_BOSSES));

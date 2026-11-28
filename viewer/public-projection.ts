@@ -58,6 +58,7 @@ import type { AchievementFacts, ActiveSegment, ActionNoteView, CharacterStatus, 
 import type { ArmSummary, CampaignView, CampaignsResponse, DungeonsResponse, EpisodesResponse, Square } from "./api-types-evals";
 import type { FleetAccountView, FleetEndedView, FleetJobView, FleetPausedView, ResumeHoldCode, FleetRunFacts, FleetPreflightView, FleetResponse, FleetServerView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse, TierView, ToolsResponse } from "./api-types-runner";
 import { EPISODE_IDS, hasBoard, isTaskEpisode } from "../runner/src/episodes";
+import { bossName } from "../runner/src/dungeons";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { THEME_TOKENS } from "../runner/src/site-settings";
 import { redactGameProse, redactProseText } from "./redact-prose";
@@ -889,12 +890,23 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
  * effort, a harness tag or a series, and each attempt's run ids, all of which
  * the public runs listing already carries; nothing of a run a public handle
  * withholds reaches a row (the route builds off the handle's own listing).
+ * The board's bosses are entries the registry knows, each named by the
+ * registry (`runner/dungeons/`), never by the body: a boss's short name, as
+ * an NPC's name always is public.
  */
 export function projectDungeons(d: DungeonsResponse): DungeonsResponse {
   return scrubPathsValue<DungeonsResponse>({
     version: d.version,
     boards: d.boards.map((b) => ({
       episode: b.episode,
+      ...(Array.isArray(b.bosses)
+        ? {
+            bosses: b.bosses.flatMap((x) => {
+              const name = typeof x?.entry === "number" ? bossName(x.entry) : null;
+              return name === null ? [] : [{ entry: x.entry, name, ...(x.optional === true ? { optional: true as const } : {}) }];
+            }),
+          }
+        : {}),
       rows: b.rows.map((r) => ({
         model: r.model,
         effort: r.effort,

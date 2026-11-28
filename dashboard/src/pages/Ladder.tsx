@@ -36,7 +36,7 @@
  * (`/api/dungeons`, derived in `viewer/dungeons.ts`), a row per model
  * condition on its best attempt. Above the table, the scatter's idiom for an
  * attempt (`components/DungeonChart`), with the tier's row of axis views in
- * its own vocabulary (`DUNGEON_VIEWS` in `lib/dungeons.ts`, on the same
+ * its own vocabulary (`dungeonViews` in `lib/dungeons.ts`, on the same
  * `?view=`): time from launch against bosses killed by default, or the best
  * attempt's cost against bosses or, for the attempts that got furthest,
  * against time. The tier's filters and the Pareto toggle are not shown: a
@@ -61,11 +61,13 @@ import { useSeriesFilter } from "../components/SeriesSelect";
 import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
 import { DUNGEON_CHOICES, type DungeonChoice, EPISODE_CHOICES, dungeonLabel, dungeonParam, dungeonRedirect, episodeParam } from "../lib/episodes";
 import {
-  DUNGEON_VIEWS,
+  DEFAULT_DUNGEON_VIEW_ID,
+  type BoardRoute,
   type DungeonView,
   attemptHref,
   attemptTitle,
   boardHint,
+  boardRoute,
   boardRowKey,
   bossesText,
   bossesTitle,
@@ -74,6 +76,7 @@ import {
   COOKIE_TITLE,
   cookieText,
   dungeonViewParam,
+  dungeonViews,
 } from "../lib/dungeons";
 import {
   RUNGS,
@@ -406,8 +409,8 @@ export default function Ladder() {
                 <DungeonBoard
                   board={b()}
                   episode={id()}
-                  view={dungeonViewParam(params.view)}
-                  onView={(v) => setParams({ view: v.id === DUNGEON_VIEWS[0]!.id ? undefined : v.id }, { replace: true })}
+                  view={dungeonViewParam(params.view, boardRoute(b()))}
+                  onView={(v) => setParams({ view: v.id === DEFAULT_DUNGEON_VIEW_ID ? undefined : v.id }, { replace: true })}
                 />
               )}
             </Show>
@@ -686,7 +689,7 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; 
       <div class="ladder-controls">
         <div class="chips views">
           <span class="dim">axes</span>
-          <For each={DUNGEON_VIEWS}>
+          <For each={dungeonViews(props.view.route)}>
             {(v) => (
               <button class={v.id === props.view.id ? "on" : ""} title={v.hint} onClick={() => props.onView(v)}>
                 {v.title}
@@ -722,7 +725,7 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; 
                 </td>
               </tr>
             </Show>
-            <For each={series.kept()}>{(row) => <DungeonRow row={row} hovered={hovered()} onHover={setHovered} />}</For>
+            <For each={series.kept()}>{(row) => <DungeonRow row={row} route={props.view.route} hovered={hovered()} onHover={setHovered} />}</For>
           </tbody>
         </table>
       </div>
@@ -730,7 +733,7 @@ function DungeonBoard(props: { board: DungeonBoardView; episode: DungeonChoice; 
   );
 }
 
-function DungeonRow(props: { row: DungeonRowView; hovered: string | null; onHover: (key: string | null) => void }) {
+function DungeonRow(props: { row: DungeonRowView; route: BoardRoute; hovered: string | null; onHover: (key: string | null) => void }) {
   const r = (): DungeonRowView => props.row;
   const key = (): string => boardRowKey(props.row);
   const effort = (): string | null => effortLabel(r().effort);
@@ -757,8 +760,8 @@ function DungeonRow(props: { row: DungeonRowView; hovered: string | null; onHove
       <td class="right mono" title={attemptTitle(r().best)}>
         {clearTimeText(r().best)}
       </td>
-      <td class="right mono" title={bossesTitle(r().best)}>
-        {bossesText(r().best)}
+      <td class="right mono" title={bossesTitle(r().best, props.route)}>
+        {bossesText(r().best, props.route)}
       </td>
       <td class={r().best.cookie ? "right mono ok" : "right mono dim"} title={COOKIE_TITLE}>
         {cookieText(r().best)}

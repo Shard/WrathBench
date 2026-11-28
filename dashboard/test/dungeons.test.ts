@@ -1,11 +1,19 @@
 /**
  * The dungeon tabs' chart (`src/lib/dungeons.ts`): one point per board row at
- * its best attempt, the route's seven bosses counted and Cookie never.
+ * its best attempt, the route's bosses (the board's, served) counted and an
+ * optional one never.
  */
 
 import { describe, expect, test } from "bun:test";
-import type { DungeonAttemptView, DungeonRowView } from "../src/api/client";
-import { BOSS_NAMES, bossesText, dungeonPoints, dungeonViewParam } from "../src/lib/dungeons";
+import type { DungeonAttemptView, DungeonBossView, DungeonRowView } from "../src/api/client";
+import { boardRoute, bossesText, bossesTitle, dungeonPoints, dungeonViewParam } from "../src/lib/dungeons";
+
+/** The Deadmines board's bosses as the viewer serves them, invented names. */
+const BOSSES: DungeonBossView[] = [
+  ...[644, 643, 642, 1763, 646, 647, 639].map((entry, i) => ({ entry, name: `Boss ${i + 1}` })),
+  { entry: 645, name: "Extra", optional: true },
+];
+const ROUTE = boardRoute({ bosses: BOSSES });
 
 const attempt = (o: Partial<DungeonAttemptView> = {}): DungeonAttemptView => ({
   runIds: ["r1"],
@@ -44,7 +52,7 @@ describe("dungeonPoints", () => {
   const none = row("none", attempt());
 
   test("a cleared attempt sits at its time to clear, an uncleared one at its last boss, both by bosses; no boss, no point", () => {
-    const m = dungeonPoints([cleared, partway, none]);
+    const m = dungeonPoints([cleared, partway, none], dungeonViewParam(undefined, ROUTE));
     expect(m.points.map((p) => [p.model, p.x, p.y])).toEqual([
       ["fast", 6_000_000, 7],
       ["slow", 4_200_000, 3],
@@ -62,7 +70,7 @@ describe("the views", () => {
   const unpriced = row("unpriced", attempt({ bosses: [644], lastBossMs: 1_000_000, costUsd: null }));
 
   test("cost × time plots only the cleared attempts, with or without Cookie", () => {
-    const v = dungeonViewParam("cost-time");
+    const v = dungeonViewParam("cost-time", ROUTE);
     const m = dungeonPoints([clear8, clear7, short, unpriced], v);
     expect(m.points.map((p) => [p.model, p.x, p.y])).toEqual([
       ["eight", 4.2, 7_000_000],
@@ -76,9 +84,30 @@ describe("the views", () => {
 });
 
 describe("Cookie (operator, 2026-11-20)", () => {
-  test("the bosses are the route's seven, and Cookie is not among them", () => {
-    expect([...BOSS_NAMES.keys()]).toEqual([644, 643, 642, 1763, 646, 647, 639]);
-    expect(BOSS_NAMES.has(645)).toBe(false);
-    expect(bossesText(attempt({ bosses: [644, 643, 642, 1763, 646, 647, 639], cookie: true }))).toBe("7/7");
+  test("the bosses are the route's seven, and the optional one is not among them", () => {
+    expect([...ROUTE.names.keys()]).toEqual([644, 643, 642, 1763, 646, 647, 639]);
+    expect(ROUTE.names.has(645)).toBe(false);
+    expect(bossesText(attempt({ bosses: [644, 643, 642, 1763, 646, 647, 639], cookie: true }), ROUTE)).toBe("7/7");
+    expect(bossesTitle(attempt({ bosses: [644, 642] }), ROUTE)).toBe("Boss 1, Boss 3");
+  });
+});
+
+describe("a board published before it carried its bosses", () => {
+  test("counts with no denominator, names by entry, and still draws", () => {
+    const old = boardRoute({});
+    expect(old.size).toBeNull();
+    expect(bossesText(attempt({ bosses: [644, 643] }), old)).toBe("2");
+    expect(bossesTitle(attempt({ bosses: [644] }), old)).toBe("644");
+    const v = dungeonViewParam(undefined, old);
+    expect(v.y.caption).toBe("bosses killed on the route");
+    expect(v.y.ticks!(3)).toEqual([0, 1, 2, 3]);
+    expect(dungeonPoints([row("r", attempt({ bosses: [644], lastBossMs: 1 }))], v).points).toHaveLength(1);
+  });
+
+  test("a served route of seven reads as the board always has", () => {
+    const v = dungeonViewParam(undefined, ROUTE);
+    expect(v.hint).toBe("time from launch to the clear, or to the last boss against bosses killed, of 7 on the route");
+    expect(v.y.ticks!(0)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(dungeonViewParam("cost-time", ROUTE).hint).toBe("the best attempt's cost (USD, log) against the time from launch to the clear, for the cleared attempts: all 7 bosses on the route");
   });
 });

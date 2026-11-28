@@ -265,9 +265,13 @@ export interface DungeonAttemptView {
   /** The verdict the attempt ended on (a member's own, never `party-ended`). */
   reason: string | null;
   timeToClearMs: number | null;
-  /** The route's boss entries killed (`DEADMINES_REQUIRED`, seven), in the board's boss order. */
+  /** The route's boss entries killed (the dungeon's bosses not marked optional, seven in the Deadmines), in the route's order. */
   bosses: number[];
-  /** Whether Cookie, the boss off the route, was killed: an optional extra that counts toward nothing. */
+  /**
+   * Whether a boss off the route was killed: the Deadmines' one is Cookie, an
+   * optional extra that counts toward nothing. Named for him because the
+   * board has only ever been the Deadmines'.
+   */
   cookie: boolean;
   /** When the last of the route's bosses died. */
   lastBossMs: number | null;
@@ -298,9 +302,23 @@ export interface DungeonRowView {
   best: DungeonAttemptView;
 }
 
+/** A boss of the board's dungeon by entry, with the registry's short name (`runner/dungeons/<id>.json`). */
+export interface DungeonBossView {
+  entry: number;
+  name: string;
+  /** Off the route: never among an attempt's `bosses` (the Deadmines' Cookie). */
+  optional?: true;
+}
+
 /** One id's table, rows in the board's order. */
 export interface DungeonBoardView {
   episode: EpisodeIdView;
+  /**
+   * The id's dungeon's bosses in route order, the optional ones flagged: what
+   * the tab names and counts an attempt's bosses by. Absent from a body
+   * published before the registry.
+   */
+  bosses?: DungeonBossView[];
   rows: DungeonRowView[];
 }
 

@@ -1,0 +1,29 @@
+{
+  "id": "deadmines",
+  "name": "The Deadmines",
+  "kind": "dungeon",
+  "size": 5,
+  "map": 36,
+  "entrance": {
+    "trigger": 78,
+    "map": 0,
+    "x": -11208.5,
+    "y": 1685.3,
+    "z": 25.8,
+    "radius": 7
+  },
+  "level": 20,
+  "staged": "moonbrook-mine",
+  "bosses": [
+    { "entry": 644, "name": "Rhahk'Zor" },
+    { "entry": 643, "name": "Sneed" },
+    { "entry": 642, "name": "Sneed's Shredder" },
+    { "entry": 1763, "name": "Gilnid" },
+    { "entry": 646, "name": "Mr. Smite" },
+    { "entry": 647, "name": "Captain Greenskin" },
+    { "entry": 639, "name": "Edwin VanCleef" },
+    { "entry": 645, "name": "Cookie", "optional": true }
+  ],
+  "end": 639,
+  "note": "The facts the Deadmines evals and campaigns have run on since deadmines@4 (docs/proposals/GROUP-PLAY.md §4, §6). The entrance is AreaTrigger.dbc 78 on map 0, radius 7, which areatrigger_teleport 78 sends to map 36, rounded as infra/fixtures/scenarios.ts holds it. The bosses are the instance's DungeonEncounter.dbc encounters by creature entry plus Sneed's Shredder (642), which the boss list has always counted though it is no encounter of its own. Cookie is off the route to VanCleef and the objective names only VanCleef, so he is optional (operator, 2026-11-20); he stays last, where the board has always listed him."
+}
