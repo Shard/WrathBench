@@ -4,7 +4,8 @@
  * written), the task episodes' definitions and the camera's and timeline's
  * boss rule. The Deadmines entry is the facts every Deadmines run was read
  * by, so it must equal them exactly; the other entries are probe targets and
- * hold together on their own.
+ * hold together on their own. Every entry is staged: its scenario is a
+ * fixture scenario with room for its party, at its level.
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
@@ -12,7 +13,9 @@ import { join } from "node:path";
 import { BOSS_ENTRIES, DUNGEONS, bossName, dungeonById, dungeonByMap, dungeonByStaged, dungeonSchema, optionalOf, routeOf } from "../runner/src/dungeons";
 import { TASK_EPISODE_IDS } from "../runner/src/episodes";
 import { taskDefinition } from "../runner/src/task-episodes";
-import { DEADMINES_ENTRANCE_TRIGGER, ONYXIA_ENTRANCE_TRIGGER, isScenarioName } from "./fixtures/scenarios";
+import { checkedIn, checkedInFiles } from "../runner/test/fixtures/campaigns";
+import { DEADMINES_ENTRANCE_TRIGGER, ONYXIA_ENTRANCE_TRIGGER, SCENARIOS, isScenarioName, type Scenario } from "./fixtures/scenarios";
+import { PARTY_DUNGEONS } from "./smoke/lib/party";
 
 const DIR = join(import.meta.dir, "..", "runner", "dungeons");
 
@@ -78,12 +81,30 @@ describe("the Deadmines entry is today's facts", () => {
   });
 });
 
-describe("the other entries", () => {
-  // A probe target may be defined before it is staged; every one registered
-  // today has its scenario in the stager.
-  test("name scenarios the stager has", () => {
-    for (const d of DUNGEONS) expect({ id: d.id, staged: d.staged, exists: isScenarioName(d.staged) }).toEqual({ id: d.id, staged: d.staged, exists: true });
+describe("every entry is staged", () => {
+  // An instance is registered with the scenario that stages its party: the
+  // stager can put a full party outside it, at the entry's level, which is
+  // the level the party smokes and every checked-in definition staged there use.
+  test("its scenario exists, with a spot for every member of a full party", () => {
+    for (const d of DUNGEONS) {
+      const spots = isScenarioName(d.staged) ? ((SCENARIOS[d.staged] as Scenario).partySpots?.length ?? 0) : null;
+      expect({ id: d.id, staged: d.staged, spots: spots !== null && spots >= d.size }).toEqual({ id: d.id, staged: d.staged, spots: true });
+    }
   });
+
+  test("its level is the party smokes' and every checked-in definition's staged on its scenario", () => {
+    const defs = checkedInFiles().map((f) => checkedIn(f.replace(/\.json$/, "")));
+    for (const d of DUNGEONS) {
+      expect({ id: d.id, smoke: PARTY_DUNGEONS[d.staged]?.level }).toEqual({ id: d.id, smoke: d.level });
+      for (const def of defs) {
+        if (typeof def.start !== "object" || def.start.staged !== d.staged) continue;
+        expect({ id: d.id, def: `${def.id}@${def.version}`, level: def.start.level }).toEqual({ id: d.id, def: `${def.id}@${def.version}`, level: d.level });
+      }
+    }
+  });
+});
+
+describe("the other entries", () => {
 
   test("Shadowfang Keep ends on Arugal and the Stockade on Bazil Thredd, both off map 0 triggers", () => {
     expect(dungeonById("shadowfang-keep")).toMatchObject({ map: 33, level: 20, end: 4275, entrance: { trigger: 145, map: 0 } });
