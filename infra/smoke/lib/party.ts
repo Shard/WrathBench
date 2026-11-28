@@ -8,32 +8,71 @@
  */
 
 import { connect, type MoveResult, type WrathClient } from "@wrathbench/sdk";
-import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from "../../fixtures/loadouts";
-import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
-import { DEADMINES_STAGING_SPOTS } from "../../fixtures/scenarios";
+import { LOADOUT_IDS, PARTY_MONEY, loadoutAt, loadoutFor, partySpot, type Loadout } from "../../fixtures/loadouts";
+import { DEFAULT_PARTY_ACCOUNTS, DEFAULT_PARTY_SCENARIO, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
+import {
+  DEADMINES_ENTRANCE_TRIGGER,
+  SCENARIOS,
+  SHADOWFANG_ENTRANCE_TRIGGER,
+  STOCKADE_ENTRANCE_TRIGGER,
+  type Position,
+  type Scenario,
+  type ScenarioName,
+} from "../../fixtures/scenarios";
 import { smokeToken } from "./session";
 import { dist2d, fmt } from "./geo";
 
-export type PartyMember = { member: string; account: string; character: string; loadout: Loadout };
+export type PartyMember = { member: string; account: string; character: string; loadout: Loadout; level: number; spot: Position };
+
+type Point = { x: number; y: number; z: number };
+
+/**
+ * A dungeon a party can be staged outside of, for the party smokes: the
+ * scenario its party stands in, the level it is staged at (the one its probe
+ * campaign states), the entrance trigger each member makes its one move of,
+ * the instance map that lands it on, and the exit trigger inside, which an
+ * AreaTrigger.dbc record on that map sends back to map 0. Smoke data only:
+ * nothing here is on a scenario object, which the staging hash covers.
+ */
+export type PartyDungeon = { scenario: ScenarioName; level: number; entrance: Point & { id: number }; instanceMap: number; exit: Point & { id: number } };
+
+export const PARTY_DUNGEONS: Readonly<Record<string, PartyDungeon>> = {
+  // The Deadmines (map 36): exit trigger 119.
+  "moonbrook-mine": { scenario: "moonbrook-mine", level: 20, entrance: DEADMINES_ENTRANCE_TRIGGER, instanceMap: 36, exit: { id: 119, x: -14.4, y: -393.4, z: 64.6 } },
+  // Shadowfang Keep (map 33): exit trigger 194, 5.3y from where the entrance lands.
+  "silverpine-keep": { scenario: "silverpine-keep", level: 20, entrance: SHADOWFANG_ENTRANCE_TRIGGER, instanceMap: 33, exit: { id: 194, x: -230.95, y: 2105.06, z: 79.75 } },
+  // The Stockade (map 34): exit trigger 503, 15y from where the entrance lands.
+  "stormwind-stockade": { scenario: "stormwind-stockade", level: 24, entrance: STOCKADE_ENTRANCE_TRIGGER, instanceMap: 34, exit: { id: 503, x: 39.37, y: 0.8, z: -12.79 } },
+};
+
+/** The dungeon a party smoke is pointed at (`--scenario <name>`), the Deadmines' when none is named. */
+export function partyDungeon(name: string = DEFAULT_PARTY_SCENARIO): PartyDungeon {
+  const d = PARTY_DUNGEONS[name];
+  if (!d) throw new Error(`no party dungeon for scenario '${name}'; the party smokes know ${Object.keys(PARTY_DUNGEONS).join(", ")}`);
+  return d;
+}
 
 /**
  * The smokes' party: the stager's default request (PARTY1..PARTY5, one of
  * each loadout, the tank first and leading), or MODULE_PARTY_ACCOUNTS
- * (comma-separated) in that order. The request is what the roster would
+ * (comma-separated) in that order, on the Deadmines' scenario at 20 or the
+ * given dungeon's scenario and level. The request is what the roster would
  * send, so the smokes exercise the contract the fleet uses.
  */
-export function smokeRequest(tag: string, env: Record<string, string | undefined> = process.env): StageRequest {
+export function smokeRequest(tag: string, env: Record<string, string | undefined> = process.env, dungeon: PartyDungeon = partyDungeon()): StageRequest {
   const accounts = (env["MODULE_PARTY_ACCOUNTS"] ?? DEFAULT_PARTY_ACCOUNTS.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
   if (accounts.length !== LOADOUT_IDS.length) throw new Error(`MODULE_PARTY_ACCOUNTS names ${accounts.length} accounts; a party is ${LOADOUT_IDS.length}`);
-  return defaultStageRequest({ party: `smoke-${tag}`, campaign: `smoke-${tag}`, accounts });
+  return defaultStageRequest({ party: `smoke-${tag}`, campaign: `smoke-${tag}`, accounts, scenario: dungeon.scenario, level: dungeon.level });
 }
 
-/** The members of a request, with their loadouts; the first leads. */
+/** The members of a request, with their loadouts at its level and their spots in its scenario; the first leads. */
 export function membersOf(req: StageRequest): PartyMember[] {
-  return req.members.map((m) => {
+  const scenario = (SCENARIOS as Record<string, Scenario>)[req.scenario];
+  if (!scenario) throw new Error(`unknown scenario '${req.scenario}'`);
+  return req.members.map((m, i) => {
     const l = loadoutFor(m);
     if (typeof l === "string") throw new Error(l);
-    return { member: m.member, account: m.account, character: m.character, loadout: l };
+    return { member: m.member, account: m.account, character: m.character, loadout: loadoutAt(l, req.level), level: req.level, spot: partySpot(scenario, i) };
   });
 }
 
@@ -68,11 +107,11 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
   const l = m.loadout;
   const who = `${m.character} (${l.label})`;
   const level = await until(`${who} level`, 15_000, () => c.state.self.level?.value);
-  if (level !== PARTY_LEVEL) throw new Error(`${who} is level ${level}, expected ${PARTY_LEVEL}`);
+  if (level !== m.level) throw new Error(`${who} is level ${level}, expected ${m.level}`);
 
   const pos = await until(`${who} position`, 15_000, () => c.state.self.position?.value);
-  const spot = DEADMINES_STAGING_SPOTS[party.indexOf(m)] ?? DEADMINES_STAGING_SPOTS[0]!;
-  if (pos.map !== 0 || dist2d(pos, spot) > 3) throw new Error(`${who} stands on map ${pos.map} at ${fmt(pos)}, expected its staging spot ${fmt(spot)} within 3y`);
+  const spot = m.spot;
+  if (pos.map !== spot.map || dist2d(pos, spot) > 3) throw new Error(`${who} stands on map ${pos.map} at ${fmt(pos)}, expected its staging spot ${fmt(spot)} on map ${spot.map} within 3y`);
 
   const equipped = new Map<number, number>();
   await until(`${who} equipment`, 15_000, () => {

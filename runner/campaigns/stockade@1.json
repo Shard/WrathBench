@@ -1,0 +1,89 @@
+{
+  "id": "stockade",
+  "version": 1,
+  "question": "Can one agent loop, driving all five staged level-24 characters of the party through what their clients see, walk from Stormwind City into the Stockade and defeat Bazil Thredd?",
+  "note": "A probe of deadmines@7's shape on the Stockade: one arm, agents 1, on the release image with no args, one agent driving the same five characters in the same member order and roles (the five-class reference party, infra/fixtures/loadouts.ts), staged on stormwind-stockade (infra/fixtures/scenarios.ts) at level 24 (the loadouts' level-24 extension: the same gear, the trainer's spells to 24, four more talent points in each role's tree), the cell carrying the leader's start, the end on a kill of Bazil Thredd (creature entry 1716) as kill-target, told nothing to the model, and @7's budget (the four-hour clock, idle 20 minutes, the no-XP watchdog off, the 8000-call guard), wiki on without coordinates, resume false, one attempt a square. Unscored. The objectives are @7's with only the party's location, the portal's coordinates (the entrance trigger's centre, rounded as @7 rounds its own), the dungeon and the boss substituted. Not published: it reaches the fleet only when the operator publishes it and enables its store row. Assignments are the store row's: the roster entry sub-fable-52.",
+  "cells": [
+    {
+      "id": "party",
+      "race": 1,
+      "class": 1,
+      "note": "The party; its start is the leader's, the Human Warrior tank."
+    }
+  ],
+  "arms": [
+    {
+      "id": "one-agent",
+      "note": "One agent driving all five characters, on the release image.",
+      "agents": 1
+    }
+  ],
+  "objective": "You play every member of a party of five: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). Tankpartyb is the party's tank, Healpartyc its healer, and Magepartyd, Roguepartye and Palapartyf its damage. The party stands in Stormwind City, a few yards from the portal into the Stockade at (-8762, 849, 88). The objective for this run is for the party to clear the Stockade and defeat Bazil Thredd.",
+  "stopAtLevel": null,
+  "end": [
+    {
+      "kill": {
+        "entry": 1716
+      }
+    }
+  ],
+  "budget": {
+    "episodeMs": 14400000,
+    "idleMs": 1200000,
+    "noXpMs": null,
+    "maxToolCalls": 8000
+  },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 1,
+  "start": {
+    "staged": "stormwind-stockade",
+    "level": 24
+  },
+  "party": {
+    "size": 5,
+    "members": [
+      {
+        "id": "tank",
+        "role": "tank",
+        "race": 1,
+        "class": 1,
+        "character": "Tankpartyb",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Tankpartyb, the party's tank. The party stands in Stormwind City, a few yards from the portal into the Stockade at (-8762, 849, 88). The objective for this run is for the party to clear the Stockade and defeat Bazil Thredd. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "healer",
+        "role": "healer",
+        "race": 3,
+        "class": 5,
+        "character": "Healpartyc",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Healpartyc, the party's healer. The party stands in Stormwind City, a few yards from the portal into the Stockade at (-8762, 849, 88). The objective for this run is for the party to clear the Stockade and defeat Bazil Thredd. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "mage",
+        "role": "damage",
+        "race": 1,
+        "class": 8,
+        "character": "Magepartyd",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Magepartyd, the party's damage. The party stands in Stormwind City, a few yards from the portal into the Stockade at (-8762, 849, 88). The objective for this run is for the party to clear the Stockade and defeat Bazil Thredd. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "rogue",
+        "role": "damage",
+        "race": 1,
+        "class": 4,
+        "character": "Roguepartye",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Roguepartye, the party's damage. The party stands in Stormwind City, a few yards from the portal into the Stockade at (-8762, 849, 88). The objective for this run is for the party to clear the Stockade and defeat Bazil Thredd. You share party chat with the others and can whisper any of them."
+      },
+      {
+        "id": "paladin",
+        "role": "damage",
+        "race": 3,
+        "class": 2,
+        "character": "Palapartyf",
+        "objective": "You are one of a party of five, each played by another agent: Tankpartyb (warrior, the party leader), Healpartyc (priest), Magepartyd (mage), Roguepartye (rogue) and Palapartyf (paladin). You are Palapartyf, the party's damage. The party stands in Stormwind City, a few yards from the portal into the Stockade at (-8762, 849, 88). The objective for this run is for the party to clear the Stockade and defeat Bazil Thredd. You share party chat with the others and can whisper any of them."
+      }
+    ]
+  }
+}

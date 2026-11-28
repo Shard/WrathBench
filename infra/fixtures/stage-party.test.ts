@@ -14,7 +14,9 @@ import { checkedIn, checkedInFiles } from "../../runner/test/fixtures/campaigns"
 import { commandStager, type StageRequest as RosterRequest } from "../party-stager";
 import { tempDirs } from "../temp-dirs";
 import { stagingEnvOf } from "../world";
+import { PARTY_DUNGEONS, partyDungeon } from "../smoke/lib/party";
 import { loadoutFor, partyCharacterName, type Loadout } from "./loadouts";
+import { SCENARIOS, type Scenario } from "./scenarios";
 import { SoapClient } from "./soap";
 import {
   DEFAULT_PARTY_ACCOUNTS,
@@ -90,8 +92,62 @@ describe("checkStageRequest", () => {
     expect(with_((r) => (r.members[4]!.race = 1))).toMatch(/Dwarf Paladin \(race 3\); the member is race 1/);
     expect(with_((r) => (r.members[1]!.role = "damage"))).toMatch(/plays "healer"/);
     expect(with_((r) => (r.scenario = "nowhere"))).toMatch(/unknown scenario 'nowhere'/);
-    expect(with_((r) => (r.level = 25))).toMatch(/built for level 20/);
+    expect(with_((r) => (r.level = 25))).toMatch(/level 25: the loadouts are built for levels 20 and 24/);
+    expect(with_((r) => (r.level = 21))).toMatch(/built for levels 20 and 24/);
     expect(with_((r) => (r.members = []))).toMatch(/1\.\.5 members/);
+  });
+
+  test("takes the party at 24 and on the other party scenarios", () => {
+    for (const scenario of ["moonbrook-mine", "silverpine-keep", "stormwind-stockade"]) {
+      for (const level of [20, 24]) expect([scenario, level, checkStageRequest({ ...rosterRequest(), scenario, level })]).toEqual([scenario, level, []]);
+    }
+  });
+
+  test("refuses a party larger than its scenario's spots, naming the scenario and both counts", () => {
+    expect(checkStageRequest({ ...rosterRequest(), scenario: "northshire-fresh" }).join("; ")).toMatch(/scenario 'northshire-fresh' has 0 party spots for 5 members/);
+    expect(checkStageRequest({ ...rosterRequest(), scenario: "moonbrook-mine" })).toEqual([]);
+  });
+
+  test("the default request is the Deadmines' at 20 unless told otherwise", () => {
+    const d = defaultStageRequest({ party: "p" });
+    expect([d.scenario, d.level]).toEqual(["moonbrook-mine", 20]);
+    const s = defaultStageRequest({ party: "p", scenario: "stormwind-stockade", level: 24 });
+    expect([s.scenario, s.level]).toEqual(["stormwind-stockade", 24]);
+    expect(checkStageRequest(s)).toEqual([]);
+  });
+});
+
+describe("the party scenarios' spots", () => {
+  /** Inside an AreaTrigger.dbc volume: a sphere, or the oriented box Position::IsWithinBox tests. */
+  const inside = (t: (typeof PARTY_DUNGEONS)[string]["entrance"] & { radius?: number; box?: { length: number; width: number; height: number; yaw: number } }, p: { x: number; y: number; z: number }) => {
+    if (t.radius) return Math.hypot(p.x - t.x, p.y - t.y, p.z - t.z) <= t.radius;
+    const b = t.box!;
+    const dx = p.x - t.x;
+    const dy = p.y - t.y;
+    const c = Math.cos(-b.yaw);
+    const s = Math.sin(-b.yaw);
+    return Math.abs(dx * c - dy * s) <= b.length / 2 && Math.abs(dx * s + dy * c) <= b.width / 2 && Math.abs(p.z - t.z) <= b.height / 2;
+  };
+
+  for (const d of Object.values(PARTY_DUNGEONS)) {
+    test(`${d.scenario}: five spots outside the entrance trigger, 10-14.4y from its centre (the Deadmines band), 2.8y or more apart, each facing it`, () => {
+      const spots = (SCENARIOS[d.scenario] as Scenario).partySpots!;
+      expect(spots).toHaveLength(5);
+      for (const p of spots) {
+        const d2 = Math.hypot(p.x - d.entrance.x, p.y - d.entrance.y);
+        expect([p, d2 >= 10 && d2 <= 14.4]).toEqual([p, true]);
+        expect([p, inside(d.entrance, p)]).toEqual([p, false]);
+        const o = Math.atan2(d.entrance.y - p.y, d.entrance.x - p.x);
+        expect(p.o).toBeCloseTo(o < 0 ? o + 2 * Math.PI : o, 6);
+      }
+      for (let i = 0; i < spots.length; i++) for (let j = i + 1; j < spots.length; j++) expect(Math.hypot(spots[i]!.x - spots[j]!.x, spots[i]!.y - spots[j]!.y)).toBeGreaterThanOrEqual(2.8);
+    });
+  }
+
+  test("every party smoke dungeon stages at a level the stager takes", () => {
+    for (const d of Object.values(PARTY_DUNGEONS)) expect([d.scenario, checkStageRequest(defaultStageRequest({ party: "p", scenario: d.scenario, level: d.level }))]).toEqual([d.scenario, []]);
+    expect(partyDungeon().scenario).toBe("moonbrook-mine");
+    expect(() => partyDungeon("nowhere")).toThrow(/no party dungeon for scenario 'nowhere'/);
   });
 });
 
