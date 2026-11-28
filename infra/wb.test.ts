@@ -105,6 +105,54 @@ describe("where a command runs", () => {
   });
 });
 
+describe("--env: a variable for the command alone", () => {
+  const entry = (g: string, c: string): Entry => ENTRIES.find((e) => e.group === g && e.command === c)!;
+  const run = (argv: string[]) => {
+    const r = parse(argv, { WRATHBENCH_TARGET: undefined });
+    if (r.kind !== "run") throw new Error(`not a run: ${JSON.stringify(r)}`);
+    return planned(r.entry, r.opts, r.args);
+  };
+
+  test("repeatable, in order, before the group; a runner command gets them in the pod or the container, a host command in its environment", () => {
+    const vars = ["--env", "MODULE_RAID_ACCOUNTS=EVAL01,EVAL02", "--env", "MODULE_PARTY_ACCOUNTS=two words=x"];
+    expect(run([...vars, "smoke", "raid-group", "--keep"]).argv).toEqual([
+      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--",
+      "env", "MODULE_RAID_ACCOUNTS=EVAL01,EVAL02", "MODULE_PARTY_ACCOUNTS=two words=x", "bun", "infra/smoke/raid-group.ts", "--keep",
+    ]);
+    expect(run(["--local", ...vars, "smoke", "raid-group"]).argv).toEqual([
+      "docker", "compose", "-f", "infra/compose.yml", "exec", "-T",
+      "-e", "MODULE_RAID_ACCOUNTS=EVAL01,EVAL02", "-e", "MODULE_PARTY_ACCOUNTS=two words=x", "runner", "bun", "infra/smoke/raid-group.ts",
+    ]);
+    const host = run([...vars, "site", "og"]);
+    expect(host.argv).toEqual(["bun", "infra/render-og.ts"]);
+    expect(host.env).toMatchObject({ MODULE_RAID_ACCOUNTS: "EVAL01,EVAL02", MODULE_PARTY_ACCOUNTS: "two words=x", WRATHBENCH_K8S_NAMESPACE: "wrathbench" });
+    // An empty value is a value.
+    expect(run(["--env", "EMPTY=", "smoke", "raid-group"]).argv).toContain("EMPTY=");
+  });
+
+  test("without --env every argv is the one it always was", () => {
+    for (const e of ENTRIES) for (const f of forms(e)) {
+      const opts = f === e.local ? LOCAL : CLUSTER;
+      expect(argvFor(f, { ...opts, env: [] }, ["x"])).toEqual(argvFor(f, opts, ["x"]));
+    }
+    expect(plan(entry("smoke", "raid-group"), CLUSTER, [])).not.toHaveProperty("env.MODULE_RAID_ACCOUNTS");
+  });
+
+  test("a bad name, a missing value or a name wb sets itself is refused, and the value is never echoed", () => {
+    for (const bad of [["--env"], ["--env", "NOEQUALS"], ["--env", "lower=SECRETVALUE"], ["--env", "1ST=SECRETVALUE"], ["--env", "=SECRETVALUE"], ["--env", "A-B=SECRETVALUE"]]) {
+      const r = parse([...bad, "smoke", "raid-group"], {});
+      expect(r.kind).toBe("error");
+      expect(JSON.stringify(r)).not.toContain("SECRETVALUE");
+    }
+    const reserved = parse(["--env", "WRATHBENCH_K8S_NAMESPACE=other", "smoke", "raid-group"], {});
+    expect(reserved).toMatchObject({ kind: "error", message: "--env cannot set WRATHBENCH_K8S_NAMESPACE; use -n or --release" });
+    // After the group it is the script's argument, not wb's.
+    const late = parse(["smoke", "raid-group", "--env", "A=1"], {});
+    expect(late).toMatchObject({ kind: "run", args: ["--env", "A=1"] });
+    expect(late.opts.env).toBeUndefined();
+  });
+});
+
 // ------------------------------------------------------------------ spawn
 
 /**
@@ -162,6 +210,20 @@ describe("bun wb, for real", () => {
     expect(r.calls[0]!.slice(-3)).toEqual(["sh", "--accounts-only", "infra/bootstrap/bootstrap.ts"]);
     expect(r.calls[1]!.slice(0, 4)).toEqual(["kubectl", "-n", "wrathbench", "get"]);
     expect(r.err).toContain("infra/bootstrap/bootstrap.ts predates --accounts-only; the pod runs registry.example/wrathbench-runner:harness-0.5-1-gold");
+  });
+
+  test("--env reaches the pod as named, and nothing of wb's own environment does", () => {
+    const r = runWb(["--env", "MODULE_RAID_ACCOUNTS=EVAL01,EVAL02,EVAL03,EVAL04,EVAL05,EVAL06", "smoke", "raid-group"], { WRATHBENCH_DB_PASSWORD: "s3cret", MODULE_PARTY_ACCOUNTS: "PARTY1" });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([
+      ["kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "env", "MODULE_RAID_ACCOUNTS=EVAL01,EVAL02,EVAL03,EVAL04,EVAL05,EVAL06", "bun", "infra/smoke/raid-group.ts"],
+    ]);
+    expect(r.calls.flat().join(" ")).not.toMatch(/s3cret|MODULE_PARTY_ACCOUNTS/);
+    // A group's help prints the table's argv, never the operator's values.
+    const help = runWb(["--env", "MODULE_RAID_ACCOUNTS=SECRETVALUE", "smoke"]);
+    expect(help).toMatchObject({ code: 0, calls: [] });
+    expect(help.out).toContain("infra/smoke/raid-group.ts");
+    expect(help.out).not.toContain("SECRETVALUE");
   });
 
   test("help, and an unknown command, run nothing", () => {

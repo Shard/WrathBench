@@ -1351,10 +1351,14 @@ The accounts for hand runs:
   hand smoke: its reclaim would take the account from it.
 - A suite member run alone goes through the suite, `bun wb smoke suite
   <member>`, which keeps it on its own account. The bare `bun wb smoke <name>`
-  passes no environment into the pod, so it logs in on PROBE and fails at
-  character creation on a name its own account holds. For any other account
-  use the kubectl form:
-  `kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE3 bun infra/smoke/<name>.ts`.
+  passes none of this shell's environment into the pod, so it logs in on PROBE
+  and fails at character creation on a name its own account holds. A variable
+  a smoke reads goes in by name, as a global flag before the group:
+  `bun wb --env MODULE_ACCOUNT=SMOKE3 smoke <name>`, repeatable
+  (`--env MODULE_RAID_ACCOUNTS=… smoke raid-group`, `--env
+  MODULE_PARTY_ACCOUNTS=… smoke party-staging`), the same under `--local`.
+  The value rides on the command line in the pod, so never pass a secret this
+  way.
 - Leave `SMOKE` to the gate. The supervisor runs its gate on SMOKE as soon as
   it boots, and again after any worldserver restart.
 
@@ -3101,7 +3105,8 @@ suite touches them.
      80, converted to a raid at staging, checked inside a raid map and out
      again on map 1. It needs ten accounts the module admits: EVAL01..EVAL10
      by default (a world's allowlist carries them, the shared world's does
-     not), or ten named in `MODULE_PARTY_ACCOUNTS`; and a stack release that
+     not), or ten named in `MODULE_PARTY_ACCOUNTS` (`bun wb --env
+     MODULE_PARTY_ACCOUNTS=… smoke party-staging …`); and a stack release that
      allows `CMSG_GROUP_RAID_CONVERT`. On demand only.
 5. While a party campaign is enabled, run `deadmines-entry` after any release
    that touches the module, on PROBE with the fleet live.
