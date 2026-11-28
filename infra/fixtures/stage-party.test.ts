@@ -417,7 +417,8 @@ describe("raid staging's own steps", () => {
     const sent: string[] = [];
     const send = async (opcode: string) => {
       sent.push(opcode);
-      if (reply === "refused") throw new Error(`POST /action -> 400 opcode_not_allowed: sdk.raw() sends only the CMSG_* opcodes on the module's raw allowlist`);
+      // The SDK's WrathRequestError: the module's code on `.code`, and in the message.
+      if (reply === "refused") throw Object.assign(new Error("module rejected request: opcode_not_allowed (sdk.raw() sends only the CMSG_* opcodes on the module's raw allowlist, and this one is not on it) (HTTP 400)"), { code: "opcode_not_allowed" });
       if (reply === "converts") raid = true;
       return { ok: true, action: "raw", opcode, payload: "" };
     };

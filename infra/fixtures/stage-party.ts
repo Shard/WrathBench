@@ -399,8 +399,11 @@ export async function convertToRaid(lead: RaidLeader, opts: { timeoutMs?: number
     else await lead.raw(RAID_CONVERT_OPCODE);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    // The SDK's WrathRequestError carries the module's code; its message
+    // ("module rejected request: opcode_not_allowed (…)") names it too.
+    const code = typeof e === "object" && e !== null && "code" in e ? (e as { code: unknown }).code : undefined;
     throw new Error(
-      /opcode_not_allowed/.test(msg) || /not on (its|the) .*allowlist/.test(msg)
+      code === "opcode_not_allowed" || /opcode_not_allowed/.test(msg)
         ? `the module refused ${RAID_CONVERT_OPCODE} (not on its raw allowlist): a raid needs the stack release that allows it; ${msg}`
         : `${RAID_CONVERT_OPCODE} failed: ${msg}`,
     );
