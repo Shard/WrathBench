@@ -3140,13 +3140,19 @@ refused before anything is touched.
 A raid is staged the same way at 80, with ten members. Each member names its
 talent tree (`spec` in the definition and the request), which picks its
 loadout with its class (`infra/fixtures/raid-loadouts.ts`: two tanks, three
-healers, five damage, item level 200 pre-raid gear, raid reagents). A party
-above five is taken only on a scenario outside a raid that large
-(`dustwallow-lair`, ten spots outside Onyxia's Lair), never on a group's.
-Three steps differ from a group's. A raid set does not fit a fresh backpack,
-so each member's four bags are stored and worn in a login of their own
-before the gear. Trainer ranks past a talent the build does not take are
-dropped. After the first member accepts, the leader converts the group to a
+healers, five damage in item level 226-232 gear, the tier Onyxia is tuned
+for, enchanted, gemmed and glyphed, with 1000 gold and reagents, food,
+potions and flasks for many wipes). A party above five is taken only on a
+scenario outside a raid that large (`dustwallow-lair`, ten spots outside
+Onyxia's Lair), never on a group's. Four steps differ from a group's. A raid
+set does not fit a fresh backpack, so each member's four bags are stored and
+worn in a login of their own before the gear. Once the gear is worn, still
+offline, each enchanted or socketed piece gets the `item_instance`
+enchantments a client's enchanting and socketing leave; the glyphs are the
+one `character_glyphs` row a client's glyphing leaves, and a weapon skill the
+class does not start with (the Combat rogue's One-Handed Swords) is written
+at the level's cap with its spell. Trainer ranks past a talent the build does
+not take are dropped. After the first member accepts, the leader converts the group to a
 raid with `CMSG_GROUP_RAID_CONVERT`, because the door admits only a raid
 group, and then invites the rest. The raid is 10-player normal: a fresh
 leader's default, which the group takes when it is created. A module whose

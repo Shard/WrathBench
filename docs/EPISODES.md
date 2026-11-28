@@ -211,7 +211,11 @@ stays a group's. The stager takes the same count from the same entry, and
 forms a raid group before the sixth member because the core admits only a
 raid group at a raid's door; the party smokes stage and walk a raid as they
 do a group (`--scenario dustwallow-lair`). Onyxia's Lair, ten players at 80,
-is the first (`onyxia@1`, an unscored probe). Its members name their talent
+is the first (`onyxia@1`, an unscored probe). A probe stamps no staging
+hash: the stager reads the loadouts from the build it runs, so a retuned kit
+reaches a published version at the next release. `onyxia@2` is `@1` again on
+the item level 226-232 kit, so the two kits' attempts neither pool nor share
+`maxAttemptsPerCell`. Its members name their talent
 tree (`spec`), because a raid carries two of a class: a member's loadout is
 keyed by class, spec and level (`infra/fixtures/raid-loadouts.ts`), and a
 member that names none wears its class's level-20 loadout as every party

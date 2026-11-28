@@ -298,6 +298,25 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     });
   }
 
+  // A weapon master's skill, trained and practised to the level's cap. Before
+  // the cap UPDATE below, which leaves it as it is (its max is already the cap).
+  for (const skill of scenario.skills ?? []) {
+    const cap = maxSkillForLevel(scenario.level);
+    statements.push({
+      sql: `REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)`,
+      params: [guid, skill, cap, cap],
+    });
+  }
+
+  // The glyphs as a client's glyphing leaves them: one row for the active
+  // spec (talentGroup 0), replaced whole so no stale glyph survives.
+  if (scenario.glyphs) {
+    statements.push({
+      sql: `REPLACE INTO character_glyphs (guid, talentGroup, glyph1, glyph2, glyph3, glyph4, glyph5, glyph6) VALUES (?, 0, ?, ?, ?, ?, ?, ?)`,
+      params: [guid, ...scenario.glyphs],
+    });
+  }
+
   if (scenario.maxSkills) {
     // Level-ranged skills only: armor and other mono skills sit at max 1 and
     // languages at 300, and both are fixed by the loader whatever is stored.
@@ -430,6 +449,34 @@ export function buildEquipStatements(
     statements.push({ sql: `UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?`, params: [p.bag, p.slot, guid, item] });
   }
   return statements;
+}
+
+/** One worn piece's enchantments: the item in `slot` and its `item_instance.enchantments` text (`itemEnchantments`). */
+export type EnchantTarget = { entry: number; slot: number; enchantments: string };
+
+/** `MAX_ENCHANTMENT_SLOT` x `MAX_ENCHANTMENT_OFFSET`: the id, duration and charges of twelve slots. */
+export const ENCHANTMENT_TOKENS = 36;
+
+/**
+ * The enchant and socket write for worn pieces, as statements. Pure. Each
+ * target is the row the equipment move just put in its slot (bag 0), found
+ * by slot and template; its `enchantments` column is set to the text a
+ * client's enchanting and socketing leave (`Item::SaveToDB`'s form: 36
+ * numbers, each followed by a space). Only that column of rows the server
+ * allocated and saved changes, never a guid. Run while the character is
+ * offline, after the move, so the next login loads it (`Item::LoadFromDB`)
+ * and equipping applies it (`Player::ApplyEnchantment`).
+ */
+export function buildEnchantStatements(guid: number, rows: readonly InventoryRow[], targets: readonly EnchantTarget[]): Statement[] {
+  return targets.map((t) => {
+    const tokens = t.enchantments.trim().split(/\s+/);
+    if (tokens.length !== ENCHANTMENT_TOKENS || !tokens.every((x) => /^\d+$/.test(x))) {
+      throw new Error(`enchantments for item ${t.entry} in slot ${t.slot} are not ${ENCHANTMENT_TOKENS} numbers: '${t.enchantments}'`);
+    }
+    const row = rows.find((r) => r.bag === 0 && r.slot === t.slot && r.entry === t.entry);
+    if (!row) throw new Error(`item ${t.entry} is not worn in slot ${t.slot}; enchant it after the equipment move`);
+    return { sql: `UPDATE item_instance SET enchantments = ? WHERE guid = ? AND owner_guid = ? AND itemEntry = ?`, params: [t.enchantments, row.item, guid, t.entry] };
+  });
 }
 
 // ----------------------------------------------------------------- plumbing
