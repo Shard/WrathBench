@@ -192,8 +192,9 @@ which instance.
 A new instance is a probe target and nothing more. The scored machinery (the
 episode ids, the ladder's board, the tiers) stays the Deadmines', and an
 instance becomes an eval only by the operator's decision and a new id. An
-entry may name a scenario the stager does not have yet: it is defined before
-it is staged, and the registry's test says which ones wait
+entry is registered with its staging: its `staged` scenario exists with a
+spot for each member of a full party, and its `level` is the one the party
+smokes and every checked-in definition staged there use
 (`infra/dungeons-registry.test.ts`). Ids, coordinates and short names only,
 read from the pinned core's world tables and the client's DBC files, with
 where each came from in the entry's `note`; never game text.

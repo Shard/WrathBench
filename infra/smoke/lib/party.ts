@@ -53,6 +53,26 @@ export function partyDungeon(name: string = DEFAULT_PARTY_SCENARIO): PartyDungeo
 }
 
 /**
+ * A party smoke's arguments: the switches it takes, each at most once, and
+ * `--scenario <name>`, the dungeon it is pointed at (the Deadmines' when
+ * none is named). Anything else throws with the smoke's usage line.
+ */
+export function partySmokeArgs(smoke: string, argv: readonly string[], switches: readonly string[]): { switches: ReadonlySet<string>; scenario?: string; dungeon: PartyDungeon } {
+  const usage = `usage: ${smoke} ${[...switches.map((s) => `[${s}]`), "[--scenario <name>]"].join(" ")}`;
+  const on = new Set<string>();
+  let scenario: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--scenario") {
+      scenario = argv[++i];
+      if (!scenario || scenario.startsWith("--")) throw new Error(`--scenario needs a name; ${usage}`);
+    } else if (switches.includes(a)) on.add(a);
+    else throw new Error(`unknown argument ${a}; ${usage}`);
+  }
+  return { switches: on, ...(scenario ? { scenario } : {}), dungeon: partyDungeon(scenario) };
+}
+
+/**
  * The smokes' party: the stager's default request (PARTY1..PARTY5, one of
  * each loadout, the tank first and leading), or MODULE_PARTY_ACCOUNTS
  * (comma-separated) in that order, on the Deadmines' scenario at 20 or the

@@ -7,12 +7,11 @@
  * party smokes' members (party.ts) are what a `--scenario` stages and checks.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { checkedIn, checkedInFiles } from "../runner/test/fixtures/campaigns";
 import { LOADOUTS, loadoutAt, partySpot } from "./fixtures/loadouts";
 import { SCENARIOS, type Scenario } from "./fixtures/scenarios";
 import { openEventStream, waitForEvent } from "./smoke/lib/events";
 import { moduleAction, moduleRequest, moduleSession } from "./smoke/lib/module";
-import { PARTY_DUNGEONS, membersOf, partyDungeon, smokeRequest } from "./smoke/lib/party";
+import { PARTY_DUNGEONS, membersOf, partyDungeon, partySmokeArgs, smokeRequest } from "./smoke/lib/party";
 import { checks, stampedLog, taggedLog } from "./smoke/lib/report";
 
 let printed: string[] = [];
@@ -161,11 +160,16 @@ describe("the party smokes' members", () => {
     });
   }
 
-  test("each smoke dungeon's level is the start.level of every checked-in party definition staged on its scenario", () => {
-    const staged = checkedInFiles()
-      .map((f) => checkedIn(f.replace(/\.json$/, "")))
-      .flatMap((def) => (def.party !== undefined && typeof def.start === "object" && def.start.staged in PARTY_DUNGEONS ? [{ ref: `${def.id}@${def.version}`, ...def.start }] : []));
-    expect(new Set(staged.map((s) => s.staged))).toEqual(new Set(Object.keys(PARTY_DUNGEONS)));
-    for (const s of staged) expect([s.ref, s.level]).toEqual([s.ref, PARTY_DUNGEONS[s.staged]!.level]);
+  test("the arguments: the smoke's switches and --scenario, the Deadmines' when none is named, anything else refused with the usage", () => {
+    const none = partySmokeArgs("party-staging", [], ["--keep", "--recheck"]);
+    expect([[...none.switches], none.scenario, none.dungeon]).toEqual([[], undefined, partyDungeon()]);
+    const some = partySmokeArgs("party-staging", ["--keep", "--scenario", "stormwind-stockade"], ["--keep", "--recheck"]);
+    expect([[...some.switches], some.scenario, some.dungeon.level]).toEqual([["--keep"], "stormwind-stockade", 24]);
+    expect(() => partySmokeArgs("party-entry", ["--recheck"], ["--staged", "--keep"])).toThrow(
+      "unknown argument --recheck; usage: party-entry [--staged] [--keep] [--scenario <name>]",
+    );
+    expect(() => partySmokeArgs("party-staging", ["--scenario"], ["--keep"])).toThrow(/^--scenario needs a name; usage: party-staging/);
+    expect(() => partySmokeArgs("party-staging", ["--scenario", "--keep"], ["--keep"])).toThrow(/^--scenario needs a name/);
+    expect(() => partySmokeArgs("party-staging", ["--scenario", "nowhere"], ["--keep"])).toThrow(/no party dungeon for scenario 'nowhere'/);
   });
 });

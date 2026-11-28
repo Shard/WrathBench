@@ -48,25 +48,16 @@
 
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { assertStagedMember, deleteMembers, loginMember, membersOf, partyDungeon, smokeRequest } from "./lib/party";
+import { assertStagedMember, deleteMembers, loginMember, membersOf, partySmokeArgs, smokeRequest } from "./lib/party";
 import { stageParty } from "../fixtures/stage-party";
 import type { WrathClient } from "@wrathbench/sdk";
 import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
-const USAGE = "usage: party-staging [--keep] [--recheck] [--scenario <name>]";
-const argv = Bun.argv.slice(2);
-let scenarioArg: string | undefined;
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i]!;
-  if (a === "--scenario") {
-    scenarioArg = argv[++i];
-    if (!scenarioArg) throw new Error(`--scenario needs a name; ${USAGE}`);
-  } else if (a !== "--keep" && a !== "--recheck") throw new Error(`unknown argument ${a}; ${USAGE}`);
-}
-const KEEP = argv.includes("--keep");
-const RECHECK = argv.includes("--recheck");
-const dungeon = partyDungeon(scenarioArg);
+const args = partySmokeArgs("party-staging", Bun.argv.slice(2), ["--keep", "--recheck"]);
+const KEEP = args.switches.has("--keep");
+const RECHECK = args.switches.has("--recheck");
+const dungeon = args.dungeon;
 const request = smokeRequest("party-staging", process.env, dungeon);
 const party = membersOf(request);
 
@@ -89,7 +80,7 @@ try {
   await Bun.sleep(2000);
   for (const [i, m] of party.entries()) await assertStagedMember(clients[i]!, m, party, log);
   ok = true;
-  console.log(`PASS: party-staging${scenarioArg ? ` --scenario ${dungeon.scenario} (level ${dungeon.level})` : ""}${RECHECK ? " --recheck (nothing staged was reaped by the boot)" : ""} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+  console.log(`PASS: party-staging${args.scenario ?` --scenario ${dungeon.scenario} (level ${dungeon.level})` : ""}${RECHECK ? " --recheck (nothing staged was reaped by the boot)" : ""} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);
   process.exitCode = 1;
