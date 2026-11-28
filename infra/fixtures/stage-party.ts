@@ -3,9 +3,10 @@
  * each member a fresh character on its party account (PARTY1..PARTY5, or
  * five the attempt drew from the eval pool, EVAL01..EVALnn) under the name the
  * campaign definition gives it, put into the loadout of its race and class
- * (level 20, trainer spells, preset talents, skills, quest-level greens worn,
- * bags, supplies), standing where the request's scenario puts it, grouped
- * with the first member leading, and logged out.
+ * (level 20, or a level `LEVEL_EXTENSIONS` covers; trainer spells to that
+ * level, preset talents, skills, quest-level greens worn, bags, supplies),
+ * standing on its own spot of the request's scenario, grouped with the first
+ * member leading, and logged out.
  *
  * The roster's contract (infra/party-stager.ts on the fleet side, which this
  * file matches and never changes):
@@ -100,7 +101,10 @@ import {
   LOADOUTS,
   LOADOUT_IDS,
   PARTY_LEVEL,
+  PARTY_LEVELS,
   checkTalentsAgainstFrame,
+  isPartyLevel,
+  loadoutAt,
   loadoutFor,
   partyCharacterName,
   partyScenario,
@@ -108,7 +112,7 @@ import {
   type Loadout,
   type StockLine,
 } from "./loadouts";
-import { SCENARIOS, isScenarioName } from "./scenarios";
+import { SCENARIOS, isScenarioName, type Scenario } from "./scenarios";
 import { soapFromEnv, type SoapClient } from "./soap";
 
 /** The pinned party accounts. */
@@ -229,8 +233,14 @@ export function checkStageRequest(req: StageRequest): string[] {
   const ms = req.members;
   if (ms.length < 1 || ms.length > 5) errors.push(`a party is 1..5 members, got ${ms.length}`);
   if (!isScenarioName(req.scenario)) errors.push(`unknown scenario '${req.scenario}'`);
-  // The loadouts' talents are eleven points: the level they are built for.
-  if (req.level !== PARTY_LEVEL) errors.push(`level ${req.level}: the loadouts are built for level ${PARTY_LEVEL}`);
+  else {
+    // One spot a member: never two members stood in one another.
+    const spots = (SCENARIOS[req.scenario] as Scenario).partySpots?.length ?? 0;
+    if (ms.length > spots) errors.push(`scenario '${req.scenario}' has ${spots} party spots for ${ms.length} members`);
+  }
+  // The loadouts' talents are eleven points at 20; a level above it is one an extension is written for.
+  const levelOk = isPartyLevel(req.level);
+  if (!levelOk) errors.push(`level ${req.level}: the loadouts are built for levels ${PARTY_LEVELS.join(" and ")}`);
   const dupes = (xs: string[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
   // Account names are case-blind in auth, and the eval pool's check is too.
   for (const a of dupes(ms.map((m) => m.account.toUpperCase()))) errors.push(`account ${a} is named twice`);
@@ -242,20 +252,23 @@ export function checkStageRequest(req: StageRequest): string[] {
     if (!/^[a-z][a-z0-9]{0,15}$/.test(m.member)) errors.push(`member id '${m.member}' is not a member id`);
     const l = loadoutFor(m);
     if (typeof l === "string") errors.push(`${m.member}: ${l}`);
+    else if (levelOk) errors.push(...validateLoadout(loadoutAt(l, req.level), req.level));
     else errors.push(...validateLoadout(l));
   }
   return errors;
 }
 
-/** The default party's request: PARTY1..PARTY5, one of each loadout, in loadout order (the tank first, so it leads). */
-export function defaultStageRequest(over: Partial<Pick<StageRequest, "party" | "campaign">> & { accounts?: readonly string[] } = {}): StageRequest {
+/** The default party's request: PARTY1..PARTY5, one of each loadout, in loadout order (the tank first, so it leads), on the Deadmines' scenario at 20 unless told otherwise. */
+export function defaultStageRequest(
+  over: Partial<Pick<StageRequest, "party" | "campaign" | "scenario" | "level">> & { accounts?: readonly string[] } = {},
+): StageRequest {
   const accounts = over.accounts ?? DEFAULT_PARTY_ACCOUNTS;
   return {
     party: over.party ?? `manual-${Date.now()}`,
     campaign: over.campaign ?? "manual",
     version: 0,
-    scenario: DEFAULT_PARTY_SCENARIO,
-    level: PARTY_LEVEL,
+    scenario: over.scenario ?? DEFAULT_PARTY_SCENARIO,
+    level: over.level ?? PARTY_LEVEL,
     members: LOADOUT_IDS.map((id, i) => {
       const l = LOADOUTS[id];
       const account = accounts[i]!;
@@ -353,10 +366,10 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
       account: m.account,
       character: m.character,
       runId: m.runId,
-      loadout: loadoutFor(m) as Loadout,
+      loadout: loadoutAt(loadoutFor(m) as Loadout, req.level),
     }));
-    for (const m of members) m.spells = await readTrainerSpells(sql, m.loadout);
-    log(`party ${req.party} (${req.campaign}@${req.version}, scenario ${req.scenario}): ${members.map((m) => `${m.character} (${m.id}, ${m.loadout.label}) on ${m.account} for ${m.runId}`).join(", ")}`);
+    for (const m of members) m.spells = await readTrainerSpells(sql, m.loadout, req.level);
+    log(`party ${req.party} (${req.campaign}@${req.version}, scenario ${req.scenario}, level ${req.level}): ${members.map((m) => `${m.character} (${m.id}, ${m.loadout.label}) on ${m.account} for ${m.runId}`).join(", ")}`);
 
     const token = (m: Member, phase: string) => `stage-${req.party.replace(/[^\w-]/g, "-").slice(0, 40)}-${m.account}-${phase}-${crypto.randomUUID()}`;
     const open = async (m: Member, phase: string): Promise<WrathClient> => {

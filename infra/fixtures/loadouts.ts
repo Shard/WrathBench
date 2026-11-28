@@ -43,6 +43,10 @@
  *   left out (`trainerExclude`): no other member rides at 20.
  * - Talents: eleven points (levels 10-20), one tree per role, every tier and
  *   prerequisite legal, each row the spell of the rank taken.
+ *
+ * A party staged above 20 wears the same loadout with its level's extension
+ * (`LEVEL_EXTENSIONS`, `loadoutAt`): the extra talent points, the trainer's
+ * spells up to that level, and nothing else.
  */
 
 import { accountFixtureName } from "../smoke/lib/fixture";
@@ -62,6 +66,8 @@ export type PartyRoleWord = "tank" | "healer" | "damage";
 /** The party's level, and the talent points it has: one a level from 10. */
 export const PARTY_LEVEL = 20;
 export const PARTY_TALENT_POINTS = PARTY_LEVEL - 9;
+/** A character's talent points at `level`: one a level from 10. */
+export const talentPointsAt = (level: number): number => Math.max(0, level - 9);
 /** 3 gold, for repairs. */
 export const PARTY_MONEY = 30_000;
 
@@ -307,6 +313,109 @@ export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
 };
 
 /**
+ * What a loadout gains above level 20, per level the party is staged at: kept
+ * apart from LOADOUTS so the level-20 objects, which the scored Deadmines
+ * groups' staging hash covers (`infra/task-launch.ts`), never move. A level
+ * is the base loadout plus its extension (`loadoutAt`): the same gear, bags
+ * and supplies (every piece is wearable from 20, and none has a required
+ * level above it), the class trainer's spells up to the level (read at
+ * staging time, as at 20), and the talents the extra points buy.
+ *
+ * Level 24 (the Stockade's party): 15 points, four more than
+ * the 11-point preset, all in the role's own tree. With 11 spent, tier 4
+ * needs 15 first, so the four go into tiers 1-3, on passive talents only, so
+ * no member gains an ability the level-20 party lacks:
+ *
+ * - tank, Protection: Toughness 4 (armor from items).
+ * - healer, Holy: Inspiration from 1 to 3, Holy Specialization 2 (heal crit).
+ * - mage, Frost: Precision from 2 to 3, Piercing Ice 3.
+ * - rogue, Combat: Dual Wield Specialization from 3 to 5, Close Quarters
+ *   Combat 2 (which needs Dual Wield Specialization at 5).
+ * - paladin, Retribution: Conviction 4.
+ *
+ * A raised talent keeps its one `character_talent` row, at the new rank's
+ * spell (`talents` here replace the base pick of the same `talentId`). The
+ * ranks and spells were read off Talent.dbc. Between 21 and 24 no class quest
+ * of these five teaches a spell (quest_template), no trainer entry is a
+ * learn-effect spell (Spell.dbc), and one entry needs a talent the preset
+ * does not take: the mage trainer's Pyroblast rank 2 (12505, level 24)
+ * requires the Fire talent Pyroblast (11366), so it is left out. `keySpells`
+ * at 24 swap a level-20 key spell for the rank the trainer adds by 24, so the
+ * staging smoke checks the rank the spellbook shows.
+ */
+export type LoadoutExtension = {
+  talents: readonly TalentPick[];
+  trainerExclude?: readonly number[];
+  keySpells?: readonly number[];
+};
+
+export const LEVEL_EXTENSIONS: Readonly<Record<number, Readonly<Record<LoadoutId, LoadoutExtension>>>> = {
+  24: {
+    tank: {
+      talents: [{ talentId: 140, tab: 163, row: 2, col: 3, rank: 4, maxRank: 5, spell: 12763, name: "Toughness" }],
+      // Revenge rank 2 (6574) at 24.
+      keySpells: [71, 355, 7386, 2565, 6574, 8198],
+    },
+    healer: {
+      talents: [
+        { talentId: 361, tab: 202, row: 2, col: 3, rank: 3, maxRank: 3, spell: 15363, name: "Inspiration" },
+        { talentId: 401, tab: 202, row: 0, col: 2, rank: 2, maxRank: 5, spell: 15008, name: "Holy Specialization" },
+      ],
+      // Heal rank 2 (2055), Resurrection rank 2 (2010), Power Word: Shield rank 4 (3747), Power Word: Fortitude rank 3 (1245).
+      keySpells: [2061, 2055, 2010, 3747, 6075, 1245],
+    },
+    mage: {
+      talents: [
+        { talentId: 1649, tab: 61, row: 1, col: 2, rank: 3, maxRank: 3, spell: 29440, name: "Precision" },
+        { talentId: 61, tab: 61, row: 2, col: 0, rank: 3, maxRank: 3, spell: 12953, name: "Piercing Ice" },
+      ],
+      trainerExclude: [12505],
+    },
+    rogue: {
+      talents: [
+        { talentId: 221, tab: 181, row: 0, col: 2, rank: 5, maxRank: 5, spell: 13852, name: "Dual Wield Specialization" },
+        { talentId: 182, tab: 181, row: 2, col: 2, rank: 2, maxRank: 5, spell: 13804, name: "Close Quarters Combat", dependsOn: { talentId: 221, rank: 5 } },
+      ],
+    },
+    paladin: {
+      talents: [{ talentId: 1411, tab: 381, row: 2, col: 1, rank: 4, maxRank: 5, spell: 20120, name: "Conviction" }],
+      // Redemption rank 2 (10322) at 24.
+      keySpells: [20271, 26573, 879, 19750, 20217, 10322],
+    },
+  },
+};
+
+/** The levels a party is staged at: the loadouts' own, and each level an extension is written for. */
+export const PARTY_LEVELS: readonly number[] = [PARTY_LEVEL, ...Object.keys(LEVEL_EXTENSIONS).map(Number)].sort((a, b) => a - b);
+
+export function isPartyLevel(level: number): boolean {
+  return PARTY_LEVELS.includes(level);
+}
+
+/**
+ * The loadout at a staged level: at PARTY_LEVEL the shipped object itself
+ * (the same reference, so nothing a level-20 staging writes or hashes can
+ * move), above it a new object with the level's extension applied. Throws
+ * for a level no extension is written for; `checkStageRequest` refuses such
+ * a level before anyone calls this.
+ */
+export function loadoutAt(l: Loadout, level: number): Loadout {
+  if (level === PARTY_LEVEL) return l;
+  const ext = LEVEL_EXTENSIONS[level]?.[l.id];
+  if (!ext) throw new Error(`no level ${level} extension for the ${l.id} loadout; the party is staged at ${PARTY_LEVELS.join(" or ")}`);
+  const replaced = new Set(ext.talents.map((t) => t.talentId));
+  const added = ext.talents.filter((t) => !l.talents.some((b) => b.talentId === t.talentId));
+  const talents = [...l.talents.map((b) => (replaced.has(b.talentId) ? ext.talents.find((t) => t.talentId === b.talentId)! : b)), ...added];
+  const trainerExclude = [...(l.trainerExclude ?? []), ...(ext.trainerExclude ?? [])];
+  return {
+    ...l,
+    talents,
+    ...(trainerExclude.length ? { trainerExclude } : {}),
+    keySpells: ext.keySpells ?? l.keySpells,
+  };
+}
+
+/**
  * The loadout for a member of this race and class, or why there is none.
  * The gear is chosen for the race and class's starting proficiencies, so
  * race and class must both match; the role word must be the
@@ -349,7 +458,7 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
     xp: 0,
     money: PARTY_MONEY,
     // The member's own spot (member order), so five do not stand in one another.
-    position: base.partySpots?.[member] ?? base.position,
+    position: partySpot(base, member),
     ...(base.homebind ? { homebind: base.homebind } : {}),
     clearQuests: true,
     spells,
@@ -359,17 +468,29 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
 }
 
 /**
- * The structural check on a loadout, run in the tests and again by the
- * stager before it writes anything. The talent half matters most: the
- * worldserver ASSERTs on a `character_talent` row that is not a talent
- * spell, and silently resets a tree that spends more than the level gives.
+ * A member's spot in a party scenario: its own, in member order. A member
+ * past the scenario's spots is refused rather than stood on another's
+ * (`checkStageRequest` refuses such a party before anything is touched).
  */
-export function validateLoadout(l: Loadout): string[] {
+export function partySpot(base: Scenario, member: number): Scenario["position"] {
+  const spot = base.partySpots?.[member];
+  if (!spot) throw new Error(`the scenario (${base.description}) has ${base.partySpots?.length ?? 0} party spots; member ${member + 1} has none`);
+  return spot;
+}
+
+/**
+ * The structural check on a loadout at a level (the loadout as `loadoutAt`
+ * gives it), run in the tests and again by the stager before it writes
+ * anything. The talent half matters most: the worldserver ASSERTs on a
+ * `character_talent` row that is not a talent spell, and silently resets a
+ * tree that spends more than the level gives.
+ */
+export function validateLoadout(l: Loadout, level = PARTY_LEVEL): string[] {
   const errors: string[] = [];
   const where = `loadout ${l.id}`;
   // Talents: points, one row per talent, ranks, tiers, prerequisites.
   const total = l.talents.reduce((n, t) => n + t.rank, 0);
-  if (total > PARTY_TALENT_POINTS) errors.push(`${where}: ${total} talent points, a level ${PARTY_LEVEL} character has ${PARTY_TALENT_POINTS}`);
+  if (total > talentPointsAt(level)) errors.push(`${where}: ${total} talent points, a level ${level} character has ${talentPointsAt(level)}`);
   const ids = new Set<number>();
   const spells = new Set<number>();
   const spentInTab = new Map<number, number>();

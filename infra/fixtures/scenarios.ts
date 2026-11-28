@@ -308,6 +308,73 @@ export const SENTINEL_HILL_BIND = { map: 0, zone: 108, x: -10624.5, y: 1096.66, 
 /** Westfall (AreaTable); the server recomputes the zone from the position at login. */
 export const WESTFALL_ZONE = 40;
 
+// The two party scenarios after the Deadmines', staged the same way (a party
+// of five on the walkway outside an instance portal, one plain move of the
+// trigger's centre from entry) and read off the same sources: the trigger's
+// geometry from AreaTrigger.dbc, its target from `areatrigger_teleport`, the
+// spots from the server's own navmesh tiles (data/client/mmaps, read offline:
+// each spot is on the polygon component that holds the zone's `game_tele`
+// point for the dungeon and reaches into the trigger, with mesh 0.75y around
+// it on every side, z the mesh's), the aggro clearance from the pinned core's
+// base world SQL (creature, creature_addon and waypoint_data paths, the SAI
+// `waypoints` paths, creature_template levels, factions and detection_range,
+// FactionTemplate.dbc for who is hostile to an Alliance player), and the
+// homebind from `game_tele` with its area from the server's area grid
+// (data/client/maps). The spots are 10-14.3y from the trigger's centre, inside
+// the Deadmines' 10-14.4y, and 2.8y or more apart.
+//
+// Shadowfang Keep: AreaTrigger.dbc 145 on map 0 at (-229.49, 1576.35, 78.89),
+// radius 7, the keep's gate in Silverpine Forest (zone 130, area 236), which
+// `areatrigger_teleport` 145 sends to map 33. The gate's own polygons are an
+// island; the walkway outside it, which `game_tele` 836 stands on 15.6y out,
+// comes to 5.4y of the centre (inside the sphere), and a move of the centre
+// ends there (the module's END_REACHABLE_RADIUS). Silverpine is Horde-held:
+// no creature spawn, wander or patrol point is within 100y of the trigger, the
+// nearest are the village's spawns 100y+ away and 50y below (faction
+// 123, not hostile), and the nearest hostile to an Alliance player, Horde
+// NPCs included, is entry 2106 at 174y (aggro radius 16y at level 20), then
+// entry 2058 at 203y. The homebind is Southshore, `game_tele` 913, area 271:
+// the nearest Alliance inn (Silverpine has none). A corpse run stays in the
+// zone: graveyard 1256, `graveyard_zone` 130 for either faction, is 480y south.
+export const SHADOWFANG_ENTRANCE_TRIGGER = { id: 145, map: 0, x: -229.49, y: 1576.35, z: 78.89, radius: 7 };
+/** The Shadowfang Keep party's five spots on the walkway outside the gate, in member order, each facing the trigger. */
+export const SHADOWFANG_STAGING_SPOTS: readonly { x: number; y: number; z: number }[] = [
+  { x: -234.0, y: 1567.3, z: 77.0 },
+  { x: -231.5, y: 1565.6, z: 77.0 },
+  { x: -236.3, y: 1565.6, z: 77.0 },
+  { x: -234.8, y: 1563.1, z: 77.0 },
+  { x: -232.0, y: 1562.4, z: 77.0 },
+];
+export const SOUTHSHORE_BIND = { map: 0, zone: 271, x: -853.221, y: -533.529, z: 9.98556 };
+/** Silverpine Forest (AreaTable). */
+export const SILVERPINE_ZONE = 130;
+
+// The Stockade: AreaTrigger.dbc 101 on map 0, a box (length 4.972, width
+// 9.694, height 7.444, yaw 0.6632) centred on (-8761.85, 848.557, 87.805) at
+// the foot of the ramp down from the canal in Stormwind City (zone 1519),
+// which `areatrigger_teleport` 101 sends to map 34. The centre is on the
+// ramp's own mesh, so a move of it walks straight in. The spots are on the
+// ramp above it (z 90-91.3), on the component `game_tele` 1435 stands on 23y
+// out. Every creature within 100y is friendly to an Alliance player
+// (Stormwind's factions 11 and 12) or the civilian trigger creature 15384
+// 14y off and 28y below (flags_extra trigger and civilian: it never engages);
+// the nearest hostile is entry 3581 at 138y in the sewers. The one patrol
+// path ending at the door, SAI path 1706, belongs to creature 1706's map-0
+// branch, and that creature is spawned only on map 34. The homebind is the
+// Trade District, `game_tele` 954, beside the city's inn.
+export const STOCKADE_ENTRANCE_TRIGGER = { id: 101, map: 0, x: -8761.85, y: 848.557, z: 87.805, box: { length: 4.972, width: 9.694, height: 7.444, yaw: 0.6632 } };
+/** The Stockade party's five spots on the ramp above the door, in member order, each facing the trigger. */
+export const STOCKADE_STAGING_SPOTS: readonly { x: number; y: number; z: number }[] = [
+  { x: -8768.0, y: 840.5, z: 90.1 },
+  { x: -8771.4, y: 845.3, z: 90.1 },
+  { x: -8770.9, y: 842.1, z: 90.7 },
+  { x: -8770.6, y: 838.8, z: 91.3 },
+  { x: -8774.1, y: 842.8, z: 91.3 },
+];
+export const STORMWIND_TRADE_BIND = { map: 0, zone: 1519, x: -8833.38, y: 628.628, z: 94.0066 };
+/** Stormwind City (AreaTable). */
+export const STORMWIND_ZONE = 1519;
+
 // The steep re-plan smoke's starts: points a freeplay character stood on when
 // the module refused its move as `drop` at a 51-58 degree step, read off the
 // module's own move_path rows (the route's first point), and the point each
@@ -677,6 +744,28 @@ export const SCENARIOS = {
     position: { map: 0, zone: WESTFALL_ZONE, ...DEADMINES_STAGING, o: facing(DEADMINES_STAGING, DEADMINES_ENTRANCE_TRIGGER) },
     partySpots: DEADMINES_STAGING_SPOTS.map((p) => ({ map: 0, zone: WESTFALL_ZONE, ...p, o: facing(p, DEADMINES_ENTRANCE_TRIGGER) })),
     homebind: SENTINEL_HILL_BIND,
+    clearQuests: true,
+  },
+  "silverpine-keep": {
+    description:
+      "level 80, 1g, on the walkway outside Shadowfang Keep's gate facing its entrance trigger, 10y away, homebind Southshore, empty quest log (a party scenario: the five members stand on the five spots there at the request's level, infra/fixtures/loadouts.ts; a single character stands on the first at 80)",
+    level: 80,
+    xp: 0,
+    money: 10000,
+    position: { map: 0, zone: SILVERPINE_ZONE, ...SHADOWFANG_STAGING_SPOTS[0]!, o: facing(SHADOWFANG_STAGING_SPOTS[0]!, SHADOWFANG_ENTRANCE_TRIGGER) },
+    partySpots: SHADOWFANG_STAGING_SPOTS.map((p) => ({ map: 0, zone: SILVERPINE_ZONE, ...p, o: facing(p, SHADOWFANG_ENTRANCE_TRIGGER) })),
+    homebind: SOUTHSHORE_BIND,
+    clearQuests: true,
+  },
+  "stormwind-stockade": {
+    description:
+      "level 80, 1g, on the ramp above the Stockade's door in Stormwind facing its entrance trigger, 10y away, homebind the Trade District, empty quest log (a party scenario: the five members stand on the five spots there at the request's level, infra/fixtures/loadouts.ts; a single character stands on the first at 80)",
+    level: 80,
+    xp: 0,
+    money: 10000,
+    position: { map: 0, zone: STORMWIND_ZONE, ...STOCKADE_STAGING_SPOTS[0]!, o: facing(STOCKADE_STAGING_SPOTS[0]!, STOCKADE_ENTRANCE_TRIGGER) },
+    partySpots: STOCKADE_STAGING_SPOTS.map((p) => ({ map: 0, zone: STORMWIND_ZONE, ...p, o: facing(p, STOCKADE_ENTRANCE_TRIGGER) })),
+    homebind: STORMWIND_TRADE_BIND,
     clearQuests: true,
   },
   "vineyard-priest": {

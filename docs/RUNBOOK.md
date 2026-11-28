@@ -3088,6 +3088,9 @@ suite touches them.
      PROBE.
    - `bun wb smoke party-entry` stages a party, walks it into map 36 together,
      checks that it is one instance, and deletes the characters.
+     `--scenario silverpine-keep` or `--scenario stormwind-stockade` runs the
+     same entry for Shadowfang Keep (level 20) or the Stockade (level 24),
+     on demand only: neither is in the suite or the gate.
    - `bun wb smoke party-staging` stages the party, checks every member at
      login, and deletes the characters.
 5. While a party campaign is enabled, run `deadmines-entry` after any release
@@ -3108,8 +3111,16 @@ so a pool, tenant, runner or smoke account is never staged. The definition names
 those names. Each member wears the loadout of its race and class
 (`infra/fixtures/loadouts.ts`): a Human Warrior tank, a Dwarf Priest healer,
 and as damage a Human Mage, a Human Rogue and a Dwarf Paladin, so no pet is
-ever staged. A member of any other race and class, or a level other than 20,
-is refused before anything is touched. The script exits 0 when the party is
+ever staged. The request's level is the definition's `start.level`: 20, or
+24, which is the same loadout with the trainer's spells to 24 and four more
+talent points in each role's tree (`LEVEL_EXTENSIONS`, which says what each
+buys and why); the level-20 loadouts are untouched by it, so the scored
+Deadmines groups' staging hash does not move. Each member stands on its own
+spot of the scenario (`partySpots`): `moonbrook-mine` for the Deadmines,
+`silverpine-keep` outside Shadowfang Keep and `stormwind-stockade` above the
+Stockade's door, five spots each. A member of any other race and class, a
+level other than 20 or 24, or a party larger than its scenario's spots is
+refused before anything is touched. The script exits 0 when the party is
 staged and formed with no session open, and its last stdout line is then
 `{"ok":true,"detail":…}`. Otherwise the reason is the last line on stderr:
 exit 1 for a staging that failed, 2 for a refused request. If a member does
