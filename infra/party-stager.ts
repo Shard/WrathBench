@@ -29,13 +29,15 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { PartyRole } from "../runner/src/party";
+import type { PartyRole, PartySpec } from "../runner/src/party";
 
 /** One member to stage, in member order. */
 export interface StageMember {
   /** The member id (`tank`, `healer`, …), its run id's suffix. */
   member: string;
   role: PartyRole;
+  /** The definition's talent tree for the member, when it names one: with the class and level, what picks the loadout. Absent when the definition names none. */
+  spec?: PartySpec;
   /** The client's own race and class ids. */
   race: number;
   class: number;
