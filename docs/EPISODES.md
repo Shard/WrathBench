@@ -182,11 +182,12 @@ the run timeline's boss marks, the camera's boss cuts and the party page all
 read it from there, so a run in another registered instance gets its own
 bosses everywhere without a reader learning its name.
 
-No campaign definition or episode file names a dungeon. A run finds its own
-from the scenario its definition's `start.staged` names, or from the instance
-map its characters entered, so adding an instance moves no schema, no hash and
-no scored group. Boss entries are creature entries, one creature each, so no
-entry is two instances' and a kill's entry alone says it was a boss.
+No campaign definition or episode file names a dungeon, so adding an instance
+moves no schema, no hash and no scored group. The board finds its dungeon
+from the scenario its task definition's `start.staged` names. Everything else
+needs no lookup: boss entries are creature entries, one creature each, so no
+entry is two instances' and a kill's entry alone says it was a boss, and in
+which instance.
 
 A new instance is a probe target and nothing more. The scored machinery (the
 episode ids, the ladder's board, the tiers) stays the Deadmines', and an

@@ -5,9 +5,11 @@
  * follows; it carries exactly the facts the Deadmines evals have always run
  * on, so reading them from here moves nothing.
  *
- * A run finds its dungeon from what it already carries: its definition's
- * `start.staged` (the scenario the stager applied) or the instance map its
- * characters entered. Neither the campaign definition nor the episode JSON
+ * A run's dungeon follows from what it already carries: its definition's
+ * `start.staged` (the scenario the stager applied, `dungeonByStaged`, which
+ * the board reads) or the instance map its characters entered
+ * (`dungeonByMap`); a boss kill needs neither, its entry alone says which
+ * (`BOSS_ENTRIES`). Neither the campaign definition nor the episode JSON
  * names a dungeon, so neither schema nor any hash moves for it.
  *
  * Kept free of the runner's heavier modules, like `task-episodes.ts`: the
