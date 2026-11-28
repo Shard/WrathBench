@@ -1725,7 +1725,7 @@ exports[`the supervisor's tick over fixture states Deadmines solo: a t3 model wi
               ],
             },
             "hash": "sha256:875505ed52060e76",
-            "staging": "sha256:d1f6a505e68618b8",
+            "staging": "sha256:cbaccd62b7f6e2b1",
             "version": 1,
           },
           "class": 1,

@@ -224,8 +224,8 @@ describe("the scored Deadmines groups' pins", () => {
   // Golden values: the definition and staging hashes are comparability keys, so
   // a change to either splits the scored group and must be deliberate, never a side effect.
   const PINS = {
-    deadmines: { definition: "sha256:372bc06840e0ba5d", staging: "sha256:d1f6a505e68618b8", agents: 5, characters: 1, runs: 5 },
-    "deadmines-solo": { definition: "sha256:875505ed52060e76", staging: "sha256:d1f6a505e68618b8", agents: 1, characters: 5, runs: 1 },
+    deadmines: { definition: "sha256:372bc06840e0ba5d", staging: "sha256:cbaccd62b7f6e2b1", agents: 5, characters: 1, runs: 5 },
+    "deadmines-solo": { definition: "sha256:875505ed52060e76", staging: "sha256:cbaccd62b7f6e2b1", agents: 1, characters: 5, runs: 1 },
   } as const;
 
   test("hold for both ids, from the definition through the fleet's launch file to the stamped tuple", () => {

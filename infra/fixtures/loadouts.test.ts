@@ -153,8 +153,8 @@ describe("the member scenario", () => {
     expect(s.clearQuests).toBe(true);
     expect(s.spells).toEqual([71, 100, 355, 772, 6343, 7386]);
     expect(s.talents).toEqual([12727, 12753, 12975]);
-    // No level-20 pick carries `spellbook`, so the scenario has no such key and stages as it always did.
-    expect("talentSpells" in s).toBe(false);
+    // Last Stand is an ability: its spell row is written too, as LearnTalent leaves it.
+    expect(s.talentSpells).toEqual([12975]);
     expect(s.maxSkills).toBe(true);
     // The base scenario's own level 80 and money are not the member's.
     expect(SCENARIOS["moonbrook-mine"].level).toBe(80);
@@ -174,7 +174,24 @@ describe("the member scenario", () => {
     expect(rendered.findIndex((s) => s.startsWith("INSERT INTO character_talent"))).toBeGreaterThan(del);
     expect(rendered).toContain("UPDATE character_skills SET value = 100, max = 100 WHERE guid = 4242 AND max > 1 AND max < 300");
     expect(rendered).toContain("INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (4242, 71, 255)");
+    // The active talent's ability at the active spec's mask; the passive picks are talent rows only.
+    expect(rendered).toContain("INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (4242, 12975, 1)");
+    expect(rendered.join("\n")).not.toMatch(/character_spell \(guid, spell, specMask\) VALUES \(4242, (12727|12753),/);
     expect(rendered.join("\n")).not.toMatch(/item_instance|INSERT INTO character_inventory|ammoId/);
+  });
+
+  test("the active talents are flagged at every party level, and only they are", () => {
+    // Read offline from Talent.dbc (addToSpellBook) and Spell.dbc (not passive, no learn effect):
+    // Last Stand, Icy Veins, Seal of Command. No level-24 pick is one.
+    const active: Record<string, number[]> = { tank: [12975], healer: [], mage: [12472], rogue: [], paladin: [20375] };
+    for (const level of PARTY_LEVELS) {
+      for (const id of LOADOUT_IDS) {
+        const s = partyScenario(loadoutAt(LOADOUTS[id], level), [], SCENARIOS["moonbrook-mine"], level, 0);
+        validateScenario(s);
+        expect(s.talentSpells ?? []).toEqual(active[id]!);
+      }
+    }
+    for (const ext of Object.values(LEVEL_EXTENSIONS)) for (const e of Object.values(ext)) expect(e.talents.some((t) => t.spellbook)).toBe(false);
   });
 
   test("a member past its scenario's spots is refused, never stood on another's or on the solo position", () => {
