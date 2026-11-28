@@ -1351,10 +1351,14 @@ The accounts for hand runs:
   hand smoke: its reclaim would take the account from it.
 - A suite member run alone goes through the suite, `bun wb smoke suite
   <member>`, which keeps it on its own account. The bare `bun wb smoke <name>`
-  passes no environment into the pod, so it logs in on PROBE and fails at
-  character creation on a name its own account holds. For any other account
-  use the kubectl form:
-  `kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE3 bun infra/smoke/<name>.ts`.
+  passes none of this shell's environment into the pod, so it logs in on PROBE
+  and fails at character creation on a name its own account holds. A variable
+  a smoke reads goes in by name, as a global flag before the group:
+  `bun wb --env MODULE_ACCOUNT=SMOKE3 smoke <name>`, repeatable
+  (`--env MODULE_RAID_ACCOUNTS=… smoke raid-group`, `--env
+  MODULE_PARTY_ACCOUNTS=… smoke party-staging`), the same under `--local`.
+  The value rides on the command line in the pod, so never pass a secret this
+  way.
 - Leave `SMOKE` to the gate. The supervisor runs its gate on SMOKE as soon as
   it boots, and again after any worldserver restart.
 
@@ -3101,7 +3105,8 @@ suite touches them.
      80, converted to a raid at staging, checked inside a raid map and out
      again on map 1. It needs ten accounts the module admits: EVAL01..EVAL10
      by default (a world's allowlist carries them, the shared world's does
-     not), or ten named in `MODULE_PARTY_ACCOUNTS`; and a stack release that
+     not), or ten named in `MODULE_PARTY_ACCOUNTS` (`bun wb --env
+     MODULE_PARTY_ACCOUNTS=… smoke party-staging …`); and a stack release that
      allows `CMSG_GROUP_RAID_CONVERT`. On demand only.
 5. While a party campaign is enabled, run `deadmines-entry` after any release
    that touches the module, on PROBE with the fleet live.
@@ -3140,13 +3145,19 @@ refused before anything is touched.
 A raid is staged the same way at 80, with ten members. Each member names its
 talent tree (`spec` in the definition and the request), which picks its
 loadout with its class (`infra/fixtures/raid-loadouts.ts`: two tanks, three
-healers, five damage, item level 200 pre-raid gear, raid reagents). A party
-above five is taken only on a scenario outside a raid that large
-(`dustwallow-lair`, ten spots outside Onyxia's Lair), never on a group's.
-Three steps differ from a group's. A raid set does not fit a fresh backpack,
-so each member's four bags are stored and worn in a login of their own
-before the gear. Trainer ranks past a talent the build does not take are
-dropped. After the first member accepts, the leader converts the group to a
+healers, five damage in item level 226-232 gear, the tier Onyxia is tuned
+for, enchanted, gemmed and glyphed, with 1000 gold and reagents, food,
+potions and flasks for many wipes). A party above five is taken only on a
+scenario outside a raid that large (`dustwallow-lair`, ten spots outside
+Onyxia's Lair), never on a group's. Four steps differ from a group's. A raid
+set does not fit a fresh backpack, so each member's four bags are stored and
+worn in a login of their own before the gear. Once the gear is worn, still
+offline, each enchanted or socketed piece gets the `item_instance`
+enchantments a client's enchanting and socketing leave; the glyphs are the
+one `character_glyphs` row a client's glyphing leaves, and a weapon skill the
+class does not start with (the Combat rogue's One-Handed Swords) is written
+at the level's cap with its spell. Trainer ranks past a talent the build does
+not take are dropped. After the first member accepts, the leader converts the group to a
 raid with `CMSG_GROUP_RAID_CONVERT`, because the door admits only a raid
 group, and then invites the rest. The raid is 10-player normal: a fresh
 leader's default, which the group takes when it is created. A module whose

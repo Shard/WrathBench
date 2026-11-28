@@ -55,7 +55,7 @@
 
 import type { PartySpec } from "../../runner/src/party";
 import { accountFixtureName } from "../smoke/lib/fixture";
-import { RAID_LEVEL, RAID_LOADOUTS, isRaidLoadout, raidGearProblems, raidLoadoutOf, type RaidLoadoutId } from "./raid-loadouts";
+import { GLYPH_SLOT_MAJOR, RAID_BAG_RESERVE, RAID_BAG_SLOTS, RAID_LEVEL, RAID_LOADOUTS, isRaidLoadout, raidGearProblems, raidLoadoutOf, supplySlots, type RaidLoadoutId } from "./raid-loadouts";
 import type { Scenario } from "./scenarios";
 
 /**
@@ -76,8 +76,10 @@ export const PARTY_LEVEL = 20;
 export const PARTY_TALENT_POINTS = PARTY_LEVEL - 9;
 /** A character's talent points at `level`: one a level from 10. */
 export const talentPointsAt = (level: number): number => Math.max(0, level - 9);
-/** 3 gold, for repairs. */
+/** 3 gold, for repairs: a level-20 or level-24 party's. A raid loadout carries its own (`Loadout.money`). */
 export const PARTY_MONEY = 30_000;
+/** The copper a member of this loadout is staged with: its own, or the party's. */
+export const loadoutMoney = (l: Pick<Loadout, "money">): number => l.money ?? PARTY_MONEY;
 
 /** Equipment slots (`EquipmentSlots` in the core). */
 export const SLOT = {
@@ -98,7 +100,20 @@ export const SLOT = {
   ranged: 17,
 } as const;
 
-export type GearLine = { item: number; name: string; slot: number; twoHand?: true };
+export type GearLine = {
+  item: number;
+  name: string;
+  slot: number;
+  twoHand?: true;
+  /**
+   * A raid piece's permanent enchant (SpellItemEnchantment.dbc id) and the gem
+   * items in its sockets, in socket order (`raid-loadouts.ts`). The stager
+   * writes them as the `item_instance.enchantments` a client's enchant and
+   * socketing leave (`itemEnchantments`). Absent on every level-20 piece.
+   */
+  enchant?: number;
+  gems?: readonly number[];
+};
 export type StockLine = { item: number; name: string; count: number };
 export type TalentPick = {
   talentId: number;
@@ -165,7 +180,26 @@ export type Loadout = {
   bags: readonly StockLine[];
   /** Added once the bags are worn: food, drink, potions. */
   supplies: readonly StockLine[];
+  /** Copper at staging; absent means `PARTY_MONEY`. Set on the raid loadouts only, so no level-20 object moves. */
+  money?: number;
+  /**
+   * The glyphs in the active spec's six slots, in slot order (`character_glyphs`
+   * glyph1..6, GlyphProperties.dbc ids). A raid loadout's only.
+   */
+  glyphs?: readonly GlyphPick[];
+  /**
+   * Weapon skills a weapon master teaches that the race and class do not
+   * start with: the spell (a `character_spell` row) and its skill line,
+   * written at the level's cap as a trained and practised skill leaves it
+   * (`Scenario.skills`). A raid loadout's only.
+   */
+  weaponSkills?: readonly WeaponSkill[];
 };
+
+/** One glyph slot's glyph: its GlyphProperties.dbc id and whether it is a major glyph (TypeFlags 0) or a minor one (1). */
+export type GlyphPick = { glyph: number; name: string; major: boolean };
+/** A weapon master's skill: the spell that teaches it, its SkillLine.dbc id and the `item_template` weapon subclass it covers. */
+export type WeaponSkill = { spell: number; skill: number; subclass: number; name: string };
 
 const WOOLEN_BAG: StockLine = { item: 4240, name: "Woolen Bag", count: 1 };
 const BAGS = [WOOLEN_BAG, WOOLEN_BAG] as const;
@@ -506,14 +540,17 @@ export function partyCharacterName(id: LoadoutId, account: string): string {
 export function partyScenario(loadout: Loadout, trainerSpells: readonly number[], base: Scenario, level = PARTY_LEVEL, member = 0): Scenario {
   const exclude = new Set(loadout.trainerExclude ?? []);
   const taught = trainerSpells.filter((s) => !exclude.has(s)).flatMap((s) => loadout.trainerLearns?.[s] ?? [s]);
-  const spells = [...new Set([...taught, ...loadout.questSpells.map((s) => s.spell)])].sort((a, b) => a - b);
+  const weaponSkills = loadout.weaponSkills ?? [];
+  const spells = [...new Set([...taught, ...loadout.questSpells.map((s) => s.spell), ...weaponSkills.map((w) => w.spell)])].sort((a, b) => a - b);
   // Only when a pick carries it, so a scenario without one is the object it always was.
   const talentSpells = loadout.talents.filter((t) => t.spellbook).map((t) => t.spell);
+  // The same for the raid loadouts' glyphs and weapon skills: absent on every level-20 loadout.
+  const glyphs = loadout.glyphs?.map((g) => g.glyph);
   return {
     description: `party ${loadout.id}: level ${level} ${loadout.label} at the scenario's spot (${base.description}), ${loadout.talents.length} talents, ${spells.length} spells`,
     level,
     xp: 0,
-    money: PARTY_MONEY,
+    money: loadoutMoney(loadout),
     // The member's own spot (member order), so five do not stand in one another.
     position: partySpot(base, member),
     ...(base.homebind ? { homebind: base.homebind } : {}),
@@ -521,6 +558,8 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
     spells,
     talents: loadout.talents.map((t) => t.spell),
     ...(talentSpells.length ? { talentSpells } : {}),
+    ...(glyphs?.length ? { glyphs } : {}),
+    ...(weaponSkills.length ? { skills: weaponSkills.map((w) => w.skill) } : {}),
     maxSkills: true,
   };
 }
@@ -577,7 +616,18 @@ export function validateLoadout(l: Loadout, level = PARTY_LEVEL): string[] {
   }
   if (l.gear.some((g) => g.twoHand) && slots.has(SLOT.offHand)) errors.push(`${where}: a two-handed weapon and an off hand`);
   if (l.bags.length > 4) errors.push(`${where}: ${l.bags.length} bags, there are 4 bag slots`);
-  if (isRaidLoadout(l)) errors.push(...raidGearProblems(l));
+  if (isRaidLoadout(l)) {
+    errors.push(...raidGearProblems(l));
+    if (supplySlots(l) + RAID_BAG_RESERVE > RAID_BAG_SLOTS) errors.push(`${where}: supplies take ${supplySlots(l)} bag slots; with ${RAID_BAG_RESERVE} kept free the bags hold ${RAID_BAG_SLOTS}`);
+  }
+  if (l.glyphs !== undefined) {
+    if (l.glyphs.length !== GLYPH_SLOT_MAJOR.length) errors.push(`${where}: ${l.glyphs.length} glyphs; a spec has ${GLYPH_SLOT_MAJOR.length} slots`);
+    l.glyphs.forEach((g, i) => {
+      if (g.major !== GLYPH_SLOT_MAJOR[i]) errors.push(`${where}: glyph ${g.name} (${g.glyph}) is ${g.major ? "major" : "minor"} in a ${GLYPH_SLOT_MAJOR[i] ? "major" : "minor"} slot (${i})`);
+      if (!Number.isInteger(g.glyph) || g.glyph <= 0) errors.push(`${where}: glyph id ${g.glyph}`);
+    });
+    if (new Set(l.glyphs.map((g) => g.glyph)).size !== l.glyphs.length) errors.push(`${where}: a glyph twice`);
+  }
   for (const s of [...l.bags, ...l.supplies]) {
     if (!Number.isInteger(s.count) || s.count < 1) errors.push(`${where}: ${s.name} count ${s.count}`);
   }

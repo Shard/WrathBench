@@ -25,9 +25,12 @@
  * not through this tool. The party stager (`stage-party.ts`) is the one
  * exception to "through the module", and it still inserts nothing: its gear
  * comes from the running server's own `.additem` over SOAP, and the only item
- * write here is the offline equipment move (`buildEquipStatements` in
+ * writes here are the offline equipment move (`buildEquipStatements` in
  * apply.ts), which changes `bag`/`slot` on rows the server saved and never a
- * guid.
+ * guid, and, for a raid piece, the `enchantments` column of a row the server
+ * saved and the move just put on (`buildEnchantStatements`): the permanent
+ * enchant, the gems and the socket bonus a client's enchanting and socketing
+ * would have left on it, never a guid either.
  */
 
 /** A map position with a facing. */
@@ -122,6 +125,24 @@ export type Scenario = {
    * skill is added: the loader keeps the stored value and recomputes the max.
    */
   maxSkills?: boolean;
+  /**
+   * The active spec's six glyph slots, in slot order (GlyphProperties.dbc
+   * ids, 0 for an empty slot), written as the one `character_glyphs` row a
+   * client's glyphing leaves (talentGroup 0). The loader casts each glyph's
+   * aura at login (`_LoadGlyphAuras`) and drops one whose type is not the
+   * slot's (GlyphSlot.dbc: slots 0, 3 and 5 are major), so a bad id costs
+   * the glyph, never the login.
+   */
+  glyphs?: number[];
+  /**
+   * SkillLine.dbc ids to write at the level's cap (`character_skills`, value
+   * and max both 5 x level): a weapon skill a weapon master teaches, as a
+   * trained and practised one stands. The skill's teaching spell goes in
+   * `spells`; the loader keeps a skill the race and class may have
+   * (SkillRaceClassInfo.dbc) and, finding the row, does not reset it when
+   * the spell loads after it.
+   */
+  skills?: number[];
 };
 
 /** One quest-log row with its kill counts standing (`Scenario.quests.counted`). */
@@ -1019,7 +1040,16 @@ export function validateScenario(scenario: Scenario): void {
     scenario.talentSpells === undefined || !scenario.talentSpells.some((s) => scenario.spells?.includes(s)),
     "talentSpells must not also be in spells, which are written at every spec's mask",
   );
+  assert(
+    scenario.glyphs === undefined ||
+      (scenario.glyphs.length === GLYPH_SLOTS && scenario.glyphs.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff)),
+    `glyphs must be ${GLYPH_SLOTS} GlyphProperties.dbc ids (0 for an empty slot)`,
+  );
+  assert(scenario.skills === undefined || (isIdList(scenario.skills) && new Set(scenario.skills).size === scenario.skills.length), "skills must be distinct positive SkillLine.dbc ids");
 }
+
+/** `MAX_GLYPH_SLOT_INDEX`: a spec's glyph slots, `character_glyphs` glyph1..glyph6. */
+export const GLYPH_SLOTS = 6;
 
 /** `characters.taximask` is 14 u32 words in 3.3.5 (TaxiMaskSize); node n sets bit n-1. */
 export const TAXI_MASK_WORDS = 14;

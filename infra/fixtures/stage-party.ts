@@ -60,7 +60,9 @@
  *      not say so.
  *   4. After that save, one transaction moves the gear and the bags from the
  *      backpack to their slots, swapping starter gear into the places they
- *      left (`bag`/`slot` only, never a guid).
+ *      left (`bag`/`slot` only, never a guid). A raid set's enchants and
+ *      gems follow in one more, on the rows now worn: the `enchantments`
+ *      column a client's enchanting and socketing leave, never a guid.
  *      A raid set (17 pieces and four bags) does not fit a fresh backpack,
  *      so its bags go through 3 and 4 alone first (`bagsFirst`).
  *   5. All members log in together: supplies go into the now-worn bags, the
@@ -92,6 +94,7 @@ import { moduleBase } from "../smoke/lib/module";
 import {
   OFFHAND_SLOT,
   applyStatements,
+  buildEnchantStatements,
   buildEquipStatements,
   buildStatements,
   connect as connectDb,
@@ -102,6 +105,7 @@ import {
   waitForNewSave,
   waitUntilOffline,
   type CharacterRow,
+  type EnchantTarget,
   type EquipTarget,
   type InventoryRow,
 } from "./apply";
@@ -120,7 +124,7 @@ import {
   type Loadout,
   type StockLine,
 } from "./loadouts";
-import { RAID_LEVEL, RAID_LOADOUTS, RAID_LOADOUT_IDS, isRaidLoadout, raidTrainerSpells, type TrainerRow } from "./raid-loadouts";
+import { RAID_LEVEL, RAID_LOADOUTS, RAID_LOADOUT_IDS, isRaidLoadout, itemEnchantments, raidTrainerSpells, type TrainerRow } from "./raid-loadouts";
 import { SCENARIOS, isScenarioName, type Scenario } from "./scenarios";
 import { soapFromEnv, type SoapClient } from "./soap";
 
@@ -397,6 +401,19 @@ export function bagsFirst(l: Pick<Loadout, "gear" | "bags">): boolean {
   return l.gear.length + l.bags.length > BACKPACK_ROOM;
 }
 
+/**
+ * The worn pieces a loadout enchants or sockets, with the enchantments text a
+ * client's enchanting and socketing leave (`itemEnchantments`): a raid set's
+ * only. A level-20 set has none and its staging writes nothing more.
+ */
+export function enchantTargets(l: Loadout): EnchantTarget[] {
+  if (!isRaidLoadout(l)) return [];
+  return l.gear.flatMap((g) => {
+    const enchantments = itemEnchantments(g);
+    return enchantments === undefined ? [] : [{ entry: g.item, slot: g.slot, enchantments }];
+  });
+}
+
 /** The client opcode that makes the leader's group a raid (`WorldSession::HandleGroupRaidConvertOpcode`). */
 export const RAID_CONVERT_OPCODE = "CMSG_GROUP_RAID_CONVERT";
 
@@ -616,6 +633,12 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
       // A raid set does not fit a fresh backpack: the bags are worn first, in a round of their own.
       await storeAndEquip(m, m.loadout.bags, (rows) => bagTargets(rows, m.loadout.bags), [], "bags");
       await storeAndEquip(m, gear, () => gearTargets, clear, "gear");
+      // A raid set's enchants and gems, on the rows the move just put in their slots, still offline.
+      const targets = enchantTargets(m.loadout);
+      if (targets.length) {
+        await applyStatements(sql!, buildEnchantStatements(m.guid!, await readInventory(sql!, m.guid!), targets));
+        log(`  ${m.character}: ${targets.length} worn pieces enchanted and socketed`);
+      }
     });
 
     // 5: everyone in together: supplies, the worn-gear check, the party.

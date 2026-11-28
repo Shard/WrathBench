@@ -8,7 +8,8 @@
  */
 
 import { connect, type MoveResult, type WrathClient } from "@wrathbench/sdk";
-import { LOADOUT_IDS, PARTY_MONEY, loadoutAt, loadoutFor, partySpot, type Loadout } from "../../fixtures/loadouts";
+import { LOADOUT_IDS, loadoutAt, loadoutFor, loadoutMoney, partySpot, type Loadout } from "../../fixtures/loadouts";
+import { isRaidLoadout, itemEnchantments } from "../../fixtures/raid-loadouts";
 import { DEFAULT_PARTY_ACCOUNTS, DEFAULT_PARTY_SCENARIO, DEFAULT_RAID_ACCOUNTS, defaultStageRequest, maxMembers, type StageRequest } from "../../fixtures/stage-party";
 import {
   DEADMINES_ENTRANCE_TRIGGER,
@@ -131,8 +132,9 @@ async function until<T>(what: string, ms: number, read: () => T | undefined): Pr
  * The staging smoke's assertions for one logged-in member, each read off the
  * state cache the way a run's own client sees it at login: level, position,
  * the loadout's items in their equipment slots, the role's key spells, the
- * preset talents in SMSG_TALENTS_INFO, the money, the supplies in the bags,
- * and the group listing the other members with the first one leading.
+ * preset talents in SMSG_TALENTS_INFO, a raid set's glyphs, staged weapon
+ * skills, enchants and gems, the money, the supplies in the bags, and the group listing the other
+ * members with the first one leading.
  */
 export async function assertStagedMember(c: WrathClient, m: PartyMember, party: readonly PartyMember[], log: (s: string) => void): Promise<void> {
   const l = m.loadout;
@@ -173,8 +175,33 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
   const unlearned = l.talents.filter((t) => !known.has(t.spell) && !book.some((s) => s.name === t.name && (s.rank ?? 0) > 1));
   if (unlearned.length) throw new Error(`${who} holds the talent but not the spell of ${unlearned.map((t) => `${t.name} (${t.spell})`).join(", ")}`);
 
+  // A raid set's glyphs, in their slots, as SMSG_TALENTS_INFO lists them.
+  if (l.glyphs?.length) {
+    const have = new Map(talents.glyphs.map((g) => [g.slot, g.glyphId]));
+    const wrongGlyphs = l.glyphs.flatMap((g, i) => (have.get(i) === g.glyph ? [] : [`${g.name} (${g.glyph}) in slot ${i}: found ${have.get(i) ?? "nothing"}`]));
+    if (wrongGlyphs.length) throw new Error(`${who}'s glyphs differ from the preset: ${wrongGlyphs.join("; ")}`);
+  }
+
+  // A weapon master's skill the loadout stages (the rogue's swords): at the level's cap, not reset to 1 by its spell loading after it.
+  for (const w of l.weaponSkills ?? []) {
+    const s = c.state.skill(w.skill);
+    if (s?.value !== m.level * 5) throw new Error(`${who}'s ${w.name} (skill ${w.skill}) is at ${s ? `${s.value}/${s.max}` : "nothing"}, expected ${m.level * 5}`);
+  }
+
+  // A raid set's enchants and gems: each worn piece shows a green line for every enchantment slot the stager wrote.
+  if (isRaidLoadout(l)) {
+    const bare = l.gear.flatMap((g) => {
+      const ids = (itemEnchantments(g) ?? "").trim().split(/\s+/).filter((_, i) => i % 3 === 0);
+      const want = ids.filter((id) => id !== "" && id !== "0").length;
+      const worn = c.state.inventory.find((it) => it.slot === g.slot && it.itemId === g.item);
+      const lines = worn?.enchants?.length ?? 0;
+      return lines < want ? [`${g.name} (${g.item}) shows ${lines} of ${want}`] : [];
+    });
+    if (bare.length) throw new Error(`${who} wears pieces without their enchants and gems: ${bare.join("; ")}`);
+  }
+
   const money = await until(`${who} money`, 15_000, () => c.state.money?.value);
-  if (money !== PARTY_MONEY) throw new Error(`${who} has ${money} copper, expected ${PARTY_MONEY}`);
+  if (money !== loadoutMoney(l)) throw new Error(`${who} has ${money} copper, expected ${loadoutMoney(l)}`);
 
   const bag = c.state.bag();
   const counts = new Map<number, number>();

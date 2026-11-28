@@ -34,8 +34,12 @@
  * form is refused. The namespace and the release come from
  * WRATHBENCH_K8S_NAMESPACE and WRATHBENCH_K8S_RELEASE (default `wrathbench`),
  * or `-n`/`--release`; a host script gets them through that same environment,
- * never as an added flag. Global flags go before the group. Everything after
- * the command belongs to the script.
+ * never as an added flag. `--env NAME=value`, repeatable, sets a variable for
+ * the command alone: `env NAME=value` after kubectl's `--` in the pod,
+ * compose's `-e` in the container, the environment of a host command. Only
+ * what is named goes; wb never forwards its own environment, where the
+ * secrets are. Global flags go before the group. Everything after the
+ * command belongs to the script.
  */
 
 import { readdirSync } from "node:fs";
@@ -403,7 +407,20 @@ export interface Options {
   readonly target: "cluster" | "local";
   readonly namespace: string;
   readonly release: string;
+  /**
+   * `--env NAME=value`, in the order given: variables set for the command
+   * itself, and only these. A runner command gets them on the pod's or the
+   * container's side (`env NAME=value` after kubectl's `--`, compose's `-e`),
+   * a host command in its environment. Nothing of wb's own environment is
+   * forwarded, so a secret never rides along unasked.
+   */
+  readonly env?: readonly (readonly [string, string])[];
 }
+
+/** A forwarded variable's name: capitals, digits and underscores, not starting with a digit. */
+export const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+/** Names `--env` refuses: wb sets these itself from `-n` and `--release`. */
+const ENV_RESERVED = new Set(["WRATHBENCH_K8S_NAMESPACE", "WRATHBENCH_K8S_RELEASE"]);
 
 export type Parsed =
   | { kind: "help"; opts: Options; group?: string }
@@ -420,7 +437,8 @@ export function parse(argv: readonly string[], env: Readonly<Record<string, stri
   let target: Options["target"] = "cluster";
   let namespace = nonEmpty(env["WRATHBENCH_K8S_NAMESPACE"]) ?? "wrathbench";
   let release = nonEmpty(env["WRATHBENCH_K8S_RELEASE"]) ?? "wrathbench";
-  const opts = (): Options => ({ target, namespace, release });
+  const forwarded: [string, string][] = [];
+  const opts = (): Options => ({ target, namespace, release, ...(forwarded.length ? { env: forwarded } : {}) });
   if (envTarget !== undefined) {
     if (envTarget !== "cluster" && envTarget !== "local") {
       return { kind: "error", message: `WRATHBENCH_TARGET is "${envTarget}"; it is cluster or local`, opts: opts() };
@@ -434,6 +452,16 @@ export function parse(argv: readonly string[], env: Readonly<Record<string, stri
     if (a === "-h" || a === "--help") return { kind: "help", opts: opts() };
     if (a === "--local") {
       target = "local";
+      continue;
+    }
+    if (a === "--env") {
+      const v = argv[++i];
+      const eq = v === undefined ? -1 : v.indexOf("=");
+      const name = eq < 0 ? "" : v!.slice(0, eq);
+      // The value is never echoed: it may be what the operator meant to keep out of a log.
+      if (!ENV_NAME.test(name)) return { kind: "error", message: `--env takes NAME=value, NAME in capitals, digits and underscores${name === "" ? "" : `; got the name ${JSON.stringify(name)}`}`, opts: opts() };
+      if (ENV_RESERVED.has(name)) return { kind: "error", message: `--env cannot set ${name}; use -n or --release`, opts: opts() };
+      forwarded.push([name, v!.slice(eq + 1)]);
       continue;
     }
     if (a === "-n" || a === "--namespace" || a === "--release") {
@@ -470,18 +498,25 @@ export function runnerPod(opts: Options): string {
 /** The argv a form runs on a target, with the operator's arguments appended untouched. */
 export function argvFor(form: Form, opts: Options, args: readonly string[]): string[] {
   if (form.place === "host") return [...form.argv, ...args];
-  if (opts.target === "cluster") return ["kubectl", "-n", opts.namespace, "exec", "-i", runnerPod(opts), "--", ...form.argv, ...args];
-  return ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "runner", ...form.argv, ...args];
+  const env = opts.env ?? [];
+  if (opts.target === "cluster") {
+    // kubectl exec has no flag for the command's environment: `env` sets it in the pod.
+    const prefix = env.length ? ["env", ...env.map(([k, v]) => `${k}=${v}`)] : [];
+    return ["kubectl", "-n", opts.namespace, "exec", "-i", runnerPod(opts), "--", ...prefix, ...form.argv, ...args];
+  }
+  return ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", ...env.flatMap(([k, v]) => ["-e", `${k}=${v}`]), "runner", ...form.argv, ...args];
 }
 
 /** What one command runs, or why it cannot. */
 export function plan(entry: Entry, opts: Options, args: readonly string[]): Plan | { refused: string } {
   const form = opts.target === "local" ? entry.local : entry.cluster;
   if (form === null) return { refused: `"${entry.group} ${entry.command}" drives the cluster; it has no --local form` };
+  // A host command's `--env` rides in its own environment; a runner command's is in its argv.
+  const forwarded = form.place === "host" ? Object.fromEntries(opts.env ?? []) : {};
   return {
     argv: argvFor(form, opts, args),
     cwd: REPO_ROOT,
-    env: { WRATHBENCH_K8S_NAMESPACE: opts.namespace, WRATHBENCH_K8S_RELEASE: opts.release },
+    env: { ...forwarded, WRATHBENCH_K8S_NAMESPACE: opts.namespace, WRATHBENCH_K8S_RELEASE: opts.release },
   };
 }
 
@@ -489,7 +524,7 @@ export function plan(entry: Entry, opts: Options, args: readonly string[]): Plan
 
 function topHelp(opts: Options): string {
   const lines = [
-    "usage: bun wb [--local] [-n <namespace>] [--release <name>] <group> <command> [args…]",
+    "usage: bun wb [--local] [-n <namespace>] [--release <name>] [--env NAME=value]… <group> <command> [args…]",
     "",
   ];
   for (const [group, what] of Object.entries(GROUPS)) {
@@ -505,13 +540,16 @@ function topHelp(opts: Options): string {
     `Target: ${opts.target === "cluster" ? `the cluster (namespace ${opts.namespace}, release ${opts.release})` : "the compose quickstart on this machine"}.`,
     "--local, or WRATHBENCH_TARGET=local, is the compose quickstart; -n and --release,",
     "or WRATHBENCH_K8S_NAMESPACE and WRATHBENCH_K8S_RELEASE, name the cluster's.",
+    "--env NAME=value, repeatable, sets a variable for the command alone (a runner",
+    "command's in the pod or container); nothing else of this shell's environment goes.",
   );
   return lines.join("\n");
 }
 
 function groupHelp(group: string, opts: Options): string {
-  const clusterOpts: Options = { ...opts, target: "cluster" };
-  const localOpts: Options = { ...opts, target: "local" };
+  // The table's argv, never the operator's --env values.
+  const clusterOpts: Options = { target: "cluster", namespace: opts.namespace, release: opts.release };
+  const localOpts: Options = { ...clusterOpts, target: "local" };
   const lines = [`usage: bun wb ${group} <command> [args…]`, "", `${GROUPS[group]}.`, ""];
   for (const e of ENTRIES.filter((x) => x.group === group)) {
     lines.push(`  ${[e.command, e.takes].filter(Boolean).join(" ")}`);
