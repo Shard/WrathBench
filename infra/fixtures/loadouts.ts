@@ -42,7 +42,11 @@
  *   Warhorse (13820), which teaches the mount and Apprentice Riding and is
  *   left out (`trainerExclude`): no other member rides at 20.
  * - Talents: eleven points (levels 10-20), one tree per role, every tier and
- *   prerequisite legal, each row the spell of the rank taken.
+ *   prerequisite legal, each row the spell of the rank taken. Three picks
+ *   are abilities, not auras (Talent.dbc `addToSpellBook`, Spell.dbc not
+ *   passive): the tank's Last Stand, the mage's Icy Veins and the paladin's
+ *   Seal of Command, which carry `spellbook` so the stager also learns them
+ *   as spells.
  *
  * A party staged above 20 wears the same loadout with its level's extension
  * (`LEVEL_EXTENSIONS`, `loadoutAt`): the extra talent points, the trainer's
@@ -116,9 +120,9 @@ export type TalentPick = {
    * the active spec's mask, and that row is the only thing that puts it in
    * `m_spells`: the `character_talent` row alone loads the talent's points but
    * leaves the ability out of `SMSG_INITIAL_SPELLS` and uncastable. So the
-   * stager writes that row too (`Scenario.talentSpells`). Set on the raid
-   * loadouts; the level-20 objects do not carry it, so their staging and its
-   * hash are what they were.
+   * stager writes that row too (`Scenario.talentSpells`). Set on every such
+   * pick: at 20 Last Stand, Icy Veins and Seal of Command (no level-24 pick
+   * is one), and the raid loadouts' active talents.
    */
   spellbook?: true;
   /** A prerequisite talent and the points it must hold (1-based). */
@@ -132,7 +136,7 @@ export type Loadout = {
    * A raid loadout's talent tree: with the class, what a member's `spec`
    * picks it by. Absent on the five level-20 loadouts, which a member picks
    * by class alone, so their objects (and the staging hash over them) are
-   * what they always were.
+   * not moved by it.
    */
   spec?: PartySpec;
   /** A raid loadout's one level (`RAID_LEVEL`). Absent on the level-20 loadouts, which `loadoutAt` extends. */
@@ -189,7 +193,7 @@ export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
     talents: [
       { talentId: 1601, tab: 163, row: 0, col: 1, rank: 5, maxRank: 5, spell: 12727, name: "Shield Specialization" },
       { talentId: 138, tab: 163, row: 1, col: 2, rank: 5, maxRank: 5, spell: 12753, name: "Anticipation" },
-      { talentId: 153, tab: 163, row: 2, col: 0, rank: 1, maxRank: 1, spell: 12975, name: "Last Stand" },
+      { talentId: 153, tab: 163, row: 2, col: 0, rank: 1, maxRank: 1, spell: 12975, name: "Last Stand", spellbook: true },
     ],
     gear: [
       { item: 6721, name: "Chestplate of Kor", slot: SLOT.chest },
@@ -252,7 +256,7 @@ export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
       { talentId: 37, tab: 61, row: 0, col: 1, rank: 5, maxRank: 5, spell: 16766, name: "Improved Frostbolt" },
       { talentId: 73, tab: 61, row: 1, col: 0, rank: 3, maxRank: 3, spell: 15047, name: "Ice Shards" },
       { talentId: 1649, tab: 61, row: 1, col: 2, rank: 2, maxRank: 3, spell: 29439, name: "Precision" },
-      { talentId: 69, tab: 61, row: 2, col: 1, rank: 1, maxRank: 1, spell: 12472, name: "Icy Veins" },
+      { talentId: 69, tab: 61, row: 2, col: 1, rank: 1, maxRank: 1, spell: 12472, name: "Icy Veins", spellbook: true },
     ],
     gear: [
       { item: 10657, name: "Talbar Mantle", slot: SLOT.shoulders },
@@ -322,7 +326,7 @@ export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
       { talentId: 1407, tab: 381, row: 0, col: 2, rank: 5, maxRank: 5, spell: 20105, name: "Benediction" },
       { talentId: 1464, tab: 381, row: 1, col: 1, rank: 3, maxRank: 3, spell: 20337, name: "Heart of the Crusader" },
       { talentId: 1631, tab: 381, row: 1, col: 0, rank: 2, maxRank: 2, spell: 25957, name: "Improved Judgements" },
-      { talentId: 1481, tab: 381, row: 2, col: 2, rank: 1, maxRank: 1, spell: 20375, name: "Seal of Command" },
+      { talentId: 1481, tab: 381, row: 2, col: 2, rank: 1, maxRank: 1, spell: 20375, name: "Seal of Command", spellbook: true },
     ],
     gear: [
       { item: 24348, name: "Tunic of the Dragon Slayer", slot: SLOT.chest },
@@ -342,7 +346,8 @@ export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
 /**
  * What a loadout gains above level 20, per level the party is staged at: kept
  * apart from LOADOUTS so the level-20 objects, which the scored Deadmines
- * groups' staging hash covers (`infra/task-launch.ts`), never move. A level
+ * groups' staging hash covers (`infra/task-launch.ts`), never move for
+ * another level's sake. A level
  * is the base loadout plus its extension (`loadoutAt`): the same gear, bags
  * and supplies (every piece is wearable from 20, and none has a required
  * level above it), the class trainer's spells up to the level (read at

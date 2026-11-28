@@ -121,8 +121,12 @@ other.
   in the mine a few yards from the portal, pre-formed with the warrior
   leading: Tankpartyb (Human Warrior, tank), Healpartyc (Dwarf Priest,
   healer), Magepartyd (Human Mage), Roguepartye (Human Rogue) and Palapartyf
-  (Dwarf Paladin), each in its loadout (`infra/fixtures/loadouts.ts`). The
-  party draws its five accounts from the eval pool and plays on a world of its
+  (Dwarf Paladin), each in its loadout (`infra/fixtures/loadouts.ts`). A
+  talent that is an ability (the tank's Last Stand, the mage's Icy Veins, the
+  paladin's Seal of Command) is staged as a client's learned talent leaves it,
+  with its spell in the spellbook; attempts stamped with the staging hash
+  `sha256:d1f6a505e68618b8` had those talents' points without the
+  abilities, which could not be cast. The party draws its five accounts from the eval pool and plays on a world of its
   own; with `policy.worlds` off the attempt is held, never moved to the shared
   world.
 - **Directive.** `deadmines-solo`: deadmines@5's one-agent objective.

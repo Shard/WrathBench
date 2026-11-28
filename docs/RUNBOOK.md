@@ -3094,7 +3094,8 @@ suite touches them.
    - `bun wb smoke party-staging` stages the party, checks every member at
      login, and deletes the characters. It takes the same `--scenario`, and
      checks each member at that scenario's level: at 24 the talents and key
-     spells of `LEVEL_EXTENSIONS`, no point unspent. A `--keep` and its
+     spells of `LEVEL_EXTENSIONS`, no point unspent, and at any level each
+     talent's spell in the login spellbook. A `--keep` and its
      `--recheck` take the same `--scenario`.
    - Both take `--scenario dustwallow-lair`: Onyxia's Lair's raid of ten at
      80, converted to a raid at staging, checked inside a raid map and out
@@ -3124,7 +3125,12 @@ ever staged. The request's level is the definition's `start.level`: 20, or
 24, which is the same loadout with the trainer's spells to 24 and four more
 talent points in each role's tree (`LEVEL_EXTENSIONS`, which says what each
 buys and why); the level-20 loadouts are untouched by it, so the scored
-Deadmines groups' staging hash does not move. Each member stands on its own
+Deadmines groups' staging hash does not move. A talent that is an ability
+(`spellbook` on the pick: Last Stand, Icy Veins, Seal of Command at 20 and 24,
+and the raid loadouts' active talents) is also written as the spell row a
+client's learned talent leaves, at the active spec's mask; without it the
+talent's points load but the ability is not in the spellbook and cannot be
+cast. Each member stands on its own
 spot of the scenario (`partySpots`): `moonbrook-mine` for the Deadmines,
 `silverpine-keep` outside Shadowfang Keep and `stormwind-stockade` above the
 Stockade's door, five spots each. A member of any other race and class, a
