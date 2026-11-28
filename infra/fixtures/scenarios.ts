@@ -107,6 +107,15 @@ export type Scenario = {
    */
   talents?: number[];
   /**
+   * Of `talents`, the rank spells that are spellbook abilities (Talent.dbc
+   * `addToSpellBook`, not passive, no learn effect), each also written as the
+   * `character_spell` row `Player::LearnTalent` leaves for one (`learnSpell`,
+   * at the active spec's mask). Without it the core loads the talent's points
+   * but not the ability: `_LoadTalents` never puts it in `m_spells`, so it is
+   * missing from `SMSG_INITIAL_SPELLS` and a cast of it is refused.
+   */
+  talentSpells?: number[];
+  /**
    * Raise every level-ranged skill row the character already has (weapons,
    * defense, the class's own lines) to the level's maximum, 5 x level. Rows
    * with max 1 (armor, mono skills) and 300 (languages) are untouched, and no
@@ -1001,6 +1010,14 @@ export function validateScenario(scenario: Scenario): void {
   assert(
     scenario.talents === undefined || new Set(scenario.talents).size === scenario.talents.length,
     "talents must not repeat a spell",
+  );
+  assert(
+    scenario.talentSpells === undefined || (isIdList(scenario.talentSpells) && scenario.talentSpells.every((s) => scenario.talents?.includes(s))),
+    "talentSpells must be spell ids from talents",
+  );
+  assert(
+    scenario.talentSpells === undefined || !scenario.talentSpells.some((s) => scenario.spells?.includes(s)),
+    "talentSpells must not also be in spells, which are written at every spec's mask",
   );
 }
 

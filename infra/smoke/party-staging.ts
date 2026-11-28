@@ -10,7 +10,8 @@
  *     the supplies in them;
  *   - the role's key spells at that level in the spellbook;
  *   - the preset talents at that level, rank for rank, in SMSG_TALENTS_INFO,
- *     no point unspent;
+ *     no point unspent, and each talent's spell in the login spellbook (a
+ *     talent row alone loads the points but not an active talent's ability);
  *   - the money;
  *   - the group at login (SMSG_GROUP_LIST): the other four, the tank leading.
  *

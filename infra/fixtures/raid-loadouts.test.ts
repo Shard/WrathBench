@@ -187,4 +187,28 @@ describe("a raid member's scenario", () => {
     const pala = partyScenario(RAID_LOADOUTS.holypaladin as Loadout, [10321, 13820, 20217], SCENARIOS["dustwallow-lair"], RAID_LEVEL, 4);
     expect(pala.spells).toEqual([5502, 7328, 20217, 20271, 21084]);
   });
+
+  test("its spellbook talents are also written as the character_spell rows LearnTalent leaves, at the active spec's mask", () => {
+    const tank = RAID_LOADOUTS.protwarrior as Loadout;
+    const s = partyScenario(tank, [100, 47488], SCENARIOS["dustwallow-lair"], RAID_LEVEL, 9);
+    // Last Stand, Concussion Blow, Vigilance, Devastate, Shockwave.
+    expect([...s.talentSpells!].sort((a, b) => a - b)).toEqual([12809, 12975, 20243, 46968, 50720]);
+    const rendered = buildStatements(7, s).map(renderStatement);
+    for (const spell of s.talentSpells!) {
+      expect(rendered).toContain(`INSERT INTO character_talent (guid, spell, specMask) VALUES (7, ${spell}, 1)`);
+      expect(rendered).toContain(`INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (7, ${spell}, 1)`);
+    }
+    // A passive pick is a talent row only: the core sends it from the talent map.
+    expect(rendered.join("\n")).not.toMatch(/character_spell \(guid, spell, specMask\) VALUES \(7, 12727,/);
+  });
+
+  test("every raid loadout's active talents are flagged, and only talent picks are", () => {
+    for (const l of ALL) {
+      const s = partyScenario(l as Loadout, [], SCENARIOS["dustwallow-lair"], RAID_LEVEL, 0);
+      validateScenario(s);
+      expect(s.talentSpells?.length ?? 0).toBeGreaterThan(0);
+    }
+    // Read offline from Talent.dbc (addToSpellBook) and Spell.dbc (not passive, no learn effect).
+    expect(ALL.reduce((n, l) => n + l.talents.filter((t) => t.spellbook).length, 0)).toBe(48);
+  });
 });

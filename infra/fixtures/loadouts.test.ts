@@ -153,6 +153,8 @@ describe("the member scenario", () => {
     expect(s.clearQuests).toBe(true);
     expect(s.spells).toEqual([71, 100, 355, 772, 6343, 7386]);
     expect(s.talents).toEqual([12727, 12753, 12975]);
+    // No level-20 pick carries `spellbook`, so the scenario has no such key and stages as it always did.
+    expect("talentSpells" in s).toBe(false);
     expect(s.maxSkills).toBe(true);
     // The base scenario's own level 80 and money are not the member's.
     expect(SCENARIOS["moonbrook-mine"].level).toBe(80);
