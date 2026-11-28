@@ -64,6 +64,18 @@ describe("the inspector's API in the viewer", () => {
 });
 
 describe("a fan-out run in the inspector's API", () => {
+  test("ten characters, a raid's, are ten sessions of one run, and the run lists all ten", async () => {
+    const runs = tempDir("viewer-inspector-fanout-ten-");
+    const names = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliett"];
+    const characters = names.map((name, i) => ({ name, guid: String(901 + i), readings: [{ ts: 1762000200000 + i * 1000, level: 80, xp: 0, map: 1, x: -4750 - i, y: -3755, z: 50, money: 10000 }] }));
+    await writeFanoutRun(runs, { characters });
+    const h = viewer(runs);
+    const list = (await (await get(h, "/api/inspector/sessions")).json()) as { sessions: { id: string; group?: string }[] };
+    expect(list.sessions.filter((s) => s.group === FANOUT_RUN).map((s) => s.id).sort()).toEqual(names.map((n) => `${FANOUT_RUN}~${n}`).sort());
+    const run = (await (await get(h, `/api/run/${FANOUT_RUN}`)).json()) as { fanout?: { character: string }[] };
+    expect(run.fanout?.map((f) => f.character).sort()).toEqual([...names].sort());
+  });
+
   test("each character is a session under <run-id>~<Character>, grouped by the run; the single run keeps its bytes", async () => {
     const runs = tempDir("viewer-inspector-fanout-");
     materialiseV1p1(runs);

@@ -22,7 +22,8 @@
 import { z } from "zod";
 import { parseCompactWindow } from "./config";
 import { ARM_RESERVED_FLAGS, RUN_FLAGS, flagsOf } from "./run-flags";
-import { partyDefinitionSchema, type PartyMember } from "./party";
+import { PARTY_MAX, partyDefinitionSchema, type PartyMember } from "./party";
+import { dungeonByStaged } from "./dungeons";
 import { endConditionSchema, type EndCondition } from "./end-conditions";
 
 /** Names a campaign id, a cell id and an arm id must all survive: safe in a run id and a path. */
@@ -211,6 +212,27 @@ export const campaignDefinitionSchema = z
       }
       if (oneAgent && d.objective === null) {
         ctx.addIssue({ code: "custom", path: ["objective"], message: "a one-agent arm drives the whole party on one run: its objective is the top-level objective, which is null" });
+      }
+      // A group is five. A larger party is a raid's, staged outside a raid
+      // instance as large as it (the dungeon registry's `size`), and played by
+      // one agent: a party of agents is stamped one member a run, and that
+      // stamp (`partyConfigSchema`) is a group's.
+      const staged = d.start !== undefined && d.start !== "fresh" ? dungeonByStaged(d.start.staged) : null;
+      const max = staged !== null && staged.size > PARTY_MAX ? staged.size : PARTY_MAX;
+      if (d.party.size > max) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["party", "size"],
+          message:
+            staged !== null && staged.size > PARTY_MAX
+              ? `${staged.name} holds ${staged.size}; the party is ${d.party.size}`
+              : `a party is at most ${PARTY_MAX}, unless its staged start is outside a larger instance (runner/dungeons/); ${d.start !== undefined && d.start !== "fresh" ? `'${d.start.staged}' is ${staged === null ? "no registered instance's" : `${staged.name}'s, which holds ${staged.size}`}` : "it starts nowhere staged"}`,
+        });
+      }
+      if (d.party.size > PARTY_MAX) {
+        d.arms.forEach((a, i) => {
+          if (a.agents !== 1) ctx.addIssue({ code: "custom", path: ["arms", i, "agents"], message: `arm ${a.id}: a party above ${PARTY_MAX} is one agent driving every member (agents: 1)` });
+        });
       }
       // The cell is the party; its start reads as the leader's, so a reader
       // of the cell is never told a start no member had.

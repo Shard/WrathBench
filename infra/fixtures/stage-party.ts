@@ -1,12 +1,14 @@
 /**
  * Stage a party for the Deadmines eval (docs/proposals/GROUP-PLAY.md §3):
  * each member a fresh character on its party account (PARTY1..PARTY5, or
- * five the attempt drew from the eval pool, EVAL01..EVALnn) under the name the
- * campaign definition gives it, put into the loadout of its race and class
- * (level 20, or a level `LEVEL_EXTENSIONS` covers; trainer spells to that
- * level, preset talents, skills, quest-level greens worn, bags, supplies),
- * standing on its own spot of the request's scenario, grouped with the first
- * member leading, and logged out.
+ * the accounts the attempt drew from the eval pool, EVAL01..EVALnn) under the
+ * name the campaign definition gives it, put into the loadout of its race and
+ * class (level 20, or a level `LEVEL_EXTENSIONS` covers; trainer spells to
+ * that level, preset talents, skills, quest-level greens worn, bags,
+ * supplies), or, for a member that names its spec, the level-80 raid loadout
+ * of its class and spec (`raid-loadouts.ts`), standing on its own spot of the
+ * request's scenario, grouped with the first member leading (a raid group,
+ * up to the raid's size, outside a raid), and logged out.
  *
  * The roster's contract (infra/party-stager.ts on the fleet side, which this
  * file matches and never changes):
@@ -59,10 +61,14 @@
  *   4. After that save, one transaction moves the gear and the bags from the
  *      backpack to their slots, swapping starter gear into the places they
  *      left (`bag`/`slot` only, never a guid).
+ *      A raid set (17 pieces and four bags) does not fit a fresh backpack,
+ *      so its bags go through 3 and 4 alone first (`bagsFirst`).
  *   5. All members log in together: supplies go into the now-worn bags, the
  *      worn gear is checked, the first member invites the others and each
  *      accepts through the SDK — the client path, so the group's guid comes
- *      from the server's generator — and everyone logs out. A group survives
+ *      from the server's generator — and everyone logs out. Outside a raid
+ *      the leader converts the group to a raid after the first accept
+ *      (`convertToRaid`), before the sixth invite. A group survives
  *      its members' logout (`LeaveGroupOnLogout.Enabled` is off), so the runs
  *      log in grouped.
  *
@@ -78,8 +84,10 @@ import type { SQL } from "bun";
 import { connect as connectModule, guidKey, type WrathClient } from "@wrathbench/sdk";
 import { isEvalPoolAccountName } from "../../runner/src/account-pool";
 import { isValidCharacterName } from "../../runner/src/character-name";
+import { dungeonByStaged } from "../../runner/src/dungeons";
+import { PARTY_MAX } from "../../runner/src/party";
 import { MODULE_SECRET } from "../smoke/lib/auth";
-import { characterNames, type FixtureContext } from "../smoke/lib/fixture";
+import { accountFixtureName, characterNames, type FixtureContext } from "../smoke/lib/fixture";
 import { moduleBase } from "../smoke/lib/module";
 import {
   OFFHAND_SLOT,
@@ -112,6 +120,7 @@ import {
   type Loadout,
   type StockLine,
 } from "./loadouts";
+import { RAID_LEVEL, RAID_LOADOUTS, RAID_LOADOUT_IDS, isRaidLoadout, raidTrainerSpells, type TrainerRow } from "./raid-loadouts";
 import { SCENARIOS, isScenarioName, type Scenario } from "./scenarios";
 import { soapFromEnv, type SoapClient } from "./soap";
 
@@ -130,6 +139,8 @@ export function isStageableAccount(account: string): boolean {
   return PARTY_ACCOUNT_PATTERN.test(account) || isEvalPoolAccountName(account);
 }
 export const DEFAULT_PARTY_ACCOUNTS = ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"] as const;
+/** A raid's default accounts: the PARTY accounts stop at five, so ten from the eval pool. */
+export const DEFAULT_RAID_ACCOUNTS = ["EVAL01", "EVAL02", "EVAL03", "EVAL04", "EVAL05", "EVAL06", "EVAL07", "EVAL08", "EVAL09", "EVAL10"] as const;
 /** The scenario a Deadmines party stands in. */
 export const DEFAULT_PARTY_SCENARIO = "moonbrook-mine";
 
@@ -139,6 +150,8 @@ export type StageMember = {
   member: string;
   /** The party definition's role word: tank, healer or damage. */
   role: string;
+  /** The definition's talent tree for the member, when it names one (a raid's): with the class and level, what picks the loadout. */
+  spec?: string;
   race: number;
   class: number;
   /** The name to create it under: the definition's, and the one its run is launched with. */
@@ -214,7 +227,7 @@ export function parseStageRequest(doc: unknown): { ok: true; request: StageReque
   for (const k of ["party", "campaign", "scenario"]) if (typeof doc[k] !== "string" || doc[k] === "") errors.push(`${k} must be a non-empty string`);
   for (const k of ["version", "level"]) if (!Number.isInteger(doc[k])) errors.push(`${k} must be an integer`);
   if (!Array.isArray(doc["members"])) errors.push("members must be an array");
-  const fields = ["member", "role", "race", "class", "character", "account", "runId"];
+  const fields = ["member", "role", "spec", "race", "class", "character", "account", "runId"];
   for (const [i, m] of (Array.isArray(doc["members"]) ? doc["members"] : []).entries()) {
     if (!isRecord(m)) {
       errors.push(`members[${i}] is not an object`);
@@ -223,24 +236,39 @@ export function parseStageRequest(doc: unknown): { ok: true; request: StageReque
     for (const k of Object.keys(m)) if (!fields.includes(k)) errors.push(`members[${i}]: unknown key '${k}'`);
     for (const k of ["member", "role", "character", "account", "runId"]) if (typeof m[k] !== "string" || m[k] === "") errors.push(`members[${i}].${k} must be a non-empty string`);
     for (const k of ["race", "class"]) if (!Number.isInteger(m[k])) errors.push(`members[${i}].${k} must be an integer`);
+    if (m["spec"] !== undefined && (typeof m["spec"] !== "string" || m["spec"] === "")) errors.push(`members[${i}].spec must be a non-empty string when given`);
   }
   return errors.length ? { ok: false, errors } : { ok: true, request: doc as unknown as StageRequest };
+}
+
+/**
+ * The most members a request on this scenario may name: a group's five, or
+ * the registry size of the raid the scenario stages outside
+ * (`runner/dungeons/`), so ten only outside a ten-player raid.
+ */
+export function maxMembers(scenario: string): number {
+  const d = dungeonByStaged(scenario);
+  return d !== null && d.size > PARTY_MAX ? d.size : PARTY_MAX;
 }
 
 /** What a well-shaped request must also be before anything is touched. Pure. */
 export function checkStageRequest(req: StageRequest): string[] {
   const errors: string[] = [];
   const ms = req.members;
-  if (ms.length < 1 || ms.length > 5) errors.push(`a party is 1..5 members, got ${ms.length}`);
+  const max = maxMembers(req.scenario);
+  if (ms.length < 1 || ms.length > max) errors.push(`a party is 1..${max} members${max > PARTY_MAX ? ` outside ${dungeonByStaged(req.scenario)!.name}` : ""}, got ${ms.length}`);
   if (!isScenarioName(req.scenario)) errors.push(`unknown scenario '${req.scenario}'`);
   else {
     // One spot a member: never two members stood in one another.
     const spots = (SCENARIOS[req.scenario] as Scenario).partySpots?.length ?? 0;
     if (ms.length > spots) errors.push(`scenario '${req.scenario}' has ${spots} party spots for ${ms.length} members`);
   }
-  // The loadouts' talents are eleven points at 20; a level above it is one an extension is written for.
-  const levelOk = isPartyLevel(req.level);
-  if (!levelOk) errors.push(`level ${req.level}: the loadouts are built for levels ${PARTY_LEVELS.join(" and ")}`);
+  // The loadouts' talents are eleven points at 20; a level above it is one an
+  // extension is written for, or the raid loadouts' one level, which every
+  // member reaches by naming its spec (`loadoutFor`).
+  const raid = req.level === RAID_LEVEL;
+  const levelOk = isPartyLevel(req.level) || raid;
+  if (!levelOk) errors.push(`level ${req.level}: the loadouts are built for levels ${PARTY_LEVELS.join(" and ")}, and ${RAID_LEVEL} for a member that names its spec`);
   const dupes = (xs: string[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
   // Account names are case-blind in auth, and the eval pool's check is too.
   for (const a of dupes(ms.map((m) => m.account.toUpperCase()))) errors.push(`account ${a} is named twice`);
@@ -250,18 +278,38 @@ export function checkStageRequest(req: StageRequest): string[] {
     if (!isStageableAccount(m.account)) errors.push(`refusing to stage on '${m.account}': only the party accounts (PARTY1..PARTY5) and the eval pool's (EVAL01..) are staged`);
     if (!isValidCharacterName(m.character)) errors.push(`'${m.character}' is not a character name the game accepts`);
     if (!/^[a-z][a-z0-9]{0,15}$/.test(m.member)) errors.push(`member id '${m.member}' is not a member id`);
-    const l = loadoutFor(m);
+    const l = loadoutFor(m, levelOk ? req.level : undefined);
     if (typeof l === "string") errors.push(`${m.member}: ${l}`);
     else if (levelOk) errors.push(...validateLoadout(loadoutAt(l, req.level), req.level));
-    else errors.push(...validateLoadout(l));
+    else errors.push(...validateLoadout(l, l.level));
   }
   return errors;
 }
 
-/** The default party's request: PARTY1..PARTY5, one of each loadout, in loadout order (the tank first, so it leads), on the Deadmines' scenario at 20 unless told otherwise. */
+/**
+ * The default party's request: PARTY1..PARTY5, one of each loadout, in
+ * loadout order (the tank first, so it leads), on the Deadmines' scenario at
+ * 20 unless told otherwise. At the raid level it is the ten raid loadouts in
+ * theirs, each naming its spec, on EVAL01..EVAL10 unless told otherwise.
+ */
 export function defaultStageRequest(
   over: Partial<Pick<StageRequest, "party" | "campaign" | "scenario" | "level">> & { accounts?: readonly string[] } = {},
 ): StageRequest {
+  if (over.level === RAID_LEVEL) {
+    const accounts = over.accounts ?? DEFAULT_RAID_ACCOUNTS;
+    return {
+      party: over.party ?? `manual-${Date.now()}`,
+      campaign: over.campaign ?? "manual",
+      version: 0,
+      scenario: over.scenario ?? DEFAULT_PARTY_SCENARIO,
+      level: RAID_LEVEL,
+      members: RAID_LOADOUT_IDS.map((id, i) => {
+        const l = RAID_LOADOUTS[id];
+        const account = accounts[i]!;
+        return { member: id, role: l.partyRole, spec: l.spec, race: l.race, class: l.class, character: accountFixtureName(l.namePrefix, account), account, runId: over.party ?? "manual" };
+      }),
+    };
+  }
   const accounts = over.accounts ?? DEFAULT_PARTY_ACCOUNTS;
   return {
     party: over.party ?? `manual-${Date.now()}`,
@@ -298,6 +346,27 @@ function countByItem(items: readonly { itemId: number | undefined; count: number
   return out;
 }
 
+/**
+ * A raid member's trainer rows up to its level, each with its prerequisites
+ * (`ReqAbility1..3`), which `raidTrainerSpells` filters against the build's
+ * talents once the module's frame is in hand. The level-20 and level-24 path
+ * reads spells alone (`readTrainerSpells`), as it always has.
+ */
+export async function readTrainerRows(sql: SQL, loadout: Loadout, maxLevel: number): Promise<TrainerRow[]> {
+  const world = process.env["WRATHBENCH_WORLD_DB"] ?? "acore_world";
+  if (!/^\w+$/.test(world)) throw new Error(`WRATHBENCH_WORLD_DB '${world}' is not a schema name`);
+  const rows = (await sql.unsafe(
+    `SELECT ts.SpellId AS spell, ts.ReqAbility1 AS r1, ts.ReqAbility2 AS r2, ts.ReqAbility3 AS r3
+     FROM ${world}.trainer_spell ts JOIN ${world}.trainer t ON t.Id = ts.TrainerId
+     WHERE ts.TrainerId = ? AND t.Type = 0 AND t.Requirement = ? AND ts.ReqLevel <= ?
+     ORDER BY ts.SpellId`,
+    [loadout.trainerId, loadout.class, maxLevel],
+  )) as { spell: number; r1: number; r2: number; r3: number }[];
+  const out = rows.map((r) => ({ spell: Number(r.spell), reqs: [r.r1, r.r2, r.r3].map(Number).filter((x) => x > 0) }));
+  if (out.length < 10) throw new Error(`trainer ${loadout.trainerId} (class ${loadout.class}) lists ${out.length} spells up to level ${maxLevel}; expected the class trainer`);
+  return out;
+}
+
 /** The class trainer's spells up to the party level, from the table the core loads (`ObjectMgr::LoadTrainers`). */
 export async function readTrainerSpells(sql: SQL, loadout: Loadout, maxLevel = PARTY_LEVEL): Promise<number[]> {
   const world = process.env["WRATHBENCH_WORLD_DB"] ?? "acore_world";
@@ -316,6 +385,58 @@ export async function readTrainerSpells(sql: SQL, loadout: Loadout, maxLevel = P
   return spells;
 }
 
+/**
+ * A fresh character's backpack holds 16, a few taken by what it is created
+ * with; a loadout whose gear and bags together pass 12 (a raid set's 17 pieces
+ * and four bags) cannot land at once, so its bags are stored and worn in a
+ * round of their own first. The level-20 sets (at most ten pieces and two
+ * bags) never reach it, so their staging is the one round it always was.
+ */
+export const BACKPACK_ROOM = 12;
+export function bagsFirst(l: Pick<Loadout, "gear" | "bags">): boolean {
+  return l.gear.length + l.bags.length > BACKPACK_ROOM;
+}
+
+/** The client opcode that makes the leader's group a raid (`WorldSession::HandleGroupRaidConvertOpcode`). */
+export const RAID_CONVERT_OPCODE = "CMSG_GROUP_RAID_CONVERT";
+
+/** The leader's side of the convert, as `convertToRaid` needs it: the SDK's raw action and its group view, and a dedicated method if the SDK grows one. */
+export type RaidLeader = Pick<WrathClient, "raw" | "state"> & { convertToRaid?: () => Promise<unknown> };
+
+/**
+ * Make the leader's group a raid, through the client's own packet, and wait
+ * until the server's group list says so. A dedicated SDK method is preferred
+ * when the SDK has one (the stack's rule is one audited path per opcode, so a
+ * method takes the opcode off the raw allowlist); until then it is the raw
+ * action. A module whose raw allowlist does not carry the opcode refuses it
+ * (`opcode_not_allowed`), which ends the staging at the group step with the
+ * reason, after every member is staged and before any run launches. The raid
+ * is ten-player normal without asking: a group takes its leader's raid
+ * difficulty when it is created (`Group::Create`), and a fresh character's is
+ * 10-player normal (`instance_mode_mask` 0, `Player::LoadFromDB`).
+ */
+export async function convertToRaid(lead: RaidLeader, opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<void> {
+  try {
+    if (typeof lead.convertToRaid === "function") await lead.convertToRaid();
+    else await lead.raw(RAID_CONVERT_OPCODE);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // The SDK's WrathRequestError carries the module's code; its message
+    // ("module rejected request: opcode_not_allowed (…)") names it too.
+    const code = typeof e === "object" && e !== null && "code" in e ? (e as { code: unknown }).code : undefined;
+    throw new Error(
+      code === "opcode_not_allowed" || /opcode_not_allowed/.test(msg)
+        ? `the module refused ${RAID_CONVERT_OPCODE} (not on its raw allowlist): a raid needs the stack release that allows it; ${msg}`
+        : `${RAID_CONVERT_OPCODE} failed: ${msg}`,
+    );
+  }
+  const deadline = Date.now() + (opts.timeoutMs ?? 10_000);
+  while (lead.state.group()?.raid !== true) {
+    if (Date.now() > deadline) throw new Error(`sent ${RAID_CONVERT_OPCODE}, but the leader's group is still not a raid (the server ignores a convert from a group of one, or from a member who is not the leader)`);
+    await Bun.sleep(opts.pollMs ?? 200);
+  }
+}
+
 type Member = {
   index: number;
   id: string;
@@ -325,6 +446,8 @@ type Member = {
   loadout: Loadout;
   guid?: number;
   spells?: number[];
+  /** A raid member's trainer rows, filtered into `spells` once the talent frame is read. */
+  trainerRows?: TrainerRow[];
 };
 
 const sleep = (ms: number) => Bun.sleep(ms);
@@ -366,9 +489,12 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
       account: m.account,
       character: m.character,
       runId: m.runId,
-      loadout: loadoutAt(loadoutFor(m) as Loadout, req.level),
+      loadout: loadoutAt(loadoutFor(m, req.level) as Loadout, req.level),
     }));
-    for (const m of members) m.spells = await readTrainerSpells(sql, m.loadout, req.level);
+    for (const m of members) {
+      if (isRaidLoadout(m.loadout)) m.trainerRows = await readTrainerRows(sql, m.loadout, req.level);
+      else m.spells = await readTrainerSpells(sql, m.loadout, req.level);
+    }
     log(`party ${req.party} (${req.campaign}@${req.version}, scenario ${req.scenario}, level ${req.level}): ${members.map((m) => `${m.character} (${m.id}, ${m.loadout.label}) on ${m.account} for ${m.runId}`).join(", ")}`);
 
     const token = (m: Member, phase: string) => `stage-${req.party.replace(/[^\w-]/g, "-").slice(0, 40)}-${m.account}-${phase}-${crypto.randomUUID()}`;
@@ -448,6 +574,8 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
       // Log out before throwing: the character exists but has no talent rows yet.
       await close(c, true);
       if (bad.length) throw new StageFailure("create", `talent preset does not match the module's frame, nothing written: ${bad.join("; ")}`, m.character);
+      // A raid member's trainer rows past a talent it does not take are dropped against the module's own frame.
+      if (m.trainerRows !== undefined) m.spells = raidTrainerSpells(m.loadout, m.trainerRows, frame);
       const row = await readCharacter(sql!, m.account, m.character);
       if (!row) throw new StageFailure("create", `${m.character} is not in the characters table after its create`, m.character);
       await waitUntilOffline(sql!, row, saveWaitMs);
@@ -458,26 +586,36 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
     });
 
     // 3 + 4: gear and bags through SOAP while online, then the offline equipment move.
-    await each("gear", async (m) => {
+    /** One round: store `lines` while online, log out, then move what `targetsOf` names to its slots offline. */
+    const storeAndEquip = async (m: Member, lines: readonly StockLine[], targetsOf: (rows: InventoryRow[]) => EquipTarget[], clear: readonly number[], what: string): Promise<void> => {
       const before: CharacterRow = await snapshot(sql!, m.guid!);
       const c = await open(m, "gear");
       const loginAt = Date.now();
       await c.createSession({ account: m.account, character: m.character });
       await sleep(1000); // the login burst, so the bag view has its baseline
       const baseline = countByItem(c.state.bag().items);
-      const lines = [...m.loadout.gear.map((g) => ({ item: g.item, name: g.name, count: 1 })), ...m.loadout.bags];
       for (const l of lines) await soap.addItem(m.character, l.item, l.count);
-      await waitForItems(c, baseline, lines, `${m.character} gear`);
+      await waitForItems(c, baseline, lines, `${m.character} ${what}`);
       await sessionAtLeast(loginAt);
       await close(c, true);
       await waitForNewSave(sql!, before, saveWaitMs);
 
       const rows = await readInventory(sql!, m.guid!);
-      const targets: EquipTarget[] = [...m.loadout.gear.map((g) => ({ entry: g.item, slot: g.slot })), ...bagTargets(rows, m.loadout.bags)];
-      const clear = m.loadout.gear.some((g) => g.twoHand) ? [OFFHAND_SLOT] : [];
-      const moves = buildEquipStatements(m.guid!, rows, targets, clear);
+      const moves = buildEquipStatements(m.guid!, rows, targetsOf(rows), clear);
       await applyStatements(sql!, moves);
       log(`  ${m.character}: ${lines.length} items stored by the server, ${moves.length / 2} moved to their slots`);
+    };
+    await each("gear", async (m) => {
+      const gear = m.loadout.gear.map((g) => ({ item: g.item, name: g.name, count: 1 }));
+      const gearTargets = m.loadout.gear.map((g) => ({ entry: g.item, slot: g.slot }));
+      const clear = m.loadout.gear.some((g) => g.twoHand) ? [OFFHAND_SLOT] : [];
+      if (!bagsFirst(m.loadout)) {
+        await storeAndEquip(m, [...gear, ...m.loadout.bags], (rows) => [...gearTargets, ...bagTargets(rows, m.loadout.bags)], clear, "gear");
+        return;
+      }
+      // A raid set does not fit a fresh backpack: the bags are worn first, in a round of their own.
+      await storeAndEquip(m, m.loadout.bags, (rows) => bagTargets(rows, m.loadout.bags), [], "bags");
+      await storeAndEquip(m, gear, () => gearTargets, clear, "gear");
     });
 
     // 5: everyone in together: supplies, the worn-gear check, the party.
@@ -516,7 +654,11 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
     step = "group";
     const leader = members[0]!;
     const lead = online.get(leader.index)!;
-    for (const m of members.slice(1)) {
+    // A raid's door admits a raid group only (MapMgr::PlayerCannotEnter), and
+    // a group holds five: the leader converts once the first member is in
+    // (the core ignores a convert from a group of one), before the sixth.
+    const raidGroup = dungeonByStaged(req.scenario)?.kind === "raid";
+    for (const [i, m] of members.slice(1).entries()) {
       const c = online.get(m.index)!;
       const invited = await lead.inviteToGroup(m.character, { timeout: 10_000 });
       if (!invited.ok) throw new StageFailure("group", `${leader.character} could not invite ${m.character}: ${invited.hint}`, m.character);
@@ -524,6 +666,12 @@ export async function stageParty(req: StageRequest, opts: StageOptions = {}): Pr
       const g = await c.acceptGroupInvite({ timeout: 10_000 });
       if (!g.inGroup || g.leaderName !== leader.character) {
         throw new StageFailure("group", `${m.character} accepted but lists leader ${g.leaderName} (inGroup ${g.inGroup})`, m.character);
+      }
+      if (raidGroup && i === 0) {
+        await convertToRaid(lead).catch((e) => {
+          throw new StageFailure("group", e instanceof Error ? e.message : String(e), leader.character);
+        });
+        log(`  ${leader.character} converted the group to a raid`);
       }
     }
     if (members.length > 1) {

@@ -192,11 +192,26 @@ which instance.
 A new instance is a probe target and nothing more. The scored machinery (the
 episode ids, the ladder's board, the tiers) stays the Deadmines', and an
 instance becomes an eval only by the operator's decision and a new id. An
-entry may name a scenario the stager does not have yet: it is defined before
-it is staged, and the registry's test says which ones wait
+entry is registered with its staging: its `staged` scenario exists with a
+spot for each member of a full party, and its `level` is the one the party
+smokes and every checked-in definition staged there use
 (`infra/dungeons-registry.test.ts`). Ids, coordinates and short names only,
 read from the pinned core's world tables and the client's DBC files, with
 where each came from in the entry's `note`; never game text.
+
+An entry's `size` is also the one place a party larger than five is allowed.
+A group is five; a definition whose staged start is outside a `kind: "raid"`
+instance may declare a party up to that instance's size, played by one agent
+(`agents: 1`): a party of agents is stamped one member a run, and that stamp
+stays a group's. The stager takes the same count from the same entry, and
+forms a raid group before the sixth member because the core admits only a
+raid group at a raid's door; the party smokes stage and walk a raid as they
+do a group (`--scenario dustwallow-lair`). Onyxia's Lair, ten players at 80,
+is the first (`onyxia@1`, an unscored probe). Its members name their talent
+tree (`spec`), because a raid carries two of a class: a member's loadout is
+keyed by class, spec and level (`infra/fixtures/raid-loadouts.ts`), and a
+member that names none wears its class's level-20 loadout as every party
+always has, so no existing definition or staging hash moves.
 
 ## `probing` — the probe-campaign episode
 

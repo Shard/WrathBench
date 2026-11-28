@@ -25,5 +25,5 @@
     { "entry": 4275, "name": "Archmage Arugal" }
   ],
   "end": 4275,
-  "note": "Read from the pinned core: the entrance is areatrigger 145 on map 0, radius 7, which areatrigger_teleport 145 sends to map 33; the bosses are DungeonEncounter.dbc's eight encounters on map 33 in its order, each resolved to its creature_template entry and checked against a creature spawn on map 33, and instance_encounters names Arugal (4275) the instance's last encounter. Encounters only, so a boss fought as more than one creature names only its credited one, and nothing is marked optional because no source says a boss is off the route. The scenario silverpine-keep is not staged yet."
+  "note": "Read from the pinned core: the entrance is areatrigger 145 on map 0, radius 7, which areatrigger_teleport 145 sends to map 33; the bosses are DungeonEncounter.dbc's eight encounters on map 33 in its order, each resolved to its creature_template entry and checked against a creature spawn on map 33, and instance_encounters names Arugal (4275) the instance's last encounter. Encounters only, so a boss fought as more than one creature names only its credited one, and nothing is marked optional because no source says a boss is off the route."
 }

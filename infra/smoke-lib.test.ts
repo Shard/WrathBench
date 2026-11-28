@@ -3,11 +3,16 @@
  * print what the smokes printed before they shared them: the log prefixes,
  * the failure messages and the verdict totals are read by the suite and by
  * whoever tails a smoke, so their spelling is pinned here. The event stream
- * and the request helpers run against a local stand-in for the module.
+ * and the request helpers run against a local stand-in for the module. The
+ * party smokes' members (party.ts) are what a `--scenario` stages and checks.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { LOADOUTS, loadoutAt, partySpot, type LOADOUT_IDS } from "./fixtures/loadouts";
+import { RAID_LOADOUTS, type RaidLoadoutId } from "./fixtures/raid-loadouts";
+import { SCENARIOS, type Scenario } from "./fixtures/scenarios";
 import { openEventStream, waitForEvent } from "./smoke/lib/events";
 import { moduleAction, moduleRequest, moduleSession } from "./smoke/lib/module";
+import { PARTY_DUNGEONS, membersOf, partyDungeon, partySmokeArgs, smokeRequest } from "./smoke/lib/party";
 import { checks, stampedLog, taggedLog } from "./smoke/lib/report";
 
 let printed: string[] = [];
@@ -130,5 +135,51 @@ describe("against a stand-in module", () => {
 
   test("an event stream that cannot open rejects with the smokes' words", async () => {
     await expect(openEventStream("ws://127.0.0.1:9", "tok", () => {})).rejects.toThrow(/^ws error: /);
+  });
+});
+
+describe("the party smokes' members", () => {
+  test("by default the Deadmines' party at 20, each loadout the shipped level-20 object itself", () => {
+    const party = membersOf(smokeRequest("party-staging", {}));
+    expect(party).toHaveLength(5);
+    for (const [i, m] of party.entries()) {
+      expect([m.character, m.level]).toEqual([m.character, 20]);
+      expect(m.loadout).toBe(LOADOUTS[m.loadout.id as (typeof LOADOUT_IDS)[number]]);
+      expect(m.spot).toEqual(partySpot(SCENARIOS["moonbrook-mine"] as Scenario, i));
+    }
+  });
+
+  for (const d of Object.values(PARTY_DUNGEONS)) {
+    test(`--scenario ${d.scenario}: every member at ${d.level}, on its own spot, with the loadout at that level`, () => {
+      const party = membersOf(smokeRequest("party-staging", {}, partyDungeon(d.scenario)));
+      expect(party).toHaveLength(d.raid ? 10 : 5);
+      for (const [i, m] of party.entries()) {
+        expect(m.level).toBe(d.level);
+        expect(m.loadout).toEqual(d.raid ? RAID_LOADOUTS[m.loadout.id as RaidLoadoutId] : loadoutAt(LOADOUTS[m.loadout.id as (typeof LOADOUT_IDS)[number]], d.level));
+        expect(m.spot).toEqual(partySpot(SCENARIOS[d.scenario] as Scenario, i));
+      }
+    });
+  }
+
+  test("the arguments: the smoke's switches and --scenario, the Deadmines' when none is named, anything else refused with the usage", () => {
+    const none = partySmokeArgs("party-staging", [], ["--keep", "--recheck"]);
+    expect([[...none.switches], none.scenario, none.dungeon]).toEqual([[], undefined, partyDungeon()]);
+    const some = partySmokeArgs("party-staging", ["--keep", "--scenario", "stormwind-stockade"], ["--keep", "--recheck"]);
+    expect([[...some.switches], some.scenario, some.dungeon.level]).toEqual([["--keep"], "stormwind-stockade", 24]);
+    expect(() => partySmokeArgs("party-entry", ["--recheck"], ["--staged", "--keep"])).toThrow(
+      "unknown argument --recheck; usage: party-entry [--staged] [--keep] [--scenario <name>]",
+    );
+    expect(() => partySmokeArgs("party-staging", ["--scenario"], ["--keep"])).toThrow(/^--scenario needs a name; usage: party-staging/);
+    expect(() => partySmokeArgs("party-staging", ["--scenario", "--keep"], ["--keep"])).toThrow(/^--scenario needs a name/);
+    expect(() => partySmokeArgs("party-staging", ["--scenario", "nowhere"], ["--keep"])).toThrow(/no party dungeon for scenario 'nowhere'/);
+  });
+
+  test("a raid's smoke party is its ten on EVAL01..EVAL10, or ten named accounts, and never five", () => {
+    const raid = partyDungeon("dustwallow-lair");
+    const req = smokeRequest("party-staging", {}, raid);
+    expect(req.members.map((m) => m.account)).toEqual(Array.from({ length: 10 }, (_, i) => `EVAL${String(i + 1).padStart(2, "0")}`));
+    expect(req.members.every((m) => m.spec !== undefined)).toBe(true);
+    expect(() => smokeRequest("party-staging", { MODULE_PARTY_ACCOUNTS: "PARTY1,PARTY2,PARTY3,PARTY4,PARTY5" }, raid)).toThrow(/names 5 accounts; a raid is 10/);
+    expect([raid.instanceMap, raid.entrance.map, raid.raid]).toEqual([249, 1, true]);
   });
 });

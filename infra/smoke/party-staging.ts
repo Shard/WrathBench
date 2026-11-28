@@ -4,13 +4,25 @@
  * SQL and STAGER's SOAP `.additem`), then log each one in through the SDK
  * the way its run will and check, from what the client is sent at login:
  *
- *   - level 20, standing in Moonbrook within 8y of the scenario's spot;
+ *   - the scenario's level, standing within 3y of its own spot of the
+ *     scenario;
  *   - every loadout item in its equipment slot (`slot < 19`), the bags worn,
  *     the supplies in them;
- *   - the role's key spells in the spellbook;
- *   - the preset talents, rank for rank, in SMSG_TALENTS_INFO, no point unspent;
+ *   - the role's key spells at that level in the spellbook;
+ *   - the preset talents at that level, rank for rank, in SMSG_TALENTS_INFO,
+ *     no point unspent, and each talent's spell in the login spellbook (a
+ *     talent row alone loads the points but not an active talent's ability);
  *   - the money;
  *   - the group at login (SMSG_GROUP_LIST): the other four, the tank leading.
+ *
+ * The Deadmines' party by default (`moonbrook-mine`, level 20); `--scenario`
+ * stages and checks another party dungeon's (lib/party.ts `PARTY_DUNGEONS`:
+ * `silverpine-keep` at 20, `stormwind-stockade` at 24, the level its probe
+ * campaign's `start.level` states, with the loadouts' `LEVEL_EXTENSIONS`
+ * applied), on demand and never in the suite.
+ *
+ *   bun wb smoke party-staging                                # the Deadmines' party at 20
+ *   bun wb smoke party-staging --scenario stormwind-stockade  # the Stockade's at 24
  *
  * Then it deletes the five through the module.
  *
@@ -25,6 +37,9 @@
  *   ...the next worldserver recreate...
  *   bun wb smoke party-staging --recheck    # after: the same checks on what survived, then delete
  *
+ * A --recheck (or party-entry's --staged) takes the same --scenario as the
+ * --keep that staged the party.
+ *
  * From then on the construction is the proof (stage-party.ts says why).
  *
  * Needs the chart's staging switch on (SOAP, STAGER's password in this pod,
@@ -34,17 +49,17 @@
 
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { assertStagedMember, deleteMembers, loginMember, membersOf, smokeRequest } from "./lib/party";
+import { assertStagedMember, deleteMembers, loginMember, membersOf, partySmokeArgs, smokeRequest } from "./lib/party";
 import { stageParty } from "../fixtures/stage-party";
 import type { WrathClient } from "@wrathbench/sdk";
 import { stampedLog } from "./lib/report";
 
 const BASE = moduleBase();
-const argv = Bun.argv.slice(2);
-for (const a of argv) if (a !== "--keep" && a !== "--recheck") throw new Error(`unknown argument ${a}; usage: party-staging [--keep] [--recheck]`);
-const KEEP = argv.includes("--keep");
-const RECHECK = argv.includes("--recheck");
-const request = smokeRequest("party-staging");
+const args = partySmokeArgs("party-staging", Bun.argv.slice(2), ["--keep", "--recheck"]);
+const KEEP = args.switches.has("--keep");
+const RECHECK = args.switches.has("--recheck");
+const dungeon = args.dungeon;
+const request = smokeRequest("party-staging", process.env, dungeon);
 const party = membersOf(request);
 
 const started = Date.now();
@@ -54,7 +69,7 @@ let ok = false;
 const clients: WrathClient[] = [];
 try {
   if (RECHECK) {
-    log(`--recheck: checking the party staged before the recreate, ${party.map((m) => m.character).join(", ")}`);
+    log(`--recheck: checking the party staged before the recreate (${dungeon.scenario}, level ${dungeon.level}), ${party.map((m) => m.character).join(", ")}`);
   } else {
     const staged = await stageParty(request, { log });
     if (!staged.ok) throw new Error(`staging failed: ${staged.reason}`);
@@ -66,7 +81,7 @@ try {
   await Bun.sleep(2000);
   for (const [i, m] of party.entries()) await assertStagedMember(clients[i]!, m, party, log);
   ok = true;
-  console.log(`PASS: party-staging${RECHECK ? " --recheck (nothing staged was reaped by the boot)" : ""} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+  console.log(`PASS: party-staging${args.scenario ?` --scenario ${dungeon.scenario} (level ${dungeon.level})` : ""}${RECHECK ? " --recheck (nothing staged was reaped by the boot)" : ""} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);
   process.exitCode = 1;

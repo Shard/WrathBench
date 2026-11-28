@@ -26,23 +26,14 @@ import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 import { fmt } from "./lib/geo";
-import { deleteMembers, loginMember, membersOf, partyDungeon, smokeRequest, walkTo } from "./lib/party";
+import { deleteMembers, loginMember, membersOf, partySmokeArgs, smokeRequest, walkTo } from "./lib/party";
 import { stampedLog } from "./lib/report";
 
-const USAGE = "usage: party-entry [--staged] [--keep] [--scenario <name>]";
 const BASE = moduleBase();
-const argv = Bun.argv.slice(2);
-let scenarioArg: string | undefined;
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i]!;
-  if (a === "--scenario") {
-    scenarioArg = argv[++i];
-    if (!scenarioArg) throw new Error(`--scenario needs a name; ${USAGE}`);
-  } else if (a !== "--staged" && a !== "--keep") throw new Error(`unknown argument ${a}; ${USAGE}`);
-}
-const STAGED = argv.includes("--staged");
-const KEEP = argv.includes("--keep");
-const dungeon = partyDungeon(scenarioArg);
+const args = partySmokeArgs("party-entry", Bun.argv.slice(2), ["--staged", "--keep"]);
+const STAGED = args.switches.has("--staged");
+const KEEP = args.switches.has("--keep");
+const dungeon = args.dungeon;
 const request = smokeRequest("party-entry", process.env, dungeon);
 const party = membersOf(request);
 
@@ -83,8 +74,8 @@ try {
   await Bun.sleep(1500);
   for (const [i, m] of party.entries()) {
     const map = clients[i]!.state.self.map?.value;
-    if (map?.id !== dungeon.instanceMap || map.instanceType !== "party") {
-      throw new Error(`${m.character}'s state.self.map inside is ${JSON.stringify(map ?? null)}, expected map ${dungeon.instanceMap}, a party dungeon`);
+    if (map?.id !== dungeon.instanceMap || map.instanceType !== (dungeon.raid ? "raid" : "party")) {
+      throw new Error(`${m.character}'s state.self.map inside is ${JSON.stringify(map ?? null)}, expected map ${dungeon.instanceMap}, a ${dungeon.raid ? "raid" : "party dungeon"}`);
     }
   }
 
@@ -103,10 +94,10 @@ try {
   await Promise.all(
     party.map(async (m, i) => {
       const r = await walkTo(clients[i]!, dungeon.exit, (s) => log(`  ${m.character}:${s}`));
-      if (!(r.ok && r.status === "transferred" && r.to.map === 0)) throw new Error(`${m.character}'s walk out ended ${r.status}`);
+      if (!(r.ok && r.status === "transferred" && r.to.map === dungeon.entrance.map)) throw new Error(`${m.character}'s walk out ended ${r.status}`);
     }),
   );
-  log(`PASS exit: all ${party.length} back on map 0`);
+  log(`PASS exit: all ${party.length} back on map ${dungeon.entrance.map}`);
   console.log(`PASS: party-entry (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);

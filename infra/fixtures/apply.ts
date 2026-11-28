@@ -288,6 +288,16 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     }
   }
 
+  // A spellbook talent's ability, as `LearnTalent` leaves it: `learnSpell`
+  // writes the row at `GetLearnSpellSpecMask`, the active spec's mask for a
+  // talent spell, which is TALENT_SPEC_MASK.
+  for (const spell of scenario.talentSpells ?? []) {
+    statements.push({
+      sql: `INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (?, ?, ?)`,
+      params: [guid, spell, TALENT_SPEC_MASK],
+    });
+  }
+
   if (scenario.maxSkills) {
     // Level-ranged skills only: armor and other mono skills sit at max 1 and
     // languages at 300, and both are fixed by the loader whatever is stored.

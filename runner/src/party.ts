@@ -28,6 +28,40 @@ import { CHARACTER_NAME_RULE, isValidCharacterName } from "./character-name";
 export const PARTY_ROLES = ["tank", "healer", "damage"] as const;
 export type PartyRole = (typeof PARTY_ROLES)[number];
 
+/**
+ * A member's talent tree, by its name, for a party whose two members of one
+ * class and role need telling apart (a raid's holy and discipline priests).
+ * The stager keys a loadout by class, spec and level
+ * (`infra/fixtures/loadouts.ts`); a member with no spec wears its class's
+ * level-20 loadout, as every party did before raids. Never rendered to the
+ * model: the member's objective is the only text a definition hands it.
+ */
+export const PARTY_SPECS = [
+  "arms",
+  "fury",
+  "protection",
+  "holy",
+  "retribution",
+  "assassination",
+  "combat",
+  "subtlety",
+  "discipline",
+  "shadow",
+  "arcane",
+  "fire",
+  "frost",
+] as const;
+export type PartySpec = (typeof PARTY_SPECS)[number];
+
+/**
+ * The largest party a definition may declare without a larger instance to
+ * hold it: a group. A raid's definition may declare up to its dungeon's
+ * registry size, which `campaign-def.ts` checks against the staged start.
+ */
+export const PARTY_MAX = 5;
+/** The structural ceiling, a 40-player raid's: the dungeon's own size is the real bound (`campaign-def.ts`). */
+export const RAID_MAX = 40;
+
 /** Safe in a run id and a path: a member id is the run id's suffix. */
 const MEMBER_ID = /^[a-z][a-z0-9]{0,15}$/;
 
@@ -38,6 +72,12 @@ export const partyMemberSchema = z
     /** The run id's suffix: `tank`, `healer`, `mage`, … */
     id: z.string().regex(MEMBER_ID, "a member id is 1-16 lowercase letters and digits, starting with a letter"),
     role: z.enum(PARTY_ROLES),
+    /**
+     * The member's talent tree (`PARTY_SPECS`), which picks its loadout with
+     * its class and the staged level. Optional with no default, so a member
+     * written before it parses, and hashes, as it always did.
+     */
+    spec: z.enum(PARTY_SPECS).optional(),
     /** The client's own race and class ids, as a cell declares them. */
     race: z.number().int().positive(),
     class: z.number().int().positive(),
@@ -55,7 +95,12 @@ export type PartyMember = z.infer<typeof partyMemberSchema>;
 
 export const partyDefinitionSchema = z
   .object({
-    size: z.number().int().min(2).max(5),
+    /**
+     * At most `PARTY_MAX`, unless the definition stages it outside a larger
+     * instance: `campaign-def.ts` holds a party above five to its staged
+     * dungeon's registry size, and to a one-agent arm.
+     */
+    size: z.number().int().min(2).max(RAID_MAX),
     /** In member order; the first is the party leader. */
     members: z.array(partyMemberSchema).min(2),
   })
@@ -111,7 +156,8 @@ export const partyConfigSchema = z
     id: z.string().min(1).max(200),
     member: z.string().regex(MEMBER_ID),
     role: z.enum(PARTY_ROLES),
-    size: z.number().int().min(2).max(5),
+    /** A party of agents, one a member, is a group: larger is one agent's (`campaign-def.ts`). */
+    size: z.number().int().min(2).max(PARTY_MAX),
     members: z.array(partyMemberRecordSchema).min(2),
   })
   .strict();

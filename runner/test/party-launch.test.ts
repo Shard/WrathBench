@@ -87,6 +87,25 @@ describe("the definition's start and party blocks", () => {
     expect(bad({ party: { size: 2, members: [party.party!.members[0], { ...party.party!.members[1], character: "Bqeee" }] } })).toContain("2-12 letters");
   });
 
+  test("a party is five, larger only outside a raid as large and on one agent; a spec is optional and adds nothing when absent", () => {
+    const parse = (over: Record<string, unknown>) => campaignDefinitionSchema.safeParse({ ...party, ...over });
+    const why = (over: Record<string, unknown>): string => {
+      const r = parse(over);
+      if (r.success) throw new Error("accepted");
+      return issuesOf(r.error);
+    };
+    const ten = Array.from({ length: 10 }, (_, i) => ({ ...PARTY_MEMBERS[i % 5]!, id: `m${i}`, character: `Member${"abcdefghij"[i]}` }));
+    const oneAgent = { arms: [{ id: "one-agent", agents: 1 }], objective: "Defeat Onyxia." };
+    expect(why({ party: { size: 10, members: ten } })).toContain("a party is at most 5");
+    expect(why({ party: { size: 10, members: ten }, start: { staged: "stormwind-stockade", level: 24 }, ...oneAgent })).toContain("The Stockade's, which holds 5");
+    expect(why({ party: { size: 10, members: ten }, start: { staged: "dustwallow-lair", level: 80 } })).toContain("a party above 5 is one agent driving every member");
+    expect(parse({ party: { size: 10, members: ten }, start: { staged: "dustwallow-lair", level: 80 }, ...oneAgent }).success).toBe(true);
+    expect(why({ party: { size: 11, members: [...ten, { ...ten[0]!, id: "m10", character: "Memberk" }] }, start: { staged: "dustwallow-lair", level: 80 }, ...oneAgent })).toContain("Onyxia's Lair holds 10; the party is 11");
+    // A member's spec is optional, with no default: a member without one parses to the object it was.
+    expect(party.party!.members.every((m) => !("spec" in m))).toBe(true);
+    expect(why({ party: { size: 5, members: party.party!.members.map((m, i) => (i === 0 ? { ...m, spec: "tanking" } : m)) } })).toContain("spec");
+  });
+
   test("the hash covers the party: a renamed member is a different definition", () => {
     const renamed = partyDefinition({ party: { size: 5, members: PARTY_MEMBERS.map((m) => ({ ...m, character: m.id === "mage" ? "Corwin" : m.character })) } });
     expect(campaignHash(renamed)).not.toBe(campaignHash(party));

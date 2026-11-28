@@ -4,7 +4,8 @@
  * written), the task episodes' definitions and the camera's and timeline's
  * boss rule. The Deadmines entry is the facts every Deadmines run was read
  * by, so it must equal them exactly; the other entries are probe targets and
- * hold together on their own.
+ * hold together on their own. Every entry is staged: its scenario is a
+ * fixture scenario with room for its party, at its level.
  */
 import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
@@ -12,7 +13,9 @@ import { join } from "node:path";
 import { BOSS_ENTRIES, DUNGEONS, bossName, dungeonById, dungeonByMap, dungeonByStaged, dungeonSchema, optionalOf, routeOf } from "../runner/src/dungeons";
 import { TASK_EPISODE_IDS } from "../runner/src/episodes";
 import { taskDefinition } from "../runner/src/task-episodes";
-import { DEADMINES_ENTRANCE_TRIGGER, isScenarioName } from "./fixtures/scenarios";
+import { checkedIn, checkedInFiles } from "../runner/test/fixtures/campaigns";
+import { DEADMINES_ENTRANCE_TRIGGER, ONYXIA_ENTRANCE_TRIGGER, SCENARIOS, isScenarioName, type Scenario } from "./fixtures/scenarios";
+import { PARTY_DUNGEONS } from "./smoke/lib/party";
 
 const DIR = join(import.meta.dir, "..", "runner", "dungeons");
 
@@ -78,19 +81,44 @@ describe("the Deadmines entry is today's facts", () => {
   });
 });
 
-describe("the other entries", () => {
-  // A probe target is defined before it is staged: its scenario is the
-  // stager's next piece of work, so its absence here is expected and stated,
-  // not a gap this test should close.
-  test("name scenarios that are not staged yet, and the registry does not require them", () => {
-    for (const d of DUNGEONS.filter((x) => x.id !== "deadmines")) {
-      expect({ id: d.id, staged: d.staged, exists: isScenarioName(d.staged) }).toEqual({ id: d.id, staged: d.staged, exists: false });
+describe("every entry is staged", () => {
+  // An instance is registered with the scenario that stages its party: the
+  // stager can put a full party outside it, at the entry's level, which is
+  // the level the party smokes and every checked-in definition staged there use.
+  test("its scenario exists, with a spot for every member of a full party", () => {
+    for (const d of DUNGEONS) {
+      const spots = isScenarioName(d.staged) ? ((SCENARIOS[d.staged] as Scenario).partySpots?.length ?? 0) : null;
+      expect({ id: d.id, staged: d.staged, spots: spots !== null && spots >= d.size }).toEqual({ id: d.id, staged: d.staged, spots: true });
     }
   });
+
+  test("its level is the party smokes' and every checked-in definition's staged on its scenario", () => {
+    const defs = checkedInFiles().map((f) => checkedIn(f.replace(/\.json$/, "")));
+    for (const d of DUNGEONS) {
+      expect({ id: d.id, smoke: PARTY_DUNGEONS[d.staged]?.level }).toEqual({ id: d.id, smoke: d.level });
+      for (const def of defs) {
+        if (typeof def.start !== "object" || def.start.staged !== d.staged) continue;
+        expect({ id: d.id, def: `${def.id}@${def.version}`, level: def.start.level }).toEqual({ id: d.id, def: `${def.id}@${def.version}`, level: d.level });
+      }
+    }
+  });
+});
+
+describe("the other entries", () => {
 
   test("Shadowfang Keep ends on Arugal and the Stockade on Bazil Thredd, both off map 0 triggers", () => {
     expect(dungeonById("shadowfang-keep")).toMatchObject({ map: 33, level: 20, end: 4275, entrance: { trigger: 145, map: 0 } });
     expect(dungeonById("stockade")).toMatchObject({ map: 34, level: 24, end: 1716, entrance: { trigger: 101, map: 0 } });
     expect(BOSS_ENTRIES.has(4275) && BOSS_ENTRIES.has(1716)).toBe(true);
+  });
+
+  test("Onyxia's Lair is a ten-player raid at 80 off a map 1 trigger, ending on Onyxia, its door the stager's", () => {
+    const ony = dungeonById("onyxias-lair")!;
+    expect(ony).toMatchObject({ kind: "raid", size: 10, map: 249, level: 80, staged: "dustwallow-lair", end: 10184, entrance: { trigger: 2848, map: 1, radius: 16 } });
+    expect(routeOf(ony)).toEqual([10184]);
+    expect(dungeonByMap(249)?.id).toBe("onyxias-lair");
+    expect(dungeonByStaged("dustwallow-lair")?.id).toBe("onyxias-lair");
+    const { id, ...at } = ONYXIA_ENTRANCE_TRIGGER;
+    expect(ony.entrance).toEqual({ trigger: id, ...at });
   });
 });
