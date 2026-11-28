@@ -1,0 +1,22 @@
+{
+  "id": "onyxias-lair",
+  "name": "Onyxia's Lair",
+  "kind": "raid",
+  "size": 10,
+  "map": 249,
+  "entrance": {
+    "trigger": 2848,
+    "map": 1,
+    "x": -4768.61,
+    "y": -3752.11,
+    "z": 53.43,
+    "radius": 16
+  },
+  "level": 80,
+  "staged": "dustwallow-lair",
+  "bosses": [
+    { "entry": 10184, "name": "Onyxia" }
+  ],
+  "end": 10184,
+  "note": "Read from the pinned core: the entrance is areatrigger 2848 on map 1 (Dustwallow Marsh, the Wyrmbog), a sphere of radius 16, which areatrigger_teleport 2848 sends to map 249; areatrigger_teleport 1064 brings a player out at (-4747.17, -3753.27, 49.81), beside the staging spots. Map 249 is a raid (instance_template parent 1); dungeon_access_template 15 is its 10-player normal mode, minimum level 80, with no item, quest or achievement requirement (dungeon_access_requirements has none for it), and the core refuses a player outside a raid group at the door (MapMgr::PlayerCannotEnter, Instance.IgnoreRaid off). One encounter: instance_encounters 707 (10-player) credits creature 10184, Onyxia, level 83, rank 3, whose 25-player difficulty entry is 36538. A ghost of map 249 returns to graveyard 1265, Mudsprocket (graveyard_zone for area 2159), about 640 yards from the entrance."
+}

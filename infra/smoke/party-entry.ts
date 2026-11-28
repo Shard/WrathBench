@@ -74,8 +74,8 @@ try {
   await Bun.sleep(1500);
   for (const [i, m] of party.entries()) {
     const map = clients[i]!.state.self.map?.value;
-    if (map?.id !== dungeon.instanceMap || map.instanceType !== "party") {
-      throw new Error(`${m.character}'s state.self.map inside is ${JSON.stringify(map ?? null)}, expected map ${dungeon.instanceMap}, a party dungeon`);
+    if (map?.id !== dungeon.instanceMap || map.instanceType !== (dungeon.raid ? "raid" : "party")) {
+      throw new Error(`${m.character}'s state.self.map inside is ${JSON.stringify(map ?? null)}, expected map ${dungeon.instanceMap}, a ${dungeon.raid ? "raid" : "party dungeon"}`);
     }
   }
 
@@ -94,10 +94,10 @@ try {
   await Promise.all(
     party.map(async (m, i) => {
       const r = await walkTo(clients[i]!, dungeon.exit, (s) => log(`  ${m.character}:${s}`));
-      if (!(r.ok && r.status === "transferred" && r.to.map === 0)) throw new Error(`${m.character}'s walk out ended ${r.status}`);
+      if (!(r.ok && r.status === "transferred" && r.to.map === dungeon.entrance.map)) throw new Error(`${m.character}'s walk out ended ${r.status}`);
     }),
   );
-  log(`PASS exit: all ${party.length} back on map 0`);
+  log(`PASS exit: all ${party.length} back on map ${dungeon.entrance.map}`);
   console.log(`PASS: party-entry (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);

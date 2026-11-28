@@ -375,6 +375,48 @@ export const STORMWIND_TRADE_BIND = { map: 0, zone: 1519, x: -8833.38, y: 628.62
 /** Stormwind City (AreaTable). */
 export const STORMWIND_ZONE = 1519;
 
+// Onyxia's Lair, the first raid scenario: ten spots, read the same way.
+// AreaTrigger 2848 on map 1 is a sphere of radius 16 centred at (-4768.61,
+// -3752.11, 53.43) inside the cave in the Wyrmbog (Dustwallow Marsh, zone 15,
+// area 511), which `areatrigger_teleport` 2848 sends to map 249. Its centre
+// floats 7y over the tunnel floor (the mesh there is at z 46.1), so the spots
+// are outside the sphere in three dimensions, 17.5-22.8y from its centre, on
+// the tunnel floor toward the cave mouth (z 49.5-51.1): the polygon component
+// `game_tele` 700 stands on 65y out at the mouth, which reaches 9y from the
+// centre inside the sphere, so a walk toward the centre fires it. The mesh
+// spans tiles 40,39 and 40,38 here; the component was joined across them on
+// their shared edges. Leaving the instance (`areatrigger_teleport` 1064) puts
+// a player at (-4747.17, -3753.27, 49.81), among the spots. Nearby, from the
+// world SQL: no creature spawn, wander or patrol point (waypoint_data, SAI
+// waypoints) is within 79y; the nearest hostile to an Alliance player is a
+// Firemane Flamecaller (4334, level 41-42, faction 103, random wander 5y) at
+// 94y and 5y below, with eight more of them and a Firemane Scalebane (4328)
+// 100-140y out, and a Scorchscale Drake (23687, elite, level 42) wandering
+// 20y around a point 123y away and 47y above. At level 80 every one of them
+// aggroes at the 5y floor (Creature::GetAggroRange: detection range 18-20
+// less a level gap of 38 or more). The approach from Theramore crosses the
+// Wyrmbog's dragonkin at the same levels. The homebind is Theramore,
+// `game_tele` 1121, area 513 (Theramore Isle), on the mesh at z 8.7; a ghost
+// on map 1 returns to Theramore's graveyard (189), and a ghost of map 249 to
+// Mudsprocket's (1265), 640y from the door.
+export const ONYXIA_ENTRANCE_TRIGGER = { id: 2848, map: 1, x: -4768.61, y: -3752.11, z: 53.43, radius: 16 };
+/** The Onyxia's Lair raid's ten spots in the tunnel toward the cave mouth, in member order, each facing the trigger. */
+export const ONYXIA_STAGING_SPOTS: readonly { x: number; y: number; z: number }[] = [
+  { x: -4752.6, y: -3758.1, z: 49.6 },
+  { x: -4751.6, y: -3749.6, z: 49.5 },
+  { x: -4753.6, y: -3761.1, z: 50.0 },
+  { x: -4750.6, y: -3755.6, z: 49.5 },
+  { x: -4750.1, y: -3752.6, z: 49.6 },
+  { x: -4749.1, y: -3747.6, z: 50.5 },
+  { x: -4749.6, y: -3758.6, z: 50.5 },
+  { x: -4747.6, y: -3750.6, z: 50.4 },
+  { x: -4747.6, y: -3754.6, z: 50.1 },
+  { x: -4746.6, y: -3757.6, z: 51.1 },
+];
+export const THERAMORE_BIND = { map: 1, zone: 513, x: -3641.3, y: -4358.93, z: 8.35467 };
+/** Dustwallow Marsh (AreaTable). */
+export const DUSTWALLOW_ZONE = 15;
+
 // The steep re-plan smoke's starts: points a freeplay character stood on when
 // the module refused its move as `drop` at a 51-58 degree step, read off the
 // module's own move_path rows (the route's first point), and the point each
@@ -766,6 +808,17 @@ export const SCENARIOS = {
     position: { map: 0, zone: STORMWIND_ZONE, ...STOCKADE_STAGING_SPOTS[0]!, o: facing(STOCKADE_STAGING_SPOTS[0]!, STOCKADE_ENTRANCE_TRIGGER) },
     partySpots: STOCKADE_STAGING_SPOTS.map((p) => ({ map: 0, zone: STORMWIND_ZONE, ...p, o: facing(p, STOCKADE_ENTRANCE_TRIGGER) })),
     homebind: STORMWIND_TRADE_BIND,
+    clearQuests: true,
+  },
+  "dustwallow-lair": {
+    description:
+      "level 80, 1g, in the tunnel outside Onyxia's Lair's entrance trigger in the Wyrmbog facing it, 17.5y away, homebind Theramore, empty quest log (a raid scenario: the ten members stand on the ten spots there at 80, infra/fixtures/loadouts.ts; a single character stands on the first)",
+    level: 80,
+    xp: 0,
+    money: 10000,
+    position: { map: 1, zone: DUSTWALLOW_ZONE, ...ONYXIA_STAGING_SPOTS[0]!, o: facing(ONYXIA_STAGING_SPOTS[0]!, ONYXIA_ENTRANCE_TRIGGER) },
+    partySpots: ONYXIA_STAGING_SPOTS.map((p) => ({ map: 1, zone: DUSTWALLOW_ZONE, ...p, o: facing(p, ONYXIA_ENTRANCE_TRIGGER) })),
+    homebind: THERAMORE_BIND,
     clearQuests: true,
   },
   "vineyard-priest": {

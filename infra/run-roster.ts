@@ -2545,7 +2545,7 @@ export function stageRequestOf(specs: readonly Resolved[]): StageRequest {
     level: start.level,
     members: def.party!.members.map((m) => {
       const rec = launch.members.find((r) => r.member === m.id)!;
-      return { member: m.id, role: m.role, race: m.race, class: m.class, character: m.character, account: rec.account, runId: rec.runId };
+      return { member: m.id, role: m.role, ...(m.spec !== undefined ? { spec: m.spec } : {}), race: m.race, class: m.class, character: m.character, account: rec.account, runId: rec.runId };
     }),
   };
 }
@@ -2583,7 +2583,7 @@ export function fanoutStageRequestOf(spec: Pick<Resolved, "runId" | "campaignFil
     level: start.level,
     members: def.party.members.map((m) => {
       const rec = launch.members.find((r) => r.member === m.id)!;
-      return { member: m.id, role: m.role, race: m.race, class: m.class, character: m.character, account: rec.account, runId: spec.runId };
+      return { member: m.id, role: m.role, ...(m.spec !== undefined ? { spec: m.spec } : {}), race: m.race, class: m.class, character: m.character, account: rec.account, runId: spec.runId };
     }),
   };
 }

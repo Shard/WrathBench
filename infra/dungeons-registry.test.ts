@@ -14,7 +14,7 @@ import { BOSS_ENTRIES, DUNGEONS, bossName, dungeonById, dungeonByMap, dungeonByS
 import { TASK_EPISODE_IDS } from "../runner/src/episodes";
 import { taskDefinition } from "../runner/src/task-episodes";
 import { checkedIn, checkedInFiles } from "../runner/test/fixtures/campaigns";
-import { DEADMINES_ENTRANCE_TRIGGER, SCENARIOS, isScenarioName, type Scenario } from "./fixtures/scenarios";
+import { DEADMINES_ENTRANCE_TRIGGER, ONYXIA_ENTRANCE_TRIGGER, SCENARIOS, isScenarioName, type Scenario } from "./fixtures/scenarios";
 import { PARTY_DUNGEONS } from "./smoke/lib/party";
 
 const DIR = join(import.meta.dir, "..", "runner", "dungeons");
@@ -110,5 +110,15 @@ describe("the other entries", () => {
     expect(dungeonById("shadowfang-keep")).toMatchObject({ map: 33, level: 20, end: 4275, entrance: { trigger: 145, map: 0 } });
     expect(dungeonById("stockade")).toMatchObject({ map: 34, level: 24, end: 1716, entrance: { trigger: 101, map: 0 } });
     expect(BOSS_ENTRIES.has(4275) && BOSS_ENTRIES.has(1716)).toBe(true);
+  });
+
+  test("Onyxia's Lair is a ten-player raid at 80 off a map 1 trigger, ending on Onyxia, its door the stager's", () => {
+    const ony = dungeonById("onyxias-lair")!;
+    expect(ony).toMatchObject({ kind: "raid", size: 10, map: 249, level: 80, staged: "dustwallow-lair", end: 10184, entrance: { trigger: 2848, map: 1, radius: 16 } });
+    expect(routeOf(ony)).toEqual([10184]);
+    expect(dungeonByMap(249)?.id).toBe("onyxias-lair");
+    expect(dungeonByStaged("dustwallow-lair")?.id).toBe("onyxias-lair");
+    const { id, ...at } = ONYXIA_ENTRANCE_TRIGGER;
+    expect(ony.entrance).toEqual({ trigger: id, ...at });
   });
 });

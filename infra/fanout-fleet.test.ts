@@ -16,7 +16,10 @@ import { campaignLaunch } from "../runner/src/campaign-launch";
 import { CAMPAIGN_FILE, writeCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_POLICY } from "../runner/src/models";
 import type { RunFact } from "../runner/src/run-fact";
-import { defsBlock, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
+import { checkedIn, defsBlock, oneAgentDefinition, PARTY_MEMBERS } from "../runner/test/fixtures/campaigns";
+import { fanoutLaunchOf } from "../runner/src/party";
+import type { CampaignFile } from "../runner/src/campaign-file";
+import { checkStageRequest } from "./fixtures/stage-party";
 import { parseFleet, pinnedCampaignJobs, type FleetConfig } from "./run-fleet-config";
 import { planOf } from "./fixtures/tick";
 import { fillEntries, jobSpawn, planResumes, planStaleRuns, sessionsOf, unownedLiveRuns } from "./run-fleet-plan";
@@ -286,5 +289,20 @@ describe("every account's holder in one pass", () => {
       ["SHARED", accountHolderIn(root, "SHARED", "")!],
     ]);
     expect(accountHoldersIn(join(root, "missing")).size).toBe(0);
+  });
+});
+
+describe("a raid's one-agent staging", () => {
+  test("the roster hands the stager each member's spec, and a member without one gets no key at all", () => {
+    const def = checkedIn("onyxia@1");
+    const accounts = Array.from({ length: 10 }, (_, i) => `EVAL${String(i + 1).padStart(2, "0")}`);
+    const file = { campaign: def.id, version: def.version, definition: def, fanout: fanoutLaunchOf(def.party!, accounts) } as unknown as CampaignFile;
+    const req = fanoutStageRequestOf({ runId: "onyxia-r1", campaignFile: file });
+    expect(req).toMatchObject({ campaign: "onyxia", version: 1, scenario: "dustwallow-lair", level: 80 });
+    expect(req.members.map((m) => [m.member, m.spec, m.account])).toEqual(def.party!.members.map((m, i) => [m.id, m.spec, accounts[i]!]));
+    // What the roster sends is what the stager takes.
+    expect(checkStageRequest(req)).toEqual([]);
+    const five = fanoutStageRequestOf(resolve(fillEntries(planOf(fleet(), { stamp: STAMP }).pinned[0]!.spawn, STAMP), STAMP)[0]!);
+    expect(five.members.some((m) => "spec" in m)).toBe(false);
   });
 });

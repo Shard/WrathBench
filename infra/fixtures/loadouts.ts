@@ -49,14 +49,18 @@
  * spells up to that level, and nothing else.
  */
 
+import type { PartySpec } from "../../runner/src/party";
 import { accountFixtureName } from "../smoke/lib/fixture";
+import { RAID_LEVEL, RAID_LOADOUTS, isRaidLoadout, raidGearProblems, raidLoadoutOf, type RaidLoadoutId } from "./raid-loadouts";
 import type { Scenario } from "./scenarios";
 
 /**
  * The five loadouts, one per class. A loadout id is not a party role: the
  * fleet's party definition gives each member one of three role words (`tank`,
  * `healer`, `damage`, runner/src/party.ts) and a race and class, and the
- * stager picks the loadout by race and class (`loadoutFor`).
+ * stager picks the loadout by race and class (`loadoutFor`). A member that
+ * also names its talent tree (`spec`) is a raid's, and wears the level-80
+ * loadout of its class and spec instead (`raid-loadouts.ts`).
  */
 export const LOADOUT_IDS = ["tank", "healer", "mage", "rogue", "paladin"] as const;
 export type LoadoutId = (typeof LOADOUT_IDS)[number];
@@ -109,7 +113,17 @@ export type TalentPick = {
 };
 
 export type Loadout = {
-  id: LoadoutId;
+  /** A level-20 loadout's id, or a raid loadout's (`raid-loadouts.ts`). */
+  id: LoadoutId | RaidLoadoutId;
+  /**
+   * A raid loadout's talent tree: with the class, what a member's `spec`
+   * picks it by. Absent on the five level-20 loadouts, which a member picks
+   * by class alone, so their objects (and the staging hash over them) are
+   * what they always were.
+   */
+  spec?: PartySpec;
+  /** A raid loadout's one level (`RAID_LEVEL`). Absent on the level-20 loadouts, which `loadoutAt` extends. */
+  level?: number;
   /** The role word a party definition gives a member wearing this loadout. */
   partyRole: PartyRoleWord;
   race: number;
@@ -400,8 +414,13 @@ export function isPartyLevel(level: number): boolean {
  * a level before anyone calls this.
  */
 export function loadoutAt(l: Loadout, level: number): Loadout {
+  // A raid loadout is built for its one level and has no extensions.
+  if (l.level !== undefined) {
+    if (level !== l.level) throw new Error(`the ${l.id} loadout is built for level ${l.level}; the party is staged at ${level}`);
+    return l;
+  }
   if (level === PARTY_LEVEL) return l;
-  const ext = LEVEL_EXTENSIONS[level]?.[l.id];
+  const ext = LEVEL_EXTENSIONS[level]?.[l.id as LoadoutId];
   if (!ext) throw new Error(`no level ${level} extension for the ${l.id} loadout; the party is staged at ${PARTY_LEVELS.join(" or ")}`);
   const replaced = new Set(ext.talents.map((t) => t.talentId));
   const added = ext.talents.filter((t) => !l.talents.some((b) => b.talentId === t.talentId));
@@ -420,8 +439,26 @@ export function loadoutAt(l: Loadout, level: number): Loadout {
  * The gear is chosen for the race and class's starting proficiencies, so
  * race and class must both match; the role word must be the
  * loadout's, so a definition cannot stage a healer's gear on its "damage".
+ *
+ * A member that names its talent tree (`spec`, a raid's) is keyed by class,
+ * tree and level instead (`raid-loadouts.ts`): two members of one class are
+ * then two loadouts. One that names none is keyed by class alone, as every
+ * party was before raids, and gets the same object it always did. `level`,
+ * when given, is the request's, which a raid loadout must be built for.
  */
-export function loadoutFor(member: { race: number; class: number; role: string }): Loadout | string {
+export function loadoutFor(member: { race: number; class: number; role: string; spec?: string }, level?: number): Loadout | string {
+  if (member.spec !== undefined) {
+    const r = raidLoadoutOf(member.class, member.spec);
+    if (!r) {
+      const all = Object.values(RAID_LOADOUTS).map((x) => `${x.label} (class ${x.class}, ${x.spec})`).join(", ");
+      return `no loadout for class ${member.class} with spec ${member.spec}; the loadouts with a spec are ${all}`;
+    }
+    if (r.race !== member.race) return `the class ${member.class} ${member.spec} loadout is a ${r.label} (race ${r.race}); the member is race ${member.race}`;
+    if (r.partyRole !== member.role) return `the ${r.label} loadout plays "${r.partyRole}"; the member's role is "${member.role}"`;
+    if (level !== undefined && level !== r.level) return `the ${r.label} loadout is built for level ${r.level}; the party is staged at ${level}`;
+    return r;
+  }
+  if (level === RAID_LEVEL) return `a member staged at ${RAID_LEVEL} names its spec (the raid loadouts are keyed by class and spec); class ${member.class} names none`;
   const l = Object.values(LOADOUTS).find((x) => x.class === member.class);
   if (!l) return `no loadout for class ${member.class}; the loadouts are ${Object.values(LOADOUTS).map((x) => `${x.label} (race ${x.race}, class ${x.class})`).join(", ")}`;
   if (l.race !== member.race) return `the class ${member.class} loadout is a ${l.label} (race ${l.race}); the member is race ${member.race}`;
@@ -519,6 +556,7 @@ export function validateLoadout(l: Loadout, level = PARTY_LEVEL): string[] {
   }
   if (l.gear.some((g) => g.twoHand) && slots.has(SLOT.offHand)) errors.push(`${where}: a two-handed weapon and an off hand`);
   if (l.bags.length > 4) errors.push(`${where}: ${l.bags.length} bags, there are 4 bag slots`);
+  if (isRaidLoadout(l)) errors.push(...raidGearProblems(l));
   for (const s of [...l.bags, ...l.supplies]) {
     if (!Number.isInteger(s.count) || s.count < 1) errors.push(`${where}: ${s.name} count ${s.count}`);
   }

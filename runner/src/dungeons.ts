@@ -19,6 +19,7 @@
 
 import { z } from "zod";
 import deadminesJson from "../dungeons/deadmines.json";
+import onyxiasLairJson from "../dungeons/onyxias-lair.json";
 import shadowfangKeepJson from "../dungeons/shadowfang-keep.json";
 import stockadeJson from "../dungeons/stockade.json";
 
@@ -103,6 +104,7 @@ export const DUNGEONS: readonly Dungeon[] = [
   parse("deadmines", deadminesJson),
   parse("shadowfang-keep", shadowfangKeepJson),
   parse("stockade", stockadeJson),
+  parse("onyxias-lair", onyxiasLairJson),
 ];
 
 /** The instance by id. */

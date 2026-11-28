@@ -33,7 +33,7 @@ import {
    test; `test/preload-solid.ts` installs it and says why. */
 import { createComputed, createRoot, createSignal } from "solid-js";
 import { createMapState } from "../src/lib/mapstate";
-import { fanoutTrack } from "../src/lib/party";
+import { MEMBER_SLOTS, fanoutTrack, memberClass, memberToken } from "../src/lib/party";
 
 const SCREEN = { w: 800, h: 600 };
 
@@ -236,5 +236,17 @@ describe("a fan-out run's replay", () => {
     const t = fanoutTrack("fanout-probe", [track("fanout-probe~Alfa", [1, 3]), track("fanout-probe~Bravo", [2])]);
     expect(t.runId).toBe("fanout-probe");
     expect(t.points.map((p) => p.ts)).toEqual([1, 2, 3]);
+  });
+
+  test("ten characters, a raid's, merge onto one clock, and every one gets a member colour (the five tokens, by index modulo five)", () => {
+    const point = (ts: number) => ({ ts, map: 1, x: 0, y: 0, level: 80, xp: 0, money: null, questsCompleted: null, turn: null });
+    const tracks = Array.from({ length: 10 }, (_, i): TrackResponse => ({ runId: `raid~C${i}`, characterName: null, model: "m", harnessVersion: null, points: [point(10 - i), point(20 + i)] }));
+    const t = fanoutTrack("raid", tracks);
+    expect(t.points).toHaveLength(20);
+    expect(t.points.map((p) => p.ts)).toEqual([...t.points.map((p) => p.ts)].sort((a, b) => a - b));
+    const classes = Array.from({ length: 10 }, (_, i) => memberClass(i));
+    expect(classes.every((c) => /^member-[1-5]$/.test(c))).toBe(true);
+    expect(classes.slice(5)).toEqual(classes.slice(0, 5));
+    expect(new Set(Array.from({ length: 10 }, (_, i) => memberToken(i))).size).toBe(MEMBER_SLOTS);
   });
 });

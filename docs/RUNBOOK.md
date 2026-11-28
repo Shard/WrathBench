@@ -3096,6 +3096,12 @@ suite touches them.
      checks each member at that scenario's level: at 24 the talents and key
      spells of `LEVEL_EXTENSIONS`, no point unspent. A `--keep` and its
      `--recheck` take the same `--scenario`.
+   - Both take `--scenario dustwallow-lair`: Onyxia's Lair's raid of ten at
+     80, converted to a raid at staging, checked inside a raid map and out
+     again on map 1. It needs ten accounts the module admits: EVAL01..EVAL10
+     by default (a world's allowlist carries them, the shared world's does
+     not), or ten named in `MODULE_PARTY_ACCOUNTS`; and a stack release that
+     allows `CMSG_GROUP_RAID_CONVERT`. On demand only.
 5. While a party campaign is enabled, run `deadmines-entry` after any release
    that touches the module, on PROBE with the fleet live.
 
@@ -3123,7 +3129,27 @@ spot of the scenario (`partySpots`): `moonbrook-mine` for the Deadmines,
 `silverpine-keep` outside Shadowfang Keep and `stormwind-stockade` above the
 Stockade's door, five spots each. A member of any other race and class, a
 level other than 20 or 24, or a party larger than its scenario's spots is
-refused before anything is touched. The script exits 0 when the party is
+refused before anything is touched.
+
+A raid is staged the same way at 80, with ten members. Each member names its
+talent tree (`spec` in the definition and the request), which picks its
+loadout with its class (`infra/fixtures/raid-loadouts.ts`: two tanks, three
+healers, five damage, item level 200 pre-raid gear, raid reagents). A party
+above five is taken only on a scenario outside a raid that large
+(`dustwallow-lair`, ten spots outside Onyxia's Lair), never on a group's.
+Three steps differ from a group's. A raid set does not fit a fresh backpack,
+so each member's four bags are stored and worn in a login of their own
+before the gear. Trainer ranks past a talent the build does not take are
+dropped. After the first member accepts, the leader converts the group to a
+raid with `CMSG_GROUP_RAID_CONVERT`, because the door admits only a raid
+group, and then invites the rest. The raid is 10-player normal: a fresh
+leader's default, which the group takes when it is created. A module whose
+raw allowlist lacks that opcode fails the staging at the group step (exit 1,
+`the module refused CMSG_GROUP_RAID_CONVERT`), after every member is staged
+and before anything launches. A raid campaign therefore waits for the stack
+release that allows it. Its ten accounts come from the eval pool, so the
+chart's `worlds.pool.size` must cover ten plus any other party drawing at
+the same time. The script exits 0 when the party is
 staged and formed with no session open, and its last stdout line is then
 `{"ok":true,"detail":…}`. Otherwise the reason is the last line on stderr:
 exit 1 for a staging that failed, 2 for a refused request. If a member does

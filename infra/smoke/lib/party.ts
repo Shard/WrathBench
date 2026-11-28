@@ -9,9 +9,10 @@
 
 import { connect, type MoveResult, type WrathClient } from "@wrathbench/sdk";
 import { LOADOUT_IDS, PARTY_MONEY, loadoutAt, loadoutFor, partySpot, type Loadout } from "../../fixtures/loadouts";
-import { DEFAULT_PARTY_ACCOUNTS, DEFAULT_PARTY_SCENARIO, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
+import { DEFAULT_PARTY_ACCOUNTS, DEFAULT_PARTY_SCENARIO, DEFAULT_RAID_ACCOUNTS, defaultStageRequest, maxMembers, type StageRequest } from "../../fixtures/stage-party";
 import {
   DEADMINES_ENTRANCE_TRIGGER,
+  ONYXIA_ENTRANCE_TRIGGER,
   SCENARIOS,
   SHADOWFANG_ENTRANCE_TRIGGER,
   STOCKADE_ENTRANCE_TRIGGER,
@@ -31,10 +32,12 @@ type Point = { x: number; y: number; z: number };
  * scenario its party stands in, the level it is staged at (the one its probe
  * campaign states), the entrance trigger each member makes its one move of,
  * the instance map that lands it on, and the exit trigger inside, which an
- * AreaTrigger.dbc record on that map sends back to map 0. Smoke data only:
+ * AreaTrigger.dbc record on that map sends back to the entrance's map (map 0,
+ * or map 1 for Onyxia's Lair). `raid` marks a raid's: the map a member reads
+ * inside is a raid, and its party is the raid's size. Smoke data only:
  * nothing here is on a scenario object, which the staging hash covers.
  */
-export type PartyDungeon = { scenario: ScenarioName; level: number; entrance: Point & { id: number }; instanceMap: number; exit: Point & { id: number } };
+export type PartyDungeon = { scenario: ScenarioName; level: number; entrance: Point & { id: number; map: number }; instanceMap: number; exit: Point & { id: number }; raid?: true };
 
 export const PARTY_DUNGEONS: Readonly<Record<string, PartyDungeon>> = {
   // The Deadmines (map 36): exit trigger 119.
@@ -43,6 +46,9 @@ export const PARTY_DUNGEONS: Readonly<Record<string, PartyDungeon>> = {
   "silverpine-keep": { scenario: "silverpine-keep", level: 20, entrance: SHADOWFANG_ENTRANCE_TRIGGER, instanceMap: 33, exit: { id: 194, x: -230.95, y: 2105.06, z: 79.75 } },
   // The Stockade (map 34): exit trigger 503, 15y from where the entrance lands.
   "stormwind-stockade": { scenario: "stormwind-stockade", level: 24, entrance: STOCKADE_ENTRANCE_TRIGGER, instanceMap: 34, exit: { id: 503, x: 39.37, y: 0.8, z: -12.79 } },
+  // Onyxia's Lair (map 249), a ten-player raid at 80: exit trigger 1064, a
+  // radius-30 sphere at the lair's mouth, back to map 1 among the spots.
+  "dustwallow-lair": { scenario: "dustwallow-lair", level: 80, entrance: ONYXIA_ENTRANCE_TRIGGER, instanceMap: 249, exit: { id: 1064, x: 29.24, y: -22.18, z: 10.53 }, raid: true },
 };
 
 /** The dungeon a party smoke is pointed at (`--scenario <name>`), the Deadmines' when none is named. */
@@ -76,12 +82,17 @@ export function partySmokeArgs(smoke: string, argv: readonly string[], switches:
  * The smokes' party: the stager's default request (PARTY1..PARTY5, one of
  * each loadout, the tank first and leading), or MODULE_PARTY_ACCOUNTS
  * (comma-separated) in that order, on the Deadmines' scenario at 20 or the
- * given dungeon's scenario and level. The request is what the roster would
- * send, so the smokes exercise the contract the fleet uses.
+ * given dungeon's scenario and level. A raid's is its ten raid loadouts, on
+ * EVAL01..EVAL10 unless MODULE_PARTY_ACCOUNTS names ten others: the PARTY
+ * accounts stop at five, and an eval account logs in only where the module's
+ * allowlist carries it (a world of its own does). The request is what the
+ * roster would send, so the smokes exercise the contract the fleet uses.
  */
 export function smokeRequest(tag: string, env: Record<string, string | undefined> = process.env, dungeon: PartyDungeon = partyDungeon()): StageRequest {
-  const accounts = (env["MODULE_PARTY_ACCOUNTS"] ?? DEFAULT_PARTY_ACCOUNTS.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  if (accounts.length !== LOADOUT_IDS.length) throw new Error(`MODULE_PARTY_ACCOUNTS names ${accounts.length} accounts; a party is ${LOADOUT_IDS.length}`);
+  const size = dungeon.raid ? maxMembers(dungeon.scenario) : LOADOUT_IDS.length;
+  const fallback = dungeon.raid ? DEFAULT_RAID_ACCOUNTS : DEFAULT_PARTY_ACCOUNTS;
+  const accounts = (env["MODULE_PARTY_ACCOUNTS"] ?? fallback.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (accounts.length !== size) throw new Error(`MODULE_PARTY_ACCOUNTS names ${accounts.length} accounts; a ${dungeon.raid ? "raid" : "party"} is ${size}`);
   return defaultStageRequest({ party: `smoke-${tag}`, campaign: `smoke-${tag}`, accounts, scenario: dungeon.scenario, level: dungeon.level });
 }
 
@@ -90,7 +101,7 @@ export function membersOf(req: StageRequest): PartyMember[] {
   const scenario = (SCENARIOS as Record<string, Scenario>)[req.scenario];
   if (!scenario) throw new Error(`unknown scenario '${req.scenario}'`);
   return req.members.map((m, i) => {
-    const l = loadoutFor(m);
+    const l = loadoutFor(m, req.level);
     if (typeof l === "string") throw new Error(l);
     return { member: m.member, account: m.account, character: m.character, loadout: loadoutAt(l, req.level), level: req.level, spot: partySpot(scenario, i) };
   });
